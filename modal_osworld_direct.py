@@ -259,7 +259,7 @@ def derive_hint(evaluator: dict, instruction: str, domain: str) -> str:
     gpu="A100-80GB",
     image=image,
     volumes={"/data": vol},
-    timeout=86400,
+    timeout=129600,  # 36 hours — full 369-task run takes ~31h
     memory=65536,
     cpu=8,
 )
@@ -300,6 +300,33 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
 
     if domain != "all":
         test_all = {domain: test_all.get(domain, [])}
+
+    # Skip Google Drive tasks (8 tasks) — require OAuth setup
+    # OSWorld officially supports running 361 tasks without Google Drive
+    gdrive_tasks = set()
+    for dom, tids in test_all.items():
+        for tid in tids:
+            config_path = f"evaluation_examples/examples/{dom}/{tid}.json"
+            if os.path.exists(config_path):
+                with open(config_path) as f:
+                    ex = json.load(f)
+                for step in ex.get("config", []):
+                    if step.get("type") == "googledrive":
+                        gdrive_tasks.add(tid)
+                        break
+                # Also check result getters for googledrive_file
+                ev = ex.get("evaluator", {})
+                results = ev.get("result", {})
+                if not isinstance(results, list):
+                    results = [results]
+                for r in results:
+                    if isinstance(r, dict) and r.get("type") == "googledrive_file":
+                        gdrive_tasks.add(tid)
+
+    if gdrive_tasks:
+        for dom in test_all:
+            test_all[dom] = [t for t in test_all[dom] if t not in gdrive_tasks]
+        print(f"  Skipping {len(gdrive_tasks)} Google Drive tasks (no OAuth configured)")
 
     total = sum(len(v) for v in test_all.values())
     if max_tasks > 0:
