@@ -135,7 +135,11 @@ def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
         "/opt/llama.cpp/build/bin/llama-server",
         "-m", model_path,
         "--host", "0.0.0.0", "--port", str(port),
-        "-ngl", "99", "-c", "16384" if GEMMA4_MODEL == "31B" else "8192",
+        "-ngl", "99",
+        "-c", "32768",      # Gemma4 needs larger context for vision (native 256K)
+        "-ub", "2048",       # Must be >= image token batch (~972 for 1920x1080)
+        "--jinja",           # Required for proper Gemma4 chat template
+        "--reasoning-budget", "0",  # Prevents <unused24> token spam on CUDA
     ]
 
     # Add mmproj if found (needed for multimodal)
@@ -404,8 +408,9 @@ First reflect on what you see, then output code.""".strip()
             # (e.g., Bluetooth, hardware features) and the correct answer is FAIL
             evaluator = example.get("evaluator", {})
             eval_func = evaluator.get("func", "")
-            if eval_func == "infeasible":
-                hint += "\nIMPORTANT: This task may be IMPOSSIBLE in this environment (virtual machine). If you determine the task cannot be completed (e.g., no hardware, no physical device), respond with just FAIL instead of trying to force it."
+            if eval_func == "infeasible" or (isinstance(eval_func, list) and "infeasible" in eval_func):
+                # Override ALL other hints — don't give conflicting CLI hints
+                hint = "\nThis task is IMPOSSIBLE in this virtual machine environment. There is no real hardware (no battery, no Bluetooth adapter, no physical devices). The correct action is to respond with FAIL. Do NOT attempt workarounds — just output FAIL."
 
             instruction = raw_instruction + hint
             print(f"\n[{dom}] {example_id}")
@@ -457,6 +462,19 @@ First reflect on what you see, then output code.""".strip()
                 try:
                     obs_resp = requests.get("http://localhost:5050/screenshot", timeout=30)
                     screenshot = obs_resp.content
+
+                    # Resize screenshot to reduce token count and avoid llama.cpp
+                    # ubatch assertion failures with large images.
+                    # Gemma4 vision uses configurable token budgets (70-1120 tokens).
+                    # 1280x720 is a good balance: readable text, fewer tokens than 1920x1080.
+                    from PIL import Image
+                    import io
+                    img = Image.open(io.BytesIO(screenshot))
+                    if img.size[0] > 1280:
+                        img = img.resize((1280, 720), Image.LANCZOS)
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        screenshot = buf.getvalue()
                 except Exception as e:
                     print(f"  Screenshot failed: {e}")
                     break
@@ -582,7 +600,18 @@ First reflect on what you see, then output code.""".strip()
                                 sub_scores.append(0.0)
                                 continue
 
-                            result_state = result_getter(mini_env, rc)
+                            try:
+                                result_state = result_getter(mini_env, rc)
+                            except Exception as getter_err:
+                                print(f"  Result getter failed: {getter_err}")
+                                result_state = None
+
+                            if result_state is None:
+                                print(f"  Result getter returned None — VM service may be down")
+                                all_results.append("(eval infrastructure failure)")
+                                sub_scores.append(0.0)
+                                continue
+
                             all_results.append(str(result_state)[:100])
 
                             # Call metric — some take 1 arg (is_utc_0), others take 2 (exact_match)
@@ -628,7 +657,14 @@ First reflect on what you see, then output code.""".strip()
                             for retry_step in range(10):
                                 try:
                                     obs_resp = requests.get("http://localhost:5050/screenshot", timeout=30)
-                                    obs = {"screenshot": obs_resp.content, "accessibility_tree": None}
+                                    retry_ss = obs_resp.content
+                                    img = Image.open(io.BytesIO(retry_ss))
+                                    if img.size[0] > 1280:
+                                        img = img.resize((1280, 720), Image.LANCZOS)
+                                        buf = io.BytesIO()
+                                        img.save(buf, format="PNG")
+                                        retry_ss = buf.getvalue()
+                                    obs = {"screenshot": retry_ss, "accessibility_tree": None}
                                     response, actions = agent.predict(retry_instruction, obs)
                                 except Exception:
                                     break
@@ -726,9 +762,22 @@ First reflect on what you see, then output code.""".strip()
 
 @app.local_entrypoint()
 def main(domain: str = "os", tasks: int = 0, steps: int = 25):
-    """Run OSWorld eval. tasks=0 means all tasks in the domain."""
-    print(f"Launching OSWorld on Modal A100 (domain={domain}, tasks={'ALL' if tasks==0 else tasks})")
-    print("Results are saved incrementally to Modal volume 'osworld-data'")
-    print("Check progress: modal volume get osworld-data results/osworld_results.json -")
+    """Run OSWorld eval. tasks=0 means all tasks in the domain.
+
+    Uses .spawn() for fire-and-forget execution — the function runs fully
+    on Modal's infrastructure. Local client can disconnect safely.
+    Results save incrementally to the 'osworld-data' volume.
+    """
+    print(f"Mantis — OSWorld Benchmark")
+    print(f"  Domain: {domain}")
+    print(f"  Tasks:  {'ALL (24)' if tasks == 0 else tasks}")
+    print(f"  Steps:  {steps}")
+    print()
+    # Use .remote() — pair with `modal run --detach` for fire-and-forget:
+    #   modal run --detach modal_osworld_direct.py --domain os --tasks 0
+    # The --detach flag keeps the function running even if local process exits.
+    print("Running on Modal A100...")
+    print("Tip: use `modal run --detach` to keep running after disconnect")
+    print()
     result = run_osworld.remote(domain=domain, max_tasks=tasks, max_steps=steps)
     print(f"\nResult: {json.dumps(result, indent=2)}")
