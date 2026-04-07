@@ -181,12 +181,55 @@ def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
     raise RuntimeError("llama-server failed to start within timeout")
 
 
-def derive_hint(evaluator: dict, instruction: str, domain: str) -> str:
+def load_learnings(volume_path: str = "/data/results/learnings.json") -> list:
+    """Load accumulated learnings from previous runs."""
+    try:
+        with open(volume_path) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def get_prior_learning(task_id: str, instruction: str, learnings: list) -> str:
+    """Find relevant prior learnings for a task — by task ID or similar instruction."""
+    relevant = []
+
+    for entry in learnings:
+        # Exact task match
+        if entry.get("task_id") == task_id:
+            relevant.append(entry)
+            continue
+        # Similar instruction (share 3+ words)
+        prior_words = set(entry.get("instruction", "").lower().split())
+        current_words = set(instruction.lower().split())
+        overlap = prior_words & current_words - {"the", "a", "to", "in", "on", "my", "i", "can", "you", "help", "me", "is"}
+        if len(overlap) >= 4:
+            relevant.append(entry)
+
+    if not relevant:
+        return ""
+
+    # Distill prior learnings into actionable advice
+    advice = "\nPrior learnings from similar tasks:"
+    for entry in relevant[-3:]:  # Last 3 relevant entries
+        diag = entry.get("diagnosis", "")
+        actions = entry.get("actions_tried", [])
+        if diag:
+            advice += f"\n- {diag}"
+        if actions:
+            advice += f" (failed approaches: {', '.join(a[:40] for a in actions)})"
+    return advice
+
+
+def derive_hint(evaluator: dict, instruction: str, domain: str,
+                learnings: list = None, task_id: str = None) -> str:
     """Derive a task hint from the evaluator config — generalizes across all domains.
 
     Instead of hardcoding per-task hints, we reverse-engineer what the evaluator
     checks and tell the agent what outcome is expected. This works for any domain
     because the evaluator config describes the success criteria.
+
+    Also incorporates learnings from prior runs to avoid repeating mistakes.
     """
     eval_func = evaluator.get("func", "")
 
@@ -252,7 +295,15 @@ def derive_hint(evaluator: dict, instruction: str, domain: str) -> str:
     if not hints:
         return ""
 
-    return "\nHint: " + " ".join(hints)
+    result = "\nHint: " + " ".join(hints)
+
+    # 5. Inject prior learnings if available
+    if learnings and task_id:
+        prior = get_prior_learning(task_id, instruction, learnings)
+        if prior:
+            result += prior
+
+    return result
 
 
 @app.function(
@@ -452,6 +503,12 @@ First reflect on what you see, then output code.""".strip()
     scores = []
     task_count = 0
 
+    # Load learnings from prior runs — accumulated knowledge
+    prior_learnings = load_learnings()
+    if prior_learnings:
+        print(f"  Loaded {len(prior_learnings)} learnings from prior runs")
+    run_osworld._learnings = prior_learnings
+
     for dom, example_ids in test_all.items():
         for example_id in example_ids:
             if max_tasks > 0 and task_count >= max_tasks:
@@ -464,9 +521,9 @@ First reflect on what you see, then output code.""".strip()
             raw_instruction = example["instruction"]
             evaluator = example.get("evaluator", {})
 
-            # Generalized hint engine — derives hints from evaluator config,
-            # not from hardcoded domain knowledge. Works across all 369 tasks.
-            hint = derive_hint(evaluator, raw_instruction, dom)
+            # Generalized hint engine — derives hints from evaluator config + prior learnings
+            hint = derive_hint(evaluator, raw_instruction, dom,
+                              learnings=prior_learnings, task_id=example_id)
 
             instruction = raw_instruction + hint
             print(f"\n[{dom}] {example_id}")
@@ -698,18 +755,78 @@ First reflect on what you see, then output code.""".strip()
                         if len(sub_scores) > 1:
                             print(f"  Compound eval ({conj}): {sub_scores} → {score}")
 
-                        # Self-verification: if failed, build feedback for retry
+                        # Distillation loop: analyze failure → distill learning → generate new strategy → retry
                         if score == 0 and attempt < max_retries and sub_scores:
-                            feedback = f"\n\nVERIFICATION FAILED (attempt {attempt+1}). "
+                            # Step 1: Build failure analysis context
+                            action_summary = []
+                            for a in action_history[-10:]:  # Last 10 actions
+                                if isinstance(a, str):
+                                    # Extract just the key action from code
+                                    for line in a.split('\n'):
+                                        if 'pyautogui' in line or 'subprocess' in line:
+                                            action_summary.append(line.strip()[:80])
+                                            break
+
+                            analysis = f"\n\nFAILURE ANALYSIS (attempt {attempt+1}):\n"
+                            analysis += f"What was tried: {'; '.join(action_summary[-5:]) if action_summary else 'unknown'}\n"
                             for i, (r, e) in enumerate(zip(all_results, all_expected)):
-                                feedback += f"Check {i+1}: got '{r}', expected '{e}'. "
-                            feedback += "Try a DIFFERENT approach to fix this."
+                                analysis += f"Result {i+1}: got '{r}', expected '{e}'\n"
+
+                            # Step 2: Distill what went wrong (categories)
+                            result_str = ' '.join(str(r) for r in all_results)
+                            expected_str = ' '.join(str(e) for e in all_expected)
+
+                            if any("not found" in str(r).lower() or "no such" in str(r).lower() for r in all_results):
+                                analysis += "Diagnosis: Command or file not found. Check paths and command names.\n"
+                            elif any(str(r).strip() == "" or str(r).strip() == "None" for r in all_results):
+                                analysis += "Diagnosis: Empty result. The command may not have executed. Make sure to press Enter after typing.\n"
+                            elif all_results == all_expected:
+                                analysis += "Diagnosis: Results match but scored 0. May be a formatting issue.\n"
+                            else:
+                                analysis += "Diagnosis: Wrong result. Try a completely different approach or command.\n"
+
+                            # Step 3: Generate strategy hint based on failure pattern
+                            strategy = ""
+                            if any("pyautogui.write" in str(a) for a in action_history):
+                                strategy += "- Previous attempt used pyautogui.write() which may mangle special chars. Use subprocess.run() instead.\n"
+                            if any("click" in str(a) for a in action_history[-3:]):
+                                strategy += "- Previous attempt used GUI clicks. Try a terminal command approach instead.\n"
+                            if len(action_history) >= max_steps - 2:
+                                strategy += "- Ran out of steps. Execute the solution in fewer, more decisive steps.\n"
+
+                            analysis += f"New strategy:\n{strategy}" if strategy else ""
+                            analysis += "Try a COMPLETELY DIFFERENT approach. Do NOT repeat what failed."
 
                             print(f"  Attempt {attempt+1} failed. Results: {all_results}")
-                            print(f"  Retrying with feedback...")
+                            print(f"  Distilled: {analysis.split('Diagnosis:')[1].split(chr(10))[0].strip() if 'Diagnosis:' in analysis else '?'}")
+                            print(f"  Retrying with distilled learning...")
 
-                            # Run more agent steps with failure feedback
-                            retry_instruction = raw_instruction + hint + feedback
+                            # Step 4: Store learning for future tasks (accumulates on volume)
+                            learning_entry = {
+                                "task_id": example_id,
+                                "domain": dom,
+                                "instruction": raw_instruction[:100],
+                                "attempt": attempt + 1,
+                                "diagnosis": analysis.split("Diagnosis:")[1].split("\n")[0].strip() if "Diagnosis:" in analysis else "unknown",
+                                "actions_tried": action_summary[-3:],
+                                "result": [str(r)[:50] for r in all_results],
+                                "expected": [str(e)[:50] for e in all_expected],
+                            }
+                            learnings_log = getattr(run_osworld, '_learnings', [])
+                            learnings_log.append(learning_entry)
+                            run_osworld._learnings = learnings_log
+
+                            # Save learnings to volume incrementally
+                            try:
+                                os.makedirs("/data/results", exist_ok=True)
+                                with open("/data/results/learnings.json", "w") as lf:
+                                    json.dump(learnings_log, lf, indent=2)
+                                vol.commit()
+                            except Exception:
+                                pass
+
+                            # Step 5: Retry with distilled feedback
+                            retry_instruction = raw_instruction + hint + analysis
                             for retry_step in range(10):
                                 try:
                                     obs_resp = requests.get("http://localhost:5050/screenshot", timeout=30)
