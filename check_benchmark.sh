@@ -10,14 +10,25 @@ echo "  ║  Mantis — OSWorld Benchmark Progress          ║"
 echo "  ╚═══════════════════════════════════════════════╝"
 echo ""
 
+# Accept domain as argument (default: try "all", fall back to "os")
+DOMAIN="${1:-all}"
+
 # Fetch latest results from Modal volume
-# Force fresh download (remove stale cache)
 rm -f /tmp/mantis_results.json 2>/dev/null
-.venv/bin/modal volume get osworld-data results/osworld_results.json /tmp/mantis_results.json 2>/dev/null
+.venv/bin/modal volume get osworld-data "results/osworld_results_${DOMAIN}.json" /tmp/mantis_results.json 2>/dev/null
+
+# Fall back to legacy filename, then to "os"
+if [ ! -f /tmp/mantis_results.json ]; then
+    .venv/bin/modal volume get osworld-data results/osworld_results.json /tmp/mantis_results.json 2>/dev/null
+fi
+if [ ! -f /tmp/mantis_results.json ] && [ "$DOMAIN" = "all" ]; then
+    .venv/bin/modal volume get osworld-data results/osworld_results_os.json /tmp/mantis_results.json 2>/dev/null
+    DOMAIN="os"
+fi
 
 if [ ! -f /tmp/mantis_results.json ]; then
     echo "  No results found on Modal volume"
-    echo "  Run: modal run modal_osworld_direct.py"
+    echo "  Run: modal run --detach modal_osworld_direct.py --domain $DOMAIN"
     echo ""
     exit 0
 fi

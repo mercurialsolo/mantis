@@ -781,7 +781,7 @@ First reflect on what you see, then output code.""".strip()
                 "model": f"gemma-4-{GEMMA4_MODEL}-Q4_K_M",
             }
             os.makedirs("/data/results", exist_ok=True)
-            with open("/data/results/osworld_results.json", "w") as f:
+            with open(f"/data/results/osworld_results_{domain}.json", "w") as f:
                 json.dump(results_so_far, f, indent=2)
             try:
                 vol.commit()
@@ -963,7 +963,7 @@ First reflect on what you see, then output code.""".strip()
         "model": f"gemma-4-{GEMMA4_MODEL}-Q4_K_M",
     }
     os.makedirs("/data/results", exist_ok=True)
-    with open("/data/results/osworld_results.json", "w") as f:
+    with open(f"/data/results/osworld_results_{domain}.json", "w") as f:
         json.dump(results, f, indent=2)
     vol.commit()
 
