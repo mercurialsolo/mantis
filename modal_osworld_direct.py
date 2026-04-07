@@ -242,7 +242,7 @@ def derive_hint(evaluator: dict, instruction: str, domain: str,
 
     hints = []
 
-    # 2. Extract target file paths from result config — tells agent WHERE to save
+    # 2. Extract verification info AND derive actionable technique hints
     results = evaluator.get("result", {})
     if not isinstance(results, list):
         results = [results]
@@ -251,12 +251,28 @@ def derive_hint(evaluator: dict, instruction: str, domain: str,
             continue
         rtype = r.get("type", "")
         if rtype == "vm_file" and r.get("path"):
-            hints.append(f"The result should be saved at: {r['path']}")
+            hints.append(f"Save the result at: {r['path']}")
         elif rtype == "vm_command_line" and r.get("command"):
             cmd = r["command"]
             if isinstance(cmd, list):
                 cmd = " ".join(cmd)
-            hints.append(f"Verification will run: `{cmd[:120]}`")
+            # Derive technique from the verification command
+            if "gsettings get" in cmd:
+                # Verification reads a gsettings key → agent should SET that key
+                set_cmd = cmd.replace("gsettings get", "gsettings set")
+                hints.append(f"Use terminal command: `{set_cmd.split('|')[0].strip()[:120]}` followed by the desired value.")
+            elif "which " in cmd:
+                # Verification checks if binary exists → agent should install it
+                binary = cmd.split("which ")[-1].strip()
+                hints.append(f"Install '{binary}' using: `sudo apt install {binary}` or `sudo snap install {binary}`. Password is 'password'.")
+            elif "timedatectl" in cmd:
+                hints.append("Use: `sudo timedatectl set-timezone ZONE`")
+            elif "dconf" in cmd or "stty" in cmd:
+                hints.append(f"Use dconf or gsettings to change the setting. Verify: `{cmd[:100]}`")
+            elif cmd.startswith("bash "):
+                hints.append(f"Complete the task. Verification: `{cmd}`")
+            else:
+                hints.append(f"Verification will run: `{cmd[:120]}`")
 
     # 3. Extract expected values — tells agent WHAT the result should be
     expecteds = evaluator.get("expected", {})
@@ -268,25 +284,25 @@ def derive_hint(evaluator: dict, instruction: str, domain: str,
         rules = e.get("rules", {})
         if isinstance(rules, dict):
             if rules.get("expected"):
-                hints.append(f"Expected value: {str(rules['expected'])[:100]}")
+                hints.append(f"Expected result: {str(rules['expected'])[:100]}")
             if rules.get("include"):
                 hints.append(f"Output must include: {rules['include']}")
             if rules.get("exclude"):
                 hints.append(f"Output must NOT include: {rules['exclude']}")
 
-    # 4. Domain-aware opening action
+    # 4. Domain-aware opening action + general technique guidance
     if domain == "os":
-        hints.insert(0, "Open terminal with Ctrl+Alt+T if needed. Password is 'password'.")
+        hints.insert(0, "First open terminal with Ctrl+Alt+T, wait 1 second, then type the command and press Enter. Password is 'password'.")
     elif domain == "chrome":
-        hints.insert(0, "Chrome browser should already be open. Use the address bar and menus.")
+        hints.insert(0, "Chrome browser should already be open. Use the address bar, menus, and settings (chrome://settings).")
     elif domain in ("libreoffice_calc", "libreoffice_writer", "libreoffice_impress"):
         app_name = {"libreoffice_calc": "Calc", "libreoffice_writer": "Writer",
                      "libreoffice_impress": "Impress"}[domain]
-        hints.insert(0, f"LibreOffice {app_name} should be open. Use menus and keyboard shortcuts.")
+        hints.insert(0, f"LibreOffice {app_name} should be open. Use menus and keyboard shortcuts. Save with Ctrl+S.")
     elif domain == "vs_code":
-        hints.insert(0, "VS Code should be open. Use Ctrl+Shift+P for command palette.")
+        hints.insert(0, "VS Code should be open. Use Ctrl+Shift+P for command palette. Use Ctrl+S to save.")
     elif domain == "gimp":
-        hints.insert(0, "GIMP should be open. Use menus: Filters, Colors, Image, Tools.")
+        hints.insert(0, "GIMP should be open. Use menus: Filters, Colors, Image, Tools. Export with File > Export As.")
     elif domain == "vlc":
         hints.insert(0, "Use VLC media player. Access settings via Tools > Preferences.")
     elif domain == "thunderbird":
