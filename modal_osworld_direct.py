@@ -338,7 +338,10 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
     """
     import requests
 
+    from datetime import datetime, timezone
     run_osworld._run_start = time.time()
+    run_osworld._run_start_iso = datetime.now(timezone.utc).isoformat()
+    run_osworld._run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_osworld._task_details = []
 
     # 1. Download model
@@ -904,13 +907,22 @@ First reflect on what you see, then output code.""".strip()
             total_cost = total_gpu_time * cost_per_second
 
             # Save incrementally after each task (survives disconnects)
+            from datetime import datetime, timezone
+            run_id = getattr(run_osworld, '_run_id', None)
+            if not run_id:
+                run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                run_osworld._run_id = run_id
+
             results_so_far = {
+                "run_id": run_id,
+                "started_at": getattr(run_osworld, '_run_start_iso', datetime.now(timezone.utc).isoformat()),
                 "domain": domain,
                 "tasks_run": len(scores),
                 "tasks_passed": sum(1 for s in scores if s > 0),
                 "average_score": sum(scores) / len(scores) * 100,
                 "scores": scores,
                 "task_details": getattr(run_osworld, '_task_details', []),
+                "learnings": getattr(run_osworld, '_learnings', []),
                 "total_gpu_time_s": round(total_gpu_time, 1),
                 "estimated_cost_usd": round(total_cost, 2),
                 "avg_time_per_task_s": round(total_gpu_time / len(scores), 1),
@@ -918,7 +930,11 @@ First reflect on what you see, then output code.""".strip()
                 "model": f"gemma-4-{GEMMA4_MODEL}-Q4_K_M",
             }
             os.makedirs("/data/results", exist_ok=True)
+            # Save as latest (for check_benchmark.sh)
             with open(f"/data/results/osworld_results_{domain}.json", "w") as f:
+                json.dump(results_so_far, f, indent=2)
+            # Also save timestamped copy (for run history)
+            with open(f"/data/results/osworld_results_{domain}_{run_id}.json", "w") as f:
                 json.dump(results_so_far, f, indent=2)
             try:
                 vol.commit()
