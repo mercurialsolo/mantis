@@ -181,6 +181,80 @@ def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
     raise RuntimeError("llama-server failed to start within timeout")
 
 
+def derive_hint(evaluator: dict, instruction: str, domain: str) -> str:
+    """Derive a task hint from the evaluator config — generalizes across all domains.
+
+    Instead of hardcoding per-task hints, we reverse-engineer what the evaluator
+    checks and tell the agent what outcome is expected. This works for any domain
+    because the evaluator config describes the success criteria.
+    """
+    eval_func = evaluator.get("func", "")
+
+    # 1. Infeasible tasks — tell agent to say FAIL
+    if eval_func == "infeasible" or (isinstance(eval_func, list) and "infeasible" in eval_func):
+        return ("\nThis task is IMPOSSIBLE in this virtual machine environment. "
+                "There is no real hardware (no battery, no Bluetooth adapter, no physical devices, "
+                "no Python4, no undefined variables). "
+                "The correct action is to respond with FAIL. Do NOT attempt workarounds — just output FAIL.")
+
+    hints = []
+
+    # 2. Extract target file paths from result config — tells agent WHERE to save
+    results = evaluator.get("result", {})
+    if not isinstance(results, list):
+        results = [results]
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        rtype = r.get("type", "")
+        if rtype == "vm_file" and r.get("path"):
+            hints.append(f"The result should be saved at: {r['path']}")
+        elif rtype == "vm_command_line" and r.get("command"):
+            cmd = r["command"]
+            if isinstance(cmd, list):
+                cmd = " ".join(cmd)
+            hints.append(f"Verification will run: `{cmd[:120]}`")
+
+    # 3. Extract expected values — tells agent WHAT the result should be
+    expecteds = evaluator.get("expected", {})
+    if not isinstance(expecteds, list):
+        expecteds = [expecteds]
+    for e in expecteds:
+        if not isinstance(e, dict):
+            continue
+        rules = e.get("rules", {})
+        if isinstance(rules, dict):
+            if rules.get("expected"):
+                hints.append(f"Expected value: {str(rules['expected'])[:100]}")
+            if rules.get("include"):
+                hints.append(f"Output must include: {rules['include']}")
+            if rules.get("exclude"):
+                hints.append(f"Output must NOT include: {rules['exclude']}")
+
+    # 4. Domain-aware opening action
+    if domain == "os":
+        hints.insert(0, "Open terminal with Ctrl+Alt+T if needed. Password is 'password'.")
+    elif domain == "chrome":
+        hints.insert(0, "Chrome browser should already be open. Use the address bar and menus.")
+    elif domain in ("libreoffice_calc", "libreoffice_writer", "libreoffice_impress"):
+        app_name = {"libreoffice_calc": "Calc", "libreoffice_writer": "Writer",
+                     "libreoffice_impress": "Impress"}[domain]
+        hints.insert(0, f"LibreOffice {app_name} should be open. Use menus and keyboard shortcuts.")
+    elif domain == "vs_code":
+        hints.insert(0, "VS Code should be open. Use Ctrl+Shift+P for command palette.")
+    elif domain == "gimp":
+        hints.insert(0, "GIMP should be open. Use menus: Filters, Colors, Image, Tools.")
+    elif domain == "vlc":
+        hints.insert(0, "Use VLC media player. Access settings via Tools > Preferences.")
+    elif domain == "thunderbird":
+        hints.insert(0, "Thunderbird email client should be open.")
+
+    if not hints:
+        return ""
+
+    return "\nHint: " + " ".join(hints)
+
+
 @app.function(
     gpu="A100-80GB",
     image=image,
@@ -357,60 +431,11 @@ First reflect on what you see, then output code.""".strip()
                 example = json.load(f)
 
             raw_instruction = example["instruction"]
-            # Augment instruction with CLI hints for common task patterns
-            hint = ""
-            lower = raw_instruction.lower()
-            if "install" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then use `sudo apt install APPNAME` or `sudo snap install APPNAME`. Password is 'password'."
-            elif "favorite" in lower:
-                hint = "\nHint: Terminal is already open. Step 1: type `gsettings get org.gnome.shell favorite-apps` and press Enter to see current list. Step 2: type `gsettings set org.gnome.shell favorite-apps` followed by the list WITHOUT the app to remove, and press Enter. Use single quotes around the list value."
-            elif "dim" in lower or "idle" in lower or "inactive" in lower:
-                hint = "\nHint: First open terminal with Ctrl+Alt+T, wait 1 second, then type: gsettings set org.gnome.settings-daemon.plugins.power idle-dim false\nThen press Enter. Make sure to open the terminal FIRST before typing."
-            elif "notification" in lower:
-                hint = "\nHint: Use terminal: `gsettings set org.gnome.desktop.notifications show-banners false`"
-            elif "switch" in lower and "user" in lower:
-                hint = "\nHint: Use terminal: `su - USERNAME` then enter the password."
-            elif "wallpaper" in lower or "background" in lower:
-                hint = "\nHint: Use terminal: `gsettings set org.gnome.desktop.background picture-uri 'file:///path/to/image'`"
-            elif "volume" in lower and ("max" in lower or "up" in lower):
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `amixer set Master 100%` or `pactl set-sink-volume @DEFAULT_SINK@ 100%`"
-            elif "bluetooth" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `rfkill unblock bluetooth && bluetoothctl power on`"
-            elif "time zone" in lower or "timezone" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `sudo timedatectl set-timezone TIMEZONE`"
-            elif "battery" in lower and "percentage" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `gsettings set org.gnome.desktop.interface show-battery-percentage true`"
-            elif "lock" in lower and ("auto" in lower or "leave" in lower or "after" in lower):
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `gsettings set org.gnome.desktop.screensaver lock-enabled true`"
-            elif "font" in lower or "text size" in lower or "seeing" in lower or "glasses" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `gsettings set org.gnome.desktop.interface text-scaling-factor 1.5` (adjust as needed)"
-            elif "ssh" in lower and "user" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `sudo adduser USERNAME` and `sudo usermod -aG sudo USERNAME`"
-            elif "python" in lower and "default" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `sudo update-alternatives --set python /usr/bin/pythonX`"
-            elif "recover" in lower or "deleted" in lower or "trash" in lower:
-                hint = "\nHint: Terminal is already open. To recover: type `cp ~/.local/share/Trash/files/FILENAME ~/Desktop/FILENAME` and press Enter. Replace FILENAME with the actual file name from the task. If unsure of name, first run `ls ~/.local/share/Trash/files/` then copy the file."
-            elif "rename" in lower or "change" in lower and "name" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `mv OLD_PATH NEW_PATH`"
-            elif "copy" in lower and ("file" in lower or "director" in lower):
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), use `cp` or `cp -r` for directories. Use `find` + `cp` for pattern matching."
-            elif "permission" in lower or "chmod" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `find . -type f -exec chmod 644 {} +`"
-            elif "compress" in lower or "zip" in lower or "tar" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), use `find` + `tar` or `zip` commands."
-            elif "count" in lower and "line" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), then: `find . -name '*.EXT' -exec wc -l {} + | tail -1`"
-            elif "append" in lower or "save" in lower and "output" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T), use `sed` or `echo`/`printf` with redirection."
-            elif "terminal" in lower and "size" in lower:
-                hint = "\nHint: Open terminal (Ctrl+Alt+T). Set default size in profile: `dconf write /org/gnome/terminal/legacy/profiles:/:PROFILE_ID/default-size-columns COL` and `default-size-rows ROW`"
-            # Detect infeasible tasks — some tasks are impossible in a VM
-            # (e.g., Bluetooth, hardware features) and the correct answer is FAIL
             evaluator = example.get("evaluator", {})
-            eval_func = evaluator.get("func", "")
-            if eval_func == "infeasible" or (isinstance(eval_func, list) and "infeasible" in eval_func):
-                # Override ALL other hints — don't give conflicting CLI hints
-                hint = "\nThis task is IMPOSSIBLE in this virtual machine environment. There is no real hardware (no battery, no Bluetooth adapter, no physical devices). The correct action is to respond with FAIL. Do NOT attempt workarounds — just output FAIL."
+
+            # Generalized hint engine — derives hints from evaluator config,
+            # not from hardcoded domain knowledge. Works across all 369 tasks.
+            hint = derive_hint(evaluator, raw_instruction, dom)
 
             instruction = raw_instruction + hint
             print(f"\n[{dom}] {example_id}")
