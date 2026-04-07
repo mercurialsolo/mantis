@@ -259,7 +259,7 @@ def derive_hint(evaluator: dict, instruction: str, domain: str) -> str:
     gpu="A100-80GB",
     image=image,
     volumes={"/data": vol},
-    timeout=129600,  # 36 hours — full 369-task run takes ~31h
+    timeout=86400,  # 24 hours (Modal max) — full run may need multiple batches
     memory=65536,
     cpu=8,
 )
@@ -355,6 +355,10 @@ Rules:
 - Password: '{CLIENT_PASSWORD}'
 - After typing in terminal, press Enter: `pyautogui.press('enter')`
 - Add `time.sleep(0.5)` between actions
+- For commands with special characters (<, >, |, *, &, quotes), use subprocess instead:
+  `import subprocess; subprocess.run('your command here', shell=True)`
+  This avoids pyautogui.write() mangling special characters.
+- For complex terminal commands, prefer subprocess.run() over pyautogui.write()
 
 Special codes: ```WAIT```, ```DONE```, ```FAIL```
 
