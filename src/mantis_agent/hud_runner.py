@@ -14,13 +14,13 @@ Usage:
     llama-server -hf ggml-org/gemma-4-E4B-it-GGUF --port 8080 -ngl 99 -c 4096
 
     # Run single task (debug):
-    python -m cua_agent.hud_runner
+    python -m mantis_agent.hud_runner
 
     # Run full benchmark:
-    python -m cua_agent.hud_runner --full
+    python -m mantis_agent.hud_runner --full
 
     # Run remotely on HUD (no local compute needed):
-    python -m cua_agent.hud_runner --full --remote
+    python -m mantis_agent.hud_runner --full --remote
 """
 
 from __future__ import annotations

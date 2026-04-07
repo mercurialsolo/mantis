@@ -6,7 +6,7 @@ of HUD's generic OpenAI-compatible wrapper.
 
 Usage:
     from hud.datasets import run_dataset
-    from cua_agent.hud_mcp_agent import Gemma4MCPAgent
+    from mantis_agent.hud_mcp_agent import Gemma4MCPAgent
 
     results = await run_dataset(
         name="gemma4-osworld",
@@ -53,8 +53,8 @@ class Gemma4MCPAgent(MCPAgent):
     """
 
     metadata: ClassVar[dict[str, Any]] = {
-        "agent": "gemma4-cua",
-        "framework": "cua-agent",
+        "agent": "gemma4-mantis",
+        "framework": "mantis-agent",
     }
 
     def __init__(

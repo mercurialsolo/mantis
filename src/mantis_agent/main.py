@@ -1,4 +1,4 @@
-"""CLI entry point for the streaming CUA agent."""
+"""CLI entry point for the Mantis agent."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from .streamer import ScreenStreamer
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="cua",
-        description="Streaming CUA agent — Gemma4 watches your screen and acts.",
+        prog="mantis",
+        description="Mantis agent — watches your screen with precision and acts.",
     )
     p.add_argument("task", help="Task to accomplish (natural language)")
     p.add_argument(
@@ -97,7 +97,7 @@ def main() -> None:
     logging.getLogger("transformers").setLevel(logging.WARNING)
     logging.getLogger("PIL").setLevel(logging.WARNING)
 
-    logger = logging.getLogger("cua")
+    logger = logging.getLogger("mantis")
     logger.info(f"Model: {args.model}")
     logger.info(f"Task: {args.task}")
 

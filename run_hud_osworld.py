@@ -55,7 +55,7 @@ async def main() -> None:
         logger.warning("HUD_API_KEY is not set.")
 
     from hud.datasets import run_dataset
-    from cua_agent.hud_mcp_agent import Gemma4MCPAgent
+    from mantis_agent.hud_mcp_agent import Gemma4MCPAgent
 
     logger.info(
         "Starting evaluation: model_url=%s  dataset=%s  max_steps=%d",

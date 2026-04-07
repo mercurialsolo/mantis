@@ -1,7 +1,7 @@
 [project]
-name = "cua-agent"
+name = "mantis-agent"
 version = "0.1.0"
-description = "Streaming CUA agent powered by Gemma4 — unified perception, reasoning, and action"
+description = "Mantis — a small creature with world-class vision that watches patiently and acts with speed and precision"
 requires-python = ">=3.11"
 dependencies = [
     "transformers>=4.52",
@@ -28,7 +28,7 @@ hud = [
 ]
 
 [project.scripts]
-cua = "cua_agent.main:main"
+mantis = "mantis_agent.main:main"
 
 [build-system]
 requires = ["setuptools>=68"]

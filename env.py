@@ -1,4 +1,4 @@
-"""cua_agent - HUD Environment"""
+"""mantis_agent - HUD Environment"""
 
 import asyncio
 
@@ -7,7 +7,7 @@ from hud.settings import settings
 from openai import AsyncOpenAI, Omit
 from hud.environment import Environment
 
-env = Environment("cua_agent")
+env = Environment("mantis_agent")
 
 
 # =============================================================================
@@ -106,7 +106,7 @@ if __name__ == "__main__":
 # 4. This deploys the environment for remote connection
 #
 # Once deployed, connect to it from other environments:
-#   env.connect_hub("cua_agent")
+#   env.connect_hub("mantis_agent")
 #
 # Remote deployment enables:
 # - Parallelized evaluations (run many agents simultaneously)
