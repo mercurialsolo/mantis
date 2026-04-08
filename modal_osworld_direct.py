@@ -791,30 +791,47 @@ First reflect on what you see, then output code.""".strip()
                             for i, (r, e) in enumerate(zip(all_results, all_expected)):
                                 analysis += f"Result {i+1}: got '{r}', expected '{e}'\n"
 
-                            # Step 2: Distill what went wrong (categories)
+                            # Step 2: Deep diagnosis — extract specific errors from eval results
                             result_str = ' '.join(str(r) for r in all_results)
-                            expected_str = ' '.join(str(e) for e in all_expected)
 
                             if any("not found" in str(r).lower() or "no such" in str(r).lower() for r in all_results):
                                 analysis += "Diagnosis: Command or file not found. Check paths and command names.\n"
                             elif any(str(r).strip() == "" or str(r).strip() == "None" for r in all_results):
                                 analysis += "Diagnosis: Empty result. The command may not have executed. Make sure to press Enter after typing.\n"
-                            elif all_results == all_expected:
-                                analysis += "Diagnosis: Results match but scored 0. May be a formatting issue.\n"
+                            elif "(eval infrastructure failure)" in result_str:
+                                analysis += "Diagnosis: Eval couldn't read VM state. Terminal service may be down. Try using subprocess.run() to execute commands directly instead of pyautogui.\n"
+                            elif "children': []" in result_str or "empty" in result_str.lower():
+                                analysis += "Diagnosis: Target directory is empty. Files were not copied/moved. Check source path and copy command.\n"
+                            elif "Incorrect permission" in result_str:
+                                analysis += f"Diagnosis: Wrong file permissions. The eval says: {result_str[:150]}. Use `find . -type f -exec chmod XXX {{}} +` with the correct permission number.\n"
+                            elif "Destination directory" in result_str:
+                                analysis += f"Diagnosis: Wrong destination directory. The eval says: {result_str[:150]}. Check the exact target path.\n"
+                            elif "Expected:" in result_str:
+                                analysis += f"Diagnosis: Output format wrong. The eval shows expected bytes: {result_str[:200]}. Match this exactly.\n"
                             else:
-                                analysis += "Diagnosis: Wrong result. Try a completely different approach or command.\n"
+                                # Include the actual result so the agent can see exactly what's wrong
+                                analysis += f"Diagnosis: Got wrong result. Actual output: {result_str[:200]}\n"
 
-                            # Step 3: Generate strategy hint based on failure pattern
+                            # Step 3: Generate actionable strategy based on failure pattern
                             strategy = ""
-                            if any("pyautogui.write" in str(a) for a in action_history):
-                                strategy += "- Previous attempt used pyautogui.write() which may mangle special chars. Use subprocess.run() instead.\n"
-                            if any("click" in str(a) for a in action_history[-3:]):
-                                strategy += "- Previous attempt used GUI clicks. Try a terminal command approach instead.\n"
-                            if len(action_history) >= max_steps - 2:
-                                strategy += "- Ran out of steps. Execute the solution in fewer, more decisive steps.\n"
+                            has_pyautogui_write = any("pyautogui.write" in str(a) for a in action_history)
+                            has_gui_clicks = any("click" in str(a) for a in action_history[-3:])
+                            ran_out_of_steps = len(action_history) >= max_steps - 2
 
-                            analysis += f"New strategy:\n{strategy}" if strategy else ""
-                            analysis += "Try a COMPLETELY DIFFERENT approach. Do NOT repeat what failed."
+                            if has_pyautogui_write and any(c in raw_instruction for c in ['<', '>', '|', '*', '"', "'"]):
+                                strategy += "- CRITICAL: Use subprocess.run('command', shell=True) instead of pyautogui.write() for commands with special characters.\n"
+                            elif has_pyautogui_write:
+                                strategy += "- Try subprocess.run() instead of pyautogui.write() to avoid character mangling.\n"
+                            if has_gui_clicks:
+                                strategy += "- Try a terminal command approach instead of GUI clicks.\n"
+                            if ran_out_of_steps:
+                                strategy += "- Ran out of steps. Use subprocess.run() to execute the solution in ONE step.\n"
+                            if "children': []" in result_str:
+                                strategy += "- The copy command didn't work. Try: find SOURCE -name 'PATTERN' -exec cp --parents {} DEST \\;\n"
+                            if not strategy:
+                                strategy += "- Try a completely different approach.\n"
+
+                            analysis += f"Strategy:\n{strategy}"
 
                             print(f"  Attempt {attempt+1} failed. Results: {all_results}")
                             print(f"  Distilled: {analysis.split('Diagnosis:')[1].split(chr(10))[0].strip() if 'Diagnosis:' in analysis else '?'}")
@@ -1108,15 +1125,33 @@ First reflect on what you see, then output code.""".strip()
         print(f"  Average score: {sum(scores)/len(scores)*100:.1f}%")
     print(f"{'='*50}")
 
-    # Save results
+    # Save final results with full metadata
+    from datetime import datetime, timezone
+    run_id = getattr(run_osworld, '_run_id', 'unknown')
+    total_gpu_time = time.time() - run_osworld._run_start
+    cost_per_second = 0.000694
+    total_cost = total_gpu_time * cost_per_second
+
     results = {
+        "run_id": run_id,
+        "started_at": getattr(run_osworld, '_run_start_iso', ''),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
         "domain": domain,
         "tasks_run": len(scores),
+        "tasks_passed": sum(1 for s in scores if s > 0),
+        "average_score": round(sum(scores) / len(scores) * 100, 1) if scores else 0,
         "scores": scores,
+        "task_details": getattr(run_osworld, '_task_details', []),
+        "learnings": getattr(run_osworld, '_learnings', []),
+        "total_gpu_time_s": round(total_gpu_time, 1),
+        "estimated_cost_usd": round(total_cost, 2),
+        "avg_time_per_task_s": round(total_gpu_time / len(scores), 1) if scores else 0,
         "model": f"gemma-4-{GEMMA4_MODEL}-Q4_K_M",
     }
     os.makedirs("/data/results", exist_ok=True)
     with open(f"/data/results/osworld_results_{domain}.json", "w") as f:
+        json.dump(results, f, indent=2)
+    with open(f"/data/results/osworld_results_{domain}_{run_id}.json", "w") as f:
         json.dump(results, f, indent=2)
     vol.commit()
 
