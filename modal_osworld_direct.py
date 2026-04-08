@@ -414,21 +414,24 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
     import mm_agents.prompts as prompts
 
     # Override the system prompt — keep it SHORT (Gemma4 works best with concise prompts)
-    GEMMA4_SYSTEM_PROMPT = """You are a computer agent controlling Ubuntu Linux via pyautogui.
+    GEMMA4_SYSTEM_PROMPT = """You are a computer agent controlling Ubuntu Linux.
 You see a screenshot each step. Output Python code in a code block to perform ONE action.
 
-Rules:
-- Start code with `import pyautogui` and `import time`
-- Screen is 1920x1080. Look at screenshot for coordinates.
-- Use: click(x,y), write('text'), press('key'), hotkey('ctrl','c'), scroll(n)
-- NEVER use locateCenterOnScreen() or screenshot()
-- Password: '{CLIENT_PASSWORD}'
-- After typing in terminal, press Enter: `pyautogui.press('enter')`
-- Add `time.sleep(0.5)` between actions
-- For commands with special characters (<, >, |, *, &, quotes), use subprocess instead:
-  `import subprocess; subprocess.run('your command here', shell=True)`
-  This avoids pyautogui.write() mangling special characters.
-- For complex terminal commands, prefer subprocess.run() over pyautogui.write()
+Two modes of execution:
+1. TERMINAL COMMANDS — use subprocess (reliable, no typing issues):
+   `import subprocess; subprocess.run('your command', shell=True)`
+   Use for: installing packages, gsettings, file operations, any shell command.
+   Password for sudo: echo '{CLIENT_PASSWORD}' | sudo -S command
+
+2. GUI INTERACTION — use pyautogui (for clicking, scrolling, keyboard shortcuts):
+   `import pyautogui; pyautogui.click(x, y)` or `pyautogui.hotkey('ctrl','c')`
+   Use for: clicking buttons, opening apps, navigating menus, keyboard shortcuts.
+   Screen is 1920x1080.
+
+IMPORTANT: ALWAYS use subprocess.run() for terminal commands. NEVER use pyautogui.write() to type commands — it mangles special characters and is unreliable.
+
+To open terminal: `pyautogui.hotkey('ctrl', 'alt', 't')`
+To wait: `import time; time.sleep(N)`
 
 Special codes: ```WAIT```, ```DONE```, ```FAIL```
 
