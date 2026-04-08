@@ -529,7 +529,59 @@ First reflect on what you see, then output code.""".strip()
     from desktop_env.controllers.setup import SetupController
     from desktop_env.evaluators import metrics, getters
 
-    controller = PythonController(vm_ip="localhost", server_port=5050)
+    controller_raw = PythonController(vm_ip="localhost", server_port=5050)
+
+    # Wrap controller to transparently upgrade pyautogui.write() to clipboard paste.
+    # pyautogui.write() types character-by-character and mangles special chars
+    # (<, >, |, *, quotes, brackets). Clipboard paste is instant and exact.
+    # This is a TOOL improvement — the model doesn't need to know about it.
+    class ReliableController:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute_python_command(self, code):
+            code = self._upgrade_writes(code)
+            return self._inner.execute_python_command(code)
+
+        def execute_action(self, action):
+            return self._inner.execute_action(action)
+
+        def _upgrade_writes(self, code):
+            """Replace pyautogui.write('text') with xdotool type when text has special chars.
+
+            pyautogui.write() types character-by-character and fails on: < > | * & {} [] () " ' ; $ \\ ` !
+            xdotool type uses X11 keysym lookup and handles all characters correctly.
+            This is transparent to the model — it keeps generating pyautogui.write() code.
+            """
+            import re
+            def replace_write(match):
+                full = match.group(0)
+                # Extract the text argument (handle both quote styles and escaped quotes)
+                text = match.group(1) if match.group(1) is not None else match.group(2)
+                if text is None:
+                    return full
+                # Only upgrade if text contains chars that pyautogui mangles
+                special = set('<>|*&{}[]()"\';$\\`!~')
+                if any(c in text for c in special):
+                    # Use xdotool type — reliable for all characters
+                    # Falls back to xclip+paste if xdotool unavailable
+                    escaped = text.replace("\\", "\\\\").replace("'", "\\'")
+                    return (f"import subprocess, shutil; "
+                            f"subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '0', '{escaped}']) "
+                            f"if shutil.which('xdotool') else "
+                            f"(subprocess.run(['xclip', '-selection', 'clipboard'], input='{escaped}'.encode()), "
+                            f"__import__('pyautogui').hotkey('ctrl', 'v'))")
+                return full
+
+            # Match pyautogui.write(...) — capture the text argument
+            # Handles: write('text'), write("text"), write('text', interval=0.05)
+            pattern = r"""pyautogui\.write\((?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")(?:\s*,\s*interval\s*=[^)]+)?\)"""
+            return re.sub(pattern, replace_write, code)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    controller = ReliableController(controller_raw)
     setup_controller = SetupController(
         vm_ip="localhost", server_port=5050,
         chromium_port=9222, vlc_port=8080,
