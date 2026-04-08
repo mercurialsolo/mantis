@@ -6,17 +6,30 @@ cd /Users/barada/Sandbox/Mason/cua-agent
 
 DOMAIN="${1:-all}"
 
-# Fetch latest results from Modal volume
-rm -f /tmp/mantis_results.json 2>/dev/null
-.venv/bin/modal volume get osworld-data "results/osworld_results_${DOMAIN}.json" /tmp/mantis_results.json 2>/dev/null
+# Find the most recent results file by listing timestamped files and picking the latest
+rm -f /tmp/mantis_results.json /tmp/mantis_ls.txt 2>/dev/null
+.venv/bin/modal volume ls osworld-data results/ 2>/dev/null | grep "osworld_results_${DOMAIN}_2" | sort -r | head -1 > /tmp/mantis_ls.txt
 
-# Fall back to legacy filename, then to "os"
+LATEST=$(cat /tmp/mantis_ls.txt | xargs)
+if [ -n "$LATEST" ]; then
+    .venv/bin/modal volume get osworld-data "$LATEST" /tmp/mantis_results.json 2>/dev/null
+fi
+
+# Fall back to non-timestamped, then legacy
 if [ ! -f /tmp/mantis_results.json ]; then
-    .venv/bin/modal volume get osworld-data results/osworld_results.json /tmp/mantis_results.json 2>/dev/null
+    .venv/bin/modal volume get osworld-data "results/osworld_results_${DOMAIN}.json" /tmp/mantis_results.json 2>/dev/null
 fi
 if [ ! -f /tmp/mantis_results.json ] && [ "$DOMAIN" = "all" ]; then
-    .venv/bin/modal volume get osworld-data results/osworld_results_os.json /tmp/mantis_results.json 2>/dev/null
+    # Try os domain
+    .venv/bin/modal volume ls osworld-data results/ 2>/dev/null | grep "osworld_results_os_2" | sort -r | head -1 > /tmp/mantis_ls.txt
+    LATEST=$(cat /tmp/mantis_ls.txt | xargs)
+    if [ -n "$LATEST" ]; then
+        .venv/bin/modal volume get osworld-data "$LATEST" /tmp/mantis_results.json 2>/dev/null
+    fi
     DOMAIN="os"
+fi
+if [ ! -f /tmp/mantis_results.json ]; then
+    .venv/bin/modal volume get osworld-data results/osworld_results.json /tmp/mantis_results.json 2>/dev/null
 fi
 
 if [ ! -f /tmp/mantis_results.json ]; then
