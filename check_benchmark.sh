@@ -33,13 +33,20 @@ fi
 
 python3 << 'PYEOF'
 import json, sys, os
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     with open("/tmp/mantis_results.json") as f:
-        r = json.load(f)
+        content = f.read().strip()
+    if not content:
+        print("  Waiting for first result...")
+        sys.exit(0)
+    r = json.loads(content)
+except json.JSONDecodeError:
+    print("  Results file being written — try again in a moment")
+    sys.exit(0)
 except Exception as e:
-    print(f"  Error reading results: {e}")
+    print(f"  Error: {e}")
     sys.exit(1)
 
 scores = r.get("scores", [])
@@ -57,13 +64,20 @@ learnings = r.get("learnings", [])
 
 done = len(scores) >= total_expected
 
-# Format timestamps
-started_short = ""
-if started:
+# Format timestamps in local timezone
+def format_local(iso_str):
+    if not iso_str:
+        return ""
     try:
-        dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
-        started_short = dt.strftime("%Y-%m-%d %H:%M UTC")
-    except: started_short = started[:19]
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        local_dt = dt.astimezone()  # converts to machine's local tz
+        tz_name = local_dt.strftime("%Z")
+        return local_dt.strftime(f"%Y-%m-%d %H:%M {tz_name}")
+    except:
+        return iso_str[:19]
+
+started_short = format_local(started)
+completed_short = format_local(completed)
 
 print()
 print("  ╔═══════════════════════════════════════════════╗")
@@ -73,6 +87,8 @@ print()
 print(f"  Run:       {run_id}")
 if started_short:
     print(f"  Started:   {started_short}")
+if done and completed_short:
+    print(f"  Finished:  {completed_short}")
 print(f"  Domain:    {domain}")
 print(f"  Model:     {model}")
 print(f"  Status:    {'COMPLETE ★' if done else 'RUNNING ●'}")
