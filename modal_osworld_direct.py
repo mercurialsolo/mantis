@@ -242,7 +242,35 @@ def derive_hint(evaluator: dict, instruction: str, domain: str,
 
     hints = []
 
-    # 2. Extract verification info AND derive actionable technique hints
+    # 2. Reverse-engineer postconfig to understand what the evaluator DOES
+    postconfig = evaluator.get("postconfig", [])
+    postconfig_actions = []
+    for step in postconfig:
+        if step.get("type") == "execute":
+            cmd = step.get("parameters", {}).get("command", "")
+            if isinstance(cmd, list):
+                cmd = " ".join(cmd)
+            postconfig_actions.append(cmd)
+        elif step.get("type") == "download":
+            for f_entry in step.get("parameters", {}).get("files", []):
+                postconfig_actions.append(f"downloads {f_entry.get('path', '?')}")
+
+    if postconfig_actions:
+        # Extract key verification steps from postconfig
+        postconfig_summary = []
+        for cmd in postconfig_actions:
+            if "stty size" in cmd:
+                postconfig_summary.append("The evaluator opens a NEW terminal and runs `stty size` to check terminal dimensions. You must change the terminal's DEFAULT size in GNOME Terminal profile settings (via dconf/gsettings), not just the current session.")
+            elif "ctrl', 's'" in cmd or "ctrl\", \"s" in cmd:
+                postconfig_summary.append("The evaluator saves the file with Ctrl+S before checking. Make sure your changes are in the active document.")
+            elif "hotkey" in cmd and "shift" in cmd and "ctrl" in cmd and "e" in cmd:
+                postconfig_summary.append("The evaluator exports the file via Shift+Ctrl+E (GIMP Export As). Make sure the image is ready to export.")
+            elif "eval.sh" in cmd or "check_password" in cmd:
+                postconfig_summary.append(f"The evaluator runs a verification script: {cmd.split('/')[-1][:30]}")
+        if postconfig_summary:
+            hints.extend(postconfig_summary)
+
+    # 3. Extract verification info AND derive actionable technique hints
     results = evaluator.get("result", {})
     if not isinstance(results, list):
         results = [results]
