@@ -92,9 +92,17 @@ task_details = r.get("task_details", [])
 for i in range(len(scores)):
     mark = "✓" if scores[i] > 0 else "✗"
     desc = f"Task {i+1}"
-    # Try task_details first, then config file
-    if i < len(task_details) and task_details[i].get("instruction"):
-        desc = task_details[i]["instruction"][:55]
+    steps = ""
+    duration = ""
+    # Try task_details first
+    if i < len(task_details):
+        td = task_details[i]
+        if td.get("instruction"):
+            desc = td["instruction"][:45]
+        s = td.get("steps", 0)
+        d = td.get("duration_s", 0)
+        if s: steps = f"{s} steps"
+        if d: duration = f"{d:.0f}s"
     elif i < len(task_ids):
         tid = task_ids[i]
         for dom_dir in ["os", "chrome", "vs_code", "gimp", "vlc", "thunderbird",
@@ -103,10 +111,13 @@ for i in range(len(scores)):
             if os.path.exists(config_path):
                 try:
                     with open(config_path) as f:
-                        desc = json.load(f).get("instruction", desc)[:55]
+                        desc = json.load(f).get("instruction", desc)[:45]
                 except: pass
                 break
-    print(f"  {mark} {i+1:2d}. {desc}")
+    suffix = ""
+    if steps or duration:
+        suffix = f"  ({steps} {duration})".rstrip()
+    print(f"  {mark} {i+1:2d}. {desc}{suffix}")
 
 print(f"  ────────────────────────────────────────────────")
 if done:
