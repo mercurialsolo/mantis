@@ -791,15 +791,16 @@ First reflect on what you see, then output code.""".strip()
                             for i, (r, e) in enumerate(zip(all_results, all_expected)):
                                 analysis += f"Result {i+1}: got '{r}', expected '{e}'\n"
 
-                            # Step 2: Deep diagnosis — extract specific errors from eval results
+                            # Step 2: Deep diagnosis — extract specific fix from eval results
                             result_str = ' '.join(str(r) for r in all_results)
+                            expected_str = ' '.join(str(e) for e in all_expected)
 
                             if any("not found" in str(r).lower() or "no such" in str(r).lower() for r in all_results):
                                 analysis += "Diagnosis: Command or file not found. Check paths and command names.\n"
                             elif any(str(r).strip() == "" or str(r).strip() == "None" for r in all_results):
                                 analysis += "Diagnosis: Empty result. The command may not have executed. Make sure to press Enter after typing.\n"
                             elif "(eval infrastructure failure)" in result_str:
-                                analysis += "Diagnosis: Eval couldn't read VM state. Terminal service may be down. Try using subprocess.run() to execute commands directly instead of pyautogui.\n"
+                                analysis += "Diagnosis: Eval couldn't read VM state. Try using subprocess.run() to execute commands directly instead of pyautogui.\n"
                             elif "children': []" in result_str or "empty" in result_str.lower():
                                 analysis += "Diagnosis: Target directory is empty. Files were not copied/moved. Check source path and copy command.\n"
                             elif "Incorrect permission" in result_str:
@@ -809,10 +810,36 @@ First reflect on what you see, then output code.""".strip()
                             elif "Expected:" in result_str:
                                 analysis += f"Diagnosis: Output format wrong. The eval shows expected bytes: {result_str[:200]}. Match this exactly.\n"
                             else:
-                                # Include the actual result so the agent can see exactly what's wrong
-                                analysis += f"Diagnosis: Got wrong result. Actual output: {result_str[:200]}\n"
+                                analysis += f"Diagnosis: Got wrong result. Current state: {result_str[:200]}\n"
 
-                            # Step 3: Generate actionable strategy based on failure pattern
+                            # Compare result vs expected to extract SPECIFIC fix
+                            for r_str, e_str in zip(all_results, all_expected):
+                                # List-based results: identify items to add/remove
+                                if "['" in str(r_str) and "['" in str(e_str):
+                                    try:
+                                        import ast
+                                        # Parse the actual list from the result
+                                        actual_list_str = str(r_str).strip()
+                                        if actual_list_str.startswith("["):
+                                            actual_items = ast.literal_eval(actual_list_str)
+                                        else:
+                                            actual_items = ast.literal_eval(actual_list_str.split("\n")[0])
+                                        expected_items = ast.literal_eval(str(e_str).strip()) if str(e_str).strip().startswith("[") else None
+                                        if actual_items and expected_items:
+                                            to_remove = set(actual_items) - set(expected_items)
+                                            to_add = set(expected_items) - set(actual_items)
+                                            if to_remove:
+                                                analysis += f"Fix: Remove {to_remove} from the list. "
+                                            if to_add:
+                                                analysis += f"Fix: Add {to_add} to the list. "
+                                            analysis += f"Set the value to exactly: {expected_items}\n"
+                                    except Exception:
+                                        pass
+                                # gsettings-style values: show exact target
+                                elif str(e_str).strip() and str(r_str).strip() != str(e_str).strip():
+                                    analysis += f"Fix: Change value from '{str(r_str).strip()[:60]}' to '{str(e_str).strip()[:60]}'\n"
+
+                            # Step 3: Generate actionable strategy
                             strategy = ""
                             has_pyautogui_write = any("pyautogui.write" in str(a) for a in action_history)
                             has_gui_clicks = any("click" in str(a) for a in action_history[-3:])
@@ -821,7 +848,7 @@ First reflect on what you see, then output code.""".strip()
                             if has_pyautogui_write and any(c in raw_instruction for c in ['<', '>', '|', '*', '"', "'"]):
                                 strategy += "- CRITICAL: Use subprocess.run('command', shell=True) instead of pyautogui.write() for commands with special characters.\n"
                             elif has_pyautogui_write:
-                                strategy += "- Try subprocess.run() instead of pyautogui.write() to avoid character mangling.\n"
+                                strategy += "- Use subprocess.run() instead of pyautogui.write() to avoid character mangling.\n"
                             if has_gui_clicks:
                                 strategy += "- Try a terminal command approach instead of GUI clicks.\n"
                             if ran_out_of_steps:
