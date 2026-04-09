@@ -622,6 +622,17 @@ First reflect on what you see, then output code.""".strip()
 
             task_start = time.time()
 
+            # Persistent trace for this task — saved to volume for debugging
+            task_trace = {
+                "task_id": example_id,
+                "domain": dom,
+                "instruction": raw_instruction,
+                "hint": hint[:200] if hint else "",
+                "steps": [],
+                "retries": [],
+                "eval_results": [],
+            }
+
             # Set up the task environment (run config commands on VM)
             task_config = example.get("config", [])
             setup_ok = True
@@ -729,6 +740,10 @@ First reflect on what you see, then output code.""".strip()
 
                 if actions:
                     last_actions.append(str(actions[0]))
+                    task_trace["steps"].append({
+                        "step": step + 1,
+                        "action": str(actions[0])[:200],
+                    })
 
                 if done:
                     break
@@ -930,9 +945,19 @@ First reflect on what you see, then output code.""".strip()
 
                             analysis += f"Strategy:\n{strategy}"
 
+                            diag_short = analysis.split('Diagnosis:')[1].split(chr(10))[0].strip() if 'Diagnosis:' in analysis else '?'
                             print(f"  Attempt {attempt+1} failed. Results: {all_results}")
-                            print(f"  Distilled: {analysis.split('Diagnosis:')[1].split(chr(10))[0].strip() if 'Diagnosis:' in analysis else '?'}")
+                            print(f"  Distilled: {diag_short}")
                             print(f"  Retrying with distilled learning...")
+
+                            # Log to trace
+                            task_trace["retries"].append({
+                                "attempt": attempt + 1,
+                                "results": [str(r)[:100] for r in all_results],
+                                "expected": [str(e)[:100] for e in all_expected],
+                                "diagnosis": diag_short,
+                                "analysis": analysis[:500],
+                            })
 
                             # Step 4: Store learning for future tasks (accumulates on volume)
                             learning_entry = {
@@ -1003,7 +1028,11 @@ First reflect on what you see, then output code.""".strip()
             print(f"  Score: {score} | Steps: {steps_taken} | Time: {task_duration:.0f}s")
             task_count += 1
 
-            # Track per-task telemetry
+            # Track per-task telemetry with full trace
+            task_trace["score"] = score
+            task_trace["steps_taken"] = steps_taken
+            task_trace["duration_s"] = round(task_duration, 1)
+
             if not hasattr(run_osworld, '_task_details'):
                 run_osworld._task_details = []
             run_osworld._task_details.append({
@@ -1014,6 +1043,19 @@ First reflect on what you see, then output code.""".strip()
                 "duration_s": round(task_duration, 1),
                 "had_hint": bool(hint),
             })
+
+            # Save trace to volume for debugging
+            if not hasattr(run_osworld, '_traces'):
+                run_osworld._traces = []
+            run_osworld._traces.append(task_trace)
+            try:
+                os.makedirs("/data/results", exist_ok=True)
+                run_id = getattr(run_osworld, '_run_id', 'unknown')
+                with open(f"/data/results/traces_{domain}_{run_id}.json", "w") as tf:
+                    json.dump(run_osworld._traces, tf, indent=2)
+                vol.commit()
+            except Exception:
+                pass
 
             # Cost calculation: A100-80GB = $0.000694/s on Modal
             total_gpu_time = time.time() - (run_osworld._run_start if hasattr(run_osworld, '_run_start') else time.time())
