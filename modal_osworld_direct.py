@@ -1159,88 +1159,110 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
                         # Distillation loop: analyze failure → distill learning → generate new strategy → retry
                         if score == 0 and attempt < max_retries and sub_scores:
                             # Step 1: Build failure analysis context
-                            action_summary = []
-                            for a in action_history[-10:]:  # Last 10 actions
-                                if isinstance(a, str):
-                                    # Extract just the key action from code
-                                    for line in a.split('\n'):
-                                        if 'pyautogui' in line or 'subprocess' in line:
-                                            action_summary.append(line.strip()[:80])
-                                            break
+                            def _action_brief(a):
+                                """First meaningful line of an action — works for helpers and legacy pyautogui."""
+                                if not isinstance(a, str):
+                                    return str(a)[:120]
+                                for line in a.split('\n'):
+                                    s = line.strip()
+                                    if (s and not s.startswith('#')
+                                        and not s.startswith('import ')
+                                        and not s.startswith('from ')):
+                                        return s[:120]
+                                return "<no action>"
+
+                            action_summary = [_action_brief(a) for a in action_history[-10:]]
 
                             analysis = f"\n\nFAILURE ANALYSIS (attempt {attempt+1}):\n"
                             analysis += f"What was tried: {'; '.join(action_summary[-5:]) if action_summary else 'unknown'}\n"
                             for i, (r, e) in enumerate(zip(all_results, all_expected)):
                                 analysis += f"Result {i+1}: got '{r}', expected '{e}'\n"
 
-                            # Step 2: Deep diagnosis — extract specific fix from eval results
+                            # Step 2: LLM-based diagnosis (EXP-3).
+                            # Ask the model itself to diagnose the failure and propose a
+                            # specific fix. Pattern-matched diagnosis is kept as a fallback
+                            # below in case the LLM call fails.
                             result_str = ' '.join(str(r) for r in all_results)
                             expected_str = ' '.join(str(e) for e in all_expected)
 
-                            if any("not found" in str(r).lower() or "no such" in str(r).lower() for r in all_results):
-                                analysis += "Diagnosis: Command or file not found. Check paths and command names.\n"
-                            elif any(str(r).strip() == "" or str(r).strip() == "None" for r in all_results):
-                                analysis += "Diagnosis: Empty result. The command may not have executed. Make sure to press Enter after typing.\n"
-                            elif "(eval infrastructure failure)" in result_str:
-                                analysis += "Diagnosis: Eval couldn't read VM state. Try using subprocess.run() to execute commands directly instead of pyautogui.\n"
-                            elif "children': []" in result_str or "empty" in result_str.lower():
-                                analysis += "Diagnosis: Target directory is empty. Files were not copied/moved. Check source path and copy command.\n"
-                            elif "Incorrect permission" in result_str:
-                                analysis += f"Diagnosis: Wrong file permissions. The eval says: {result_str[:150]}. Use `find . -type f -exec chmod XXX {{}} +` with the correct permission number.\n"
-                            elif "Destination directory" in result_str:
-                                analysis += f"Diagnosis: Wrong destination directory. The eval says: {result_str[:150]}. Check the exact target path.\n"
-                            elif "Expected:" in result_str:
-                                analysis += f"Diagnosis: Output format wrong. The eval shows expected bytes: {result_str[:200]}. Match this exactly.\n"
+                            llm_diagnosis = None
+                            try:
+                                import requests as _req
+                                diagnosis_prompt = (
+                                    "You are debugging a failed computer-use agent attempt. "
+                                    "Diagnose the failure precisely and propose ONE concrete fix.\n\n"
+                                    f"TASK: {raw_instruction[:500]}\n\n"
+                                    f"ACTIONS TRIED (last 5, most recent last):\n"
+                                    + "\n".join(f"  - {a}" for a in action_summary[-5:]) + "\n\n"
+                                    f"ACTUAL RESULT FROM EVALUATOR:\n{result_str[:600]}\n\n"
+                                    f"EXPECTED RESULT:\n{expected_str[:600]}\n\n"
+                                    "Respond with EXACTLY this format (3-5 sentences total):\n"
+                                    "MISTAKE: <what went wrong, one sentence>\n"
+                                    "FIX: <the exact next command or action to try, one or two sentences>\n"
+                                    "REASONING: <why this fix should work, one sentence>"
+                                )
+                                resp = _req.post(
+                                    "http://localhost:8080/v1/chat/completions",
+                                    json={
+                                        "model": "gemma",
+                                        "messages": [
+                                            {"role": "user", "content": diagnosis_prompt}
+                                        ],
+                                        "max_tokens": 400,
+                                        "temperature": 0.0,
+                                    },
+                                    timeout=45,
+                                )
+                                if resp.status_code == 200:
+                                    llm_diagnosis = resp.json()["choices"][0]["message"]["content"].strip()
+                            except Exception as _e:
+                                print(f"  LLM diagnosis failed: {_e}")
+                                llm_diagnosis = None
+
+                            if llm_diagnosis:
+                                analysis += f"Diagnosis: {llm_diagnosis}\n"
                             else:
-                                analysis += f"Diagnosis: Got wrong result. Current state: {result_str[:200]}\n"
+                                # Fallback: pattern-matched diagnosis (legacy path)
+                                if any("not found" in str(r).lower() or "no such" in str(r).lower() for r in all_results):
+                                    analysis += "Diagnosis: Command or file not found. Check paths and command names.\n"
+                                elif any(str(r).strip() == "" or str(r).strip() == "None" for r in all_results):
+                                    analysis += "Diagnosis: Empty result. The command may not have executed. Make sure to press Enter after typing.\n"
+                                elif "(eval infrastructure failure)" in result_str:
+                                    analysis += "Diagnosis: Eval couldn't read VM state. Try a different command or approach.\n"
+                                elif "children': []" in result_str or "empty" in result_str.lower():
+                                    analysis += "Diagnosis: Target directory is empty. Files were not copied/moved. Check source path and copy command.\n"
+                                elif "Incorrect permission" in result_str:
+                                    analysis += f"Diagnosis: Wrong file permissions. The eval says: {result_str[:150]}.\n"
+                                elif "Destination directory" in result_str:
+                                    analysis += f"Diagnosis: Wrong destination directory. The eval says: {result_str[:150]}.\n"
+                                elif "Expected:" in result_str:
+                                    analysis += f"Diagnosis: Output format wrong. The eval shows expected: {result_str[:200]}.\n"
+                                else:
+                                    analysis += f"Diagnosis: Got wrong result. Current state: {result_str[:200]}\n"
 
-                            # Compare result vs expected to extract SPECIFIC fix
-                            for r_str, e_str in zip(all_results, all_expected):
-                                # List-based results: identify items to add/remove
-                                if "['" in str(r_str) and "['" in str(e_str):
-                                    try:
-                                        import ast
-                                        # Parse the actual list from the result
-                                        actual_list_str = str(r_str).strip()
-                                        if actual_list_str.startswith("["):
-                                            actual_items = ast.literal_eval(actual_list_str)
-                                        else:
-                                            actual_items = ast.literal_eval(actual_list_str.split("\n")[0])
-                                        expected_items = ast.literal_eval(str(e_str).strip()) if str(e_str).strip().startswith("[") else None
-                                        if actual_items and expected_items:
-                                            to_remove = set(actual_items) - set(expected_items)
-                                            to_add = set(expected_items) - set(actual_items)
-                                            if to_remove:
-                                                analysis += f"Fix: Remove {to_remove} from the list. "
-                                            if to_add:
-                                                analysis += f"Fix: Add {to_add} to the list. "
-                                            analysis += f"Set the value to exactly: {expected_items}\n"
-                                    except Exception:
-                                        pass
-                                # gsettings-style values: show exact target
-                                elif str(e_str).strip() and str(r_str).strip() != str(e_str).strip():
-                                    analysis += f"Fix: Change value from '{str(r_str).strip()[:60]}' to '{str(e_str).strip()[:60]}'\n"
-
-                            # Step 3: Generate actionable strategy
-                            strategy = ""
-                            has_pyautogui_write = any("pyautogui.write" in str(a) for a in action_history)
-                            has_gui_clicks = any("click" in str(a) for a in action_history[-3:])
-                            ran_out_of_steps = len(action_history) >= max_steps - 2
-
-                            if has_pyautogui_write and any(c in raw_instruction for c in ['<', '>', '|', '*', '"', "'"]):
-                                strategy += "- CRITICAL: Use subprocess.run('command', shell=True) instead of pyautogui.write() for commands with special characters.\n"
-                            elif has_pyautogui_write:
-                                strategy += "- Use subprocess.run() instead of pyautogui.write() to avoid character mangling.\n"
-                            if has_gui_clicks:
-                                strategy += "- Try a terminal command approach instead of GUI clicks.\n"
-                            if ran_out_of_steps:
-                                strategy += "- Ran out of steps. Use subprocess.run() to execute the solution in ONE step.\n"
-                            if "children': []" in result_str:
-                                strategy += "- The copy command didn't work. Try: find SOURCE -name 'PATTERN' -exec cp --parents {} DEST \\;\n"
-                            if not strategy:
-                                strategy += "- Try a completely different approach.\n"
-
-                            analysis += f"Strategy:\n{strategy}"
+                                # Compare result vs expected to extract SPECIFIC fix (legacy path only)
+                                for r_str, e_str in zip(all_results, all_expected):
+                                    if "['" in str(r_str) and "['" in str(e_str):
+                                        try:
+                                            import ast as _ast
+                                            actual_list_str = str(r_str).strip()
+                                            if actual_list_str.startswith("["):
+                                                actual_items = _ast.literal_eval(actual_list_str)
+                                            else:
+                                                actual_items = _ast.literal_eval(actual_list_str.split("\n")[0])
+                                            expected_items = _ast.literal_eval(str(e_str).strip()) if str(e_str).strip().startswith("[") else None
+                                            if actual_items and expected_items:
+                                                to_remove = set(actual_items) - set(expected_items)
+                                                to_add = set(expected_items) - set(actual_items)
+                                                if to_remove:
+                                                    analysis += f"Fix: Remove {to_remove} from the list. "
+                                                if to_add:
+                                                    analysis += f"Fix: Add {to_add} to the list. "
+                                                analysis += f"Set the value to exactly: {expected_items}\n"
+                                        except Exception:
+                                            pass
+                                    elif str(e_str).strip() and str(r_str).strip() != str(e_str).strip():
+                                        analysis += f"Fix: Change value from '{str(r_str).strip()[:60]}' to '{str(e_str).strip()[:60]}'\n"
 
                             diag_short = analysis.split('Diagnosis:')[1].split(chr(10))[0].strip() if 'Diagnosis:' in analysis else '?'
                             print(f"  Attempt {attempt+1} failed. Results: {all_results}")
