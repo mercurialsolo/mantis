@@ -1201,10 +1201,14 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
                                     "FIX: <the exact next command or action to try, one or two sentences>\n"
                                     "REASONING: <why this fix should work, one sentence>"
                                 )
+                                # Use the actual loaded model name from llama-server, not "gemma".
+                                # llama.cpp's OpenAI endpoint requires the model name to match
+                                # what's loaded (or at least be present in /v1/models).
+                                model_name = GGUF_CONFIGS[GEMMA4_MODEL]["model_file"]
                                 resp = _req.post(
                                     "http://localhost:8080/v1/chat/completions",
                                     json={
-                                        "model": "gemma",
+                                        "model": model_name,
                                         "messages": [
                                             {"role": "user", "content": diagnosis_prompt}
                                         ],
@@ -1214,9 +1218,16 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
                                     timeout=45,
                                 )
                                 if resp.status_code == 200:
-                                    llm_diagnosis = resp.json()["choices"][0]["message"]["content"].strip()
+                                    body = resp.json()
+                                    try:
+                                        llm_diagnosis = body["choices"][0]["message"]["content"].strip()
+                                        print(f"  LLM diagnosis: {llm_diagnosis[:200]}")
+                                    except (KeyError, IndexError) as _e:
+                                        print(f"  LLM diagnosis: bad response shape: {_e} body={str(body)[:200]}")
+                                else:
+                                    print(f"  LLM diagnosis HTTP {resp.status_code}: {resp.text[:200]}")
                             except Exception as _e:
-                                print(f"  LLM diagnosis failed: {_e}")
+                                print(f"  LLM diagnosis exception: {type(_e).__name__}: {_e}")
                                 llm_diagnosis = None
 
                             if llm_diagnosis:

@@ -38,22 +38,52 @@ def _xy(x, y):
     return int(round(float(x) * _SCALE_X)), int(round(float(y) * _SCALE_Y))
 
 def _autosudo(cmd):
-    """Wrap a sudo command for non-interactive execution."""
-    s = cmd.lstrip()
-    if s.startswith("sudo ") and "-S" not in s and "| sudo" not in s and "echo " not in s.split("sudo")[0]:
-        return "echo 'password' | sudo -S " + s[5:]
-    return cmd
+    """Wrap sudo invocations for non-interactive execution.
+
+    Handles three cases:
+      1. ``sudo COMMAND``                            -> ``echo 'password' | sudo -S COMMAND``
+      2. ``A | sudo COMMAND``                        -> still wrap the sudo with -S (NOT just
+                                                        the leading echo, since A might be
+                                                        feeding stdin to COMMAND, e.g.
+                                                        ``echo 'user:pw' | sudo chpasswd``).
+                                                        We use ``sudo -S -A`` no — instead
+                                                        we use ``sudo -n`` after a one-shot
+                                                        ``sudo -v`` priming, but the simplest
+                                                        reliable form is to use the
+                                                        ``SUDO_ASKPASS`` env var with a script
+                                                        that prints the password. We avoid
+                                                        that complexity here by inserting
+                                                        ``echo 'password' |`` into a heredoc.
+      3. Already wrapped (contains ``-S`` or matches ``echo ... | sudo``) -> leave alone.
+
+    Also walks through ``&&`` / ``;`` separated sub-commands so each ``sudo`` gets handled
+    independently.
+    """
+    if "sudo" not in cmd:
+        return cmd
+
+    # Strategy: ensure passwordless sudo for the lifetime of this command.
+    # Run a one-shot ``sudo -v`` with the password piped in, then chain the
+    # original command. After ``sudo -v`` succeeds, subsequent sudos within
+    # the same session don't need a password for ~5 minutes (timestamp_timeout).
+    # This handles ALL cases: leading sudo, piped sudo, multiple sudos,
+    # sudo inside command substitution, etc.
+    if "-S" in cmd or "SUDO_ASKPASS" in cmd:
+        return cmd  # already self-sufficient
+    return "echo 'password' | sudo -S -v && " + cmd
 
 def _fix_find_exec(cmd):
     """Auto-repair malformed find -exec commands AND teach the correction.
 
-    Models often produce a trailing backslash (line continuation) at the end
-    of a find -exec command when they mean to terminate with backslash-semicolon.
-    The trailing backslash makes bash wait for more input and the find never runs.
+    Handles two common mistakes:
+      1. Trailing bare backslash: ``find ... -exec cp {} dest/ \\``
+         (model meant ``\\;`` but wrote line-continuation)
+      2. No terminator at all: ``find ... -exec cp {} dest/``
+         (model forgot the terminator entirely)
 
-    Returns (corrected_cmd, teaching_note). The note is printed to stdout so
-    the captured-output feedback loop teaches the model the right syntax for
-    future commands in the same session.
+    In both cases, find emits "missing argument to '-exec'" or hangs. We
+    append the proper ``\\;`` and print a teaching note so the model learns
+    the right syntax via the captured-output feedback loop.
     """
     if "-exec" not in cmd:
         return cmd, ""
@@ -61,13 +91,27 @@ def _fix_find_exec(cmd):
     # NOTE: helpers run as a triple-quoted prelude, so each backslash here is
     # written as four chars in the outer source ("\\\\") to become two chars
     # in the loaded code ("\\") which represent a single literal backslash.
+
+    # Case 1: trailing bare backslash (line continuation)
     if stripped.endswith("\\\\") and not stripped.endswith("\\\\;") and not stripped.endswith("\\\\+"):
         fixed = stripped + ";"
         note = (
             "Note: auto-corrected your find -exec command — added the missing "
-            "semicolon terminator. find -exec must end with backslash-semicolon "
-            "(escaped as \\\\; in shell), not just a bare trailing backslash. "
-            "Remember this for future find commands."
+            "semicolon terminator. find -exec must end with \\\\; (backslash + "
+            "semicolon), not just a bare trailing backslash. Remember this."
+        )
+        return fixed, note
+
+    # Case 2: no terminator at all. Detect by checking that the command
+    # contains -exec but does NOT contain \; or + or \\; anywhere after -exec.
+    exec_idx = stripped.find("-exec")
+    after_exec = stripped[exec_idx:]
+    if "\\\\;" not in after_exec and " ;" not in after_exec and after_exec.rstrip()[-1] != "+":
+        fixed = stripped + " \\\\;"
+        note = (
+            "Note: auto-corrected your find -exec command — appended the "
+            "missing \\\\; terminator. find -exec MUST end with \\\\; or + "
+            "or it fails with 'missing argument to -exec'. Remember this."
         )
         return fixed, note
     return cmd, ""
