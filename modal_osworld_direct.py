@@ -73,6 +73,9 @@ image = (
     .run_commands(
         "playwright install --with-deps chromium || true",
     )
+    # Ship the local mantis_agent package (prompts + tool helpers).
+    # This replaces the previous inline prompt and pyautogui-coupling.
+    .add_local_python_source("mantis_agent")
 )
 
 
@@ -140,6 +143,7 @@ def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
         "-ub", "2048",       # Must be >= image token batch (~972 for 1920x1080)
         "--jinja",           # Required for proper Gemma4 chat template
         "--reasoning-budget", "0",  # Prevents <unused24> token spam on CUDA
+        "--flash-attn", "on", # EXP-11: ~30-50% faster attention, identical outputs
     ]
 
     # Add mmproj if found (needed for multimodal)
@@ -221,8 +225,66 @@ def get_prior_learning(task_id: str, instruction: str, learnings: list) -> str:
     return advice
 
 
+def extract_setup_paths(config: list) -> dict:
+    """Scan the task setup config for directory information the agent needs.
+
+    Returns a dict with:
+      - ``cwd``: The directory the setup `cd`s into (if any). Subprocess-based
+        shell commands started by our agent start in the python service's cwd,
+        NOT the terminal's cwd, so we need to surface this directory.
+      - ``paths``: List of absolute/tilde paths created via mkdir during setup.
+        Useful when the instruction mentions a relative name (e.g. "photos")
+        but the actual directory is at "~/Desktop/photos".
+
+    This is NOT hardcoding — we're extracting information that already exists
+    in the task config (structured data), not encoding task-specific answers.
+    """
+    import re
+    result = {"cwd": "", "paths": []}
+    if not isinstance(config, list):
+        return result
+
+    cd_pattern = re.compile(r"cd\s+([^\s'\"&|;<>]+)")
+    # Capture mkdir targets, both absolute and tilde paths
+    mkdir_pattern = re.compile(r"mkdir\s+(?:-p\s+)?(~[^\s'\"&|;<>]*|/[^\s'\"&|;<>]+)")
+
+    for step in config:
+        if not isinstance(step, dict):
+            continue
+        params = step.get("parameters") or {}
+        cmd = params.get("command")
+        if isinstance(cmd, list):
+            joined = " ".join(str(c) for c in cmd)
+        elif isinstance(cmd, str):
+            joined = cmd
+        else:
+            continue
+
+        # First `cd <dir>` wins (sets the working directory expectation)
+        if not result["cwd"]:
+            m = cd_pattern.search(joined)
+            if m:
+                candidate = m.group(1).strip("'\"")
+                if candidate and not candidate.startswith(("$", "~", ".", "-")):
+                    result["cwd"] = candidate
+
+        # Collect all mkdir paths
+        for m in mkdir_pattern.finditer(joined):
+            path = m.group(1).strip("'\"")
+            if path and path not in result["paths"]:
+                result["paths"].append(path)
+
+    return result
+
+
+def extract_setup_cwd(config: list) -> str:
+    """Back-compat wrapper returning only the cwd string."""
+    return extract_setup_paths(config).get("cwd", "")
+
+
 def derive_hint(evaluator: dict, instruction: str, domain: str,
-                learnings: list = None, task_id: str = None) -> str:
+                learnings: list = None, task_id: str = None,
+                config: list = None) -> str:
     """Derive a task hint from the evaluator config — generalizes across all domains.
 
     Instead of hardcoding per-task hints, we reverse-engineer what the evaluator
@@ -309,6 +371,27 @@ def derive_hint(evaluator: dict, instruction: str, domain: str,
             if rules.get("exclude"):
                 hints.append(f"Output must NOT include: {rules['exclude']}")
 
+    # 3.5 Working directory and task paths: derived from setup config so
+    # subprocess-based commands know where the task files actually are.
+    setup_info = extract_setup_paths(config or [])
+    setup_cwd = setup_info.get("cwd", "")
+    setup_paths = setup_info.get("paths", [])
+    if setup_cwd:
+        hints.append(
+            f"IMPORTANT: task files are in the `{setup_cwd}` directory. "
+            f"When using run_command, either cd into it first "
+            f"(e.g. `run_command('cd {setup_cwd} && <your command>')`) or use "
+            f"absolute paths. run_command does NOT inherit the terminal's cwd."
+        )
+    elif setup_paths:
+        # No explicit cd, but setup created known directories — surface them
+        path_list = ", ".join(f"`{p}`" for p in setup_paths[:5])
+        hints.append(
+            f"Task setup created these directories: {path_list}. "
+            f"Use absolute paths or cd into the relevant one — run_command "
+            f"starts at the home directory, not where these were created."
+        )
+
     # 4. Domain-aware opening action + general technique guidance
     if domain == "os":
         hints.insert(0, "First open terminal with Ctrl+Alt+T, wait 1 second, then type the command and press Enter. Password is 'password'.")
@@ -328,9 +411,9 @@ def derive_hint(evaluator: dict, instruction: str, domain: str,
         hints.insert(0, "Thunderbird email client should be open.")
 
     if not hints:
-        return ""
-
-    result = "\nHint: " + " ".join(hints)
+        result = ""
+    else:
+        result = "\nHint: " + " ".join(hints)
 
     # 5. Inject prior learnings if available
     if learnings and task_id:
@@ -338,7 +421,19 @@ def derive_hint(evaluator: dict, instruction: str, domain: str,
         if prior:
             result += prior
 
-    return result
+    # 6. Curriculum: pick scenario-specific technique snippets and inject.
+    # This is a small focused knowledge bank instead of a giant generic
+    # block in the system prompt — only relevant techniques for THIS task.
+    try:
+        from mantis_agent.curriculum import select_techniques
+        curriculum = select_techniques(instruction, hint_text=" ".join(hints), domain=domain)
+        if curriculum:
+            result += "\n\nRelevant techniques for this task:\n" + curriculum
+    except Exception as e:
+        # Curriculum is non-essential — never let a bug here break the run
+        print(f"  curriculum injection failed: {e}")
+
+    return result if result else ""
 
 
 @app.function(
@@ -428,32 +523,34 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
     print(f"  Model: Gemma4 {GEMMA4_MODEL} (llama.cpp + CUDA)")
     print("=" * 50)
 
-    # 5. Run with OSWorld's PromptAgent — improved prompt for Gemma4
+    # 5. Run with OSWorld's PromptAgent — system prompt loaded from externalized module
     from mm_agents.agent import PromptAgent
     import mm_agents.prompts as prompts
+    import mm_agents.agent as mm_agent_module
 
-    # Override the system prompt — keep it SHORT (Gemma4 works best with concise prompts)
-    GEMMA4_SYSTEM_PROMPT = """You are a computer agent controlling Ubuntu Linux via pyautogui.
-You see a screenshot each step. Output Python code in a code block to perform ONE action.
+    # Load the system prompt from src/mantis_agent/prompts/.
+    # This decouples prompt content from harness code so we can iterate without
+    # editing this file. See src/mantis_agent/prompts/__init__.py.
+    from mantis_agent.prompts import load_prompt
 
-Rules:
-- Start code with `import pyautogui` and `import time`
-- Screen is 1920x1080. Look at screenshot for coordinates.
-- Use: click(x,y), write('text'), press('key'), hotkey('ctrl','c'), scroll(n)
-- NEVER use locateCenterOnScreen() or screenshot()
-- Password: '{CLIENT_PASSWORD}'
-- After typing in terminal, press Enter: `pyautogui.press('enter')`
-- Add `time.sleep(0.5)` between actions
-- For commands with special characters (<, >, |, *, &, quotes, brackets), use subprocess:
-  `import subprocess; subprocess.run('your command here', shell=True)`
-- For sudo commands: `subprocess.run("echo 'password' | sudo -S command", shell=True)`
+    GEMMA4_SYSTEM_PROMPT = load_prompt(
+        "system_v1",
+        screen_width=1280,
+        screen_height=720,
+        password="password",
+    )
 
-Special codes: ```WAIT```, ```DONE```, ```FAIL```
-
-First reflect on what you see, then output code.""".strip()
-
-    # Monkey-patch the prompt
+    # CRITICAL: PromptAgent uses `from mm_agents.prompts import SYS_PROMPT_...`
+    # which copies the value into mm_agents.agent's namespace at import time.
+    # Patching only `prompts.SYS_PROMPT_...` is a no-op because PromptAgent
+    # reads its OWN local binding. We must patch BOTH module references.
     prompts.SYS_PROMPT_IN_SCREENSHOT_OUT_CODE = GEMMA4_SYSTEM_PROMPT
+    mm_agent_module.SYS_PROMPT_IN_SCREENSHOT_OUT_CODE = GEMMA4_SYSTEM_PROMPT
+
+    # Sanity check: log first 200 chars of the prompt the agent will actually use
+    print(f"\n=== ACTIVE PROMPT (first 200 chars) ===")
+    print(mm_agent_module.SYS_PROMPT_IN_SCREENSHOT_OUT_CODE[:200])
+    print("=== END PROMPT PREVIEW ===\n")
 
     agent = PromptAgent(
         model="gpt-gemma4",  # Prefix "gpt" triggers OpenAI-compatible path using OPENAI_BASE_URL
@@ -531,20 +628,98 @@ First reflect on what you see, then output code.""".strip()
 
     controller_raw = PythonController(vm_ip="localhost", server_port=5050)
 
-    # Wrap controller to transparently upgrade pyautogui.write() to clipboard paste.
-    # pyautogui.write() types character-by-character and mangles special chars
-    # (<, >, |, *, quotes, brackets). Clipboard paste is instant and exact.
-    # This is a TOOL improvement — the model doesn't need to know about it.
+    # Tool helpers (click, type_text, key, run_terminal, etc.) prepended to
+    # every action so the model can call them as if they were already imported.
+    # See src/mantis_agent/tools/helpers.py.
+    from mantis_agent.tools import HELPERS_PRELUDE
+
+    # Wrap controller to:
+    #   1. Prepend tool helpers (the model's preferred API)
+    #   2. Safety net: rewrite any leftover pyautogui.click/.write/.typewrite
+    #      calls (model may revert to its training reflexively)
     class ReliableController:
-        def __init__(self, inner):
+        # EXP-18: Model receives 1280x720 screenshots but the actual screen is 1920x1080.
+        # Coordinates from the model must be scaled by 1.5x before execution.
+        # NOTE: this is the SAFETY NET path for legacy pyautogui calls. The new
+        # helper functions (click/double_click/...) handle scaling internally.
+        COORD_SCALE_X = 1920 / 1280  # 1.5
+        COORD_SCALE_Y = 1080 / 720   # 1.5
+        # Functions whose first two positional args are (x, y) coordinates
+        _COORD_FUNCS = (
+            "click", "rightClick", "doubleClick", "tripleClick",
+            "moveTo", "moveRel", "mouseDown", "mouseUp",
+            "dragTo", "dragRel",
+        )
+
+        def __init__(self, inner, prelude: str = ""):
             self._inner = inner
+            self._prelude = prelude
+            self.last_output = ""  # Captured stdout from the most recent action
 
         def execute_python_command(self, code):
+            # Scale + upgrade pyautogui calls (safety net for legacy code paths)
+            code = self._scale_coords(code)
             code = self._upgrade_writes(code)
-            return self._inner.execute_python_command(code)
+            # Prepend tool helpers so model can call click(), type_text(), etc.
+            if self._prelude:
+                code = self._prelude + "\n" + code
+            result = self._inner.execute_python_command(code)
+            # Capture stdout so the agent loop can feed it back to the model
+            # as context for the next step. Without this, run_command's
+            # `print(...)` output would be invisible to a screenshot-only model.
+            try:
+                if result and isinstance(result, dict):
+                    out = (result.get("output") or "").strip()
+                    err = (result.get("error") or "").strip()
+                    combined = out
+                    if err:
+                        combined = (combined + "\n" + err).strip() if combined else err
+                    self.last_output = combined
+                else:
+                    self.last_output = ""
+            except Exception:
+                self.last_output = ""
+            return result
 
         def execute_action(self, action):
+            # Dict-based actions: scale x/y fields if present
+            if isinstance(action, dict):
+                if "x" in action:
+                    try:
+                        action = {**action, "x": int(round(float(action["x"]) * self.COORD_SCALE_X))}
+                    except (TypeError, ValueError):
+                        pass
+                if "y" in action:
+                    try:
+                        action = {**action, "y": int(round(float(action["y"]) * self.COORD_SCALE_Y))}
+                    except (TypeError, ValueError):
+                        pass
             return self._inner.execute_action(action)
+
+        def _scale_coords(self, code):
+            """EXP-18: Scale 1280x720 model coordinates to 1920x1080 screen coordinates.
+
+            Model receives downsized screenshots so its (x, y) outputs are in 1280x720 space.
+            We rewrite pyautogui.<func>(x, y, ...) calls to multiply x by 1.5 and y by 1.5.
+            Only positional first-two-args are scaled — keyword args are left alone.
+            """
+            import re
+            funcs_alt = "|".join(self._COORD_FUNCS)
+            # Match pyautogui.<func>(<num>, <num>... — capture x and y as numeric literals
+            pattern = re.compile(
+                rf"pyautogui\.({funcs_alt})\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)"
+            )
+
+            def replace(m):
+                func = m.group(1)
+                try:
+                    new_x = int(round(float(m.group(2)) * self.COORD_SCALE_X))
+                    new_y = int(round(float(m.group(3)) * self.COORD_SCALE_Y))
+                except ValueError:
+                    return m.group(0)
+                return f"pyautogui.{func}({new_x}, {new_y}"
+
+            return pattern.sub(replace, code)
 
         def _upgrade_writes(self, code):
             """Replace pyautogui.write('text') with xdotool type when text has special chars.
@@ -552,36 +727,59 @@ First reflect on what you see, then output code.""".strip()
             pyautogui.write() types character-by-character and fails on: < > | * & {} [] () " ' ; $ \\ ` !
             xdotool type uses X11 keysym lookup and handles all characters correctly.
             This is transparent to the model — it keeps generating pyautogui.write() code.
+
+            EXP-23: Use ast.literal_eval + repr() for correct escape handling.
+            The previous version captured the source-text characters (including
+            backslash-escaped quotes) and re-escaped them, resulting in literal
+            backslashes being typed by xdotool. Example: model writes
+                pyautogui.write('foo "[\\'a\\']"')
+            (intent: type `foo "['a']"`). Old code typed `foo "[\\'a\\']"`,
+            corrupting any gsettings/find/printf command with nested quotes.
             """
             import re
+            import ast
+
             def replace_write(match):
                 full = match.group(0)
-                # Extract the text argument (handle both quote styles and escaped quotes)
-                text = match.group(1) if match.group(1) is not None else match.group(2)
-                if text is None:
+                # Reconstruct the original Python string literal and parse it
+                # to get the ACTUAL string value (handling all escape sequences).
+                try:
+                    if match.group(1) is not None:
+                        literal = "'" + match.group(1) + "'"
+                    else:
+                        literal = '"' + match.group(2) + '"'
+                    text = ast.literal_eval(literal)
+                except (ValueError, SyntaxError):
                     return full
+                if not isinstance(text, str):
+                    return full
+
                 # Only upgrade if text contains chars that pyautogui mangles
                 special = set('<>|*&{}[]()"\';$\\`!~')
                 if any(c in text for c in special):
-                    # Use xdotool type — reliable for all characters
-                    # Falls back to xclip+paste if xdotool unavailable
-                    escaped = text.replace("\\", "\\\\").replace("'", "\\'")
+                    # Use repr() to safely re-encode the actual text into Python
+                    # source. This produces a valid Python string literal that,
+                    # when parsed, evaluates back to the exact original text.
+                    encoded = repr(text)
                     return (f"import subprocess, shutil; "
-                            f"subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '0', '{escaped}']) "
+                            f"subprocess.run(['xdotool', 'type', '--clearmodifiers', '--delay', '0', {encoded}]) "
                             f"if shutil.which('xdotool') else "
-                            f"(subprocess.run(['xclip', '-selection', 'clipboard'], input='{escaped}'.encode()), "
+                            f"(subprocess.run(['xclip', '-selection', 'clipboard'], input={encoded}.encode()), "
                             f"__import__('pyautogui').hotkey('ctrl', 'v'))")
                 return full
 
-            # Match pyautogui.write(...) — capture the text argument
-            # Handles: write('text'), write("text"), write('text', interval=0.05)
-            pattern = r"""pyautogui\.write\((?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")(?:\s*,\s*interval\s*=[^)]+)?\)"""
+            # Match pyautogui.write(...) AND pyautogui.typewrite(...) — capture the text argument
+            # Both functions are aliases that type character-by-character with the same
+            # special-char mangling problems. EXP-23.1: include typewrite (the older alias).
+            # Handles: write('text'), write("text"), write('text', interval=0.05),
+            #         typewrite('text'), typewrite("text", interval=0.02)
+            pattern = r"""pyautogui\.(?:type)?write\((?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")(?:\s*,\s*interval\s*=[^)]+)?\)"""
             return re.sub(pattern, replace_write, code)
 
         def __getattr__(self, name):
             return getattr(self._inner, name)
 
-    controller = ReliableController(controller_raw)
+    controller = ReliableController(controller_raw, prelude=HELPERS_PRELUDE)
     setup_controller = SetupController(
         vm_ip="localhost", server_port=5050,
         chromium_port=9222, vlc_port=8080,
@@ -612,7 +810,8 @@ First reflect on what you see, then output code.""".strip()
 
             # Generalized hint engine — derives hints from evaluator config + prior learnings
             hint = derive_hint(evaluator, raw_instruction, dom,
-                              learnings=prior_learnings, task_id=example_id)
+                              learnings=prior_learnings, task_id=example_id,
+                              config=example.get("config", []))
 
             instruction = raw_instruction + hint
             print(f"\n[{dom}] {example_id}")
@@ -659,7 +858,11 @@ First reflect on what you see, then output code.""".strip()
             except Exception:
                 pass
 
-            if hint:
+            # EXP-19: Only auto-open terminal for OS domain. Other domains
+            # (chrome, libreoffice, gimp, vs_code, vlc, thunderbird) already
+            # have their target app launched by task_config — opening a terminal
+            # would steal focus and interfere with the workflow.
+            if dom == "os" and hint:
                 try:
                     controller.execute_python_command(
                         "import pyautogui, time; pyautogui.hotkey('ctrl','alt','t'); time.sleep(2)"
@@ -671,6 +874,7 @@ First reflect on what you see, then output code.""".strip()
             # Run agent loop
             done = False
             last_actions = []  # Track for loop detection
+            agent_plan = None  # EXP-1: Captured plan from first step
             for step in range(max_steps):
                 try:
                     obs_resp = requests.get("http://localhost:5050/screenshot", timeout=30)
@@ -694,11 +898,47 @@ First reflect on what you see, then output code.""".strip()
 
                 obs = {"screenshot": screenshot, "accessibility_tree": None}
 
+                # EXP-1: On first step, ask the model to plan before acting
+                if step == 0:
+                    planning_instruction = raw_instruction + hint + (
+                        "\n\nFIRST, write a brief numbered plan in this exact format:\n"
+                        "PLAN:\n"
+                        "1. <subgoal description>\n"
+                        "2. <subgoal description>\n"
+                        "...\n\n"
+                        "Then execute the first action toward subgoal 1. "
+                        "Remember: each subgoal may need several actions — don't skip ahead."
+                    )
+                    step_instruction = planning_instruction
+                elif agent_plan:
+                    step_instruction = raw_instruction + hint + (
+                        f"\n\nYour plan:\n{agent_plan}\n"
+                        "Look at the screenshot. Are you still working on the current subgoal or is it done? "
+                        "Execute the next action — staying on the current subgoal until it's actually complete."
+                    )
+                else:
+                    step_instruction = instruction
+
+                # Feed back the previous action's stdout (e.g. run_command output)
+                # so the model can SEE what its last shell command produced.
+                # Without this, run_command's print() output is invisible to a
+                # screenshot-only agent.
+                last_out = getattr(controller, "last_output", "")
+                if last_out:
+                    # Truncate very long output to keep prompt manageable
+                    snippet = last_out if len(last_out) <= 800 else last_out[:400] + "\n... [truncated] ...\n" + last_out[-400:]
+                    step_instruction += f"\n\nPrevious action output:\n```\n{snippet}\n```"
+                    # Debug: log first 400 chars so we can see actual error messages
+                    print(f"  [feedback: {snippet[:400].replace(chr(10), ' | ')}]")
+                else:
+                    if step > 0:
+                        print(f"  [feedback: <empty>]")
+
                 # Retry LLM calls on transient errors (400 image load, 500 server)
                 actions = None
                 for llm_attempt in range(3):
                     try:
-                        response, actions = agent.predict(instruction, obs)
+                        response, actions = agent.predict(step_instruction, obs)
                         break
                     except Exception as e:
                         err_str = str(e)
@@ -711,11 +951,67 @@ First reflect on what you see, then output code.""".strip()
                 if actions is None:
                     break
 
+                # EXP-1: Extract plan from first response
+                if step == 0 and response:
+                    plan_lines = []
+                    lines = response.split("\n")
+                    # Strategy 1: Look for explicit "PLAN:" marker and capture lines after it
+                    in_plan_block = False
+                    for line in lines:
+                        stripped = line.strip()
+                        if stripped.upper().startswith("PLAN:") or stripped.upper() == "PLAN":
+                            in_plan_block = True
+                            continue
+                        if in_plan_block:
+                            # Stop on code block, blank line followed by code, or "execute" marker
+                            if stripped.startswith("```") or stripped.lower().startswith("execut"):
+                                break
+                            if stripped and (
+                                stripped[0].isdigit() or stripped.startswith("- ") or stripped.startswith("* ")
+                                or stripped.startswith("Step ") or stripped.startswith("Subgoal ")
+                            ):
+                                plan_lines.append(stripped)
+
+                    # Strategy 2: Fallback — scan for any numbered/bulleted lines
+                    if not plan_lines:
+                        for line in lines:
+                            stripped = line.strip()
+                            if stripped and len(stripped) > 3 and (
+                                (stripped[0].isdigit() and len(stripped) > 2 and stripped[1] in ".)")
+                                or stripped.startswith("- ") or stripped.startswith("Step ")
+                                or stripped.startswith("Subgoal ")
+                            ):
+                                plan_lines.append(stripped)
+
+                    if plan_lines:
+                        agent_plan = "\n".join(plan_lines[:8])  # Cap at 8 lines
+                        task_trace["plan"] = agent_plan
+                        print(f"  Plan: {agent_plan[:120]}...")
+                    else:
+                        print(f"  Plan: NONE captured (response prefix: {response[:120]})")
+
                 # Loop detection: if same action 3 times, nudge the model
-                if actions and len(last_actions) >= 2 and all(
-                    str(actions[0])[:30] == str(a)[:30] for a in last_actions[-2:]
-                ):
-                    instruction = raw_instruction + hint + "\nIMPORTANT: Your last actions were repetitive. Try a DIFFERENT approach."
+                # EXP-17: Strip imports/whitespace to get a meaningful signature.
+                # The old check used str(action)[:30] which always matched the
+                # `import pyautogui\nimport time\n` boilerplate prefix.
+                def _action_sig(a):
+                    s = str(a)
+                    meaningful = [
+                        ln.strip() for ln in s.split("\n")
+                        if ln.strip() and not ln.strip().startswith("import ")
+                        and not ln.strip().startswith("#")
+                    ]
+                    return " | ".join(meaningful)[:120]
+
+                if actions and len(last_actions) >= 2:
+                    cur_sig = _action_sig(actions[0])
+                    if cur_sig and all(_action_sig(a) == cur_sig for a in last_actions[-2:]):
+                        nudge = "\nIMPORTANT: Your last actions were repetitive. Try a DIFFERENT approach."
+                        if agent_plan:
+                            step_instruction = raw_instruction + hint + f"\n\nYour plan:\n{agent_plan}" + nudge
+                        else:
+                            step_instruction = raw_instruction + hint + nudge
+                        instruction = step_instruction  # Update for subsequent steps too
 
                 if not actions:
                     break
@@ -736,13 +1032,14 @@ First reflect on what you see, then output code.""".strip()
                     except Exception as e:
                         print(f"  Action exec failed: {e}")
 
-                    time.sleep(3)  # Longer pause for QEMU TCG
+                    time.sleep(1.5)  # EXP-12: Reduced from 3s — actions complete in <1s on QEMU TCG
 
                 if actions:
                     last_actions.append(str(actions[0]))
                     task_trace["steps"].append({
                         "step": step + 1,
                         "action": str(actions[0])[:200],
+                        "had_plan": agent_plan is not None,
                     })
 
                 if done:
@@ -983,8 +1280,11 @@ First reflect on what you see, then output code.""".strip()
                             except Exception:
                                 pass
 
-                            # Step 5: Retry with distilled feedback
-                            retry_instruction = raw_instruction + hint + analysis
+                            # Step 5: Retry with distilled feedback (include plan if available)
+                            retry_instruction = raw_instruction + hint
+                            if agent_plan:
+                                retry_instruction += f"\n\nOriginal plan:\n{agent_plan}\nAdapt this plan based on the failure analysis below."
+                            retry_instruction += analysis
                             for retry_step in range(10):
                                 try:
                                     obs_resp = requests.get("http://localhost:5050/screenshot", timeout=30)
@@ -1013,7 +1313,7 @@ First reflect on what you see, then output code.""".strip()
                                             controller.execute_action(action)
                                     except Exception:
                                         pass
-                                    time.sleep(3)
+                                    time.sleep(1.5)  # EXP-12
                             continue  # Re-evaluate after retry
                 except Exception as e:
                     print(f"  Eval error: {e}")
@@ -1131,7 +1431,10 @@ First reflect on what you see, then output code.""".strip()
 
             # Reset agent and re-run
             agent.reset()
-            retry_hint = derive_hint(evaluator_cfg, example["instruction"], retry_dom)
+            retry_hint = derive_hint(
+                evaluator_cfg, example["instruction"], retry_dom,
+                config=example.get("config", []),
+            )
             retry_instruction = example["instruction"] + retry_hint
 
             # Re-setup
@@ -1194,7 +1497,7 @@ First reflect on what you see, then output code.""".strip()
                             controller.execute_action(action)
                     except Exception:
                         pass
-                    time.sleep(3)
+                    time.sleep(1.5)  # EXP-12
 
             # Re-evaluate
             time.sleep(5)
