@@ -38,39 +38,22 @@ def _xy(x, y):
     return int(round(float(x) * _SCALE_X)), int(round(float(y) * _SCALE_Y))
 
 def _autosudo(cmd):
-    """Wrap sudo invocations for non-interactive execution.
+    """Wrap a leading sudo command for non-interactive execution.
 
-    Handles three cases:
-      1. ``sudo COMMAND``                            -> ``echo 'password' | sudo -S COMMAND``
-      2. ``A | sudo COMMAND``                        -> still wrap the sudo with -S (NOT just
-                                                        the leading echo, since A might be
-                                                        feeding stdin to COMMAND, e.g.
-                                                        ``echo 'user:pw' | sudo chpasswd``).
-                                                        We use ``sudo -S -A`` no — instead
-                                                        we use ``sudo -n`` after a one-shot
-                                                        ``sudo -v`` priming, but the simplest
-                                                        reliable form is to use the
-                                                        ``SUDO_ASKPASS`` env var with a script
-                                                        that prints the password. We avoid
-                                                        that complexity here by inserting
-                                                        ``echo 'password' |`` into a heredoc.
-      3. Already wrapped (contains ``-S`` or matches ``echo ... | sudo``) -> leave alone.
+    Only wraps the simple case of a command starting with ``sudo ``. More
+    complex cases (piped sudo, chained sudo, multi-sudo) rely on the
+    passwordless-sudo setup that the harness runs once at task start
+    (see ``_setup_passwordless_sudo`` in modal_osworld_direct.py). After
+    that setup, every ``sudo`` in any position "just works" without any
+    wrapping needed.
 
-    Also walks through ``&&`` / ``;`` separated sub-commands so each ``sudo`` gets handled
-    independently.
+    This keeps the helper simple and avoids the non-tty credential-cache
+    problems that bite ``sudo -v`` under ``bash -lc``.
     """
-    if "sudo" not in cmd:
-        return cmd
-
-    # Strategy: ensure passwordless sudo for the lifetime of this command.
-    # Run a one-shot ``sudo -v`` with the password piped in, then chain the
-    # original command. After ``sudo -v`` succeeds, subsequent sudos within
-    # the same session don't need a password for ~5 minutes (timestamp_timeout).
-    # This handles ALL cases: leading sudo, piped sudo, multiple sudos,
-    # sudo inside command substitution, etc.
-    if "-S" in cmd or "SUDO_ASKPASS" in cmd:
-        return cmd  # already self-sufficient
-    return "echo 'password' | sudo -S -v && " + cmd
+    s = cmd.lstrip()
+    if s.startswith("sudo ") and "-S" not in s and "| sudo" not in s and "echo " not in s.split("sudo")[0]:
+        return "echo 'password' | sudo -S " + s[5:]
+    return cmd
 
 def _fix_find_exec(cmd):
     """Auto-repair malformed find -exec commands AND teach the correction.

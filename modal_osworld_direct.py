@@ -844,6 +844,26 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
                 print(f"  Setup failed: {e}")
                 setup_ok = False
 
+            # Configure passwordless sudo so ALL sudo calls from the agent
+            # work regardless of pipe/chain/multi-sudo complexity. We use
+            # subprocess with a list of args (no shell quoting) so the
+            # bootstrap is reliable. After this, the agent's `sudo X` calls
+            # don't need any -S or echo-password-pipe wrapping.
+            try:
+                controller.execute_python_command(
+                    "import subprocess\n"
+                    "p = subprocess.run(\n"
+                    "    ['sudo', '-S', 'bash', '-c',\n"
+                    "     'echo \"user ALL=(ALL) NOPASSWD:ALL\" > /etc/sudoers.d/99-nopasswd "
+                    "&& chmod 440 /etc/sudoers.d/99-nopasswd'],\n"
+                    "    input='password\\n',\n"
+                    "    capture_output=True, text=True, timeout=30\n"
+                    ")\n"
+                    "print(f'passwordless sudo setup: rc={p.returncode}', p.stderr[:200] if p.stderr else '')\n"
+                )
+            except Exception as e:
+                print(f"  passwordless sudo setup failed: {e}")
+
             # Reset agent
             agent.reset()
             action_history = []
