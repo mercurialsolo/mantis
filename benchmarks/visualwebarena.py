@@ -179,27 +179,67 @@ class PlaywrightAdapter:
 
 # ── VWA task loading ─────────────────────────────────────────────────────────
 
-def load_vwa_task_configs(config_dir: Optional[Path] = None) -> list[dict]:
-    """Load VWA task config JSONs. Expects config_files/vwa/ layout.
+def load_vwa_task_configs(
+    config_dir: Optional[Path] = None,
+    endpoints: Optional[dict] = None,
+) -> list[dict]:
+    """Load VWA task configs from raw JSON files (234 + 466 + 210 = 910 tasks).
 
-    Phase 2 scaffold: returns an empty list until we mount the VWA repo
-    into the Modal image or fetch configs from the volume. Callers should
-    handle the empty case gracefully.
+    The raw configs from the VWA repo use URL placeholders like ``__CLASSIFIEDS__``,
+    ``__SHOPPING__``, ``__REDDIT__``, ``__WIKIPEDIA__``, ``__HOMEPAGE__``. These get
+    replaced with the actual sidecar hostnames from ``endpoints``.
+
+    Supports two layouts:
+      1. **Per-domain raw files**: ``config_dir/test_classifieds.raw.json``, etc.
+         (the format in the VWA GitHub repo — one big list per domain).
+      2. **Per-task split files**: ``config_dir/test_classifieds/*.json``
+         (if someone already split them — one file per task).
     """
     if config_dir is None:
         config_dir = Path("/data/vwa/config_files/vwa")
-    if not config_dir.exists():
-        return []
+    if endpoints is None:
+        endpoints = VWA_ENDPOINTS
+
+    # Placeholder → actual URL mapping
+    replacements = {
+        "__CLASSIFIEDS__": endpoints.get("classifieds", "http://localhost:9980"),
+        "__SHOPPING__":    endpoints.get("shopping",    "http://localhost:7770"),
+        "__REDDIT__":      endpoints.get("reddit",      "http://localhost:9999"),
+        "__WIKIPEDIA__":   endpoints.get("wikipedia",   "http://localhost:8888"),
+        "__HOMEPAGE__":    endpoints.get("homepage",     "http://localhost:4399"),
+    }
+
+    def _replace_urls(task: dict) -> dict:
+        """Replace URL placeholders in all string fields."""
+        task_str = json.dumps(task)
+        for placeholder, url in replacements.items():
+            task_str = task_str.replace(placeholder, url)
+        return json.loads(task_str)
+
     configs: list[dict] = []
-    for sub in ("test_classifieds", "test_shopping", "test_reddit"):
-        sub_dir = config_dir / sub
-        if not sub_dir.exists():
-            continue
-        for f in sorted(sub_dir.glob("*.json")):
+    if not config_dir.exists():
+        return configs
+
+    for domain in ("test_classifieds", "test_shopping", "test_reddit"):
+        # Try raw file first (the GitHub repo format)
+        raw_path = config_dir / f"{domain}.raw.json"
+        if raw_path.exists():
             try:
-                configs.append(json.loads(f.read_text()))
-            except Exception:
-                continue
+                raw_tasks = json.loads(raw_path.read_text())
+                for task in raw_tasks:
+                    configs.append(_replace_urls(task))
+            except Exception as e:
+                print(f"  warn: failed to load {raw_path}: {e}")
+            continue
+
+        # Fall back to per-task split files
+        split_dir = config_dir / domain
+        if split_dir.exists():
+            for f in sorted(split_dir.glob("*.json")):
+                try:
+                    configs.append(_replace_urls(json.loads(f.read_text())))
+                except Exception:
+                    continue
     return configs
 
 
