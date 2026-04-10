@@ -221,6 +221,168 @@ def load_vwa_task_configs(config_dir: Optional[Path] = None) -> list[dict]:
     return configs
 
 
+# ── Agent loop primitives ────────────────────────────────────────────────────
+#
+# These run inside the Modal container. They bypass OSWorld's PromptAgent
+# entirely and talk directly to the llama-server OpenAI-compatible endpoint.
+# Same llama.cpp server is started via ``start_llama_server`` from the shared
+# module, so we get the exact same Gemma 4 26B vision model as the OS run.
+
+VWA_SYSTEM_PROMPT = """\
+You are a computer-use agent controlling a headless web browser. You see a screenshot of the current page each step and output Python code to perform ONE action.
+
+The viewport is 1280x720 pixels. Coordinates must match what you see in the screenshot.
+
+# Available helpers (already imported — just call them)
+
+- `click(x, y)` — left click at (x, y)
+- `click(x, y, button="right")` — right click
+- `double_click(x, y)` — double click
+- `type_text(text)` — type text into the focused field. Handles all special characters correctly.
+- `key(combo)` — press a key or combo. Examples: `key("Return")`, `key("ctrl+l")` (address bar), `key("Tab")`, `key("Escape")`, `key("Page_Down")`.
+- `wait(seconds=2)` — pause for N seconds (page loads, AJAX).
+- `scroll(x, y, clicks=-3)` — scroll at (x, y). Negative clicks = scroll down.
+
+# Important — you are in a browser, not a desktop OS
+
+- There is NO shell, NO terminal, NO sudo. Do not call `run_command`.
+- All task progress happens through clicks, keystrokes, and page navigation.
+- After clicking a link, submitting a form, or pressing Enter in the address bar, **always `wait(2)`** before the next action — pages load asynchronously and clicking stale UI wastes steps.
+
+# Finishing a task
+
+When you have the answer or the task is complete, output EXACTLY this and nothing else:
+
+```
+DONE: <your final answer or confirmation>
+```
+
+When the task is impossible from this page, output:
+
+```
+FAIL
+```
+
+When you need to pause and let the page settle, output:
+
+```
+WAIT
+```
+
+# Approach
+
+On your FIRST response, write a brief numbered plan, then execute the first action.
+
+First reflect on what you see in the screenshot, then output your code.\
+"""
+
+
+def _llama_infer(
+    screenshot_png: bytes,
+    instruction: str,
+    hint_text: str,
+    trajectory: list[dict],
+    model_file: str,
+    port: int = 8080,
+    timeout: int = 120,
+) -> str:
+    """POST screenshot + instruction to llama-server and return the model's text.
+
+    Uses the OpenAI-compatible chat completions endpoint that llama.cpp
+    exposes. The image is base64-encoded as a data URL.
+    """
+    import base64
+    import requests as _req
+
+    img_b64 = base64.b64encode(screenshot_png).decode("ascii")
+
+    # Build a compact user message: instruction, hint (curriculum), last few
+    # actions as history, then the current screenshot.
+    user_parts: list[dict] = [
+        {"type": "text", "text": f"TASK: {instruction}"},
+    ]
+    if hint_text:
+        user_parts.append({"type": "text", "text": hint_text})
+    if trajectory:
+        history_text = "\n".join(
+            f"Step {i + 1}: {t['action'][:160]}"
+            + (f"\n  feedback: {t['feedback'][:160]}" if t.get("feedback") else "")
+            for i, t in enumerate(trajectory[-5:])
+        )
+        user_parts.append({"type": "text", "text": f"PREVIOUS STEPS:\n{history_text}"})
+    user_parts.append(
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+    )
+
+    messages = [
+        {"role": "system", "content": VWA_SYSTEM_PROMPT},
+        {"role": "user", "content": user_parts},
+    ]
+
+    resp = _req.post(
+        f"http://localhost:{port}/v1/chat/completions",
+        json={
+            "model": model_file,
+            "messages": messages,
+            "max_tokens": 1024,
+            "temperature": 0.0,
+        },
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
+def _extract_code(response: str) -> str:
+    """Pull the first python code block out of the model's response."""
+    import re
+    m = re.search(r"```(?:python)?\s*\n(.*?)\n```", response, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # Fallback: if no fenced block, the whole response might be code
+    return response.strip()
+
+
+def _parse_terminal(code: str) -> Optional[str]:
+    """Return 'DONE', 'WAIT', 'FAIL', or None if the code block is a normal action."""
+    stripped = code.strip()
+    first_line = stripped.split("\n", 1)[0].strip()
+    if first_line.startswith("DONE"):
+        return "DONE"
+    if first_line == "FAIL":
+        return "FAIL"
+    if first_line == "WAIT":
+        return "WAIT"
+    return None
+
+
+def _execute_action(code: str, adapter: "PlaywrightAdapter") -> str:
+    """Exec model-generated Python code with adapter-bound helpers.
+
+    Returns captured stdout (feedback for the next step). Exceptions are
+    converted to string feedback so the loop continues.
+    """
+    import contextlib
+    import io
+
+    ns = {
+        "click": adapter.click,
+        "double_click": adapter.double_click,
+        "type_text": adapter.type_text,
+        "key": adapter.key,
+        "scroll": adapter.scroll,
+        "wait": adapter.wait,
+        "run_command": adapter.run_command,
+    }
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(code, ns)
+    except Exception as e:
+        buf.write(f"ERROR: {type(e).__name__}: {e}\n")
+    return buf.getvalue().strip()
+
+
 # ── Modal app + function ─────────────────────────────────────────────────────
 
 vwa_app = modal.App("gemma4-vwa")
@@ -237,61 +399,166 @@ vwa_app = modal.App("gemma4-vwa")
 def run_vwa(max_tasks: int = 1, max_steps: int = 30):
     """Run the Gemma 4 agent against VisualWebArena tasks.
 
-    Phase 2 scaffold: loads task configs (if present), drives Playwright
-    for a single task, proves the adapter/loop integration works
-    end-to-end. Scoring, retries, and full distillation loop are
-    deferred to the next commit.
+    Phase 2: full agent loop (screenshot → llama-server → parse → execute
+    via PlaywrightAdapter → feedback → next step). Works end-to-end on any
+    public URL as a fallback when the 5 VWA sidecars are not yet deployed,
+    so the pipeline can be smoke-tested without the Docker stack.
+
+    Scoring (string_match / url_match / page_image_query) is a follow-up
+    — this commit just records trajectories so we can inspect whether the
+    model actually navigates sensibly.
     """
     # 1. Start llama-server (Gemma 4) inside the container
     cfg = GGUF_CONFIGS[GEMMA4_MODEL]
+    model_file = cfg["model_file"]
     model_path = download_model("/data")
     llama_proc = start_llama_server(model_path)
-    print(f"llama-server started for VWA run")
+    print(f"llama-server started for VWA run (model={model_file})")
 
-    # 2. Load tasks (will be empty until we populate /data/vwa)
+    # Lazy import of curriculum so we pick up relevant chrome techniques
+    try:
+        from mantis_agent.curriculum import select_techniques
+    except Exception as _e:
+        print(f"  curriculum load failed (non-fatal): {_e}")
+        select_techniques = None  # type: ignore
+
+    # 2. Load tasks. Fallback: use a public URL so the whole pipeline can
+    # smoke-test without the 5 VWA sidecars.
     tasks = load_vwa_task_configs()
     if not tasks:
-        print("WARNING: no VWA task configs found under /data/vwa — smoke-testing adapter only")
+        print("NOTE: no VWA task configs under /data/vwa — using a public-URL")
+        print("      fallback so the agent loop can smoke-test end-to-end.")
         tasks = [
             {
-                "task_id": "smoke-test-0",
-                "intent": "Open the homepage and report the page title.",
-                "start_url": VWA_ENDPOINTS["homepage"],
-                "sites": ["homepage"],
+                "task_id": "smoke-example-com",
+                "intent": (
+                    "You are on example.com. Read the page and tell me what the "
+                    "main heading says and what the page is for. Then output DONE "
+                    "with your answer."
+                ),
+                "start_url": "https://example.com",
+                "sites": ["public"],
             }
         ]
 
-    # 3. Run the agent loop for up to max_tasks tasks
+    # 3. Run the agent loop for each task
     results: list[dict] = []
     for task in tasks[:max_tasks]:
-        print(f"\n=== VWA task {task.get('task_id')} ===")
-        print(f"  intent: {task.get('intent', '')[:120]}")
-        print(f"  start_url: {task.get('start_url')}")
+        task_id = task.get("task_id", "?")
+        instruction = task.get("intent", "")
+        start_url = task.get("start_url", "about:blank")
+        print(f"\n=== VWA task {task_id} ===")
+        print(f"  intent:    {instruction[:140]}")
+        print(f"  start_url: {start_url}")
 
-        adapter = None
+        # Derive curriculum hint (chrome techniques for browser tasks)
+        hint_text = ""
+        if select_techniques is not None:
+            try:
+                hint_text = select_techniques(
+                    instruction, hint_text="", domain="chrome", max_topics=3
+                )
+            except Exception as _e:
+                print(f"  curriculum injection failed: {_e}")
+        if hint_text:
+            print(f"  curriculum: {len(hint_text)} chars injected")
+
+        adapter: Optional[PlaywrightAdapter] = None
+        trajectory: list[dict] = []
+        final_status = "unknown"
+        final_answer: Optional[str] = None
+        t_start = time.time()
+
         try:
-            adapter = PlaywrightAdapter(start_url=task.get("start_url", "about:blank"))
+            adapter = PlaywrightAdapter(start_url=start_url)
+            # Give the page a moment to finish rendering before the first shot.
+            adapter.wait(2)
 
-            # SMOKE: take one screenshot and report size, proving the adapter works.
-            # Real agent loop integration comes in the follow-up commit.
-            png = adapter.screenshot()
-            title = adapter.page.title()
-            print(f"  screenshot: {len(png)} bytes")
-            print(f"  page title: {title!r}")
+            for step in range(max_steps):
+                # 3a. Observe
+                try:
+                    png = adapter.screenshot()
+                except Exception as _e:
+                    print(f"  step {step + 1}: screenshot failed: {_e}")
+                    break
 
-            results.append({
-                "task_id": task.get("task_id"),
-                "status": "smoke_ok",
-                "screenshot_bytes": len(png),
-                "page_title": title,
-            })
+                # 3b. Infer
+                try:
+                    response = _llama_infer(
+                        screenshot_png=png,
+                        instruction=instruction,
+                        hint_text=hint_text,
+                        trajectory=trajectory,
+                        model_file=model_file,
+                    )
+                except Exception as _e:
+                    print(f"  step {step + 1}: inference failed: {_e}")
+                    break
+
+                code = _extract_code(response)
+                terminal = _parse_terminal(code)
+
+                # 3c. Handle terminal states
+                if terminal == "DONE":
+                    final_status = "done"
+                    # Extract the answer after "DONE:"
+                    first_line = code.strip().split("\n", 1)[0]
+                    if ":" in first_line:
+                        final_answer = first_line.split(":", 1)[1].strip()
+                    print(f"  step {step + 1}: DONE — {final_answer or '(no answer)'}")
+                    trajectory.append({"action": code, "feedback": "", "terminal": "DONE"})
+                    break
+                if terminal == "FAIL":
+                    final_status = "failed_by_agent"
+                    print(f"  step {step + 1}: FAIL (agent gave up)")
+                    trajectory.append({"action": code, "feedback": "", "terminal": "FAIL"})
+                    break
+                if terminal == "WAIT":
+                    adapter.wait(2)
+                    trajectory.append({"action": "WAIT", "feedback": "(waited 2s)"})
+                    continue
+
+                # 3d. Execute the action
+                feedback = _execute_action(code, adapter)
+                action_brief = code.split("\n", 1)[0][:140]
+                fb_brief = feedback[:180] if feedback else ""
+                print(f"  step {step + 1}: {action_brief}")
+                if fb_brief:
+                    print(f"            ↳ {fb_brief}")
+                trajectory.append({"action": code, "feedback": feedback})
+            else:
+                final_status = "step_limit"
+                print(f"  reached step limit ({max_steps})")
+
+            results.append(
+                {
+                    "task_id": task_id,
+                    "status": final_status,
+                    "final_answer": final_answer,
+                    "final_url": adapter.page.url if adapter else None,
+                    "final_title": adapter.page.title() if adapter else None,
+                    "steps": len(trajectory),
+                    "duration_s": round(time.time() - t_start, 1),
+                    "trajectory": [
+                        {
+                            "action": t["action"][:400],
+                            "feedback": (t.get("feedback") or "")[:400],
+                        }
+                        for t in trajectory
+                    ],
+                }
+            )
         except Exception as e:
             print(f"  FAILED: {type(e).__name__}: {e}")
-            results.append({
-                "task_id": task.get("task_id"),
-                "status": "error",
-                "error": str(e)[:200],
-            })
+            results.append(
+                {
+                    "task_id": task_id,
+                    "status": "error",
+                    "error": f"{type(e).__name__}: {str(e)[:200]}",
+                    "steps": len(trajectory),
+                    "duration_s": round(time.time() - t_start, 1),
+                }
+            )
         finally:
             if adapter:
                 adapter.close()
