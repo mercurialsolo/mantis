@@ -1,163 +1,93 @@
-"""Curriculum knowledge bank for the Mantis agent.
+"""Modular curriculum knowledge bank with embedding-based selection.
 
-The curriculum is a collection of small, focused technique snippets
-organized by topic. The agent's prompt does NOT include all of them — that
-would overwhelm a small model. Instead, ``select_techniques()`` picks the
-1-3 most relevant snippets for the current task based on keywords in the
-instruction and the evaluator config, and the hint engine injects them
-inline.
-
-This keeps the prompt lean for simple tasks (no irrelevant noise) while
-still teaching the model the right pattern when it matters.
+The curriculum is a collection of small, focused technique snippets, each
+defined in its own file under ``techniques/``. The agent's prompt does
+NOT include all of them — that would overwhelm a small model. Instead,
+``select_techniques()`` picks the most relevant snippets for the current
+task using a sparse-vector embedding (TF-IDF cosine similarity) over the
+technique content, plus an explicit keyword-trigger boost.
 
 Adding a new technique:
-    1. Add a constant ``TECHNIQUE_<NAME>`` to one of the topic constants below
-    2. Add corresponding keywords/triggers to the matching entry in ``TOPICS``
-    3. (Optional) Add a unit test in tests/test_curriculum.py
+    1. Drop a new ``techniques/<name>.py`` file with the constants
+       NAME, TAGS, TRIGGERS, ALWAYS, CONTENT.
+    2. That's it. The loader auto-discovers it on next import.
 
-Topic structure:
-    Each topic has:
-      - ``triggers``: list of substrings/regexes that match relevant tasks
-      - ``techniques``: list of snippet strings
+Selection model:
+    - Documents = each technique's (name + tags + triggers + content)
+      flattened into a single text bag-of-words.
+    - Query = (instruction + hint_text + domain) bag-of-words.
+    - Score = TF-IDF cosine similarity, plus a +0.5 boost if any of the
+      technique's regex triggers matches the query (this lets us pin
+      strong domain signals like ``\\b132x?43\\b`` even when the
+      vocabulary overlap with the technique content is small).
+    - Topics with ``ALWAYS=True`` are always included regardless of score.
 """
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
 import re
+from typing import List, Optional
 
-# ── Topic: shell command basics ───────────────────────────────────────────────
-SHELL_BASICS = """\
-Shell command techniques (you have run_command(cmd) which runs via bash):
-- find -exec MUST terminate with `\\;` — like `find . -name '*.txt' -exec cp {} dest/ \\;`. A bare trailing `\\` is line continuation and breaks the command.
-- For multiple commands in one call, use `&&` or `;` between them: `run_command('cd dir && find . -name foo')`.
-- Capture output for grep filtering: `run_command('snap list | grep spotify')` works directly.
-- run_command starts at the home directory, not at any terminal's cwd.\
-"""
-
-# ── Topic: file operations ────────────────────────────────────────────────────
-FILE_OPERATIONS = """\
-File operation techniques:
-- Copy files: `cp source dest`. Copy directories recursively: `cp -r source dest`.
-- Preserve directory hierarchy when copying matched files: `find . -name '*.txt' -exec cp --parents {} dest/ \\;` (the --parents flag preserves the relative path under dest).
-- Move (rename): `mv old new`. This is NOT compression — see "Compression" below.
-- Find by name pattern: `find <root> -name '*.ext'` (use single quotes around the pattern to prevent shell expansion).
-- Use ABSOLUTE paths or `cd` first when the task references a specific directory — run_command starts at home, not at the terminal's cwd.\
-"""
-
-# ── Topic: compression ────────────────────────────────────────────────────────
-COMPRESSION = """\
-Compression techniques:
-- "Compress" means reducing file size, NOT moving. Common tools:
-  - `gzip file.txt` → produces `file.txt.gz` (replaces original)
-  - `tar -czf archive.tar.gz dir/` → tarball with gzip compression
-  - `zip -r archive.zip dir/` → zip archive
-- A "compressed" file should have a `.gz`, `.tar.gz`, `.zip`, etc. extension.
-- If the task says "compress files older than 30 days", you must actually run gzip/tar — `mv` alone is not compression.\
-"""
-
-# ── Topic: gsettings / desktop preferences ────────────────────────────────────
-GSETTINGS = """\
-gsettings techniques:
-- Get a value: `run_command("gsettings get org.gnome.desktop.interface text-scaling-factor")`
-- Set a scalar value: `run_command("gsettings set org.gnome.desktop.session idle-delay 0")`
-- Set an array value (uses nested quotes — type_text/run_command handle the escaping):
-  `run_command("gsettings set org.gnome.shell favorite-apps \\"['firefox.desktop', 'thunderbird.desktop']\\"")`
-- If gsettings reports "No such schema", you may need DBUS context:
-  `run_command("export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/1000/bus' && gsettings ...")`
-- After setting, verify with `gsettings get` and you should see the new value.\
-"""
-
-# ── Topic: package management ─────────────────────────────────────────────────
-PACKAGE_MANAGEMENT = """\
-Package install techniques:
-- snap install: `run_command("sudo snap install spotify")` — sudo is auto-wrapped, no password needed.
-- apt install: `run_command("sudo apt install -y <package>")` — `-y` skips the confirmation prompt.
-- apt may be locked by `packagekitd` — if `Could not get lock` appears, use snap or wait.
-- After installing, verify with `which <binary>` rather than `snap list` (snap list can lag).
-- Snap installs may show `[install-snap change in progress]` — that means it IS installing, just wait or check `snap changes`.\
-"""
-
-# ── Topic: system settings (timezone, locale, etc.) ───────────────────────────
-SYSTEM_SETTINGS = """\
-System settings techniques:
-- Timezone: `run_command("sudo timedatectl set-timezone UTC")` then verify with `timedatectl`.
-- Default Python: use update-alternatives, e.g. `update-alternatives --config python3`.
-- Locale: `localectl set-locale LANG=en_US.UTF-8`.
-- Permissions: `chmod 644 file` for files, `chmod 755 dir` for directories. Recursive: `chmod -R 644 dir/`.\
-"""
-
-# ── Topic: verification & finishing ──────────────────────────────────────────
-VERIFICATION = """\
-How to finish a task efficiently:
-1. After your state-changing action, run ONE verification command (e.g. `gsettings get`, `which spotify`, `ls dest/`).
-2. If the captured output matches what you expect, output `DONE` immediately. Don't keep verifying.
-3. If it doesn't match, adjust and try again.
-4. The captured-output feedback shows you exactly what your last command produced — read it carefully before deciding the next step.\
-"""
+from .tfidf import TFIDFIndex
+from . import techniques as _techniques_pkg
 
 
-# ── Topic registry: each entry has triggers and techniques ────────────────────
-TOPICS: list[dict] = [
-    {
-        "name": "shell_basics",
-        "triggers": [
-            r"\bfind\b", r"\bgrep\b", r"\b-exec\b", r"\bawk\b", r"\bsed\b",
-            r"\bxargs\b", r"\bpipe\b", r"recursive", r"directory tree",
-        ],
-        "content": SHELL_BASICS,
-    },
-    {
-        "name": "file_operations",
-        "triggers": [
-            r"\bcopy\b", r"\bcp\b", r"\bmove\b", r"\brename\b", r"\bdirectory\b",
-            r"\bfolder\b", r"\bfile(s)?\b", r"hierarchy", r"\.jpg", r"\.txt",
-            r"\.ipynb", r"\.json", r"\.csv", r"\.md",
-        ],
-        "content": FILE_OPERATIONS,
-    },
-    {
-        "name": "compression",
-        "triggers": [
-            r"compress", r"\bgzip\b", r"\btar\b", r"\bzip\b", r"archive",
-            r"\.gz\b", r"\.tar\b", r"\.zip\b",
-        ],
-        "content": COMPRESSION,
-    },
-    {
-        "name": "gsettings",
-        "triggers": [
-            r"gsettings", r"favorite", r"dim screen", r"idle.?delay",
-            r"text scaling", r"magnif", r"notification", r"dconf",
-            r"\bdesktop\b.*setting", r"gnome",
-        ],
-        "content": GSETTINGS,
-    },
-    {
-        "name": "package_management",
-        "triggers": [
-            r"\binstall\b", r"\bapt\b", r"\bsnap\b", r"\bdpkg\b",
-            r"package", r"spotify", r"firefox", r"\bvscode\b",
-        ],
-        "content": PACKAGE_MANAGEMENT,
-    },
-    {
-        "name": "system_settings",
-        "triggers": [
-            r"timezone", r"time zone", r"timedatectl", r"locale",
-            r"python.?version", r"permission", r"\bchmod\b", r"\bchown\b",
-        ],
-        "content": SYSTEM_SETTINGS,
-    },
-    {
-        "name": "verification",
-        "triggers": [
-            # Always-relevant — the model needs to know how to finish.
-            # Empty triggers list with always=True makes this a default.
-        ],
-        "content": VERIFICATION,
-        "always": True,
-    },
-]
+# ── Technique discovery (cached at first call) ────────────────────────────────
+
+_TECHNIQUES: Optional[List[dict]] = None
+_INDEX: Optional[TFIDFIndex] = None
+_INDEX_TOPICS: Optional[List[dict]] = None  # mirrors _INDEX position-by-position
+
+
+def _flatten(t: dict) -> str:
+    """Build the searchable bag-of-words document for a technique.
+
+    We index ONLY (name + tags), not the full content. Tags are curated
+    keywords that act as the canonical search vocabulary, while content is
+    rich prose meant for the model — including it in the index dilutes the
+    signal with common words and produces noisy false positives.
+    """
+    return " ".join([t["name"], " ".join(t.get("tags", []))])
+
+
+def _load_techniques() -> List[dict]:
+    """Auto-discover every module in the ``techniques`` subpackage."""
+    techs: List[dict] = []
+    for _, mod_name, _ in pkgutil.iter_modules(_techniques_pkg.__path__):
+        mod = importlib.import_module(f"{__name__}.techniques.{mod_name}")
+        techs.append(
+            {
+                "name": getattr(mod, "NAME", mod_name),
+                "tags": list(getattr(mod, "TAGS", [])),
+                "triggers": list(getattr(mod, "TRIGGERS", [])),
+                "always": bool(getattr(mod, "ALWAYS", False)),
+                "content": getattr(mod, "CONTENT", "").strip(),
+            }
+        )
+    return techs
+
+
+def _ensure_loaded() -> None:
+    global _TECHNIQUES, _INDEX, _INDEX_TOPICS
+    if _TECHNIQUES is None:
+        _TECHNIQUES = _load_techniques()
+        # Build the TF-IDF index over only the non-always topics so the
+        # always-on ones don't dilute the IDF weights for the ranking pool.
+        _INDEX_TOPICS = [t for t in _TECHNIQUES if not t["always"]]
+        _INDEX = TFIDFIndex([_flatten(t) for t in _INDEX_TOPICS])
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
+# Minimum combined score (TF-IDF cosine + trigger boost) for a non-always
+# topic to be selected. Empirically, real matches score 0.15-0.35 and noise
+# is 0.02-0.08 — 0.10 cleanly separates them.
+MIN_RELEVANCE_SCORE = 0.10
+# Boost added to a topic's score whenever any of its regex triggers matches
+# the query. Larger than MIN_RELEVANCE so a single trigger guarantees inclusion.
+TRIGGER_BOOST = 0.5
 
 
 def select_techniques(
@@ -168,35 +98,68 @@ def select_techniques(
 ) -> str:
     """Pick the most relevant curriculum snippets for a task and return them.
 
-    Selection works by scanning the task instruction (and any hint text already
-    derived from the evaluator config) for trigger keywords. Topics that match
-    are ranked by trigger count and the top ``max_topics`` are returned.
+    Args:
+        instruction: The task instruction text.
+        hint_text:   Any hint text already derived from the evaluator config.
+        domain:      The OSWorld domain (os, chrome, vs_code, ...).
+        max_topics:  Max number of non-always topics to include.
 
-    Topics marked ``always=True`` are always included (in addition to keyword
-    matches). The total returned text is capped to keep prompts lean.
+    Returns:
+        Concatenated technique content (separated by blank lines), or an
+        empty string if nothing relevant is found and there are no always-on
+        techniques.
     """
-    haystack = (instruction + " " + hint_text).lower()
-    scored: list[tuple[int, dict]] = []
-    always: list[dict] = []
-    for topic in TOPICS:
-        if topic.get("always"):
-            always.append(topic)
-            continue
-        score = 0
-        for pat in topic["triggers"]:
+    _ensure_loaded()
+    assert _INDEX is not None and _INDEX_TOPICS is not None and _TECHNIQUES is not None
+
+    query = " ".join(filter(None, [instruction, hint_text, domain]))
+
+    # 1. TF-IDF semantic ranking — over-fetch so trigger boosts can promote
+    #    topics that would otherwise fall outside the cut.
+    ranked = _INDEX.query(query, top_k=len(_INDEX_TOPICS))
+    scores = {i: s for s, i in ranked}
+
+    # 2. Keyword trigger boost: any topic whose regex triggers match the query
+    #    gets a +TRIGGER_BOOST nudge so explicit signals override weak cosine.
+    for i, topic in enumerate(_INDEX_TOPICS):
+        for pat in topic.get("triggers", []):
             try:
-                if re.search(pat, haystack):
-                    score += 1
+                if re.search(pat, query, re.IGNORECASE):
+                    scores[i] = scores.get(i, 0.0) + TRIGGER_BOOST
+                    break
             except re.error:
                 continue
-        if score > 0:
-            scored.append((score, topic))
 
-    scored.sort(key=lambda x: -x[0])
-    chosen = [t for _, t in scored[:max_topics]] + always
-    if not chosen:
+    # 3. Apply relevance threshold then pick top max_topics. Topics below
+    #    threshold are excluded entirely — better to inject zero noise than
+    #    pad to max_topics with weak matches.
+    eligible = [(s, i) for i, s in scores.items() if s >= MIN_RELEVANCE_SCORE]
+    eligible.sort(key=lambda x: -x[0])
+    chosen = [_INDEX_TOPICS[i] for _, i in eligible[:max_topics]]
+
+    # 4. Append always-on topics (these are unconditional and added on top)
+    always = [t for t in _TECHNIQUES if t["always"]]
+
+    final = chosen + always
+    if not final:
         return ""
-    return "\n\n".join(t["content"] for t in chosen)
+    return "\n\n".join(t["content"] for t in final)
 
 
-__all__ = ["select_techniques", "TOPICS"]
+def list_techniques() -> List[str]:
+    """Return the names of all loaded techniques (for diagnostics)."""
+    _ensure_loaded()
+    assert _TECHNIQUES is not None
+    return [t["name"] for t in _TECHNIQUES]
+
+
+def reload() -> None:
+    """Force a re-discovery of techniques. Useful for tests."""
+    global _TECHNIQUES, _INDEX, _INDEX_TOPICS
+    _TECHNIQUES = None
+    _INDEX = None
+    _INDEX_TOPICS = None
+    _ensure_loaded()
+
+
+__all__ = ["select_techniques", "list_techniques", "reload"]
