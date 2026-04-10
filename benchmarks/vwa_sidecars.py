@@ -207,11 +207,75 @@ def vwa_classifieds():
     _make_stub("Classifieds", 9980)
 
 
-@app.function(image=stub_image, cpu=0.5, memory=256, scaledown_window=600)
-@modal.web_server(port=7770, startup_timeout=30)
+# ══════════════════════════════════════════════════════════════════════════════
+# 3. Shopping (Magento) — real implementation from Docker image
+# ══════════════════════════════════════════════════════════════════════════════
+# Built from the official VWA Docker image: shopping_final_0712.tar
+# Pipeline: docker load → docker push to GHCR → modal.Image.from_registry
+#
+# The image contains Apache + PHP + MySQL + Magento 2 with pre-loaded products.
+# A startup script runs MySQL and Apache inside the container.
+# After startup, Magento's base-url is set to the Modal web_server URL.
+
+shopping_image = (
+    modal.Image.from_registry(
+        "ghcr.io/mercurialsolo/vwa-shopping:latest",
+        add_python="3.11",
+    )
+)
+
+
+@app.function(
+    image=shopping_image,
+    cpu=2,
+    memory=4096,
+    scaledown_window=600,
+)
+@modal.web_server(port=80, startup_timeout=120)
 def vwa_shopping():
-    """VWA Shopping (Magento) — STUB (needs PHP+MySQL implementation)."""
-    _make_stub("Shopping", 7770)
+    """VWA Shopping (Magento) — real Magento e-commerce from Docker image.
+
+    Starts MySQL and Apache inside the container. Magento serves the
+    OneStopShop e-commerce site with pre-loaded products, categories,
+    and a working checkout flow.
+    """
+    # Start MySQL first (Magento needs it)
+    subprocess.Popen(
+        ["mysqld_safe"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(5)  # Wait for MySQL to bind
+
+    # Start Apache in the background (serves Magento on port 80)
+    subprocess.Popen(
+        ["apachectl", "-D", "FOREGROUND"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(3)
+
+    # Set Magento's base URL to the Modal web_server URL
+    # This is needed because Magento generates absolute URLs for assets/links
+    modal_url = "https://getmason--vwa-sidecars-vwa-shopping.modal.run"
+    try:
+        subprocess.run(
+            ["/var/www/magento2/bin/magento", "setup:store-config:set",
+             f"--base-url={modal_url}/"],
+            capture_output=True, text=True, timeout=30,
+        )
+        subprocess.run(
+            ["mysql", "-u", "magentouser", "-pMyPassword", "magentodb", "-e",
+             f'UPDATE core_config_data SET value="{modal_url}/" WHERE path = "web/secure/base_url";'],
+            capture_output=True, text=True, timeout=15,
+        )
+        subprocess.run(
+            ["/var/www/magento2/bin/magento", "cache:flush"],
+            capture_output=True, text=True, timeout=30,
+        )
+        print(f"Shopping base URL set to {modal_url}")
+    except Exception as e:
+        print(f"Warning: could not set Magento base URL: {e}")
 
 
 @app.function(image=stub_image, cpu=0.5, memory=256, scaledown_window=600)
