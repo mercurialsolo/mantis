@@ -224,11 +224,12 @@ def vwa_classifieds():
 # Magento Docker image. The actual 68 GB tar is downloaded to the Modal
 # volume ONCE via the download_shopping_image() function below, then
 # extracted at sidecar startup time.
+# Thin image — only needs Python + wget for downloading, plus the flatten
+# script. Apache/PHP/MySQL all live INSIDE the extracted Docker filesystem
+# and run via chroot, so the host image doesn't need them.
 shopping_image = (
     modal.Image.debian_slim()
-    .apt_install("python3", "apache2", "mysql-server", "php", "php-mysql",
-                 "php-gd", "php-curl", "php-intl", "php-xml", "php-mbstring",
-                 "php-zip", "php-bcmath", "php-soap", "libapache2-mod-php")
+    .apt_install("wget", "python3")
     .add_local_file("benchmarks/flatten_docker_layers.py", "/opt/flatten.py", copy=True)
 )
 
