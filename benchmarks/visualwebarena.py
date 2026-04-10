@@ -578,21 +578,45 @@ def run_vwa(max_tasks: int = 1, max_steps: int = 30):
     # 2. Load tasks. Fallback: use a public URL so the whole pipeline can
     # smoke-test without the 5 VWA sidecars.
     tasks = load_vwa_task_configs()
-    if not tasks:
-        print("NOTE: no VWA task configs under /data/vwa — using a public-URL")
-        print("      fallback so the agent loop can smoke-test end-to-end.")
+
+    # Check if VWA sidecars are actually reachable. If not, fall back to
+    # public-URL smoke tests so the pipeline can be validated end-to-end
+    # without spinning up the Docker stack.
+    sidecars_ok = False
+    if tasks:
+        import requests as _req
+        test_url = tasks[0].get("start_url", "")
+        try:
+            _req.get(test_url, timeout=5)
+            sidecars_ok = True
+            print(f"  VWA sidecars reachable ({test_url[:50]})")
+        except Exception:
+            print(f"  VWA sidecars NOT reachable ({test_url[:50]}) — using public-URL smoke tests")
+
+    if not tasks or not sidecars_ok:
         tasks = [
+            {
+                "task_id": "smoke-wikipedia",
+                "intent": (
+                    "You are on the Wikipedia main page. Find and click the link "
+                    "to the article about 'Python (programming language)'. Then "
+                    "report the first sentence of the article. Output DONE with "
+                    "your answer."
+                ),
+                "start_url": "https://en.wikipedia.org/wiki/Main_Page",
+                "sites": ["public"],
+            },
             {
                 "task_id": "smoke-example-com",
                 "intent": (
                     "You are on example.com. Read the page and tell me what the "
-                    "main heading says and what the page is for. Then output DONE "
-                    "with your answer."
+                    "main heading says. Then output DONE with your answer."
                 ),
                 "start_url": "https://example.com",
                 "sites": ["public"],
-            }
+            },
         ]
+        print(f"  Using {len(tasks)} public-URL smoke tasks")
 
     # 3. Run the agent loop for each task
     results: list[dict] = []
