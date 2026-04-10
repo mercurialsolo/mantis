@@ -217,10 +217,39 @@ def vwa_classifieds():
 # A startup script runs MySQL and Apache inside the container.
 # After startup, Magento's base-url is set to the Modal web_server URL.
 
+# Build the Shopping image entirely on Modal — download the official VWA
+# Docker tar from archive.org, extract (flatten layers), and use as the
+# base filesystem. No local Docker or GHCR push needed.
 shopping_image = (
-    modal.Image.from_registry(
-        "ghcr.io/mercurialsolo/vwa-shopping:latest",
-        add_python="3.11",
+    modal.Image.debian_slim()
+    .apt_install("wget", "python3", "jq")
+    .run_commands(
+        # Download the Shopping Docker image tar (~6 GB)
+        "wget -q -O /tmp/shopping.tar 'http://metis.lti.cs.cmu.edu/webarena-images/shopping_final_0712.tar'",
+        # Extract and flatten Docker layers into /opt/shopping
+        "mkdir -p /opt/shopping /tmp/layers",
+        "tar xf /tmp/shopping.tar -C /tmp/layers",
+        # Flatten layers in order from manifest.json
+        """python3 -c "
+import json, subprocess, os
+with open('/tmp/layers/manifest.json') as f:
+    manifest = json.load(f)
+for layer in manifest[0]['Layers']:
+    layer_path = os.path.join('/tmp/layers', layer)
+    subprocess.run(['tar', 'xf', layer_path, '-C', '/opt/shopping'], capture_output=True)
+# Clean up whiteout files
+for root, dirs, files in os.walk('/opt/shopping'):
+    for f in files:
+        if f.startswith('.wh.'):
+            target = os.path.join(root, f.replace('.wh.', ''))
+            wh = os.path.join(root, f)
+            if os.path.exists(target):
+                subprocess.run(['rm', '-rf', target])
+            os.remove(wh)
+print('Layers flattened successfully')
+" """,
+        # Clean up the tar to save space in the image
+        "rm -rf /tmp/shopping.tar /tmp/layers",
     )
 )
 
@@ -235,42 +264,46 @@ shopping_image = (
 def vwa_shopping():
     """VWA Shopping (Magento) — real Magento e-commerce from Docker image.
 
-    Starts MySQL and Apache inside the container. Magento serves the
-    OneStopShop e-commerce site with pre-loaded products, categories,
-    and a working checkout flow.
+    The filesystem was extracted from the official VWA Docker image during
+    Modal image build. This startup function uses chroot to run MySQL and
+    Apache from the extracted filesystem at /opt/shopping.
     """
-    # Start MySQL first (Magento needs it)
-    subprocess.Popen(
-        ["mysqld_safe"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(5)  # Wait for MySQL to bind
+    root = "/opt/shopping"
 
-    # Start Apache in the background (serves Magento on port 80)
+    # Start MySQL from the extracted filesystem
     subprocess.Popen(
-        ["apachectl", "-D", "FOREGROUND"],
+        ["chroot", root, "mysqld_safe"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env={**os.environ, "HOME": "/root"},
+    )
+    time.sleep(8)  # MySQL needs time to initialize
+
+    # Start Apache (serves Magento on port 80)
+    subprocess.Popen(
+        ["chroot", root, "apachectl", "-D", "FOREGROUND"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env={**os.environ, "HOME": "/root"},
     )
     time.sleep(3)
 
     # Set Magento's base URL to the Modal web_server URL
-    # This is needed because Magento generates absolute URLs for assets/links
     modal_url = "https://getmason--vwa-sidecars-vwa-shopping.modal.run"
     try:
         subprocess.run(
-            ["/var/www/magento2/bin/magento", "setup:store-config:set",
-             f"--base-url={modal_url}/"],
-            capture_output=True, text=True, timeout=30,
+            ["chroot", root, "/var/www/magento2/bin/magento",
+             "setup:store-config:set", f"--base-url={modal_url}/"],
+            capture_output=True, text=True, timeout=60,
         )
         subprocess.run(
-            ["mysql", "-u", "magentouser", "-pMyPassword", "magentodb", "-e",
+            ["chroot", root, "mysql", "-u", "magentouser", "-pMyPassword",
+             "magentodb", "-e",
              f'UPDATE core_config_data SET value="{modal_url}/" WHERE path = "web/secure/base_url";'],
             capture_output=True, text=True, timeout=15,
         )
         subprocess.run(
-            ["/var/www/magento2/bin/magento", "cache:flush"],
+            ["chroot", root, "/var/www/magento2/bin/magento", "cache:flush"],
             capture_output=True, text=True, timeout=30,
         )
         print(f"Shopping base URL set to {modal_url}")
