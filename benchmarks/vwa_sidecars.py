@@ -271,7 +271,6 @@ def download_shopping_image():
     memory=8192,
     volumes={"/data": vol},
     scaledown_window=600,
-    ephemeral_disk=65536,  # 64 GB for extracted filesystem
 )
 @modal.web_server(port=80, startup_timeout=300)
 def vwa_shopping():
@@ -356,3 +355,63 @@ def vwa_shopping():
 def vwa_reddit():
     """VWA Reddit (Postmill) — STUB (needs PHP+PostgreSQL implementation)."""
     _make_stub("Reddit", 9999)
+
+
+# ── One-time download functions for Reddit and Classifieds ────────────────────
+
+@app.function(
+    image=shopping_image,  # reuse — just needs wget+python
+    cpu=2,
+    memory=4096,
+    volumes={"/data": vol},
+    timeout=86400,
+)
+def download_reddit_image():
+    """One-time download of the Reddit (Postmill) Docker tar to the Modal volume.
+
+    Run once: modal run benchmarks/vwa_sidecars.py::download_reddit_image
+    """
+    tar_path = "/data/vwa/postmill-populated-exposed-withimg.tar"
+    if os.path.exists(tar_path):
+        size = os.path.getsize(tar_path)
+        print(f"Reddit tar already exists: {size / 1e9:.1f} GB")
+        return
+    os.makedirs("/data/vwa", exist_ok=True)
+    print("Downloading Reddit (Postmill) Docker image from CMU...")
+    subprocess.run(
+        ["wget", "-q", "--show-progress", "-O", tar_path,
+         "http://metis.lti.cs.cmu.edu/webarena-images/postmill-populated-exposed-withimg.tar"],
+        check=True,
+    )
+    vol.commit()
+    size = os.path.getsize(tar_path)
+    print(f"Done — {size / 1e9:.1f} GB saved to {tar_path}")
+
+
+@app.function(
+    image=shopping_image,  # reuse
+    cpu=2,
+    memory=4096,
+    volumes={"/data": vol},
+    timeout=86400,
+)
+def download_classifieds_image():
+    """One-time download of the Classifieds Docker compose zip to the Modal volume.
+
+    Run once: modal run benchmarks/vwa_sidecars.py::download_classifieds_image
+    """
+    zip_path = "/data/vwa/classifieds_docker_compose.zip"
+    if os.path.exists(zip_path):
+        size = os.path.getsize(zip_path)
+        print(f"Classifieds zip already exists: {size / 1e9:.1f} GB")
+        return
+    os.makedirs("/data/vwa", exist_ok=True)
+    print("Downloading Classifieds Docker compose from archive.org...")
+    subprocess.run(
+        ["wget", "-q", "--show-progress", "-O", zip_path,
+         "https://archive.org/download/classifieds_docker_compose/classifieds_docker_compose.zip"],
+        check=True,
+    )
+    vol.commit()
+    size = os.path.getsize(zip_path)
+    print(f"Done — {size / 1e9:.1f} GB saved to {zip_path}")
