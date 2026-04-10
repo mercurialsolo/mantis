@@ -222,34 +222,15 @@ def vwa_classifieds():
 # base filesystem. No local Docker or GHCR push needed.
 shopping_image = (
     modal.Image.debian_slim()
-    .apt_install("wget", "python3", "jq")
+    .apt_install("wget", "python3")
+    .add_local_file("benchmarks/flatten_docker_layers.py", "/opt/flatten.py")
     .run_commands(
         # Download the Shopping Docker image tar (~6 GB)
-        "wget -q -O /tmp/shopping.tar 'http://metis.lti.cs.cmu.edu/webarena-images/shopping_final_0712.tar'",
-        # Extract and flatten Docker layers into /opt/shopping
-        "mkdir -p /opt/shopping /tmp/layers",
-        "tar xf /tmp/shopping.tar -C /tmp/layers",
-        # Flatten layers in order from manifest.json
-        """python3 -c "
-import json, subprocess, os
-with open('/tmp/layers/manifest.json') as f:
-    manifest = json.load(f)
-for layer in manifest[0]['Layers']:
-    layer_path = os.path.join('/tmp/layers', layer)
-    subprocess.run(['tar', 'xf', layer_path, '-C', '/opt/shopping'], capture_output=True)
-# Clean up whiteout files
-for root, dirs, files in os.walk('/opt/shopping'):
-    for f in files:
-        if f.startswith('.wh.'):
-            target = os.path.join(root, f.replace('.wh.', ''))
-            wh = os.path.join(root, f)
-            if os.path.exists(target):
-                subprocess.run(['rm', '-rf', target])
-            os.remove(wh)
-print('Layers flattened successfully')
-" """,
-        # Clean up the tar to save space in the image
-        "rm -rf /tmp/shopping.tar /tmp/layers",
+        "wget -q --show-progress -O /tmp/shopping.tar 'http://metis.lti.cs.cmu.edu/webarena-images/shopping_final_0712.tar'",
+        # Flatten Docker layers into /opt/shopping using our script
+        "python3 /opt/flatten.py /tmp/shopping.tar /opt/shopping",
+        # Clean up the tar to save image space
+        "rm -f /tmp/shopping.tar",
     )
 )
 
