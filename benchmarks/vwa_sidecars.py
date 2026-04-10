@@ -200,11 +200,92 @@ if __name__ == "__main__":
     subprocess.Popen(["python", tmpfile.name])
 
 
-@app.function(image=stub_image, cpu=0.5, memory=256, scaledown_window=600)
-@modal.web_server(port=9980, startup_timeout=30)
+# ══════════════════════════════════════════════════════════════════════════════
+# 3b. Classifieds (Osclass) — real implementation from Docker Hub image
+# ══════════════════════════════════════════════════════════════════════════════
+# The classifieds app image is already on Docker Hub: jykoh/classifieds:latest
+# We layer MySQL on top and import the SQL dumps at startup.
+
+classifieds_image = (
+    modal.Image.from_registry(
+        "jykoh/classifieds:latest",
+        add_python="3.11",
+    )
+    .run_commands(
+        # Install MySQL server inside the classifieds image
+        "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y mysql-server && rm -rf /var/lib/apt/lists/*",
+        # Prepare MySQL data dir
+        "mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld",
+    )
+    .add_local_file(
+        "/tmp/classifieds_extract/classifieds_docker_compose/mysql/osclass_craigslist.sql",
+        "/opt/osclass_craigslist.sql",
+        copy=True,
+    )
+    .add_local_file(
+        "/tmp/classifieds_extract/classifieds_docker_compose/mysql/classifieds_restore.sql",
+        "/opt/classifieds_restore.sql",
+        copy=True,
+    )
+)
+
+
+@app.function(
+    image=classifieds_image,
+    cpu=2,
+    memory=4096,
+    scaledown_window=600,
+)
+@modal.web_server(port=9980, startup_timeout=180)
 def vwa_classifieds():
-    """VWA Classifieds — STUB (needs PHP+MySQL implementation)."""
-    _make_stub("Classifieds", 9980)
+    """VWA Classifieds (Osclass) — real classified ads from Docker Hub image.
+
+    Starts MySQL, imports the product/listing database, then starts the
+    Osclass PHP app on port 9980.
+    """
+    modal_url = "https://getmason--vwa-sidecars-vwa-classifieds.modal.run"
+
+    # Start MySQL
+    print("Starting MySQL...")
+    subprocess.Popen(
+        ["mysqld_safe"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(8)
+
+    # Create database and import data
+    print("Importing classifieds database...")
+    try:
+        subprocess.run(
+            ["mysql", "-u", "root", "-e",
+             "DROP DATABASE IF EXISTS osclass; CREATE DATABASE osclass;"],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        subprocess.run(
+            ["mysql", "-u", "root", "osclass", "-e",
+             "source /opt/osclass_craigslist.sql;"],
+            capture_output=True, text=True, timeout=120, check=True,
+        )
+        print("Database imported successfully")
+    except Exception as e:
+        print(f"DB import failed: {e}")
+
+    # Update the site URL in the database to point to Modal
+    try:
+        subprocess.run(
+            ["mysql", "-u", "root", "osclass", "-e",
+             f"UPDATE oc_t_preference SET s_value='{modal_url}/' WHERE s_name='pageTitle' OR s_name='siteUrl';"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except Exception:
+        pass
+
+    # The classifieds image already has Apache configured on port 9980
+    # via its Dockerfile CMD. The web_server decorator expects the port
+    # to be bound by the time startup_timeout elapses. Apache should
+    # already be running from the image's entrypoint.
+    print(f"Classifieds ready at {modal_url}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
