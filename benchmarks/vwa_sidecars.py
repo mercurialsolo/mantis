@@ -223,7 +223,7 @@ def vwa_classifieds():
 shopping_image = (
     modal.Image.debian_slim()
     .apt_install("wget", "python3")
-    .add_local_file("benchmarks/flatten_docker_layers.py", "/opt/flatten.py")
+    .add_local_file("benchmarks/flatten_docker_layers.py", "/opt/flatten.py", copy=True)
     .run_commands(
         # Download the Shopping Docker image tar (~6 GB)
         "wget -q --show-progress -O /tmp/shopping.tar 'http://metis.lti.cs.cmu.edu/webarena-images/shopping_final_0712.tar'",
