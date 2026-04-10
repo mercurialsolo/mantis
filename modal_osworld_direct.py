@@ -885,30 +885,17 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                 "except Exception as e:\n"
                 "    print(f'Port 9222 NOT listening: {e}')\n"
             )
-            # Print whatever the VM's Python service captured
-            print(f"  VM Chrome launch output: {chrome_result}")
-            # Chrome on QEMU TCG (software CPU emulation, no KVM in gVisor)
-            # takes 15-30 seconds to fully start. Retry the CDP check with
-            # backoff until Chrome's WebSocket endpoint is ready.
-            # QEMU TCG (no KVM in gVisor) is ~30x slower than native. Chrome
-            # init that takes 2-3s natively needs 60-90s on TCG. The OSWorld
-            # setup_controller also retries 15×5s=75s, so total budget is ~165s.
-            cdp_ok = False
-            for cdp_attempt in range(18):  # 18 attempts × 5s = 90s total
-                time.sleep(5)
-                try:
-                    cdp_check = requests.get("http://localhost:9222/json", timeout=5)
-                    if cdp_check.status_code == 200:
-                        tabs = cdp_check.json()
-                        print(f"  Chrome+CDP CONFIRMED after {(cdp_attempt + 1) * 5}s: {len(tabs)} tab(s)")
-                        cdp_ok = True
-                        break
-                except Exception:
-                    pass
-                if cdp_attempt % 3 == 2:
-                    print(f"  CDP attempt {cdp_attempt + 1}/18: not ready yet ({(cdp_attempt+1)*5}s)...")
-            if not cdp_ok:
-                print("  WARNING: Chrome+CDP not reachable after 90s — chrome task setup may fail")
+            print(f"  VM Chrome launch: {chrome_result.get('output', '')[:200] if isinstance(chrome_result, dict) else chrome_result}")
+            # NOTE: Chrome+CDP via QEMU port forwarding is unreliable because
+            # Chrome binds --remote-debugging-port to 127.0.0.1 inside the VM
+            # and QEMU's hostfwd connects to the guest's external interface.
+            # We skip the container-side CDP check and let the setup_controller
+            # handle it — it has its own 15-retry loop and connects from INSIDE
+            # the VM where 127.0.0.1:9222 is reachable. If setup still fails,
+            # setup_ok=False is caught and the task proceeds from whatever Chrome
+            # state exists (agent navigates from there).
+            time.sleep(10)  # Give Chrome time to start inside the VM
+            print("  Chrome launched — setup_controller will connect via VM-local CDP")
         except Exception as e:
             print(f"  Chrome+CDP launch failed: {e}")
 
@@ -1281,9 +1268,14 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
             score = 0.0
             max_retries = 2  # Up to 2 retries after initial attempt
 
-            if not setup_ok:
+            if not setup_ok and dom not in ("chrome", "multi_apps"):
                 print(f"  Skipping eval — setup failed, retrying setup next run")
                 max_retries = 0  # Don't retry, setup is the problem
+            elif not setup_ok:
+                # Chrome/multi_apps: setup failure is expected (CDP not available
+                # via QEMU port forwarding). The agent ran from whatever Chrome
+                # state the VM desktop provides. Still try to evaluate.
+                print(f"  Setup failed (CDP unavailable) — evaluating anyway")
 
             for attempt in range(1 + max_retries):
                 time.sleep(5)  # Let VM settle
