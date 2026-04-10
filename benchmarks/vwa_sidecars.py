@@ -214,11 +214,12 @@ classifieds_image = (
     .apt_install(
         "apache2", "php", "php-mysql", "php-gd", "php-curl", "php-xml",
         "php-mbstring", "php-zip", "libapache2-mod-php",
-        "mysql-server", "wget", "unzip", "python3",
+        "mariadb-server", "wget", "unzip", "python3",
     )
     .run_commands(
-        # Prepare MySQL
+        # Prepare MariaDB (MySQL-compatible)
         "mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld",
+        "mysql_install_db --user=mysql --datadir=/var/lib/mysql 2>/dev/null || true",
         # Download Osclass (the classifieds PHP app)
         "wget -q -O /tmp/osclass.zip 'https://github.com/osclass/Osclass/releases/download/3.9.0/osclass-3.9.0.zip' || true",
         "mkdir -p /var/www/html/osclass",
