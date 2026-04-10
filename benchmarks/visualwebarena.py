@@ -100,10 +100,112 @@ class PlaywrightAdapter:
         if start_url:
             self.page.goto(start_url, wait_until="domcontentloaded")
 
+    # ── Set-of-Mark (SoM) element discovery ─────────────────────────────
+    def _get_interactive_elements(self) -> list[dict]:
+        """Query the DOM for all interactive/clickable elements with bounding boxes.
+
+        Returns a list of dicts with keys: id, tag, text, role, bbox (x, y, w, h).
+        Elements are numbered sequentially starting from 0.
+        """
+        js_code = """
+        () => {
+            const selectors = [
+                'a[href]', 'button', 'input', 'select', 'textarea',
+                '[role="button"]', '[role="link"]', '[role="menuitem"]',
+                '[role="tab"]', '[role="checkbox"]', '[role="radio"]',
+                '[role="option"]', '[role="switch"]', '[role="combobox"]',
+                '[onclick]', '[tabindex]',
+                'label', 'summary',
+            ];
+            const seen = new Set();
+            const elements = [];
+            for (const sel of selectors) {
+                for (const el of document.querySelectorAll(sel)) {
+                    if (seen.has(el)) continue;
+                    seen.add(el);
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width < 5 || rect.height < 5) continue;
+                    if (rect.top > window.innerHeight || rect.left > window.innerWidth) continue;
+                    if (rect.bottom < 0 || rect.right < 0) continue;
+                    const text = (el.textContent || el.value || el.placeholder || el.getAttribute('aria-label') || '').trim().substring(0, 80);
+                    elements.push({
+                        tag: el.tagName.toLowerCase(),
+                        text: text,
+                        role: el.getAttribute('role') || '',
+                        type: el.getAttribute('type') || '',
+                        bbox: {
+                            x: Math.round(rect.x),
+                            y: Math.round(rect.y),
+                            w: Math.round(rect.width),
+                            h: Math.round(rect.height),
+                        },
+                    });
+                }
+            }
+            return elements;
+        }
+        """
+        try:
+            elements = self.page.evaluate(js_code)
+            return [{"id": i, **el} for i, el in enumerate(elements)]
+        except Exception as e:
+            print(f"[SoM] element query failed: {e}")
+            return []
+
+    def _annotate_screenshot(self, png_bytes: bytes, elements: list[dict]) -> bytes:
+        """Draw numbered SoM labels on the screenshot at each element's bbox.
+
+        Returns annotated PNG bytes. Each label is a small colored rectangle
+        with the element's ID number, positioned at the top-left corner of
+        the element's bounding box.
+        """
+        from PIL import Image, ImageDraw, ImageFont
+
+        img = Image.open(io.BytesIO(png_bytes))
+        draw = ImageDraw.Draw(img)
+
+        # Use a small built-in font (no external font file needed)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 12)
+        except Exception:
+            font = ImageFont.load_default()
+
+        for el in elements:
+            bbox = el["bbox"]
+            x, y, w, h = bbox["x"], bbox["y"], bbox["w"], bbox["h"]
+            eid = el["id"]
+
+            # Draw a thin border around the element
+            draw.rectangle([x, y, x + w, y + h], outline="red", width=1)
+
+            # Draw the ID label (small red box with white text)
+            label = str(eid)
+            label_w = len(label) * 8 + 4
+            label_h = 14
+            lx, ly = max(0, x), max(0, y - label_h)
+            draw.rectangle([lx, ly, lx + label_w, ly + label_h], fill="red")
+            draw.text((lx + 2, ly), label, fill="white", font=font)
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
     # ── Observation ───────────────────────────────────────────────────────
     def screenshot(self) -> bytes:
         """Return a PNG screenshot of the current page as bytes."""
         return self.page.screenshot(type="png")
+
+    def screenshot_som(self) -> tuple[bytes, list[dict]]:
+        """Return a SoM-annotated screenshot + element list.
+
+        The screenshot has numbered labels drawn on every interactive element.
+        The element list maps IDs to bounding boxes so ``click_element(id)``
+        can compute the center coordinates.
+        """
+        raw_png = self.page.screenshot(type="png")
+        elements = self._get_interactive_elements()
+        annotated = self._annotate_screenshot(raw_png, elements)
+        return annotated, elements
 
     # ── Action primitives — mirror mantis_agent.tools.helpers names ──────
     def click(self, x: int, y: int, button: str = "left") -> None:
@@ -151,6 +253,26 @@ class PlaywrightAdapter:
 
     def wait(self, seconds: float) -> None:
         time.sleep(seconds)
+
+    def click_element(self, element_id: int) -> None:
+        """Click the center of a SoM-labeled element by its ID.
+
+        The model sees numbered labels on the screenshot and outputs
+        ``click_element(3)`` instead of guessing pixel coordinates.
+        This is dramatically more accurate for flat UI elements.
+        """
+        if not hasattr(self, '_last_elements') or not self._last_elements:
+            print(f"[SoM] No elements cached — falling back to noop")
+            return
+        matches = [el for el in self._last_elements if el["id"] == element_id]
+        if not matches:
+            print(f"[SoM] Element {element_id} not found (max id: {max(e['id'] for e in self._last_elements)})")
+            return
+        el = matches[0]
+        cx = el["bbox"]["x"] + el["bbox"]["w"] // 2
+        cy = el["bbox"]["y"] + el["bbox"]["h"] // 2
+        print(f"[SoM] Clicking element {element_id}: '{el['text'][:40]}' at ({cx}, {cy})")
+        self.page.mouse.click(cx, cy)
 
     def run_command(self, cmd: str) -> None:
         """No-op in VWA — we do not have a shell inside the browser.
@@ -253,17 +375,25 @@ def load_vwa_task_configs(
 VWA_SYSTEM_PROMPT = """\
 You are a computer-use agent controlling a headless web browser. You see a screenshot of the current page each step and output Python code to perform ONE action.
 
-The viewport is 1280x720 pixels. Coordinates must match what you see in the screenshot.
+The viewport is 1280x720 pixels.
+
+# Set-of-Mark (SoM) — IMPORTANT
+
+The screenshot has RED NUMBERED LABELS on every interactive element (links, buttons, inputs, etc.). Each label shows the element's ID number. To click an element, use its ID:
+
+- `click_element(3)` — click the element labeled [3] in the screenshot
+
+This is MUCH more accurate than guessing pixel coordinates. **Always prefer click_element(id) over click(x, y)** when you can see a numbered label on the target.
 
 # Available helpers (already imported — just call them)
 
-- `click(x, y)` — left click at (x, y)
-- `click(x, y, button="right")` — right click
-- `double_click(x, y)` — double click
-- `type_text(text)` — type text into the focused field. Handles all special characters correctly.
-- `key(combo)` — press a key or combo. Examples: `key("Return")`, `key("ctrl+l")` (address bar), `key("Tab")`, `key("Escape")`, `key("Page_Down")`.
-- `wait(seconds=2)` — pause for N seconds (page loads, AJAX).
-- `scroll(x, y, clicks=-3)` — scroll at (x, y). Negative clicks = scroll down.
+- `click_element(id)` — **PREFERRED** — click element by its SoM label number
+- `click(x, y)` — fallback: click at raw pixel coordinates (only if no SoM label is visible)
+- `type_text(text)` — type text into the focused field
+- `key(combo)` — press a key or combo. Examples: `key("Return")`, `key("ctrl+l")` (address bar), `key("Tab")`, `key("Escape")`, `key("Page_Down")`
+- `wait(seconds=2)` — pause for N seconds (page loads, AJAX)
+- `scroll(x, y, clicks=-3)` — scroll at (x, y). Negative clicks = scroll down
+- `double_click(x, y)` — double click at coordinates
 
 # Important — you are in a browser, not a desktop OS
 
@@ -388,6 +518,7 @@ def _execute_action(code: str, adapter: "PlaywrightAdapter") -> str:
     import io
 
     ns = {
+        "click_element": adapter.click_element,
         "click": adapter.click,
         "double_click": adapter.double_click,
         "type_text": adapter.type_text,
@@ -497,19 +628,35 @@ def run_vwa(max_tasks: int = 1, max_steps: int = 30):
             adapter.wait(2)
 
             for step in range(max_steps):
-                # 3a. Observe
+                # 3a. Observe — SoM-annotated screenshot with numbered elements
                 try:
-                    png = adapter.screenshot()
+                    png, elements = adapter.screenshot_som()
+                    adapter._last_elements = elements  # cache for click_element()
                 except Exception as _e:
                     print(f"  step {step + 1}: screenshot failed: {_e}")
                     break
+
+                # Build a text summary of SoM elements for the inference
+                if elements:
+                    elem_summary = "INTERACTIVE ELEMENTS (click by ID using click_element(id)):\n"
+                    for el in elements[:40]:  # cap at 40 to avoid token overflow
+                        elem_summary += f"  [{el['id']}] {el['tag']}"
+                        if el.get('text'):
+                            elem_summary += f" \"{el['text'][:50]}\""
+                        if el.get('type'):
+                            elem_summary += f" type={el['type']}"
+                        elem_summary += "\n"
+                    if len(elements) > 40:
+                        elem_summary += f"  ... and {len(elements) - 40} more elements\n"
+                else:
+                    elem_summary = ""
 
                 # 3b. Infer
                 try:
                     response = _llama_infer(
                         screenshot_png=png,
                         instruction=instruction,
-                        hint_text=hint_text,
+                        hint_text=hint_text + "\n\n" + elem_summary if elem_summary else hint_text,
                         trajectory=trajectory,
                         model_file=model_file,
                     )
