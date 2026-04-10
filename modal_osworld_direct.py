@@ -545,10 +545,43 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
     prompts.SYS_PROMPT_IN_SCREENSHOT_OUT_CODE = GEMMA4_SYSTEM_PROMPT
     mm_agent_module.SYS_PROMPT_IN_SCREENSHOT_OUT_CODE = GEMMA4_SYSTEM_PROMPT
 
+    # Also patch the screenshot+a11y_tree prompt (SYS_PROMPT_IN_BOTH_OUT_CODE)
+    # used when observation_type="screenshot_a11y_tree" for chrome/multi_apps.
+    # The a11y tree supplement is appended below the base prompt so the model
+    # sees both the helpers reference AND the a11y tree instructions.
+    A11Y_SUPPLEMENT = """
+
+# Accessibility Tree
+
+You also receive an accessibility tree (AT-SPI) with each screenshot. It lists every UI element with its:
+- tag (button, input, link, text, etc.)
+- name
+- text content
+- position (top-left x, y in pixels) and size (width, height)
+
+USE THE ACCESSIBILITY TREE to find exact coordinates for clicks. When you need to click a button or link:
+1. Find the element in the tree by its name or text
+2. Use its position + half its size to compute the CENTER coordinates
+3. Click at those coordinates: `click(x + w//2, y + h//2)`
+
+This is MUCH more reliable than guessing coordinates from the screenshot. Always prefer the tree's coordinates over visual estimation."""
+
+    GEMMA4_A11Y_PROMPT = GEMMA4_SYSTEM_PROMPT + A11Y_SUPPLEMENT
+    prompts.SYS_PROMPT_IN_BOTH_OUT_CODE = GEMMA4_A11Y_PROMPT
+    mm_agent_module.SYS_PROMPT_IN_BOTH_OUT_CODE = GEMMA4_A11Y_PROMPT
+
     # Sanity check: log first 200 chars of the prompt the agent will actually use
+    active_prompt = GEMMA4_A11Y_PROMPT if domain in ("chrome", "multi_apps") else GEMMA4_SYSTEM_PROMPT
     print(f"\n=== ACTIVE PROMPT (first 200 chars) ===")
-    print(mm_agent_module.SYS_PROMPT_IN_SCREENSHOT_OUT_CODE[:200])
+    print(active_prompt[:200])
     print("=== END PROMPT PREVIEW ===\n")
+
+    # EXP-21: Use screenshot+a11y tree for chrome/multi_apps domains.
+    # The accessibility tree gives the model exact element positions and
+    # sizes (from pyatspi/AT-SPI) so it can click precisely on dropdowns,
+    # radio buttons, and other flat-UI elements that vision alone misses.
+    # OS tasks keep screenshot-only — a11y tree adds noise for terminal work.
+    obs_type = "screenshot_a11y_tree" if domain in ("chrome", "multi_apps") else "screenshot"
 
     agent = PromptAgent(
         model="gpt-gemma4",  # Prefix "gpt" triggers OpenAI-compatible path using OPENAI_BASE_URL
@@ -556,7 +589,7 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
         top_p=0.95,
         temperature=0.0,
         action_space="pyautogui",
-        observation_type="screenshot",
+        observation_type=obs_type,
         max_trajectory_length=5,  # More history for better context
     )
 
@@ -980,7 +1013,16 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
                     print(f"  Screenshot failed: {e}")
                     break
 
-                obs = {"screenshot": screenshot, "accessibility_tree": None}
+                # EXP-21: Fetch a11y tree for chrome/multi_apps domains
+                a11y_tree = None
+                if obs_type == "screenshot_a11y_tree":
+                    try:
+                        a11y_resp = requests.get("http://localhost:5050/accessibility", timeout=15)
+                        if a11y_resp.status_code == 200:
+                            a11y_tree = a11y_resp.json().get("AT")
+                    except Exception:
+                        pass  # a11y tree is optional — screenshot alone is the fallback
+                obs = {"screenshot": screenshot, "accessibility_tree": a11y_tree}
 
                 # EXP-1: On first step, ask the model to plan before acting
                 if step == 0:
@@ -1451,7 +1493,15 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
                                         buf = io.BytesIO()
                                         img.save(buf, format="PNG")
                                         retry_ss = buf.getvalue()
-                                    obs = {"screenshot": retry_ss, "accessibility_tree": None}
+                                    retry_a11y = None
+                                    if obs_type == "screenshot_a11y_tree":
+                                        try:
+                                            a11y_r = requests.get("http://localhost:5050/accessibility", timeout=15)
+                                            if a11y_r.status_code == 200:
+                                                retry_a11y = a11y_r.json().get("AT")
+                                        except Exception:
+                                            pass
+                                    obs = {"screenshot": retry_ss, "accessibility_tree": retry_a11y}
                                     response, actions = agent.predict(retry_instruction, obs)
                                 except Exception:
                                     break
@@ -1634,7 +1684,15 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
                 except Exception:
                     break
 
-                obs = {"screenshot": screenshot, "accessibility_tree": None}
+                retry_a11y2 = None
+                if obs_type == "screenshot_a11y_tree":
+                    try:
+                        a11y_r2 = requests.get("http://localhost:5050/accessibility", timeout=15)
+                        if a11y_r2.status_code == 200:
+                            retry_a11y2 = a11y_r2.json().get("AT")
+                    except Exception:
+                        pass
+                obs = {"screenshot": screenshot, "accessibility_tree": retry_a11y2}
                 try:
                     response, actions = agent.predict(retry_instruction, obs)
                 except Exception:
