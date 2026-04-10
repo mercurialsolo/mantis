@@ -1042,10 +1042,11 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
                     else:
                         print(f"  Plan: NONE captured (response prefix: {response[:120]})")
 
-                # Loop detection: if same action 3 times, nudge the model
+                # Loop detection: if same (or near-same) action repeated, nudge.
                 # EXP-17: Strip imports/whitespace to get a meaningful signature.
-                # The old check used str(action)[:30] which always matched the
-                # `import pyautogui\nimport time\n` boilerplate prefix.
+                # EXP-27: Also detect near-duplicate clicks (same verb repeated,
+                # or clicks clustered within 100px) — catches the chrome-domain
+                # click-loop where the model hammers slightly different coordinates.
                 def _action_sig(a):
                     s = str(a)
                     meaningful = [
@@ -1055,15 +1056,53 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
                     ]
                     return " | ".join(meaningful)[:120]
 
+                def _is_near_dup_loop(history, window=5):
+                    """Detect near-duplicate action loops for GUI tasks."""
+                    if len(history) < 3:
+                        return False
+                    recent = history[-window:]
+                    # Extract verb from each action
+                    def _verb(a):
+                        s = str(a).strip()
+                        for v in ('click(', 'double_click(', 'type_text(', 'key(', 'scroll(', 'wait(', 'run_command('):
+                            if v in s:
+                                return v.rstrip('(')
+                        return None
+                    verbs = [_verb(a) for a in recent]
+                    # Same click verb 5+ times in a row
+                    if len(verbs) >= 5 and verbs[-1] == 'click' and all(v == 'click' for v in verbs[-5:]):
+                        return True
+                    # Clicks clustered within 100px — extract coords from last 4
+                    import re as _re
+                    coords = []
+                    for a in recent[-4:]:
+                        m = _re.search(r'click\(\s*(\d+)\s*,\s*(\d+)', str(a))
+                        if m:
+                            coords.append((int(m.group(1)), int(m.group(2))))
+                    if len(coords) >= 3:
+                        xs = [c[0] for c in coords]
+                        ys = [c[1] for c in coords]
+                        if max(xs) - min(xs) <= 100 and max(ys) - min(ys) <= 100:
+                            return True
+                    return False
+
+                nudge = None
                 if actions and len(last_actions) >= 2:
                     cur_sig = _action_sig(actions[0])
                     if cur_sig and all(_action_sig(a) == cur_sig for a in last_actions[-2:]):
-                        nudge = "\nIMPORTANT: Your last actions were repetitive. Try a DIFFERENT approach."
-                        if agent_plan:
-                            step_instruction = raw_instruction + hint + f"\n\nYour plan:\n{agent_plan}" + nudge
-                        else:
-                            step_instruction = raw_instruction + hint + nudge
-                        instruction = step_instruction  # Update for subsequent steps too
+                        nudge = "\nIMPORTANT: Your last actions were identical. Try a DIFFERENT approach."
+                if not nudge and _is_near_dup_loop(last_actions):
+                    nudge = (
+                        "\nIMPORTANT: You're clicking the same area repeatedly without progress. "
+                        "STOP clicking and try a completely DIFFERENT approach — keyboard shortcut, "
+                        "scroll to find the right element, or navigate to a different page."
+                    )
+                if nudge:
+                    if agent_plan:
+                        step_instruction = raw_instruction + hint + f"\n\nYour plan:\n{agent_plan}" + nudge
+                    else:
+                        step_instruction = raw_instruction + hint + nudge
+                    instruction = step_instruction
 
                 if not actions:
                     break
