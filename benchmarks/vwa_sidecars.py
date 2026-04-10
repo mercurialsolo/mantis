@@ -226,17 +226,14 @@ classifieds_image = (
         "cd /var/www/html/osclass && (unzip -o /tmp/osclass.zip 2>/dev/null || true)",
         "chown -R www-data:www-data /var/www/html/osclass",
         "rm -f /tmp/osclass.zip",
-        # Configure Apache to serve Osclass on port 9980
-        "echo 'Listen 9980' > /etc/apache2/ports.conf",
-        """echo '<VirtualHost *:9980>
-    DocumentRoot /var/www/html/osclass
-    <Directory /var/www/html/osclass>
-        AllowOverride All
-        Require all granted
-    </Directory>
-</VirtualHost>' > /etc/apache2/sites-available/000-default.conf""",
         "a2enmod rewrite",
     )
+    .add_local_file(
+        "benchmarks/classifieds_apache.conf",
+        "/etc/apache2/sites-available/000-default.conf",
+        copy=True,
+    )
+    .run_commands("echo 'Listen 9980' > /etc/apache2/ports.conf")
     .add_local_file(
         "/tmp/classifieds_extract/classifieds_docker_compose/mysql/osclass_craigslist.sql",
         "/opt/osclass_craigslist.sql",
