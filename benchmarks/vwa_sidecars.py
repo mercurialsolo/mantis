@@ -220,47 +220,104 @@ def vwa_classifieds():
 # Build the Shopping image entirely on Modal — download the official VWA
 # Docker tar from archive.org, extract (flatten layers), and use as the
 # base filesystem. No local Docker or GHCR push needed.
+# Shopping image is a thin base with tools needed to extract and run the
+# Magento Docker image. The actual 68 GB tar is downloaded to the Modal
+# volume ONCE via the download_shopping_image() function below, then
+# extracted at sidecar startup time.
 shopping_image = (
     modal.Image.debian_slim()
-    .apt_install("wget", "python3")
+    .apt_install("python3", "apache2", "mysql-server", "php", "php-mysql",
+                 "php-gd", "php-curl", "php-intl", "php-xml", "php-mbstring",
+                 "php-zip", "php-bcmath", "php-soap", "libapache2-mod-php")
     .add_local_file("benchmarks/flatten_docker_layers.py", "/opt/flatten.py", copy=True)
-    .run_commands(
-        # Download the Shopping Docker image tar (~6 GB)
-        "wget -q --show-progress -O /tmp/shopping.tar 'http://metis.lti.cs.cmu.edu/webarena-images/shopping_final_0712.tar'",
-        # Flatten Docker layers into /opt/shopping using our script
-        "python3 /opt/flatten.py /tmp/shopping.tar /opt/shopping",
-        # Clean up the tar to save image space
-        "rm -f /tmp/shopping.tar",
-    )
 )
 
 
 @app.function(
     image=shopping_image,
     cpu=2,
-    memory=4096,
-    scaledown_window=600,
+    memory=8192,
+    volumes={"/data": vol},
+    timeout=86400,
 )
-@modal.web_server(port=80, startup_timeout=120)
+def download_shopping_image():
+    """One-time download of the Shopping Docker tar to the Modal volume.
+
+    Run once: modal run benchmarks/vwa_sidecars.py::download_shopping_image
+    The 68 GB tar is downloaded to /data/vwa/shopping_final_0712.tar.
+    """
+    tar_path = "/data/vwa/shopping_final_0712.tar"
+    if os.path.exists(tar_path):
+        size = os.path.getsize(tar_path)
+        print(f"Shopping tar already exists: {size / 1e9:.1f} GB")
+        return
+    os.makedirs("/data/vwa", exist_ok=True)
+    print("Downloading Shopping Docker image (~68 GB) from CMU...")
+    print("This runs once and is cached on the volume.")
+    subprocess.run(
+        ["wget", "-q", "--show-progress", "-O", tar_path,
+         "http://metis.lti.cs.cmu.edu/webarena-images/shopping_final_0712.tar"],
+        check=True,
+    )
+    vol.commit()
+    size = os.path.getsize(tar_path)
+    print(f"Done — {size / 1e9:.1f} GB saved to {tar_path}")
+
+
+@app.function(
+    image=shopping_image,
+    cpu=2,
+    memory=8192,
+    volumes={"/data": vol},
+    scaledown_window=600,
+    ephemeral_disk=65536,  # 64 GB for extracted filesystem
+)
+@modal.web_server(port=80, startup_timeout=300)
 def vwa_shopping():
     """VWA Shopping (Magento) — real Magento e-commerce from Docker image.
 
-    The filesystem was extracted from the official VWA Docker image during
-    Modal image build. This startup function uses chroot to run MySQL and
-    Apache from the extracted filesystem at /opt/shopping.
+    First run: extracts the Docker image tar from the volume (~5 min).
+    Subsequent runs: uses cached extraction on ephemeral disk.
+    Then starts MySQL + Apache via chroot into the extracted filesystem.
+
+    Pre-requisite: run download_shopping_image() once to fetch the tar.
     """
+    tar_path = "/data/vwa/shopping_final_0712.tar"
     root = "/opt/shopping"
 
-    # Start MySQL from the extracted filesystem
+    if not os.path.exists(tar_path):
+        print("ERROR: Shopping tar not found on volume.")
+        print("Run first: modal run benchmarks/vwa_sidecars.py::download_shopping_image")
+        # Fall back to stub
+        _make_stub("Shopping (tar missing)", 80)
+        return
+
+    if not os.path.exists(os.path.join(root, "var", "www")):
+        print(f"Extracting Docker layers from {tar_path}...")
+        subprocess.run(
+            ["python3", "/opt/flatten.py", tar_path, root],
+            check=True,
+        )
+        print("Extraction complete")
+
+    # Mount proc/sys/dev for chroot services
+    for mnt in ["proc", "sys", "dev"]:
+        mnt_path = os.path.join(root, mnt)
+        os.makedirs(mnt_path, exist_ok=True)
+        subprocess.run(["mount", "--bind", f"/{mnt}", mnt_path], capture_output=True)
+
+    # Start MySQL
+    print("Starting MySQL...")
     subprocess.Popen(
         ["chroot", root, "mysqld_safe"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env={**os.environ, "HOME": "/root"},
     )
-    time.sleep(8)  # MySQL needs time to initialize
+    time.sleep(10)
 
     # Start Apache (serves Magento on port 80)
+    print("Starting Apache...")
     subprocess.Popen(
         ["chroot", root, "apachectl", "-D", "FOREGROUND"],
         stdout=subprocess.DEVNULL,
@@ -269,7 +326,7 @@ def vwa_shopping():
     )
     time.sleep(3)
 
-    # Set Magento's base URL to the Modal web_server URL
+    # Set Magento's base URL
     modal_url = "https://getmason--vwa-sidecars-vwa-shopping.modal.run"
     try:
         subprocess.run(
@@ -280,16 +337,17 @@ def vwa_shopping():
         subprocess.run(
             ["chroot", root, "mysql", "-u", "magentouser", "-pMyPassword",
              "magentodb", "-e",
-             f'UPDATE core_config_data SET value="{modal_url}/" WHERE path = "web/secure/base_url";'],
+             f'UPDATE core_config_data SET value="{modal_url}/" '
+             f'WHERE path = "web/secure/base_url";'],
             capture_output=True, text=True, timeout=15,
         )
         subprocess.run(
             ["chroot", root, "/var/www/magento2/bin/magento", "cache:flush"],
             capture_output=True, text=True, timeout=30,
         )
-        print(f"Shopping base URL set to {modal_url}")
+        print(f"Shopping ready at {modal_url}")
     except Exception as e:
-        print(f"Warning: could not set Magento base URL: {e}")
+        print(f"Warning: Magento base URL config failed: {e}")
 
 
 @app.function(image=stub_image, cpu=0.5, memory=256, scaledown_window=600)
