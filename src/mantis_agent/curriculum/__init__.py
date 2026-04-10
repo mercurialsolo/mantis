@@ -88,6 +88,10 @@ MIN_RELEVANCE_SCORE = 0.10
 # Boost added to a topic's score whenever any of its regex triggers matches
 # the query. Larger than MIN_RELEVANCE so a single trigger guarantees inclusion.
 TRIGGER_BOOST = 0.5
+# Boost added to topics whose tags include the current domain. Lets us pin
+# domain-specific techniques (e.g. all chrome_* topics for chrome tasks)
+# even when the instruction itself doesn't contain explicit browser keywords.
+DOMAIN_BOOST = 0.8
 
 
 def select_techniques(
@@ -129,6 +133,16 @@ def select_techniques(
                     break
             except re.error:
                 continue
+
+    # 2b. Domain boost: pin domain-specific topics (e.g. chrome techniques
+    #     for the chrome benchmark) even when the instruction text doesn't
+    #     mention browser/url/etc explicitly.
+    if domain:
+        domain_lower = domain.lower()
+        for i, topic in enumerate(_INDEX_TOPICS):
+            tags = [t.lower() for t in topic.get("tags", [])]
+            if domain_lower in tags:
+                scores[i] = scores.get(i, 0.0) + DOMAIN_BOOST
 
     # 3. Apply relevance threshold then pick top max_topics. Topics below
     #    threshold are excluded entirely — better to inject zero noise than
