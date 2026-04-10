@@ -95,13 +95,23 @@ class PlaywrightAdapter:
     every step.
     """
 
-    def __init__(self, start_url: str, viewport_width: int = 1280, viewport_height: int = 720):
+    def __init__(self, start_url: str, viewport_width: int = 1280, viewport_height: int = 720,
+                 storage_state: Optional[str] = None):
+        """Create a Playwright browser context and navigate to start_url.
+
+        Args:
+            storage_state: Path to a Playwright storage state JSON file
+                containing pre-authenticated cookies/localStorage. Used by
+                VWA tasks that require login — the agent starts already
+                logged in instead of having to navigate the login flow.
+        """
         from playwright.sync_api import sync_playwright
         self._pw_ctx = sync_playwright().start()
         self._browser = self._pw_ctx.chromium.launch(headless=True)
-        self._context = self._browser.new_context(
-            viewport={"width": viewport_width, "height": viewport_height},
-        )
+        ctx_kwargs: dict = {"viewport": {"width": viewport_width, "height": viewport_height}}
+        if storage_state and os.path.exists(storage_state):
+            ctx_kwargs["storage_state"] = storage_state
+        self._context = self._browser.new_context(**ctx_kwargs)
         self.page = self._context.new_page()
         self.start_url = start_url
         if start_url:
@@ -665,7 +675,17 @@ def run_vwa(max_tasks: int = 1, max_steps: int = 30):
         t_start = time.time()
 
         try:
-            adapter = PlaywrightAdapter(start_url=start_url)
+            # Pass storage_state for pre-authenticated sessions (login cookies).
+            # Almost all VWA tasks ship with a storage_state file — without it,
+            # the agent would need to navigate the login flow first.
+            storage_state = task.get("storage_state")
+            if storage_state and not os.path.isabs(storage_state):
+                # Resolve relative to VWA config dir
+                storage_state = str(Path("/data/vwa/config_files/vwa") / storage_state)
+            adapter = PlaywrightAdapter(
+                start_url=start_url,
+                storage_state=storage_state if storage_state and os.path.exists(str(storage_state)) else None,
+            )
             # Give the page a moment to finish rendering before the first shot.
             adapter.wait(2)
 
