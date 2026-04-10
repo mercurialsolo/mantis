@@ -872,18 +872,24 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                 "except Exception as e:\n"
                 "    print(f'Port 9222 NOT listening: {e}')\n"
             )
-            time.sleep(8)  # Extra time for Chrome to fully bind
-            # Verify CDP is reachable from the container via port forwarding
-            try:
-                cdp_check = requests.get("http://localhost:9222/json", timeout=5)
-                if cdp_check.status_code == 200:
-                    tabs = cdp_check.json()
-                    print(f"  Chrome+CDP CONFIRMED: {len(tabs)} tab(s) open")
-                else:
-                    print(f"  Chrome+CDP: HTTP {cdp_check.status_code}")
-            except Exception as cdp_err:
-                print(f"  Chrome+CDP NOT reachable from container: {cdp_err}")
-                print("  Note: Chrome may need --no-sandbox or DISPLAY=:0 inside QEMU")
+            # Chrome on QEMU TCG (software CPU emulation, no KVM in gVisor)
+            # takes 15-30 seconds to fully start. Retry the CDP check with
+            # backoff until Chrome's WebSocket endpoint is ready.
+            cdp_ok = False
+            for cdp_attempt in range(6):  # 6 attempts × 5s wait = 30s total
+                time.sleep(5)
+                try:
+                    cdp_check = requests.get("http://localhost:9222/json", timeout=5)
+                    if cdp_check.status_code == 200:
+                        tabs = cdp_check.json()
+                        print(f"  Chrome+CDP CONFIRMED after {(cdp_attempt + 1) * 5}s: {len(tabs)} tab(s)")
+                        cdp_ok = True
+                        break
+                except Exception:
+                    pass
+                print(f"  CDP attempt {cdp_attempt + 1}/6: not ready yet, waiting...")
+            if not cdp_ok:
+                print("  WARNING: Chrome+CDP not reachable after 30s — chrome task setup may fail")
         except Exception as e:
             print(f"  Chrome+CDP launch failed: {e}")
 
