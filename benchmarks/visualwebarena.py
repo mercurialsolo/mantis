@@ -670,6 +670,7 @@ def run_vwa(max_tasks: int = 1, max_steps: int = 30):
 
         adapter: Optional[PlaywrightAdapter] = None
         trajectory: list[dict] = []
+        agent_plan: Optional[str] = None  # Captured from step 0, re-injected on all subsequent steps
         final_status = "unknown"
         final_answer: Optional[str] = None
         t_start = time.time()
@@ -713,18 +714,44 @@ def run_vwa(max_tasks: int = 1, max_steps: int = 30):
                 else:
                     elem_summary = ""
 
-                # 3b. Infer
+                # 3b. Build the full instruction with plan persistence
+                step_hint = hint_text
+                if elem_summary:
+                    step_hint += "\n\n" + elem_summary
+                if agent_plan:
+                    step_hint += f"\n\nYour plan (from step 1):\n{agent_plan}\nContinue executing this plan."
+
+                # 3c. Infer
                 try:
                     response = _llama_infer(
                         screenshot_png=png,
                         instruction=instruction,
-                        hint_text=hint_text + "\n\n" + elem_summary if elem_summary else hint_text,
+                        hint_text=step_hint,
                         trajectory=trajectory,
                         model_file=model_file,
                     )
                 except Exception as _e:
                     print(f"  step {step + 1}: inference failed: {_e}")
                     break
+
+                # 3d. Capture plan from step 0's response (persists across session)
+                if step == 0 and not agent_plan:
+                    import re as _re
+                    plan_match = _re.search(
+                        r"(?:PLAN:|plan:|\d+\..*?)(.+?)(?:```|$)",
+                        response,
+                        _re.DOTALL | _re.IGNORECASE,
+                    )
+                    if plan_match:
+                        # Extract numbered lines
+                        plan_lines = []
+                        for line in response.split("\n"):
+                            stripped = line.strip()
+                            if _re.match(r"^\d+[\.\)]\s", stripped):
+                                plan_lines.append(stripped)
+                        if plan_lines:
+                            agent_plan = "\n".join(plan_lines[:8])
+                            print(f"  plan captured: {agent_plan[:120]}...")
 
                 code = _extract_code(response)
                 terminal = _parse_terminal(code)
