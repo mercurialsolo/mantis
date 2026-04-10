@@ -206,25 +206,39 @@ if __name__ == "__main__":
 # The classifieds app image is already on Docker Hub: jykoh/classifieds:latest
 # We layer MySQL on top and import the SQL dumps at startup.
 
+# Build Classifieds from scratch: PHP+Apache+MySQL+Osclass.
+# The Docker Hub image (jykoh/classifieds) is 40+ GB and times out on pull.
+# Instead we install Osclass from source and import the SQL dump (85 MB).
 classifieds_image = (
-    modal.Image.from_registry(
-        "jykoh/classifieds:latest",
-        add_python="3.11",
+    modal.Image.debian_slim()
+    .apt_install(
+        "apache2", "php", "php-mysql", "php-gd", "php-curl", "php-xml",
+        "php-mbstring", "php-zip", "libapache2-mod-php",
+        "mysql-server", "wget", "unzip", "python3",
     )
     .run_commands(
-        # Install MySQL server inside the classifieds image
-        "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y mysql-server && rm -rf /var/lib/apt/lists/*",
-        # Prepare MySQL data dir
+        # Prepare MySQL
         "mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld",
+        # Download Osclass (the classifieds PHP app)
+        "wget -q -O /tmp/osclass.zip 'https://github.com/osclass/Osclass/releases/download/3.9.0/osclass-3.9.0.zip' || true",
+        "mkdir -p /var/www/html/osclass",
+        "cd /var/www/html/osclass && (unzip -o /tmp/osclass.zip 2>/dev/null || true)",
+        "chown -R www-data:www-data /var/www/html/osclass",
+        "rm -f /tmp/osclass.zip",
+        # Configure Apache to serve Osclass on port 9980
+        "echo 'Listen 9980' > /etc/apache2/ports.conf",
+        """echo '<VirtualHost *:9980>
+    DocumentRoot /var/www/html/osclass
+    <Directory /var/www/html/osclass>
+        AllowOverride All
+        Require all granted
+    </Directory>
+</VirtualHost>' > /etc/apache2/sites-available/000-default.conf""",
+        "a2enmod rewrite",
     )
     .add_local_file(
         "/tmp/classifieds_extract/classifieds_docker_compose/mysql/osclass_craigslist.sql",
         "/opt/osclass_craigslist.sql",
-        copy=True,
-    )
-    .add_local_file(
-        "/tmp/classifieds_extract/classifieds_docker_compose/mysql/classifieds_restore.sql",
-        "/opt/classifieds_restore.sql",
         copy=True,
     )
 )
