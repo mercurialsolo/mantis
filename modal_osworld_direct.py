@@ -436,27 +436,23 @@ def derive_hint(evaluator: dict, instruction: str, domain: str,
     return result if result else ""
 
 
-@app.function(
-    gpu="A100-80GB",
-    image=image,
-    volumes={"/data": vol},
-    timeout=86400,  # 24 hours (Modal max) — full run may need multiple batches
-    memory=65536,
-    cpu=8,
-)
-def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
-    """Run OSWorld evaluation directly with Gemma4 on A100.
+def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
+    """Plain-Python OSWorld agent loop.
 
-    Uses OSWorld's PromptAgent with OPENAI_BASE_URL pointing at our llama-server.
-    The Docker provider runs the Ubuntu VM via QEMU.
+    Lives outside Modal decorators so multiple Modal apps (benchmarks/osworld_os.py,
+    benchmarks/osworld_chrome.py, ...) can call it via their own ``@app.function``
+    wrappers without duplicating 1000+ lines of orchestration logic.
+
+    Runs the full eval loop on whatever GPU/image/volume the calling Modal
+    container provides.
     """
     import requests
 
     from datetime import datetime, timezone
-    run_osworld._run_start = time.time()
-    run_osworld._run_start_iso = datetime.now(timezone.utc).isoformat()
-    run_osworld._run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    run_osworld._task_details = []
+    run_osworld_impl._run_start = time.time()
+    run_osworld_impl._run_start_iso = datetime.now(timezone.utc).isoformat()
+    run_osworld_impl._run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_osworld_impl._task_details = []
 
     # 1. Download model
     model_path = download_model("/data")
@@ -794,7 +790,7 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
     prior_learnings = load_learnings()
     if prior_learnings:
         print(f"  Loaded {len(prior_learnings)} learnings from prior runs")
-    run_osworld._learnings = prior_learnings
+    run_osworld_impl._learnings = prior_learnings
 
     for dom, example_ids in test_all.items():
         for example_id in example_ids:
@@ -1320,9 +1316,9 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
                                 "result": [str(r)[:50] for r in all_results],
                                 "expected": [str(e)[:50] for e in all_expected],
                             }
-                            learnings_log = getattr(run_osworld, '_learnings', [])
+                            learnings_log = getattr(run_osworld_impl, '_learnings', [])
                             learnings_log.append(learning_entry)
-                            run_osworld._learnings = learnings_log
+                            run_osworld_impl._learnings = learnings_log
 
                             # Save learnings to volume incrementally
                             try:
@@ -1386,9 +1382,9 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
             task_trace["steps_taken"] = steps_taken
             task_trace["duration_s"] = round(task_duration, 1)
 
-            if not hasattr(run_osworld, '_task_details'):
-                run_osworld._task_details = []
-            run_osworld._task_details.append({
+            if not hasattr(run_osworld_impl, '_task_details'):
+                run_osworld_impl._task_details = []
+            run_osworld_impl._task_details.append({
                 "task_id": example_id,
                 "instruction": raw_instruction[:100],
                 "score": score,
@@ -1398,40 +1394,40 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
             })
 
             # Save trace to volume for debugging
-            if not hasattr(run_osworld, '_traces'):
-                run_osworld._traces = []
-            run_osworld._traces.append(task_trace)
+            if not hasattr(run_osworld_impl, '_traces'):
+                run_osworld_impl._traces = []
+            run_osworld_impl._traces.append(task_trace)
             try:
                 os.makedirs("/data/results", exist_ok=True)
-                run_id = getattr(run_osworld, '_run_id', 'unknown')
+                run_id = getattr(run_osworld_impl, '_run_id', 'unknown')
                 with open(f"/data/results/traces_{domain}_{run_id}.json", "w") as tf:
-                    json.dump(run_osworld._traces, tf, indent=2)
+                    json.dump(run_osworld_impl._traces, tf, indent=2)
                 vol.commit()
             except Exception:
                 pass
 
             # Cost calculation: A100-80GB = $0.000694/s on Modal
-            total_gpu_time = time.time() - (run_osworld._run_start if hasattr(run_osworld, '_run_start') else time.time())
+            total_gpu_time = time.time() - (run_osworld_impl._run_start if hasattr(run_osworld_impl, '_run_start') else time.time())
             cost_per_second = 0.000694  # A100-80GB Modal pricing
             total_cost = total_gpu_time * cost_per_second
 
             # Save incrementally after each task (survives disconnects)
             from datetime import datetime, timezone
-            run_id = getattr(run_osworld, '_run_id', None)
+            run_id = getattr(run_osworld_impl, '_run_id', None)
             if not run_id:
                 run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-                run_osworld._run_id = run_id
+                run_osworld_impl._run_id = run_id
 
             results_so_far = {
                 "run_id": run_id,
-                "started_at": getattr(run_osworld, '_run_start_iso', datetime.now(timezone.utc).isoformat()),
+                "started_at": getattr(run_osworld_impl, '_run_start_iso', datetime.now(timezone.utc).isoformat()),
                 "domain": domain,
                 "tasks_run": len(scores),
                 "tasks_passed": sum(1 for s in scores if s > 0),
                 "average_score": sum(scores) / len(scores) * 100,
                 "scores": scores,
-                "task_details": getattr(run_osworld, '_task_details', []),
-                "learnings": getattr(run_osworld, '_learnings', []),
+                "task_details": getattr(run_osworld_impl, '_task_details', []),
+                "learnings": getattr(run_osworld_impl, '_learnings', []),
                 "total_gpu_time_s": round(total_gpu_time, 1),
                 "estimated_cost_usd": round(total_cost, 2),
                 "avg_time_per_task_s": round(total_gpu_time / len(scores), 1),
@@ -1622,22 +1618,22 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
 
     # Save final results with full metadata
     from datetime import datetime, timezone
-    run_id = getattr(run_osworld, '_run_id', 'unknown')
-    total_gpu_time = time.time() - run_osworld._run_start
+    run_id = getattr(run_osworld_impl, '_run_id', 'unknown')
+    total_gpu_time = time.time() - run_osworld_impl._run_start
     cost_per_second = 0.000694
     total_cost = total_gpu_time * cost_per_second
 
     results = {
         "run_id": run_id,
-        "started_at": getattr(run_osworld, '_run_start_iso', ''),
+        "started_at": getattr(run_osworld_impl, '_run_start_iso', ''),
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "domain": domain,
         "tasks_run": len(scores),
         "tasks_passed": sum(1 for s in scores if s > 0),
         "average_score": round(sum(scores) / len(scores) * 100, 1) if scores else 0,
         "scores": scores,
-        "task_details": getattr(run_osworld, '_task_details', []),
-        "learnings": getattr(run_osworld, '_learnings', []),
+        "task_details": getattr(run_osworld_impl, '_task_details', []),
+        "learnings": getattr(run_osworld_impl, '_learnings', []),
         "total_gpu_time_s": round(total_gpu_time, 1),
         "estimated_cost_usd": round(total_cost, 2),
         "avg_time_per_task_s": round(total_gpu_time / len(scores), 1) if scores else 0,
@@ -1653,6 +1649,23 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
     llama_proc.terminate()
     qemu_proc.terminate()
     return results
+
+
+# ── Modal-decorated wrapper ───────────────────────────────────────────────────
+# This is the OS-domain entry point. Other benchmarks (chrome, multi_apps, vwa)
+# define their own ``modal.App`` and ``@app.function`` wrappers that delegate
+# to ``run_osworld_impl`` with a different domain. See ``benchmarks/``.
+
+@app.function(
+    gpu="A100-80GB",
+    image=image,
+    volumes={"/data": vol},
+    timeout=86400,
+    memory=65536,
+    cpu=8,
+)
+def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
+    return run_osworld_impl(domain=domain, max_tasks=max_tasks, max_steps=max_steps)
 
 
 @app.local_entrypoint()
