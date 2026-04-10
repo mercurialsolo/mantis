@@ -44,36 +44,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import modal
 
-# Reuse the base llama-server startup helpers but NOT the QEMU/OSWorld stack.
+# Reuse the OSWorld image directly — it already has llama.cpp (with the
+# Gemma 4 vision mmproj), Playwright + Chromium, the mantis_agent package,
+# and every Python dep the agent loop needs. Building a separate VWA image
+# would just duplicate the llama.cpp compile step and add cold-start time.
+# The QEMU/VM code paths in that image are dormant unless we invoke them.
 from modal_osworld_direct import (
     GEMMA4_MODEL,
     GGUF_CONFIGS,
     download_model,
     start_llama_server,
+    image as vwa_image,  # reuse OSWorld image as-is
     vol,
-)
-
-
-# ── Image: Playwright + Chromium, no QEMU/VNC ────────────────────────────────
-vwa_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install(
-        "build-essential", "curl", "git", "wget",
-        # Chromium runtime deps (pulled in by playwright install --with-deps)
-    )
-    .pip_install(
-        "requests", "pillow", "numpy",
-        "playwright", "beautifulsoup4", "lxml",
-        "openai",  # for OpenAI-compatible llama.cpp client
-    )
-    .run_commands(
-        # Install llama.cpp (prebuilt binary) — same approach as OSWorld image
-        "curl -L https://github.com/ggerganov/llama.cpp/releases/latest/download/llama-b4000-bin-ubuntu-x64.zip -o /tmp/llama.zip || true",
-        # Playwright + Chromium runtime
-        "playwright install --with-deps chromium",
-    )
-    .add_local_python_source("mantis_agent")
-    .add_local_python_source("modal_osworld_direct")
 )
 
 
