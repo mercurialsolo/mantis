@@ -59,13 +59,20 @@ from modal_osworld_direct import (
 )
 
 
-# ── VWA sidecar hostnames (override via Modal env vars at deploy time) ───────
+# ── VWA sidecar hostnames ─────────────────────────────────────────────────────
+# Override via env vars, or they auto-resolve from Modal deployed sidecars.
+# The sidecars are deployed via: modal deploy benchmarks/vwa_sidecars.py
+# which gives each service a URL like https://user--vwa-sidecars-vwa-homepage.modal.run
+#
+# To find your deployed URLs:
+#   modal app list | grep vwa-sidecars
+#   modal app logs <app-id>
 VWA_ENDPOINTS = {
-    "classifieds": os.environ.get("VWA_CLASSIFIEDS_URL", "http://vwa-classifieds:9980"),
-    "shopping":    os.environ.get("VWA_SHOPPING_URL",    "http://vwa-shopping:7770"),
-    "reddit":      os.environ.get("VWA_REDDIT_URL",      "http://vwa-reddit:9999"),
-    "wikipedia":   os.environ.get("VWA_WIKIPEDIA_URL",   "http://vwa-wikipedia:8888"),
-    "homepage":    os.environ.get("VWA_HOMEPAGE_URL",    "http://vwa-homepage:4399"),
+    "classifieds": os.environ.get("VWA_CLASSIFIEDS_URL", "https://getmason--vwa-sidecars-vwa-classifieds.modal.run"),
+    "shopping":    os.environ.get("VWA_SHOPPING_URL",    "https://getmason--vwa-sidecars-vwa-shopping.modal.run"),
+    "reddit":      os.environ.get("VWA_REDDIT_URL",      "https://getmason--vwa-sidecars-vwa-reddit.modal.run"),
+    "wikipedia":   os.environ.get("VWA_WIKIPEDIA_URL",   "https://getmason--vwa-sidecars-vwa-wikipedia.modal.run"),
+    "homepage":    os.environ.get("VWA_HOMEPAGE_URL",    "https://getmason--vwa-sidecars-vwa-homepage.modal.run"),
 }
 
 
