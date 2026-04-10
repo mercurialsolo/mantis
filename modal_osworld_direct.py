@@ -788,6 +788,38 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
     scores = []
     task_count = 0
 
+    # Chrome/multi_apps domain: launch Chrome with remote debugging so the
+    # setup_controller can connect via CDP to pre-configure tabs and URLs
+    # before each task. Without this, _chrome_open_tabs_setup gets
+    # "socket hang up" on connect_over_cdp to localhost:9222.
+    if domain in ("chrome", "multi_apps"):
+        print("  Launching Chrome with CDP on :9222...")
+        try:
+            controller.execute_python_command(
+                "import subprocess, os\n"
+                "env = os.environ.copy()\n"
+                "env['DISPLAY'] = ':0'\n"
+                "subprocess.Popen(\n"
+                "    ['google-chrome',\n"
+                "     '--remote-debugging-port=9222',\n"
+                "     '--no-first-run',\n"
+                "     '--no-default-browser-check',\n"
+                "     '--disable-features=Translate',\n"
+                "     '--start-maximized',\n"
+                "     '--disable-infobars',\n"
+                "     '--disable-session-crashed-bubble',\n"
+                "     'about:blank'],\n"
+                "    env=env,\n"
+                "    stdout=subprocess.DEVNULL,\n"
+                "    stderr=subprocess.DEVNULL,\n"
+                ")\n"
+                "print('Chrome launched with CDP')\n"
+            )
+            time.sleep(5)  # Give Chrome time to start and bind port 9222
+            print("  Chrome+CDP ready")
+        except Exception as e:
+            print(f"  Chrome+CDP launch failed: {e}")
+
     # Load learnings from prior runs — accumulated knowledge
     prior_learnings = load_learnings()
     if prior_learnings:
