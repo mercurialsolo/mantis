@@ -890,8 +890,11 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
             # Chrome on QEMU TCG (software CPU emulation, no KVM in gVisor)
             # takes 15-30 seconds to fully start. Retry the CDP check with
             # backoff until Chrome's WebSocket endpoint is ready.
+            # QEMU TCG (no KVM in gVisor) is ~30x slower than native. Chrome
+            # init that takes 2-3s natively needs 60-90s on TCG. The OSWorld
+            # setup_controller also retries 15×5s=75s, so total budget is ~165s.
             cdp_ok = False
-            for cdp_attempt in range(6):  # 6 attempts × 5s wait = 30s total
+            for cdp_attempt in range(18):  # 18 attempts × 5s = 90s total
                 time.sleep(5)
                 try:
                     cdp_check = requests.get("http://localhost:9222/json", timeout=5)
@@ -902,9 +905,10 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                         break
                 except Exception:
                     pass
-                print(f"  CDP attempt {cdp_attempt + 1}/6: not ready yet, waiting...")
+                if cdp_attempt % 3 == 2:
+                    print(f"  CDP attempt {cdp_attempt + 1}/18: not ready yet ({(cdp_attempt+1)*5}s)...")
             if not cdp_ok:
-                print("  WARNING: Chrome+CDP not reachable after 30s — chrome task setup may fail")
+                print("  WARNING: Chrome+CDP not reachable after 90s — chrome task setup may fail")
         except Exception as e:
             print(f"  Chrome+CDP launch failed: {e}")
 
