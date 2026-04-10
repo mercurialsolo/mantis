@@ -871,8 +871,18 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                 "except Exception as e:\n"
                 "    print(f'Port 9222 NOT listening: {e}')\n"
             )
-            time.sleep(5)
-            print("  Chrome+CDP setup done")
+            time.sleep(8)  # Extra time for Chrome to fully bind
+            # Verify CDP is reachable from the container via port forwarding
+            try:
+                cdp_check = requests.get("http://localhost:9222/json", timeout=5)
+                if cdp_check.status_code == 200:
+                    tabs = cdp_check.json()
+                    print(f"  Chrome+CDP CONFIRMED: {len(tabs)} tab(s) open")
+                else:
+                    print(f"  Chrome+CDP: HTTP {cdp_check.status_code}")
+            except Exception as cdp_err:
+                print(f"  Chrome+CDP NOT reachable from container: {cdp_err}")
+                print("  Note: Chrome may need --no-sandbox or DISPLAY=:0 inside QEMU")
         except Exception as e:
             print(f"  Chrome+CDP launch failed: {e}")
 
