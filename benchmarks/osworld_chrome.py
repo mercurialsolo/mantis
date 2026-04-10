@@ -16,8 +16,10 @@ import json
 import sys
 from pathlib import Path
 
-# Make the parent directory importable so we can pull in the shared loop
-# without having to install the project as a package.
+# Make the parent directory importable so this file works when launched
+# locally with `modal run`. Inside the Modal container, modal_osworld_direct
+# is shipped via image.add_local_python_source (see modal_osworld_direct.py)
+# so this sys.path mutation is a no-op there.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import modal

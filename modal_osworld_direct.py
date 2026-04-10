@@ -73,9 +73,11 @@ image = (
     .run_commands(
         "playwright install --with-deps chromium || true",
     )
-    # Ship the local mantis_agent package (prompts + tool helpers).
-    # This replaces the previous inline prompt and pyautogui-coupling.
+    # Ship the local mantis_agent package (prompts + tool helpers) AND
+    # the modal_osworld_direct module itself, so benchmarks/* wrappers
+    # that import run_osworld_impl can find it inside the container.
     .add_local_python_source("mantis_agent")
+    .add_local_python_source("modal_osworld_direct")
 )
 
 
@@ -859,6 +861,40 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
                 )
             except Exception as e:
                 print(f"  passwordless sudo setup failed: {e}")
+
+            # Ensure at-spi2 accessibility bus is running so the eval's
+            # ``vm_terminal_output`` getter (pyatspi-based) can find
+            # gnome-terminal-server in the a11y tree. Tasks 14 and 22 depend
+            # on this — without it, /terminal returns None and the retry pass
+            # can't recover. Best-effort: if it's already running, this is
+            # a no-op; if at-spi2 isn't installed, the except clause swallows.
+            try:
+                controller.execute_python_command(
+                    "import subprocess\n"
+                    "try:\n"
+                    "    subprocess.run(\n"
+                    "        ['sudo', '-n', 'systemctl', 'start', 'at-spi-dbus-bus.service'],\n"
+                    "        capture_output=True, text=True, timeout=10\n"
+                    "    )\n"
+                    "except Exception:\n"
+                    "    pass\n"
+                    "try:\n"
+                    "    subprocess.Popen(['/usr/lib/at-spi2-core/at-spi-bus-launcher', '--launch-immediately'])\n"
+                    "except FileNotFoundError:\n"
+                    "    pass\n"
+                    "# Enable gnome a11y at the gsettings level — some Ubuntu images ship\n"
+                    "# with accessibility toolkit disabled which prevents pyatspi from seeing terminals.\n"
+                    "try:\n"
+                    "    subprocess.run(\n"
+                    "        ['gsettings', 'set', 'org.gnome.desktop.interface', 'toolkit-accessibility', 'true'],\n"
+                    "        capture_output=True, text=True, timeout=10\n"
+                    "    )\n"
+                    "except Exception:\n"
+                    "    pass\n"
+                    "print('a11y readiness: attempted')\n"
+                )
+            except Exception as e:
+                print(f"  a11y setup failed: {e}")
 
             # Reset agent
             agent.reset()

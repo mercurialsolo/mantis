@@ -58,46 +58,69 @@ def _autosudo(cmd):
 def _fix_find_exec(cmd):
     """Auto-repair malformed find -exec commands AND teach the correction.
 
-    Handles two common mistakes:
-      1. Trailing bare backslash: ``find ... -exec cp {} dest/ \\``
-         (model meant ``\\;`` but wrote line-continuation)
-      2. No terminator at all: ``find ... -exec cp {} dest/``
-         (model forgot the terminator entirely)
+    A valid find -exec looks like one of:
+        find ... -exec CMD \\;        (backslash-semicolon terminator)
+        find ... -exec CMD {} +       (plus terminator — multiple args)
 
-    In both cases, find emits "missing argument to '-exec'" or hangs. We
-    append the proper ``\\;`` and print a teaching note so the model learns
-    the right syntax via the captured-output feedback loop.
+    The terminator lives in the ``-exec SECTION``, which runs from the
+    ``-exec`` token up to the first shell pipe (``" | "``) or end of the
+    command. Past mistakes we auto-repair:
+      1. Trailing bare backslash at section end  (\\ instead of \\;)
+      2. No terminator at all in the section
+
+    IMPORTANT regression avoided: a command like
+        find . -exec cat {} + | wc -l
+    is VALID — the ``+`` terminator comes before a shell pipe. A naive
+    check that only looks at the last character of the whole command
+    would miss this and incorrectly append \\; to the end, breaking wc.
+
+    NOTE: helpers run as a triple-quoted prelude, so each literal backslash
+    here is written as four chars in the source ("\\\\") which become two
+    chars in the loaded code ("\\") which represent a single backslash at
+    exec time. The comments below use RUNTIME syntax (single backslash).
     """
     if "-exec" not in cmd:
         return cmd, ""
-    stripped = cmd.rstrip()
-    # NOTE: helpers run as a triple-quoted prelude, so each backslash here is
-    # written as four chars in the outer source ("\\\\") to become two chars
-    # in the loaded code ("\\") which represent a single literal backslash.
 
-    # Case 1: trailing bare backslash (line continuation)
-    if stripped.endswith("\\\\") and not stripped.endswith("\\\\;") and not stripped.endswith("\\\\+"):
-        fixed = stripped + ";"
+    # 1. Identify the -exec section: from "-exec" to the first " | " (shell
+    #    pipe surrounded by spaces) or end of command. Pipes inside argument
+    #    values are uncommon in real finds, so splitting on " | " is safe.
+    exec_idx = cmd.find("-exec")
+    pipe_idx = cmd.find(" | ", exec_idx)
+    section_end = pipe_idx if pipe_idx != -1 else len(cmd)
+    section = cmd[exec_idx:section_end].rstrip()
+
+    # 2. Check if the section already has a valid terminator.
+    #    RUNTIME checks:
+    #       ends with "\\;"        -> valid (backslash-semicolon)
+    #       ends with " +"         -> valid (plus terminator after a space)
+    #       ends with "{}+"        -> valid (plus after braces with no space)
+    if section.endswith("\\\\;"):
+        return cmd, ""
+    if section.endswith(" +") or section.endswith("{}+"):
+        return cmd, ""
+
+    # 3. Broken case A: trailing bare backslash (line continuation).
+    #    RUNTIME: section ends with "\\" but NOT "\\;".
+    if section.endswith("\\\\"):
+        # Replace the trailing \\ with \\;
+        fixed = cmd[:exec_idx] + section[:-1] + "\\\\;" + cmd[section_end:]
         note = (
-            "Note: auto-corrected your find -exec command — added the missing "
-            "semicolon terminator. find -exec must end with \\\\; (backslash + "
-            "semicolon), not just a bare trailing backslash. Remember this."
+            "Note: auto-corrected your find -exec — replaced trailing backslash "
+            "with backslash-semicolon. find -exec needs \\\\; (the semicolon is "
+            "required), not just a bare \\\\. Remember this."
         )
         return fixed, note
 
-    # Case 2: no terminator at all. Detect by checking that the command
-    # contains -exec but does NOT contain \; or + or \\; anywhere after -exec.
-    exec_idx = stripped.find("-exec")
-    after_exec = stripped[exec_idx:]
-    if "\\\\;" not in after_exec and " ;" not in after_exec and after_exec.rstrip()[-1] != "+":
-        fixed = stripped + " \\\\;"
-        note = (
-            "Note: auto-corrected your find -exec command — appended the "
-            "missing \\\\; terminator. find -exec MUST end with \\\\; or + "
-            "or it fails with 'missing argument to -exec'. Remember this."
-        )
-        return fixed, note
-    return cmd, ""
+    # 4. Broken case B: no terminator at all. Insert \\; at the end of the
+    #    -exec section (just before the pipe, or at end of command).
+    fixed = cmd[:exec_idx] + section + " \\\\;" + cmd[section_end:]
+    note = (
+        "Note: auto-corrected your find -exec — inserted the missing \\\\; "
+        "terminator. find -exec MUST end with \\\\; or + or it fails with "
+        "'missing argument to -exec'. Remember this."
+    )
+    return fixed, note
 
 def click(x, y, button="left"):
     """Click at (x, y) — coordinates are in the screenshot's pixel space."""
