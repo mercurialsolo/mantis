@@ -828,7 +828,7 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
     if domain in ("chrome", "multi_apps"):
         print("  Launching Chrome with CDP on :9222...")
         try:
-            controller.execute_python_command(
+            chrome_result = controller.execute_python_command(
                 "import subprocess, os, time\n"
                 "env = os.environ.copy()\n"
                 "env['DISPLAY'] = ':0'\n"
@@ -872,6 +872,8 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                 "except Exception as e:\n"
                 "    print(f'Port 9222 NOT listening: {e}')\n"
             )
+            # Print whatever the VM's Python service captured
+            print(f"  VM Chrome launch output: {chrome_result}")
             # Chrome on QEMU TCG (software CPU emulation, no KVM in gVisor)
             # takes 15-30 seconds to fully start. Retry the CDP check with
             # backoff until Chrome's WebSocket endpoint is ready.
