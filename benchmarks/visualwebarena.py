@@ -245,9 +245,20 @@ class PlaywrightAdapter:
                 normalized.append("Enter")
             elif low == "escape" or low == "esc":
                 normalized.append("Escape")
-            elif low in ("tab", "backspace", "delete", "home", "end",
-                         "pageup", "pagedown", "up", "down", "left", "right"):
+            elif low in ("tab", "backspace", "delete", "home", "end"):
                 normalized.append(low.capitalize())
+            elif low in ("pageup", "page_up"):
+                normalized.append("PageUp")
+            elif low in ("pagedown", "page_down"):
+                normalized.append("PageDown")
+            elif low in ("up", "arrowup"):
+                normalized.append("ArrowUp")
+            elif low in ("down", "arrowdown"):
+                normalized.append("ArrowDown")
+            elif low in ("left", "arrowleft"):
+                normalized.append("ArrowLeft")
+            elif low in ("right", "arrowright"):
+                normalized.append("ArrowRight")
             else:
                 # Single character — keep as-is
                 normalized.append(p)
