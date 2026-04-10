@@ -841,6 +841,7 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                 "    proc = subprocess.Popen(\n"
                 "        ['google-chrome',\n"
                 "         '--remote-debugging-port=9222',\n"
+                "         '--remote-debugging-address=0.0.0.0',\n"
                 "         '--no-first-run',\n"
                 "         '--no-default-browser-check',\n"
                 "         '--disable-features=Translate',\n"
@@ -1054,7 +1055,12 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                         if a11y_resp.status_code == 200:
                             a11y_tree = a11y_resp.json().get("AT")
                     except Exception:
-                        pass  # a11y tree is optional — screenshot alone is the fallback
+                        pass
+                    # PromptAgent crashes if a11y_tree is None when observation_type
+                    # includes it. Pass empty XML so linearize_accessibility_tree
+                    # returns an empty table instead of crashing.
+                    if a11y_tree is None:
+                        a11y_tree = "<desktop-frame></desktop-frame>"
                 obs = {"screenshot": screenshot, "accessibility_tree": a11y_tree}
 
                 # EXP-1: On first step, ask the model to plan before acting
@@ -1534,6 +1540,8 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                                                 retry_a11y = a11y_r.json().get("AT")
                                         except Exception:
                                             pass
+                                        if retry_a11y is None:
+                                            retry_a11y = "<desktop-frame></desktop-frame>"
                                     obs = {"screenshot": retry_ss, "accessibility_tree": retry_a11y}
                                     response, actions = agent.predict(retry_instruction, obs)
                                 except Exception:
@@ -1725,6 +1733,8 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                             retry_a11y2 = a11y_r2.json().get("AT")
                     except Exception:
                         pass
+                    if retry_a11y2 is None:
+                        retry_a11y2 = "<desktop-frame></desktop-frame>"
                 obs = {"screenshot": screenshot, "accessibility_tree": retry_a11y2}
                 try:
                     response, actions = agent.predict(retry_instruction, obs)
