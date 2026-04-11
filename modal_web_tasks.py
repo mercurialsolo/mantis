@@ -1,26 +1,33 @@
-"""Run Mantis CUA against live web tasks on Modal — Playwright + Gemma4.
+"""Run Mantis CUA against live web tasks on Modal — Playwright or QEMU VM.
 
-Same architecture as OSWorld Modal runs but instead of QEMU VM, we use
-Playwright+Chromium to drive a real browser against live web apps (CRMs,
-SaaS tools, etc.). Gemma4 runs on A100 GPU via llama-server.
+Two modes:
+  - playwright: Headless Chromium, fast, good for most web tasks
+  - qemu: Full Ubuntu desktop VM with Firefox, same as OSWorld — use when
+    the task needs desktop-level interaction or a full browser profile
 
-Architecture:
+Architecture (playwright mode):
     Modal A100 Container
     ├── llama-server (Gemma4 on GPU, port 8080)
     ├── Playwright + Chromium (headless, 1280x720)
-    ├── PlaywrightGymEnv (translates Mantis actions ↔ Playwright)
-    ├── GymRunner (frame history, loop detection, trajectory)
-    └── Session persistence (.sessions/ for login state)
+    └── GymRunner (frame history, loop detection)
+
+Architecture (qemu mode):
+    Modal A100 Container
+    ├── llama-server (Gemma4 on GPU, port 8080)
+    └── QEMU Ubuntu VM
+        ├── Firefox/Chrome (full desktop)
+        ├── pyautogui execution via Python controller
+        └── Screenshots via /screenshot endpoint
 
 Usage:
-    # Run CRM tasks
+    # Playwright mode (default, fast)
     modal run modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json
 
-    # Detached (background)
-    modal run --detach modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json
+    # QEMU VM mode (full desktop)
+    modal run modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json --mode qemu
 
-    # Override model
-    GEMMA4_MODEL=26B modal run modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json
+    # Detached
+    modal run --detach modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json
 """
 
 import json
@@ -58,6 +65,7 @@ image = (
 )
 def run_web_tasks(
     task_file_contents: str,
+    mode: str = "playwright",
     max_steps: int = 30,
     frames_per_inference: int = 5,
 ):
@@ -65,16 +73,17 @@ def run_web_tasks(
 
     Args:
         task_file_contents: JSON string of the task suite config.
+        mode: "playwright" (headless Chromium) or "qemu" (full desktop VM).
         max_steps: Maximum steps per task.
         frames_per_inference: Number of recent frames to feed the brain.
     """
+    import subprocess
     import requests
     from datetime import datetime, timezone
     from PIL import Image
     from io import BytesIO
 
     from mantis_agent.brain_llamacpp import LlamaCppBrain
-    from mantis_agent.gym.playwright_env import PlaywrightGymEnv
     from mantis_agent.gym.runner import GymRunner
     from mantis_agent.actions import ActionType
 
@@ -99,6 +108,7 @@ def run_web_tasks(
 
     print(f"\n{'='*60}")
     print(f"Mantis — Web Task Benchmark")
+    print(f"  Mode:     {mode}")
     print(f"  Session:  {session_name}")
     print(f"  Base URL: {base_url}")
     print(f"  Tasks:    {len(tasks)}")
@@ -115,18 +125,23 @@ def run_web_tasks(
     )
     brain.load()
 
-    # 4. Create Playwright environment
+    # 4. Create environment based on mode
     session_dir = "/data/sessions"
     os.makedirs(session_dir, exist_ok=True)
+    qemu_proc = None
 
-    env = PlaywrightGymEnv(
-        start_url=base_url,
-        viewport=(1280, 720),
-        headless=True,
-        browser_type="chromium",
-        session_dir=session_dir,
-        settle_time=1.5,
-    )
+    if mode == "qemu":
+        env, qemu_proc = _create_qemu_env(base_url, session_dir, requests)
+    else:
+        from mantis_agent.gym.playwright_env import PlaywrightGymEnv
+        env = PlaywrightGymEnv(
+            start_url=base_url,
+            viewport=(1280, 720),
+            headless=True,
+            browser_type="chromium",
+            session_dir=session_dir,
+            settle_time=1.5,
+        )
 
     # 5. Order tasks: login first if no session exists
     login_tasks = [t for t in tasks if t.get("save_session")]
@@ -258,6 +273,8 @@ def run_web_tasks(
     # 7. Final summary
     env.close()
     llama_proc.terminate()
+    if qemu_proc:
+        qemu_proc.kill()
 
     passed = sum(1 for s in scores if s > 0)
     total_time = time.time() - t0
@@ -273,7 +290,200 @@ def run_web_tasks(
     return {"passed": passed, "total": len(scores), "score": avg, "results_path": results_path}
 
 
-def _verify_task(env: "PlaywrightGymEnv", verify_config: dict) -> bool:
+def _create_qemu_env(base_url: str, session_dir: str, requests_mod):
+    """Boot a QEMU Ubuntu VM and return a QemuGymEnv + the QEMU process."""
+    import subprocess
+
+    qcow2_path = "/data/Ubuntu.qcow2"
+    if not os.path.exists(qcow2_path):
+        print("Downloading Ubuntu VM image...")
+        from desktop_env.providers.docker.manager import _download_vm
+        _download_vm("/data")
+        vol.commit()
+
+    qemu_proc = subprocess.Popen([
+        "qemu-system-x86_64",
+        "-m", "4G", "-smp", "4",
+        "-drive", f"file={qcow2_path},format=qcow2,if=virtio,snapshot=on",
+        "-nographic",
+        "-net", "user,hostfwd=tcp::5050-:5000,hostfwd=tcp::9222-:9222",
+        "-net", "nic,model=virtio",
+        "-accel", "tcg,thread=multi",
+        "-cpu", "max",
+    ], stdout=open("/tmp/qemu.log", "w"), stderr=subprocess.STDOUT)
+
+    # Wait for VM to boot
+    vm_ready = False
+    for i in range(120):
+        try:
+            r = requests_mod.get("http://localhost:5050/screenshot", timeout=5)
+            if r.status_code == 200:
+                print(f"VM ready! ({i*2}s)")
+                vm_ready = True
+                break
+        except Exception:
+            pass
+        if qemu_proc.poll() is not None:
+            raise RuntimeError(f"QEMU exited with code {qemu_proc.returncode}")
+        if i % 30 == 0 and i > 0:
+            print(f"  Still booting... ({i*2}s)")
+        time.sleep(2)
+
+    if not vm_ready:
+        qemu_proc.kill()
+        raise RuntimeError("VM boot timeout")
+
+    # Open the target URL in Firefox inside the VM
+    from desktop_env.controllers.python import PythonController
+    controller = PythonController(vm_ip="localhost", server_port=5050)
+
+    # Launch Firefox with the target URL
+    controller.execute_python_command(
+        f"import subprocess, os; "
+        f"env = os.environ.copy(); env['DISPLAY'] = ':0'; "
+        f"subprocess.Popen(['firefox', '{base_url}'], env=env); "
+        f"import time; time.sleep(5)"
+    )
+
+    env = QemuGymEnv(
+        controller=controller,
+        vm_url="http://localhost:5050",
+        base_url=base_url,
+        session_dir=session_dir,
+    )
+    return env, qemu_proc
+
+
+class QemuGymEnv:
+    """GymEnvironment backed by a QEMU Ubuntu VM.
+
+    Screenshots come from the VM's /screenshot endpoint.
+    Actions are executed via pyautogui inside the VM through PythonController.
+    """
+
+    def __init__(self, controller, vm_url: str, base_url: str, session_dir: str):
+        self._controller = controller
+        self._vm_url = vm_url
+        self._base_url = base_url
+        self._session_dir = session_dir
+        self._viewport = (1280, 720)
+
+    def reset(self, task, **kwargs):
+        """Navigate to start URL and return initial screenshot."""
+        from mantis_agent.gym.base import GymObservation
+
+        start_url = kwargs.get("start_url", self._base_url)
+        # Open URL in Firefox inside the VM
+        self._controller.execute_python_command(
+            f"import subprocess, os; "
+            f"env = os.environ.copy(); env['DISPLAY'] = ':0'; "
+            f"subprocess.Popen(['firefox', '{start_url}'], env=env); "
+            f"import time; time.sleep(3)"
+        )
+        time.sleep(2)
+        return self._capture()
+
+    def step(self, action):
+        """Execute action via pyautogui inside the VM."""
+        import requests
+        from mantis_agent.gym.base import GymObservation, GymResult
+        from mantis_agent.actions import ActionType
+
+        code = self._action_to_pyautogui(action)
+        if code:
+            self._controller.execute_python_command(code)
+            time.sleep(1.5)
+
+        obs = self._capture()
+        return GymResult(observation=obs, reward=0.0, done=False, info={})
+
+    def close(self):
+        pass
+
+    @property
+    def screen_size(self):
+        return self._viewport
+
+    @property
+    def current_url(self):
+        return self._base_url
+
+    @property
+    def page(self):
+        return None
+
+    def has_session(self, name):
+        return os.path.exists(os.path.join(self._session_dir, f"{name}_state.json"))
+
+    def load_session(self, name):
+        pass  # QEMU sessions use Firefox profile, not Playwright state
+
+    def save_session(self, name):
+        # Save a marker file so has_session() returns True
+        path = os.path.join(self._session_dir, f"{name}_state.json")
+        import json
+        with open(path, "w") as f:
+            json.dump({"mode": "qemu", "saved_at": time.time()}, f)
+        return path
+
+    def _capture(self):
+        """Get screenshot from VM."""
+        import requests
+        from mantis_agent.gym.base import GymObservation
+        from PIL import Image
+        from io import BytesIO
+
+        resp = requests.get(f"{self._vm_url}/screenshot", timeout=30)
+        img = Image.open(BytesIO(resp.content))
+        # Resize to match viewport for consistent model input
+        if img.size[0] > self._viewport[0]:
+            img = img.resize(self._viewport, Image.LANCZOS)
+        return GymObservation(screenshot=img)
+
+    @staticmethod
+    def _action_to_pyautogui(action):
+        """Convert Mantis Action to pyautogui code for VM execution."""
+        from mantis_agent.actions import ActionType
+
+        match action.action_type:
+            case ActionType.CLICK:
+                x, y = action.params["x"], action.params["y"]
+                # Scale 1280x720 → 1920x1080
+                sx, sy = int(x * 1.5), int(y * 1.5)
+                button = action.params.get("button", "left")
+                return f"import pyautogui; pyautogui.click({sx}, {sy}, button='{button}')"
+            case ActionType.DOUBLE_CLICK:
+                x, y = action.params["x"], action.params["y"]
+                sx, sy = int(x * 1.5), int(y * 1.5)
+                return f"import pyautogui; pyautogui.doubleClick({sx}, {sy})"
+            case ActionType.TYPE:
+                text = action.params["text"].replace("'", "\\'")
+                return f"import pyautogui; pyautogui.typewrite('{text}', interval=0.02)"
+            case ActionType.KEY_PRESS:
+                keys = action.params["keys"]
+                parts = [k.strip() for k in keys.split("+")]
+                if len(parts) == 1:
+                    return f"import pyautogui; pyautogui.press('{parts[0]}')"
+                keys_repr = ", ".join(f"'{k}'" for k in parts)
+                return f"import pyautogui; pyautogui.hotkey({keys_repr})"
+            case ActionType.SCROLL:
+                direction = action.params["direction"]
+                amount = action.params.get("amount", 3)
+                clicks = amount if direction == "up" else -amount
+                return f"import pyautogui; pyautogui.scroll({clicks})"
+            case ActionType.DRAG:
+                sx, sy = int(action.params["start_x"] * 1.5), int(action.params["start_y"] * 1.5)
+                ex, ey = int(action.params["end_x"] * 1.5), int(action.params["end_y"] * 1.5)
+                return f"import pyautogui; pyautogui.moveTo({sx}, {sy}); pyautogui.drag({ex-sx}, {ey-sy}, duration=0.5)"
+            case ActionType.WAIT:
+                seconds = action.params.get("seconds", 1.0)
+                return f"import time; time.sleep({min(seconds, 5.0)})"
+            case ActionType.DONE:
+                return None
+        return None
+
+
+def _verify_task(env, verify_config: dict) -> bool:
     """Run verification checks against the current browser state."""
     if not verify_config:
         return False
@@ -313,21 +523,29 @@ def _verify_task(env: "PlaywrightGymEnv", verify_config: dict) -> bool:
 @app.local_entrypoint()
 def main(
     task_file: str = "tasks/crm/staffai_tasks.json",
+    mode: str = "playwright",
     max_steps: int = 30,
 ):
-    """Run Mantis against live web tasks on Modal A100."""
+    """Run Mantis against live web tasks on Modal A100.
+
+    Args:
+        task_file: Path to task suite JSON.
+        mode: "playwright" (headless, fast) or "qemu" (full desktop VM).
+        max_steps: Max steps per task.
+    """
     print(f"Mantis — Web Task Benchmark (Modal)")
     print(f"  Task file: {task_file}")
+    print(f"  Mode:      {mode}")
     print(f"  Model:     Gemma4 {GEMMA4_MODEL}")
     print(f"  Max steps: {max_steps}")
     print()
 
-    # Read task file locally and send contents to Modal
     with open(task_file) as f:
         task_file_contents = f.read()
 
     result = run_web_tasks.remote(
         task_file_contents=task_file_contents,
+        mode=mode,
         max_steps=max_steps,
     )
     print(f"\nResult: {json.dumps(result, indent=2)}")
