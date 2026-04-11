@@ -443,11 +443,70 @@ def vwa_shopping():
         print(f"Warning: Magento base URL config failed: {e}")
 
 
-@app.function(image=stub_image, cpu=0.5, memory=256, scaledown_window=600)
-@modal.web_server(port=9999, startup_timeout=30)
+@app.function(
+    image=shopping_image,  # reuse — has python3 + flatten script
+    cpu=2,
+    memory=8192,
+    volumes={"/data": vol},
+    scaledown_window=600,
+)
+@modal.web_server(port=80, startup_timeout=300)
 def vwa_reddit():
-    """VWA Reddit (Postmill) — STUB (needs PHP+PostgreSQL implementation)."""
-    _make_stub("Reddit", 9999)
+    """VWA Reddit (Postmill) — real Postmill forum from Docker image.
+
+    Extracts the Postmill Docker image from the volume, mounts proc/sys/dev,
+    then starts PostgreSQL + Nginx + PHP-FPM via chroot.
+    """
+    tar_path = "/data/vwa/postmill-populated-exposed-withimg.tar"
+    root = "/opt/reddit"
+
+    if not os.path.exists(tar_path):
+        print("ERROR: Reddit tar not found on volume.")
+        _make_stub("Reddit (tar missing)", 80)
+        return
+
+    if not os.path.exists(os.path.join(root, "var", "www")):
+        print(f"Extracting Docker layers from {tar_path}...")
+        subprocess.run(
+            ["python3", "/opt/flatten.py", tar_path, root],
+            check=True,
+        )
+        print("Extraction complete")
+
+    # Mount proc/sys/dev for chroot services
+    for mnt in ["proc", "sys", "dev", "dev/pts", "run"]:
+        mnt_path = os.path.join(root, mnt)
+        os.makedirs(mnt_path, exist_ok=True)
+        subprocess.run(["mount", "--bind", f"/{mnt}", mnt_path], capture_output=True)
+
+    # Postmill uses PostgreSQL + Nginx + PHP-FPM
+    # Start PostgreSQL
+    print("Starting PostgreSQL...")
+    subprocess.Popen(
+        ["chroot", root, "su", "-", "postgres", "-c", "/usr/lib/postgresql/15/bin/pg_ctl start -D /var/lib/postgresql/15/main"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(8)
+
+    # Start PHP-FPM
+    print("Starting PHP-FPM...")
+    subprocess.Popen(
+        ["chroot", root, "php-fpm8.1", "--daemonize"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(2)
+
+    # Start Nginx on port 80
+    print("Starting Nginx...")
+    subprocess.Popen(
+        ["chroot", root, "nginx", "-g", "daemon off;"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(2)
+    print("Reddit (Postmill) ready")
 
 
 # ── One-time download functions for Reddit and Classifieds ────────────────────
