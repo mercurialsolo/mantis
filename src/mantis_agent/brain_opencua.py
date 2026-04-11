@@ -267,21 +267,30 @@ class OpenCUABrain:
             sx, sy = _model_coords_to_screen(mx, my, screen_size[0], screen_size[1])
             return Action(ActionType.DOUBLE_CLICK, {"x": sx, "y": sy})
 
-        # typewrite('text')
-        type_match = re.search(r"typewrite\(['\"](.+?)['\"]\)", text)
+        # typewrite('text') or write('text')
+        type_match = re.search(r"(?:typewrite|write)\(['\"](.+?)['\"]\)", text)
         if type_match:
             return Action(ActionType.TYPE, {"text": type_match.group(1)})
 
-        # hotkey('key1', 'key2')
+        # hotkey('key1', 'key2') or hotkey(['key1', 'key2'])
         hotkey_match = re.search(r"hotkey\((.+?)\)", text)
         if hotkey_match:
-            keys = [k.strip().strip("'\"") for k in hotkey_match.group(1).split(",")]
+            raw = hotkey_match.group(1)
+            # Strip list brackets if present
+            raw = raw.strip("[]")
+            keys = [k.strip().strip("'\"") for k in raw.split(",")]
+            # Normalize key names
+            key_map = {"cmd": "ctrl", "command": "ctrl", "return": "enter"}
+            keys = [key_map.get(k.lower(), k) for k in keys]
             return Action(ActionType.KEY_PRESS, {"keys": "+".join(keys)})
 
         # press('key')
         press_match = re.search(r"press\(['\"](.+?)['\"]\)", text)
         if press_match:
-            return Action(ActionType.KEY_PRESS, {"keys": press_match.group(1)})
+            key = press_match.group(1)
+            key_map = {"return": "enter", "cmd": "ctrl"}
+            key = key_map.get(key.lower(), key)
+            return Action(ActionType.KEY_PRESS, {"keys": key})
 
         # scroll(amount)
         scroll_match = re.search(r'scroll\((-?\d+)\)', text)
