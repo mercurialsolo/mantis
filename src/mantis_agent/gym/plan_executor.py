@@ -162,6 +162,13 @@ class PlanExecutor:
             time.sleep(self._settle_time)
             return StepResult(success=True, method="direct", detail=f"clicked role element '{target}'", url_after=self._page.url)
 
+        # Strategy 3: target might be an input field (e.g. "User ID input field")
+        el = self._find_input(target)
+        if el:
+            el.click()
+            time.sleep(self._settle_time)
+            return StepResult(success=True, method="direct", detail=f"clicked input '{target}'", url_after=self._page.url)
+
         return StepResult(success=False, method="direct", detail=f"could not find clickable element for '{target}'")
 
     def _key(self, step, params: dict) -> StepResult:
