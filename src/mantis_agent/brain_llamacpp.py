@@ -67,7 +67,7 @@ Use this to know if your previous typing action succeeded — if a field shows y
 - To fill a form: click the input field ONCE to focus it, then call type_text() with the value.
 - Do NOT click an input field multiple times. One click focuses it — then immediately type.
 - After typing, move to the next field: click the next input, or press key_press('Tab').
-- To submit a form: click the Submit/Sign In button, OR press key_press('Enter').
+- To submit a form: press key_press('Enter') — this is the most reliable method. Only click the Submit button if Enter doesn't work.
 - If you already clicked a field and see it is focused, your NEXT action must be type_text() — not another click.
 
 # Avoiding loops
