@@ -242,11 +242,10 @@ def run_web_tasks(
                 else:
                     intent = resolved_intent
                     print(f"  Plan loaded: {len(active_plan.steps)} steps")
-                    # Create executor if env has a Playwright page
-                    if hasattr(env, 'page') and env.page is not None:
-                        from mantis_agent.gym.plan_executor import PlanExecutor
-                        executor = PlanExecutor(page=env.page, settle_time=1.5)
-                        print(f"  Direct execution: enabled (Playwright)")
+                    # Create executor — passes env so page resolves lazily after reset
+                    from mantis_agent.gym.plan_executor import PlanExecutor
+                    executor = PlanExecutor(env=env, settle_time=1.5)
+                    print(f"  Direct execution: enabled")
 
             runner = GymRunner(
                 brain=brain,

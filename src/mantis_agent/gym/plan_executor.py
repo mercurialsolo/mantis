@@ -42,13 +42,24 @@ class PlanExecutor:
     """Execute plan steps directly via Playwright, falling back to brain.
 
     Args:
-        page: Playwright Page object.
+        page: Playwright Page object, or an env with a .page property.
+            If an env is passed, the page is resolved lazily (after reset).
         settle_time: Seconds to wait after each action.
     """
 
-    def __init__(self, page, settle_time: float = 1.5):
-        self._page = page
+    def __init__(self, page=None, settle_time: float = 1.5, env=None):
+        self._page_ref = page
+        self._env = env
         self._settle_time = settle_time
+
+    @property
+    def _page(self):
+        """Resolve the page lazily — env.page is only available after reset."""
+        if self._page_ref is not None:
+            return self._page_ref
+        if self._env is not None and hasattr(self._env, "page"):
+            return self._env.page
+        return None
 
     def can_execute(self, step) -> bool:
         """Check if a plan step can be executed directly (no brain needed)."""
@@ -64,6 +75,9 @@ class PlanExecutor:
         Returns:
             StepResult with success/failure and detail.
         """
+        if self._page is None:
+            return StepResult(success=False, method="direct", detail="no page available (env not reset?)")
+
         resolved_params = resolved_params or {}
         action = step.action
 
