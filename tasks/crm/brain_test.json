@@ -1,0 +1,36 @@
+{
+  "session_name": "staffai_crm",
+  "base_url": "https://staffai-test-crm.exe.xyz",
+  "tasks": [
+    {
+      "task_id": "brain_login",
+      "intent": "Go to https://staffai-test-crm.exe.xyz and log in with user ID sarah.connor and password skynet99. After logging in, you should see a dashboard.",
+      "save_session": true,
+      "start_url": "https://staffai-test-crm.exe.xyz",
+      "verify": {
+        "type": "url_not_contains",
+        "value": "login"
+      }
+    },
+    {
+      "task_id": "brain_find_expensive_lead",
+      "intent": "You are logged into a CRM. Navigate to the Leads section. Find any lead with a pipeline value over $1,000,000. Open that lead's detail page. Read the robot name and the asking price. Then click done and report what you found in the summary.",
+      "require_session": true,
+      "start_url": "https://staffai-test-crm.exe.xyz",
+      "verify": {
+        "type": "url_contains",
+        "value": "leads"
+      }
+    },
+    {
+      "task_id": "brain_edit_lead",
+      "intent": "You are logged into a CRM. Go to the Leads page. Click on the 'Qualified' filter in the left sidebar. Open the first lead in the filtered list. Click Edit. Change the 'Lead Source' field to 'Website Inquiry'. Click 'Update Lead' to save.",
+      "require_session": true,
+      "start_url": "https://staffai-test-crm.exe.xyz",
+      "verify": {
+        "type": "page_contains_text",
+        "value": "Website Inquiry"
+      }
+    }
+  ]
+}

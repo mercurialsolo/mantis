@@ -68,7 +68,7 @@ def start_llama_server(model_path: str, port: int = 8080):
         "-c", "32768",
         "-ub", "2048",
         "--jinja",
-        "--reasoning-budget", "2048",  # ENABLED — allows extended thinking
+        "--reasoning-budget", "4096",  # Extended thinking for multi-step reasoning
         "--flash-attn", "on",
     ]
     if os.path.exists(mmproj_path):
