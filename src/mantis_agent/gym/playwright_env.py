@@ -142,6 +142,13 @@ class PlaywrightGymEnv(GymEnvironment):
 
         obs = self._capture()
 
+        # After click actions, detect if an input field is now focused.
+        # This tells the runner that the next logical action is type_text,
+        # enabling form-aware nudges when the model gets stuck clicking.
+        focused_input = self._detect_focused_input() if action.action_type in (
+            ActionType.CLICK, ActionType.DOUBLE_CLICK
+        ) else None
+
         return GymResult(
             observation=obs,
             reward=0.0,  # no automatic reward — verification happens externally
@@ -149,6 +156,7 @@ class PlaywrightGymEnv(GymEnvironment):
             info={
                 "url": self._page.url,
                 "title": self._page.title(),
+                "focused_input": focused_input,
             },
         )
 
@@ -239,6 +247,32 @@ class PlaywrightGymEnv(GymEnvironment):
         logger.info(f"Session loaded: {path}")
 
     # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _detect_focused_input(self) -> dict | None:
+        """Check if an input/textarea element is currently focused.
+
+        Returns a dict with element info if a form field has focus, else None.
+        Used by the runner to generate form-aware nudges.
+        """
+        try:
+            result = self._page.evaluate("""() => {
+                const el = document.activeElement;
+                if (!el) return null;
+                const tag = el.tagName.toLowerCase();
+                if (tag !== 'input' && tag !== 'textarea' && !el.isContentEditable) return null;
+                return {
+                    tag: tag,
+                    type: el.getAttribute('type') || '',
+                    name: el.getAttribute('name') || '',
+                    placeholder: el.getAttribute('placeholder') || '',
+                    id: el.id || '',
+                    value: (el.value || '').substring(0, 100),
+                    empty: !(el.value || '').trim(),
+                };
+            }""")
+            return result
+        except Exception:
+            return None
 
     def _capture(self) -> GymObservation:
         """Take a screenshot and return as GymObservation."""
