@@ -13,6 +13,7 @@ Architecture:
 """
 
 from .base import GymEnvironment, GymObservation, GymResult
+from .plans import Plan, load_plan, save_plan, get_missing_inputs
 from .playwright_env import PlaywrightGymEnv
 from .runner import GymRunner
 
@@ -21,5 +22,9 @@ __all__ = [
     "GymObservation",
     "GymResult",
     "GymRunner",
+    "Plan",
     "PlaywrightGymEnv",
+    "get_missing_inputs",
+    "load_plan",
+    "save_plan",
 ]

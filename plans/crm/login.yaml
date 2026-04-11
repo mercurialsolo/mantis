@@ -1,0 +1,38 @@
+name: login_crm
+description: Log in to StaffAI CRM
+url: https://staffai-test-crm.exe.xyz
+save_session: true
+
+inputs:
+  user_id:
+    description: "CRM user ID"
+    default: "sarah.connor"
+  password:
+    description: "CRM password"
+    required: true
+
+steps:
+  - action: navigate
+    url: "{{url}}"
+
+  - action: click
+    target: "User ID input field"
+    wait_for: input_focused
+
+  - action: type
+    text: "{{user_id}}"
+
+  - action: click
+    target: "Password input field"
+    wait_for: input_focused
+
+  - action: type
+    text: "{{password}}"
+
+  - action: click
+    target: "Sign In button"
+    wait_for: url_changed
+
+  - action: verify
+    check: url_contains
+    value: "dashboard"

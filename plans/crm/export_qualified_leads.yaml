@@ -1,0 +1,31 @@
+name: export_qualified_leads
+description: Export qualified leads as CSV
+url: https://staffai-test-crm.exe.xyz
+require_session: true
+
+inputs:
+  status_filter:
+    description: "Lead status to filter by"
+    default: "Qualified"
+
+steps:
+  - action: click
+    target: "Leads page link in the navigation menu"
+    wait_for: url_changed
+
+  - action: click
+    target: "Status filter dropdown or search"
+
+  - action: type
+    text: "{{status_filter}}"
+
+  - action: click
+    target: "'{{status_filter}}' option in the filter"
+    wait_for: page_updated
+
+  - action: click
+    target: "Export or Download CSV button"
+
+  - action: verify
+    check: download_exists
+    value: "*.csv"
