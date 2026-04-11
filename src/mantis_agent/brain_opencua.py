@@ -1,20 +1,23 @@
-"""OpenCUA Brain — CUA-specialized vision model for browser automation.
+"""CUA Brain — specialized vision models for browser automation.
 
-OpenCUA is a fine-tuned Qwen2.5-VL model trained specifically for
-computer use tasks. Unlike Gemma4 (general-purpose with tool-calling),
-OpenCUA outputs pyautogui actions directly and understands GUI elements
-natively.
+Supports OpenCUA and EvoCUA families — fine-tuned Qwen VL models
+trained specifically for computer use. Both output pyautogui actions
+and understand GUI elements natively.
 
-Sizes: 7B (single A100), 32B (4× GPU), 72B (8× GPU)
+OpenCUA (xlang-ai): 7B/32B/72B, based on Qwen2.5-VL
+EvoCUA (Meituan):   8B/32B, based on Qwen3-VL (SOTA: 56.7% OSWorld)
+
 Backend: vLLM with OpenAI-compatible API
 
-Key differences from LlamaCppBrain:
+Key differences from LlamaCppBrain (Gemma4):
 - No tool_choice="required" — model outputs actions as text, not tool calls
 - Coordinate system uses smart-resize (model coords → screen coords)
 - Long chain-of-thought reasoning built into the model
 - Multi-image context (up to 3 screenshots for history)
 
-Reference: https://huggingface.co/xlangai/OpenCUA-72B
+References:
+  https://huggingface.co/xlangai/OpenCUA-32B
+  https://huggingface.co/meituan/EvoCUA-32B-20260105
 """
 
 from __future__ import annotations

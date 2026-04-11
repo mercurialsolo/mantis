@@ -1,17 +1,20 @@
-"""Run Mantis CUA with OpenCUA-32B brain on Modal — vLLM + Playwright.
+"""Run Mantis CUA with OpenCUA/EvoCUA brain on Modal — vLLM + Playwright.
 
-OpenCUA-32B: 34.8% OSWorld (vs Gemma4's ~5-10%), trained specifically
-for computer use. Based on Qwen2.5-VL-32B, fine-tuned on CUA datasets.
-
-Architecture:
-    Modal A100×4 Container
-    ├── vLLM server (OpenCUA-32B, tensor-parallel=4, port 8000)
-    ├── Playwright + Chromium (headless, 1280x720)
-    └── GymRunner + PlanExecutor + PageDiscovery
+Supported models:
+  EvoCUA-8B:   46.1% OSWorld, 1× A100 (BEST value)
+  EvoCUA-32B:  56.7% OSWorld, 2× A100 (SOTA open-source)
+  OpenCUA-32B: 34.8% OSWorld, 4× A100
+  OpenCUA-72B: 45.0% OSWorld, 8× A100
 
 Usage:
+    # EvoCUA-8B (default — best single-GPU performance)
     modal run modal_web_tasks_opencua.py --task-file tasks/crm/original_test.json
-    modal run modal_web_tasks_opencua.py --task-file tasks/crm/staffai_tasks.json --plan-dir plans/crm
+
+    # EvoCUA-32B (SOTA)
+    CUA_MODEL=evocua-32b modal run modal_web_tasks_opencua.py --task-file tasks/crm/original_test.json
+
+    # OpenCUA-32B
+    CUA_MODEL=opencua-32b modal run modal_web_tasks_opencua.py --task-file tasks/crm/original_test.json
 """
 
 import json
@@ -26,7 +29,35 @@ app = modal.App("opencua-web-tasks")
 
 vol = modal.Volume.from_name("osworld-data", create_if_missing=True)
 
-OPENCUA_MODEL = os.environ.get("OPENCUA_MODEL", "xlangai/OpenCUA-32B")
+CUA_MODELS = {
+    "evocua-8b": {
+        "repo": "meituan/EvoCUA-8B-20260105",
+        "name": "EvoCUA-8B",
+        "tp": 1,
+        "gpus": "A100-80GB",
+    },
+    "evocua-32b": {
+        "repo": "meituan/EvoCUA-32B-20260105",
+        "name": "EvoCUA-32B",
+        "tp": 2,
+        "gpus": "A100-80GB:2",
+    },
+    "opencua-32b": {
+        "repo": "xlangai/OpenCUA-32B",
+        "name": "OpenCUA-32B",
+        "tp": 4,
+        "gpus": "A100-80GB:4",
+    },
+    "opencua-72b": {
+        "repo": "xlangai/OpenCUA-72B",
+        "name": "OpenCUA-72B",
+        "tp": 8,
+        "gpus": "A100-80GB:8",
+    },
+}
+
+CUA_MODEL_KEY = os.environ.get("CUA_MODEL", "evocua-8b")
+CUA_CONFIG = CUA_MODELS.get(CUA_MODEL_KEY, CUA_MODELS["evocua-8b"])
 
 image = (
     modal.Image.from_registry(
@@ -45,19 +76,20 @@ image = (
 )
 
 
-def download_opencua(vol_path: str) -> str:
-    """Download OpenCUA model if not cached on volume."""
-    model_dir = os.path.join(vol_path, "models", "opencua-32b")
+def download_model(vol_path: str) -> str:
+    """Download CUA model if not cached on volume."""
+    slug = CUA_MODEL_KEY.replace("-", "_")
+    model_dir = os.path.join(vol_path, "models", slug)
     marker = os.path.join(model_dir, ".download_complete")
     if os.path.exists(marker):
-        print(f"OpenCUA-32B cached at {model_dir}")
+        print(f"{CUA_CONFIG['name']} cached at {model_dir}")
         return model_dir
 
     os.makedirs(model_dir, exist_ok=True)
-    print(f"Downloading {OPENCUA_MODEL}...")
+    print(f"Downloading {CUA_CONFIG['repo']}...")
     from huggingface_hub import snapshot_download
     snapshot_download(
-        OPENCUA_MODEL,
+        CUA_CONFIG["repo"],
         local_dir=model_dir,
         ignore_patterns=["*.md", "*.txt"],
     )
@@ -110,7 +142,7 @@ def start_vllm_server(model_dir: str, port: int = 8000, tp: int = 4) -> subproce
 
 
 @app.function(
-    gpu="A100-80GB:4",
+    gpu=CUA_CONFIG["gpus"],
     image=image,
     volumes={"/data": vol},
     timeout=7200,
@@ -138,8 +170,9 @@ def run_opencua_tasks(
     t0 = time.time()
 
     # 1. Download + start vLLM
-    model_dir = download_opencua("/data")
-    vllm_proc = start_vllm_server(model_dir, port=8000, tp=4)
+    model_dir = download_model("/data")
+    tp = CUA_CONFIG["tp"]
+    vllm_proc = start_vllm_server(model_dir, port=8000, tp=tp)
 
     r = req.get("http://localhost:8000/v1/models")
     print(f"Model: {r.json()['data'][0]['id']}")
@@ -153,11 +186,11 @@ def run_opencua_tasks(
     plan_inputs = plan_inputs or {}
 
     print(f"\n{'='*60}")
-    print(f"Mantis — OpenCUA-32B Web Tasks")
+    print(f"Mantis — {CUA_CONFIG['name']} Web Tasks")
     print(f"  Session:  {session_name}")
     print(f"  Base URL: {base_url}")
     print(f"  Tasks:    {len(tasks)}")
-    print(f"  Model:    OpenCUA-32B (vLLM, TP=4)")
+    print(f"  Model:    {CUA_CONFIG['name']} (vLLM, TP={tp})")
     print(f"  Steps:    {max_steps}")
     print(f"{'='*60}")
 
@@ -221,7 +254,7 @@ def run_opencua_tasks(
             "session_name": session_name,
             "base_url": base_url,
             "domain": session_name,
-            "model": "OpenCUA-32B",
+            "model": CUA_CONFIG["name"],
             "tasks_run": len(ordered_tasks),
             "started_at": started_at,
             "completed_at": completed_at,
@@ -382,7 +415,7 @@ def main(
 
     print(f"Mantis — OpenCUA-32B Web Tasks (Modal)")
     print(f"  Task file: {task_file}")
-    print(f"  Model:     OpenCUA-32B (4× A100-80GB)")
+    print(f"  Model:     {CUA_CONFIG['name']} ({CUA_CONFIG['gpus']})")
     print(f"  Max steps: {max_steps}")
 
     with open(task_file) as f:
