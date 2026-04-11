@@ -157,32 +157,43 @@ class AgentSBrain:
     def load(self) -> None:
         """Initialize the Agent-S3 framework."""
         try:
-            from gui_agents.s3.agents import S3Agent
+            from gui_agents.s3.agents.agent_s import AgentS3
+            from gui_agents.s3.agents.grounding import OSWorldACI
             logger.info("Agent-S3 framework loaded (gui-agents)")
 
             # Build engine params for the worker
-            engine_params = {
+            worker_engine_params = {
                 "engine_type": self.worker_provider,
                 "model": self.worker_model,
             }
             if self.worker_base_url:
-                engine_params["base_url"] = self.worker_base_url
+                worker_engine_params["base_url"] = self.worker_base_url
 
-            # Build grounding params
-            grounding_params = {}
-            if self.grounding_model:
-                grounding_params = {
+            # Build grounding agent (OSWorldACI) if grounding model specified
+            grounding_agent = None
+            if self.grounding_model and self.grounding_url:
+                grounding_engine_params = {
                     "engine_type": self.grounding_provider or "vllm",
                     "model": self.grounding_model,
+                    "base_url": self.grounding_url,
+                    "grounding_width": self.default_screen_size[0],
+                    "grounding_height": self.default_screen_size[1],
                 }
-                if self.grounding_url:
-                    grounding_params["base_url"] = self.grounding_url
+                grounding_agent = OSWorldACI(
+                    env=None,
+                    platform="linux",
+                    engine_params_for_generation=worker_engine_params,
+                    engine_params_for_grounding=grounding_engine_params,
+                    width=self.default_screen_size[0],
+                    height=self.default_screen_size[1],
+                )
 
-            self._agent = S3Agent(
-                engine_params=engine_params,
-                grounding_params=grounding_params if grounding_params else None,
+            self._agent = AgentS3(
+                worker_engine_params=worker_engine_params,
+                grounding_agent=grounding_agent,
                 platform="linux",
-                use_reflection=self.use_reflection,
+                max_trajectory_length=8,
+                enable_reflection=self.use_reflection,
             )
             logger.info(f"Agent-S3 initialized: worker={self.worker_model}, grounding={self.grounding_model or 'none'}")
 
@@ -190,7 +201,6 @@ class AgentSBrain:
             logger.warning("gui-agents not installed — using API-only mode")
             self._agent = None
 
-            # Verify we can reach the worker API
             import requests
             try:
                 resp = requests.get(f"{self.worker_base_url}/models", timeout=10)
@@ -219,30 +229,34 @@ class AgentSBrain:
     ) -> InferenceResult:
         """Use the full Agent-S3 framework."""
         try:
-            # Agent-S3 expects an observation dict with screenshot
             current_frame = frames[-1] if frames else Image.new("RGB", screen_size, "white")
 
-            # Convert PIL to bytes
             buf = BytesIO()
             current_frame.save(buf, format="PNG")
             screenshot_bytes = buf.getvalue()
 
-            # Build observation for Agent-S3
-            obs = {
-                "screenshot": screenshot_bytes,
-                "screen_size": screen_size,
-            }
+            obs = {"screenshot": screenshot_bytes}
 
-            # Get action from Agent-S3
-            result = self._agent.predict(
+            # predict() returns (info_dict, actions_list)
+            info, actions = self._agent.predict(
                 instruction=task,
                 observation=obs,
             )
 
-            action_text = result.get("action", "") if isinstance(result, dict) else str(result)
-            thinking = result.get("thought", "") if isinstance(result, dict) else ""
+            # info has: plan, plan_code, execution_code, reflection
+            thinking = info.get("plan", "") if isinstance(info, dict) else ""
+            reflection = info.get("reflection", "") if isinstance(info, dict) else ""
+            if reflection:
+                thinking = f"{thinking}\nReflection: {reflection}"
 
-            action = _parse_pyautogui_action(action_text, screen_size)
+            # actions is a list of pyautogui command strings
+            action_text = actions[0] if actions else ""
+
+            if not action_text or action_text.strip() in ("DONE", "FAIL"):
+                success = "DONE" in (action_text or "")
+                action = Action(ActionType.DONE, {"success": success, "summary": thinking[:200]})
+            else:
+                action = _parse_pyautogui_action(action_text, screen_size)
 
             return InferenceResult(
                 action=action,
