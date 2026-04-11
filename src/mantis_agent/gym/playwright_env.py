@@ -497,17 +497,27 @@ class PlaywrightGymEnv(GymEnvironment):
             case ActionType.TYPE:
                 text = action.params["text"]
                 # Use focused element's fill() for framework compatibility.
-                # fill() clears existing value and dispatches input/change events
-                # that React/Vue frameworks need to register the value.
                 try:
-                    focused = self._page.evaluate_handle("() => document.activeElement")
-                    el = focused.as_element()
-                    tag = el.evaluate("el => el.tagName") if el else ""
-                    if el and tag in ("INPUT", "TEXTAREA"):
-                        el.fill(text)
+                    info = self._page.evaluate("""() => {
+                        const el = document.activeElement;
+                        if (!el) return null;
+                        return {tag: el.tagName, id: el.id, name: el.name || '', type: el.type || '', value: el.value || ''};
+                    }""")
+                    print(f"  [type] focused: {info}")
+                    if info and info["tag"] in ("INPUT", "TEXTAREA"):
+                        # Use fill() on the focused element — dispatches all events
+                        selector = f"#{info['id']}" if info.get("id") else f"[name='{info['name']}']" if info.get("name") else None
+                        if selector:
+                            self._page.fill(selector, text)
+                            print(f"  [type] fill('{selector}', '{text}') OK")
+                        else:
+                            self._page.keyboard.type(text)
+                            print(f"  [type] keyboard.type (no selector)")
                     else:
                         self._page.keyboard.type(text)
-                except Exception:
+                        print(f"  [type] keyboard.type (not input)")
+                except Exception as e:
+                    print(f"  [type] error: {e}, falling back to keyboard")
                     self._page.keyboard.type(text)
 
             case ActionType.KEY_PRESS:
