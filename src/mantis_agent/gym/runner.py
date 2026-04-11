@@ -173,12 +173,18 @@ class GymRunner:
             # ── Hybrid execution: try DOM first, fall back to brain ──
             direct_executed = False
 
+            has_plan = plan is not None
+            has_executor = self.plan_executor is not None
+            in_range = plan_step_idx < len(plan.steps) if plan else False
+            print(f"  [runner] plan={has_plan} executor={has_executor} idx={plan_step_idx} in_range={in_range}")
+
             if plan and self.plan_executor and plan_step_idx < len(plan.steps):
                 current_plan_step = plan.steps[plan_step_idx]
-                logger.info(f"Plan step {plan_step_idx + 1}/{len(plan.steps)}: {current_plan_step.action} '{current_plan_step.target}'")
+                print(f"  [executor] trying step {plan_step_idx + 1}/{len(plan.steps)}: {current_plan_step.action} target='{current_plan_step.target}' params={current_plan_step.params}")
 
                 if self.plan_executor.can_execute(current_plan_step):
                     step_result = self.plan_executor.execute(current_plan_step, plan_inputs)
+                    print(f"  [executor] result: success={step_result.success} detail={step_result.detail}")
 
                     if step_result.success:
                         logger.info(f"  Direct exec OK: {step_result.detail}")
