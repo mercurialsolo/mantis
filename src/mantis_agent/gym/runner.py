@@ -139,11 +139,14 @@ class GymRunner:
         action_history: list[Action] = []
         trajectory: list[TrajectoryStep] = []
         total_reward = 0.0
-        plan_inputs = plan_inputs or {}
+        plan_inputs = dict(plan_inputs or {})
 
-        # Plan state
-        if plan and plan_steps is None:
-            plan_steps = plan.to_instruction()
+        # Plan state — auto-add url to inputs for {{url}} resolution
+        if plan:
+            if "url" not in plan_inputs and plan.url:
+                plan_inputs["url"] = plan.url
+            if plan_steps is None:
+                plan_steps = plan.to_instruction()
         agent_plan: str | None = plan_steps
         plan_step_idx = 0  # Which plan step we're working on
         step_log: list[str] = []
