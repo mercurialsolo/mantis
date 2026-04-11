@@ -1,0 +1,16 @@
+Update the industry vertical for a qualified lead in StaffAI CRM
+
+URL: https://staffai-test-crm.exe.xyz
+Requires login session: yes
+
+Inputs:
+  lead_status = "Qualified" (Status filter for selecting the lead)
+  industry_value (required) (New industry vertical value)
+
+Steps:
+1. Go to the Leads Page
+2. Select the first lead with the "{{lead_status}}" status
+3. Go to the Edit Lead page for this lead
+4. Update the Industry Vertical to "{{industry_value}}"
+5. Click "Update Lead"
+6. Verify: page should contain "{{industry_value}}"

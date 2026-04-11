@@ -183,16 +183,26 @@ class Plan:
 
 
 def load_plan(path: str, inputs: dict[str, str] | None = None) -> Plan:
-    """Load a plan from a YAML or JSON file.
+    """Load a plan from a YAML, JSON, or plain text file.
+
+    Detects format by extension:
+      .txt → plain text (human-friendly)
+      .yaml/.yml → YAML (structured)
+      .json → JSON (structured)
 
     Args:
         path: Path to the plan file.
         inputs: Optional input values to resolve placeholders.
 
     Returns:
-        Plan instance with resolved inputs.
+        Plan instance.
     """
     path_obj = Path(path)
+
+    # Plain text format
+    if path_obj.suffix == ".txt":
+        return load_text_plan(path)
+
     content = path_obj.read_text()
 
     if path_obj.suffix in (".yml", ".yaml") and HAS_YAML:
@@ -298,3 +308,202 @@ def get_missing_inputs(plan: Plan, provided: dict[str, str] | None = None) -> li
         if inp.required and inp.name not in provided and inp.default is None:
             missing.append(inp)
     return missing
+
+
+def load_text_plan(path: str) -> Plan:
+    """Load a plan from a human-friendly plain text file.
+
+    Text format:
+        First line = description
+        URL: <url>
+        Save session after login: yes
+        Requires login session: yes
+
+        Inputs:
+          var_name = "default" (description)
+          var_name (required) (description)
+
+        Steps:
+        1. Go to <url>
+        2. Click on <target>
+        3. Type "{{variable}}"
+        ...
+        N. Verify: <check> should contain "<value>"
+    """
+    path_obj = Path(path)
+    content = path_obj.read_text()
+    lines = content.strip().split("\n")
+
+    description = lines[0].strip() if lines else ""
+    url = ""
+    save_session = False
+    require_session = False
+    inputs: list[PlanInput] = []
+    steps: list[PlanStep] = []
+
+    section = "header"  # header, inputs, steps
+
+    for line in lines[1:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Header fields
+        if stripped.lower().startswith("url:"):
+            url = stripped.split(":", 1)[1].strip()
+            continue
+        if "save session" in stripped.lower() and "yes" in stripped.lower():
+            save_session = True
+            continue
+        if "requires" in stripped.lower() and "session" in stripped.lower() and "yes" in stripped.lower():
+            require_session = True
+            continue
+
+        # Section markers
+        if stripped.lower().startswith("inputs:"):
+            section = "inputs"
+            continue
+        if stripped.lower().startswith("steps:"):
+            section = "steps"
+            continue
+
+        # Parse inputs
+        if section == "inputs":
+            inp = _parse_text_input(stripped)
+            if inp:
+                inputs.append(inp)
+            continue
+
+        # Parse steps
+        if section == "steps":
+            step = _parse_text_step(stripped)
+            if step:
+                steps.append(step)
+            continue
+
+    # Name from filename
+    name = path_obj.stem.replace(" ", "_")
+
+    return Plan(
+        name=name,
+        description=description,
+        url=url,
+        steps=steps,
+        inputs=inputs,
+        require_session=require_session,
+        save_session=save_session,
+        file_path=str(path_obj),
+    )
+
+
+def _parse_text_input(line: str) -> PlanInput | None:
+    """Parse an input line like: var_name = "default" (description)"""
+    import re
+
+    # Pattern: name = "default" (description) or name (required) (description)
+    line = line.strip()
+
+    required = "(required)" in line.lower()
+    line_clean = re.sub(r"\(required\)", "", line, flags=re.IGNORECASE).strip()
+
+    # Extract description in parentheses (last one)
+    desc_match = re.search(r"\(([^)]+)\)\s*$", line_clean)
+    description = desc_match.group(1) if desc_match else ""
+    if desc_match:
+        line_clean = line_clean[:desc_match.start()].strip()
+
+    # Extract name and default
+    if "=" in line_clean:
+        name, default_part = line_clean.split("=", 1)
+        name = name.strip()
+        default_part = default_part.strip().strip('"').strip("'")
+        return PlanInput(name=name, description=description, default=default_part, required=required)
+    else:
+        name = line_clean.strip()
+        if name:
+            return PlanInput(name=name, description=description, required=required)
+
+    return None
+
+
+def _parse_text_step(line: str) -> PlanStep | None:
+    """Parse a step line like: 1. Click on the User ID input field"""
+    import re
+
+    # Strip numbered prefix: "1. ", "2) ", etc.
+    match = re.match(r"^\d+[\.\)]\s*(.*)", line.strip())
+    if not match:
+        return None
+
+    text = match.group(1).strip()
+    if not text:
+        return None
+
+    text_lower = text.lower()
+
+    # Navigate
+    if text_lower.startswith("go to"):
+        target = text[5:].strip()
+        return PlanStep(action="navigate", params={"url": target}, target=target)
+
+    # Type
+    type_match = re.match(r'type\s+"([^"]*)"(?:\s+into\s+(.+))?', text, re.IGNORECASE)
+    if type_match:
+        typed_text = type_match.group(1)
+        target = type_match.group(2) or ""
+        return PlanStep(action="type", params={"text": typed_text}, target=target.strip())
+
+    # Verify
+    if text_lower.startswith("verify:") or text_lower.startswith("verify "):
+        verify_text = text.split(":", 1)[-1].strip() if ":" in text else text[6:].strip()
+        # Parse "URL should contain 'dashboard'" or "page should contain 'text'"
+        contain_match = re.search(r'(?:should\s+)?contain[s]?\s+"([^"]*)"', verify_text, re.IGNORECASE)
+        if contain_match:
+            value = contain_match.group(1)
+            if "url" in verify_text.lower():
+                return PlanStep(action="verify", params={"check": "url_contains", "value": value})
+            else:
+                return PlanStep(action="verify", params={"check": "page_contains_text", "value": value})
+        return PlanStep(action="verify", params={"check": "custom", "value": verify_text})
+
+    # Click
+    if text_lower.startswith("click"):
+        target = re.sub(r"^click\s+(?:on\s+)?(?:the\s+)?", "", text, flags=re.IGNORECASE).strip()
+        target = target.strip('"').strip("'")
+        return PlanStep(action="click", target=target, wait_for="")
+
+    # Select (treat as click)
+    if text_lower.startswith("select"):
+        target = re.sub(r"^select\s+(?:the\s+)?", "", text, flags=re.IGNORECASE).strip()
+        return PlanStep(action="click", target=target)
+
+    # Update/change (treat as a click + type sequence described in one step)
+    if text_lower.startswith("update") or text_lower.startswith("change"):
+        return PlanStep(action="click", target=text)
+
+    # Filter
+    if text_lower.startswith("filter"):
+        return PlanStep(action="click", target=text)
+
+    # Export/download
+    if text_lower.startswith("export") or text_lower.startswith("download"):
+        return PlanStep(action="click", target=text)
+
+    # Fallback: treat as click with full text as target
+    return PlanStep(action="click", target=text)
+
+
+def text_to_yaml(text_path: str, yaml_path: str | None = None) -> str:
+    """Convert a plain text plan to YAML format.
+
+    Args:
+        text_path: Path to .txt plan file.
+        yaml_path: Output path. If None, replaces .txt with .yaml.
+
+    Returns:
+        Path to the saved YAML file.
+    """
+    plan = load_text_plan(text_path)
+    if yaml_path is None:
+        yaml_path = str(Path(text_path).with_suffix(".yaml"))
+    return save_plan(plan, yaml_path)

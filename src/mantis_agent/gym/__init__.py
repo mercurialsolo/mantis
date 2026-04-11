@@ -13,7 +13,7 @@ Architecture:
 """
 
 from .base import GymEnvironment, GymObservation, GymResult
-from .plans import Plan, load_plan, save_plan, get_missing_inputs
+from .plans import Plan, load_plan, load_text_plan, save_plan, get_missing_inputs, text_to_yaml
 from .playwright_env import PlaywrightGymEnv
 from .runner import GymRunner
 

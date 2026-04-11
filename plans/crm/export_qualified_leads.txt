@@ -1,0 +1,13 @@
+Export qualified leads as CSV from StaffAI CRM
+
+URL: https://staffai-test-crm.exe.xyz
+Requires login session: yes
+
+Inputs:
+  status_filter = "Qualified" (Lead status to filter by)
+
+Steps:
+1. Go to the Leads Page
+2. Filter leads by "{{status_filter}}" status
+3. Export the list as CSV
+4. Verify: CSV file should be downloaded

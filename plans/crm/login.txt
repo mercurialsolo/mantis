@@ -1,0 +1,17 @@
+Login to StaffAI CRM
+
+URL: https://staffai-test-crm.exe.xyz
+Save session after login: yes
+
+Inputs:
+  user_id = "sarah.connor" (CRM user ID)
+  password (required) (CRM password)
+
+Steps:
+1. Go to https://staffai-test-crm.exe.xyz
+2. Click on the User ID input field
+3. Type "{{user_id}}"
+4. Click on the Password input field
+5. Type "{{password}}"
+6. Click the "Sign In" button
+7. Verify: URL should contain "dashboard"
