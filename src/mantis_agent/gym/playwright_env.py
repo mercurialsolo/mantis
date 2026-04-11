@@ -496,7 +496,18 @@ class PlaywrightGymEnv(GymEnvironment):
 
             case ActionType.TYPE:
                 text = action.params["text"]
-                self._page.keyboard.type(text)
+                # Use the focused element's .type() for framework compatibility.
+                # page.keyboard.type() doesn't trigger React/Vue change events.
+                try:
+                    focused = self._page.evaluate_handle("() => document.activeElement")
+                    el = focused.as_element()
+                    if el and el.evaluate("el => el.tagName") in ("INPUT", "TEXTAREA"):
+                        el.evaluate("el => { el.value = ''; }")  # clear first
+                        el.type(text)
+                    else:
+                        self._page.keyboard.type(text)
+                except Exception:
+                    self._page.keyboard.type(text)
 
             case ActionType.KEY_PRESS:
                 combo = action.params["keys"]
