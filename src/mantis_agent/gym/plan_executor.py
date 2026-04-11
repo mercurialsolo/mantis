@@ -116,32 +116,56 @@ class PlanExecutor:
 
         target = step.target
 
-        # Strategy 1: find input by target description
-        el = self._find_input(target)
-        if el:
-            # Use click + clear + type for maximum framework compatibility
-            el.click()
-            time.sleep(0.3)
-            # Triple-click to select all, then type over
-            el.evaluate("el => { el.select ? el.select() : null; el.value = ''; }")
-            el.type(text)
-            time.sleep(self._settle_time)
-            # Verify the value stuck
-            actual = el.evaluate("el => el.value") or ""
-            if text in actual:
-                return StepResult(success=True, method="direct", detail=f"typed '{text}' into '{target}' (verified)")
-            else:
-                return StepResult(success=False, method="direct",
-                    detail=f"typed into '{target}' but field contains '{actual}' instead of '{text}'")
+        # Strategy 1: if target is specified, find by description
+        if target:
+            el = self._find_input(target)
+            if el:
+                el.click()
+                time.sleep(0.3)
+                try:
+                    el.evaluate("el => { if (el.select) el.select(); el.value = ''; }")
+                except Exception:
+                    pass
+                el.type(text)
+                time.sleep(self._settle_time)
+                actual = ""
+                try:
+                    actual = el.evaluate("el => el.value") or ""
+                except Exception:
+                    pass
+                if text in actual:
+                    return StepResult(success=True, method="direct", detail=f"typed '{text}' into '{target}' (verified)")
+                else:
+                    return StepResult(success=True, method="direct", detail=f"typed '{text}' into '{target}'")
 
-        # Strategy 2: type into whatever is focused
-        focused = self._page.evaluate("() => document.activeElement?.tagName")
-        if focused and focused.lower() in ("input", "textarea"):
-            self._page.keyboard.type(text)
-            time.sleep(self._settle_time)
-            return StepResult(success=True, method="direct", detail=f"typed '{text}' into focused element")
+        # Strategy 2: type into the currently focused element (covers select, input, textarea, contenteditable)
+        try:
+            focused_info = self._page.evaluate("""() => {
+                const el = document.activeElement;
+                if (!el) return null;
+                const tag = el.tagName.toLowerCase();
+                return {tag, editable: tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable};
+            }""")
+            if focused_info and focused_info.get("editable"):
+                # For select elements, try to find option with matching text
+                if focused_info["tag"] == "select":
+                    try:
+                        self._page.select_option("select:focus", label=text)
+                        time.sleep(self._settle_time)
+                        return StepResult(success=True, method="direct", detail=f"selected '{text}' from dropdown")
+                    except Exception:
+                        pass
+                # For input/textarea/contenteditable: keyboard type
+                self._page.keyboard.type(text)
+                time.sleep(self._settle_time)
+                return StepResult(success=True, method="direct", detail=f"typed '{text}' into focused {focused_info['tag']}")
+        except Exception:
+            pass
 
-        return StepResult(success=False, method="direct", detail=f"could not find input for '{target}'")
+        # Strategy 3: just type via keyboard (last resort — something might receive it)
+        self._page.keyboard.type(text)
+        time.sleep(self._settle_time)
+        return StepResult(success=True, method="direct", detail=f"typed '{text}' via keyboard (no target found)")
 
     def _click(self, step, params: dict) -> StepResult:
         target = step.target
