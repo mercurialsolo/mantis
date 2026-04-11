@@ -230,31 +230,37 @@ def run_web_tasks(
                 env.load_session(session_name)
                 print(f"  Session '{session_name}' restored")
 
+            # Set up plan executor for direct DOM execution
+            executor = None
+            active_plan = None
+            if task_id in parsed_plans:
+                active_plan = parsed_plans[task_id]
+                resolved_intent, missing = active_plan.resolve_inputs(plan_inputs)
+                if missing:
+                    print(f"  WARNING: Plan missing required inputs: {missing}")
+                    active_plan = None
+                else:
+                    intent = resolved_intent
+                    print(f"  Plan loaded: {len(active_plan.steps)} steps")
+                    # Create executor if env has a Playwright page
+                    if hasattr(env, 'page') and env.page is not None:
+                        from mantis_agent.gym.plan_executor import PlanExecutor
+                        executor = PlanExecutor(page=env.page, settle_time=1.5)
+                        print(f"  Direct execution: enabled (Playwright)")
+
             runner = GymRunner(
                 brain=brain,
                 env=env,
                 max_steps=max_steps,
                 frames_per_inference=frames_per_inference,
+                plan_executor=executor,
             )
-
-            # If a plan file was provided for this task, resolve inputs
-            # and pass the structured steps to the runner
-            plan_steps_text = None
-            if task_id in parsed_plans:
-                plan = parsed_plans[task_id]
-                resolved_intent, missing = plan.resolve_inputs(plan_inputs)
-                if missing:
-                    print(f"  WARNING: Plan missing required inputs: {missing}")
-                else:
-                    intent = resolved_intent
-                    # Extract just the numbered steps for plan_steps
-                    plan_steps_text = plan.to_instruction()
-                    print(f"  Plan loaded: {len(plan.steps)} steps")
 
             result = runner.run(
                 task=intent,
                 task_id=task_id,
-                plan_steps=plan_steps_text,
+                plan=active_plan,
+                plan_inputs=plan_inputs,
             )
 
             task_duration = time.time() - task_start
