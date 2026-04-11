@@ -65,14 +65,26 @@ image = (
 )
 def run_web_tasks(
     task_file_contents: str,
+    plan_files: dict[str, str] | None = None,
+    plan_inputs: dict[str, str] | None = None,
     mode: str = "playwright",
     max_steps: int = 30,
     frames_per_inference: int = 5,
 ):
     """Run Mantis agent against live web tasks.
 
+    Supports two modes of task definition:
+    1. JSON task suite (task_file_contents) — freeform intents
+    2. Plan files (plan_files) — structured step-by-step plans
+
+    When plan files are provided, each task gets an explicit numbered plan
+    injected into the prompt so the model follows it instead of generating
+    its own plan from scratch.
+
     Args:
         task_file_contents: JSON string of the task suite config.
+        plan_files: Dict of task_id → plan file contents (YAML/JSON/text).
+        plan_inputs: Dict of input_name → value for resolving plan placeholders.
         mode: "playwright" (headless Chromium) or "qemu" (full desktop VM).
         max_steps: Maximum steps per task.
         frames_per_inference: Number of recent frames to feed the brain.
@@ -85,7 +97,11 @@ def run_web_tasks(
 
     from mantis_agent.brain_llamacpp import LlamaCppBrain
     from mantis_agent.gym.runner import GymRunner
+    from mantis_agent.gym.plans import Plan, load_text_plan, PlanInput, PlanStep
     from mantis_agent.actions import ActionType
+
+    plan_files = plan_files or {}
+    plan_inputs = plan_inputs or {}
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     started_at = datetime.now(timezone.utc).isoformat()
@@ -100,11 +116,27 @@ def run_web_tasks(
     r = requests.get("http://localhost:8080/v1/models")
     print(f"Model: {r.json()['data'][0]['id']}")
 
-    # 2. Parse task suite
+    # 2. Parse task suite and load plans
     task_suite = json.loads(task_file_contents)
     session_name = task_suite.get("session_name", "web_task")
     base_url = task_suite.get("base_url", "")
     tasks = task_suite.get("tasks", [])
+
+    # Parse plan files into Plan objects
+    parsed_plans: dict[str, Plan] = {}
+    for task_id, plan_content in plan_files.items():
+        try:
+            # Write to temp file for parsing (load_text_plan expects a path)
+            import tempfile
+            suffix = ".txt" if not plan_content.strip().startswith("{") and not plan_content.strip().startswith("name:") else ".yaml"
+            with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False) as f:
+                f.write(plan_content)
+                tmp_path = f.name
+            from mantis_agent.gym.plans import load_plan
+            parsed_plans[task_id] = load_plan(tmp_path)
+            os.unlink(tmp_path)
+        except Exception as e:
+            print(f"  Warning: Failed to parse plan for {task_id}: {e}")
 
     print(f"\n{'='*60}")
     print(f"Mantis — Web Task Benchmark")
@@ -205,9 +237,24 @@ def run_web_tasks(
                 frames_per_inference=frames_per_inference,
             )
 
+            # If a plan file was provided for this task, resolve inputs
+            # and pass the structured steps to the runner
+            plan_steps_text = None
+            if task_id in parsed_plans:
+                plan = parsed_plans[task_id]
+                resolved_intent, missing = plan.resolve_inputs(plan_inputs)
+                if missing:
+                    print(f"  WARNING: Plan missing required inputs: {missing}")
+                else:
+                    intent = resolved_intent
+                    # Extract just the numbered steps for plan_steps
+                    plan_steps_text = plan.to_instruction()
+                    print(f"  Plan loaded: {len(plan.steps)} steps")
+
             result = runner.run(
                 task=intent,
                 task_id=task_id,
+                plan_steps=plan_steps_text,
             )
 
             task_duration = time.time() - task_start
@@ -523,28 +570,59 @@ def _verify_task(env, verify_config: dict) -> bool:
 @app.local_entrypoint()
 def main(
     task_file: str = "tasks/crm/staffai_tasks.json",
+    plan_dir: str = "plans/crm",
     mode: str = "playwright",
     max_steps: int = 30,
+    inputs: str = "",
 ):
     """Run Mantis against live web tasks on Modal A100.
 
     Args:
         task_file: Path to task suite JSON.
+        plan_dir: Directory containing .txt/.yaml plan files.
+            Plans are matched to tasks by filename = task_id.
         mode: "playwright" (headless, fast) or "qemu" (full desktop VM).
         max_steps: Max steps per task.
+        inputs: Comma-separated key=value pairs for plan inputs.
+            Example: "password=skynet99,industry_value=Space Exploration"
     """
+    import glob
+
     print(f"Mantis — Web Task Benchmark (Modal)")
     print(f"  Task file: {task_file}")
+    print(f"  Plan dir:  {plan_dir}")
     print(f"  Mode:      {mode}")
     print(f"  Model:     Gemma4 {GEMMA4_MODEL}")
     print(f"  Max steps: {max_steps}")
-    print()
 
     with open(task_file) as f:
         task_file_contents = f.read()
 
+    # Load plan files from plan_dir, keyed by filename stem (= task_id)
+    plan_files: dict[str, str] = {}
+    if os.path.isdir(plan_dir):
+        for ext in ("*.txt", "*.yaml", "*.yml", "*.json"):
+            for plan_path in glob.glob(os.path.join(plan_dir, ext)):
+                task_id = os.path.splitext(os.path.basename(plan_path))[0]
+                with open(plan_path) as f:
+                    plan_files[task_id] = f.read()
+        print(f"  Plans:     {list(plan_files.keys())}")
+
+    # Parse inputs
+    plan_inputs: dict[str, str] = {}
+    if inputs:
+        for pair in inputs.split(","):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                plan_inputs[k.strip()] = v.strip()
+    if plan_inputs:
+        print(f"  Inputs:    {list(plan_inputs.keys())}")
+    print()
+
     result = run_web_tasks.remote(
         task_file_contents=task_file_contents,
+        plan_files=plan_files,
+        plan_inputs=plan_inputs,
         mode=mode,
         max_steps=max_steps,
     )

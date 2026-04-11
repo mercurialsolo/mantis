@@ -102,8 +102,23 @@ class GymRunner:
         self.soft_loop_window = soft_loop_window
         self.hard_loop_window = hard_loop_window
 
-    def run(self, task: str, task_id: str = "default", seed: int | None = None) -> RunResult:
-        """Execute a task with plan persistence, feedback, and context."""
+    def run(
+        self,
+        task: str,
+        task_id: str = "default",
+        seed: int | None = None,
+        plan_steps: str | None = None,
+    ) -> RunResult:
+        """Execute a task with plan persistence, feedback, and context.
+
+        Args:
+            task: Natural language task description.
+            task_id: Environment-specific task identifier.
+            seed: Optional seed for reproducibility.
+            plan_steps: Pre-defined numbered plan steps (from a Plan file).
+                If provided, the model skips its own planning and follows
+                these steps. If None, the model generates its own plan.
+        """
         logger.info(f"Starting task: {task!r} (id={task_id})")
         t0 = time.time()
 
@@ -112,8 +127,9 @@ class GymRunner:
         trajectory: list[TrajectoryStep] = []
         total_reward = 0.0
 
-        # Persistent state across steps
-        agent_plan: str | None = None
+        # Persistent state across steps.
+        # If plan_steps provided, use them directly (skip model planning).
+        agent_plan: str | None = plan_steps
         step_log: list[str] = []  # Human-readable log: "Step 1: clicked User ID field → field focused"
         last_url: str = ""
         last_title: str = ""
@@ -144,6 +160,7 @@ class GymRunner:
                 step_log=step_log,
                 last_focused_input=last_focused_input,
                 action_history=action_history,
+                has_predefined_plan=plan_steps is not None,
             )
 
             t_infer = time.time()
@@ -256,34 +273,48 @@ class GymRunner:
         step_log: list[str],
         last_focused_input: dict | None,
         action_history: list[Action],
+        has_predefined_plan: bool = False,
     ) -> str:
         """Build the full task prompt for this step with all accumulated context."""
         parts = [task]
 
-        # Step 0: ask for a plan
         if step_num == 1:
-            parts.append(
-                "\n\nFIRST, write a brief numbered plan:\n"
-                "1. <what to do first>\n"
-                "2. <what to do next>\n"
-                "...\n"
-                "Then execute the first action."
-            )
+            if has_predefined_plan and agent_plan:
+                # Plan was provided upfront — inject it and tell model to start
+                parts.append(f"\n\nFollow this plan step by step:\n{agent_plan}")
+                parts.append(
+                    "\nExecute the FIRST step of the plan now. "
+                    "Each plan step may require multiple actions (click, type, etc). "
+                    "Complete one action at a time."
+                )
+            else:
+                # No predefined plan — ask model to generate one
+                parts.append(
+                    "\n\nFIRST, write a brief numbered plan:\n"
+                    "1. <what to do first>\n"
+                    "2. <what to do next>\n"
+                    "...\n"
+                    "Then execute the first action."
+                )
         else:
             # Inject persistent plan
             if agent_plan:
                 parts.append(f"\n\nYour plan:\n{agent_plan}")
 
-            # Inject step log (last 8 steps for context window)
+            # Inject step log (last 10 steps for context window)
             if step_log:
-                recent_log = step_log[-8:]
+                recent_log = step_log[-10:]
                 parts.append("\n\nWhat you have done so far:")
                 parts.append("\n".join(f"  {entry}" for entry in recent_log))
 
-                # Guide the model to continue
+                # Determine which plan step we're on based on progress
+                completed_count = len(step_log)
                 parts.append(
-                    "\nLook at the screenshot. Based on what changed, "
-                    "execute the NEXT action toward completing the task."
+                    f"\nYou have completed {completed_count} actions. "
+                    f"Look at the screenshot. Figure out which plan step you're on "
+                    f"and execute the NEXT action to make progress. "
+                    f"Each plan step may need several actions — stay on the "
+                    f"current step until it's actually done before moving on."
                 )
 
             # Soft loop nudge
