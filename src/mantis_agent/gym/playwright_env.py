@@ -142,22 +142,26 @@ class PlaywrightGymEnv(GymEnvironment):
 
         obs = self._capture()
 
-        # After click actions, detect if an input field is now focused.
-        # This tells the runner that the next logical action is type_text,
-        # enabling form-aware nudges when the model gets stuck clicking.
-        focused_input = self._detect_focused_input() if action.action_type in (
-            ActionType.CLICK, ActionType.DOUBLE_CLICK
-        ) else None
+        info: dict[str, Any] = {
+            "url": self._page.url,
+            "title": self._page.title(),
+        }
+
+        # After click: detect if an input field is now focused
+        if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+            info["focused_input"] = self._detect_focused_input()
+
+        # After type: verify text was actually entered into the field
+        if action.action_type == ActionType.TYPE:
+            typed_text = action.params.get("text", "")
+            verify = self._verify_typed_text(typed_text)
+            info["type_verified"] = verify
 
         return GymResult(
             observation=obs,
-            reward=0.0,  # no automatic reward — verification happens externally
+            reward=0.0,
             done=False,
-            info={
-                "url": self._page.url,
-                "title": self._page.title(),
-                "focused_input": focused_input,
-            },
+            info=info,
         )
 
     def close(self) -> None:
@@ -271,6 +275,40 @@ class PlaywrightGymEnv(GymEnvironment):
                 };
             }""")
             return result
+        except Exception:
+            return None
+
+    def _verify_typed_text(self, expected_text: str) -> dict | None:
+        """Verify that typed text actually landed in the active element.
+
+        Returns dict with verification result, or None if check not possible.
+        """
+        try:
+            result = self._page.evaluate("""() => {
+                const el = document.activeElement;
+                if (!el) return null;
+                const tag = el.tagName.toLowerCase();
+                if (tag !== 'input' && tag !== 'textarea' && !el.isContentEditable) return null;
+                return {
+                    tag: tag,
+                    type: el.getAttribute('type') || '',
+                    name: el.getAttribute('name') || '',
+                    value: (el.value || '').substring(0, 200),
+                    placeholder: el.getAttribute('placeholder') || '',
+                };
+            }""")
+            if result is None:
+                return {"success": False, "reason": "no input field focused after typing"}
+            actual = result.get("value", "")
+            if expected_text in actual:
+                return {"success": True, "field": result.get("name") or result.get("type"), "value": actual}
+            else:
+                return {
+                    "success": False,
+                    "reason": f"field contains '{actual}' instead of '{expected_text}'",
+                    "field": result.get("name") or result.get("placeholder") or result.get("type"),
+                    "actual_value": actual,
+                }
         except Exception:
             return None
 

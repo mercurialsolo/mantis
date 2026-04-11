@@ -381,9 +381,18 @@ class GymRunner:
             else:
                 parts.append(f"'{field_name}' field focused, contains: \"{focused.get('value', '')}\"")
 
-        # Action-specific feedback
+        # Type verification — did the text actually land?
+        type_verify = gym_result.info.get("type_verified")
         if action.action_type == ActionType.TYPE:
-            parts.append(f"typed \"{action.params.get('text', '')}\"")
+            typed = action.params.get("text", "")
+            if type_verify and type_verify.get("success"):
+                field_name = type_verify.get("field", "field")
+                parts.append(f"typed \"{typed}\" into {field_name} (verified)")
+            elif type_verify and not type_verify.get("success"):
+                reason = type_verify.get("reason", "unknown")
+                parts.append(f"TYPING FAILED: tried to type \"{typed}\" but {reason}")
+            else:
+                parts.append(f"typed \"{typed}\" (unverified)")
         elif action.action_type == ActionType.KEY_PRESS:
             parts.append(f"pressed {action.params.get('keys', '')}")
         elif action.action_type == ActionType.CLICK and not parts:
