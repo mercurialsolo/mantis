@@ -456,7 +456,15 @@ def _parse_text_step(line: str) -> PlanStep | None:
     # Verify
     if text_lower.startswith("verify:") or text_lower.startswith("verify "):
         verify_text = text.split(":", 1)[-1].strip() if ":" in text else text[6:].strip()
-        # Parse "URL should contain 'dashboard'" or "page should contain 'text'"
+        # Parse "URL should not contain 'login'" or "URL should contain 'dashboard'"
+        not_contain_match = re.search(r'(?:should\s+)?not\s+contain\s+"([^"]*)"', verify_text, re.IGNORECASE)
+        if not_contain_match:
+            value = not_contain_match.group(1)
+            if "url" in verify_text.lower():
+                return PlanStep(action="verify", params={"check": "url_not_contains", "value": value})
+            else:
+                return PlanStep(action="verify", params={"check": "page_not_contains_text", "value": value})
+
         contain_match = re.search(r'(?:should\s+)?contain[s]?\s+"([^"]*)"', verify_text, re.IGNORECASE)
         if contain_match:
             value = contain_match.group(1)

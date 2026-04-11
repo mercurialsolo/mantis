@@ -116,16 +116,25 @@ class PlanExecutor:
 
         target = step.target
 
-        # Strategy 1: find input by placeholder text
+        # Strategy 1: find input by target description
         el = self._find_input(target)
         if el:
+            # Use click + clear + type for maximum framework compatibility
             el.click()
             time.sleep(0.3)
-            el.fill(text)
+            # Triple-click to select all, then type over
+            el.evaluate("el => { el.select ? el.select() : null; el.value = ''; }")
+            el.type(text)
             time.sleep(self._settle_time)
-            return StepResult(success=True, method="direct", detail=f"typed '{text}' into '{target}'")
+            # Verify the value stuck
+            actual = el.evaluate("el => el.value") or ""
+            if text in actual:
+                return StepResult(success=True, method="direct", detail=f"typed '{text}' into '{target}' (verified)")
+            else:
+                return StepResult(success=False, method="direct",
+                    detail=f"typed into '{target}' but field contains '{actual}' instead of '{text}'")
 
-        # Strategy 2: focus the active element and type
+        # Strategy 2: type into whatever is focused
         focused = self._page.evaluate("() => document.activeElement?.tagName")
         if focused and focused.lower() in ("input", "textarea"):
             self._page.keyboard.type(text)
@@ -196,55 +205,18 @@ class PlanExecutor:
     # ── Element finding strategies ───────────────────────────────────────
 
     def _find_input(self, target: str):
-        """Find an input element matching a natural language target."""
+        """Find an input element matching a natural language target.
+
+        Strategy order (most specific → most general):
+        1. Type-based: password, email, search → input[type=X]
+        2. ID/name keyword match via JS (avoids CSS 'i' flag issues)
+        3. Placeholder keyword match via JS
+        4. Label text match
+        5. Playwright get_by_placeholder / get_by_label
+        """
         target_lower = target.lower()
 
-        # Try placeholder match
-        for selector in [
-            f'input[placeholder*="{target}" i]',
-            f'textarea[placeholder*="{target}" i]',
-        ]:
-            try:
-                el = self._page.query_selector(selector)
-                if el and el.is_visible():
-                    return el
-            except Exception:
-                pass
-
-        # Try by label text
-        try:
-            labels = self._page.query_selector_all("label")
-            for label in labels:
-                label_text = label.inner_text().lower()
-                if any(word in label_text for word in target_lower.split() if len(word) > 2):
-                    for_id = label.get_attribute("for")
-                    if for_id:
-                        el = self._page.query_selector(f"#{for_id}")
-                        if el and el.is_visible():
-                            return el
-                    # Also check if input is a child of label
-                    child = label.query_selector("input, textarea, select")
-                    if child and child.is_visible():
-                        return child
-        except Exception:
-            pass
-
-        # Try by name/id attribute containing keywords
-        keywords = [w for w in target_lower.split() if len(w) > 2 and w not in ("the", "input", "field", "for", "this")]
-        for kw in keywords:
-            for selector in [
-                f'input[name*="{kw}" i]',
-                f'input[id*="{kw}" i]',
-                f'textarea[name*="{kw}" i]',
-            ]:
-                try:
-                    el = self._page.query_selector(selector)
-                    if el and el.is_visible():
-                        return el
-                except Exception:
-                    pass
-
-        # Try by type attribute for common field names
+        # Strategy 1: type-based for well-known field types
         type_map = {
             "password": 'input[type="password"]',
             "email": 'input[type="email"]',
@@ -258,6 +230,59 @@ class PlanExecutor:
                         return el
                 except Exception:
                     pass
+
+        # Strategy 2: find by id/name/placeholder via JS (reliable, no CSS 'i' issues)
+        keywords = [w for w in target_lower.split() if len(w) > 2 and w not in (
+            "the", "input", "field", "for", "this", "into", "text", "enter", "your",
+        )]
+        if keywords:
+            try:
+                el = self._page.evaluate_handle("""(keywords) => {
+                    const inputs = document.querySelectorAll('input, textarea, select');
+                    for (const el of inputs) {
+                        if (!el.offsetParent && el.type !== 'hidden') continue;
+                        const haystack = [
+                            el.id, el.name, el.placeholder,
+                            el.getAttribute('aria-label') || '',
+                        ].join(' ').toLowerCase();
+                        for (const kw of keywords) {
+                            if (haystack.includes(kw)) return el;
+                        }
+                    }
+                    return null;
+                }""", keywords)
+                if el:
+                    as_element = el.as_element()
+                    if as_element and as_element.is_visible():
+                        return as_element
+            except Exception:
+                pass
+
+        # Strategy 3: Playwright's get_by_placeholder (fuzzy)
+        for kw in keywords:
+            try:
+                el = self._page.get_by_placeholder(re.compile(kw, re.IGNORECASE)).first
+                if el and el.is_visible():
+                    return el
+            except Exception:
+                pass
+
+        # Strategy 4: label text match
+        try:
+            labels = self._page.query_selector_all("label")
+            for label in labels:
+                label_text = label.inner_text().lower()
+                if any(word in label_text for word in keywords):
+                    for_id = label.get_attribute("for")
+                    if for_id:
+                        el = self._page.query_selector(f"#{for_id}")
+                        if el and el.is_visible():
+                            return el
+                    child = label.query_selector("input, textarea, select")
+                    if child and child.is_visible():
+                        return child
+        except Exception:
+            pass
 
         return None
 
