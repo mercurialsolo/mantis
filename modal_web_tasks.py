@@ -232,6 +232,7 @@ def run_web_tasks(
 
             # Set up plan executor for direct DOM execution
             executor = None
+            discoverer = None
             active_plan = None
             if task_id in parsed_plans:
                 active_plan = parsed_plans[task_id]
@@ -242,10 +243,12 @@ def run_web_tasks(
                 else:
                     intent = resolved_intent
                     print(f"  Plan loaded: {len(active_plan.steps)} steps")
-                    # Create executor — passes env so page resolves lazily after reset
+                    # Create executor + discovery — passes env so page resolves lazily
                     from mantis_agent.gym.plan_executor import PlanExecutor
+                    from mantis_agent.gym.page_discovery import PageDiscovery
                     executor = PlanExecutor(env=env, settle_time=1.5)
-                    print(f"  Direct execution: enabled")
+                    discoverer = PageDiscovery(env=env, max_elements=50)
+                    print(f"  Execution: direct + discovery fallback")
 
             runner = GymRunner(
                 brain=brain,
@@ -253,6 +256,7 @@ def run_web_tasks(
                 max_steps=max_steps,
                 frames_per_inference=frames_per_inference,
                 plan_executor=executor,
+                page_discovery=discoverer if active_plan else None,
             )
 
             result = runner.run(

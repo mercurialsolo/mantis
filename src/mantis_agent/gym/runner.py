@@ -99,6 +99,7 @@ class GymRunner:
         soft_loop_window: int = 3,
         hard_loop_window: int = 8,
         plan_executor: Any = None,
+        page_discovery: Any = None,
     ):
         self.brain = brain
         self.env = env
@@ -107,6 +108,7 @@ class GymRunner:
         self.soft_loop_window = soft_loop_window
         self.hard_loop_window = hard_loop_window
         self.plan_executor = plan_executor
+        self.page_discovery = page_discovery
 
     def run(
         self,
@@ -231,8 +233,35 @@ class GymRunner:
                         last_url = step_result.url_after or last_url
                         continue
                     else:
-                        # Direct execution failed — build DOM hint for brain
-                        logger.info(f"  Direct exec failed: {step_result.detail}")
+                        # Direct execution failed — try DOM discovery + brain choice
+                        print(f"  [executor] direct failed, trying discovery...")
+
+                        if self.page_discovery:
+                            discovery_result = self._try_discovery_execution(
+                                current_plan_step, plan_inputs, step_log, frame_history,
+                            )
+                            if discovery_result:
+                                plan_step_idx += 1
+                                direct_executed = True
+
+                                obs_after = self.env._capture() if hasattr(self.env, '_capture') else None
+                                if obs_after:
+                                    frame_history.append(obs_after.screenshot)
+
+                                feedback = f"[DISCOVERY] {discovery_result}"
+                                step_log.append(f"Step {step_num}: plan step {plan_step_idx} → {feedback}")
+
+                                trajectory.append(TrajectoryStep(
+                                    step=step_num,
+                                    action=Action(ActionType.WAIT, {}),
+                                    thinking=f"Discovery execution: {current_plan_step.action}",
+                                    reward=0.0, done=False, inference_time=0.0,
+                                    feedback=feedback,
+                                ))
+                                last_url = self.env.current_url if hasattr(self.env, 'current_url') else last_url
+                                continue
+
+                        # Discovery also failed — fall back to brain with DOM hint
                         dom_hint = (
                             f"\n\nHINT: The system tried to execute plan step {plan_step_idx + 1} "
                             f"('{current_plan_step.action}: {current_plan_step.target}') "
@@ -400,6 +429,110 @@ class GymRunner:
                 parts.append(nudge)
 
         return "\n".join(parts)
+
+    def _try_discovery_execution(
+        self,
+        plan_step: Any,
+        plan_inputs: dict[str, str],
+        step_log: list[str],
+        frame_history: list[Image.Image],
+    ) -> str | None:
+        """Try to execute a plan step via DOM discovery + brain element choice.
+
+        1. Scan page for interactive elements
+        2. Ask brain "which element [N] for this step?"
+        3. Execute action on that element
+
+        Returns detail string on success, None on failure.
+        """
+        from .page_discovery import parse_brain_choice
+
+        discovery = self.page_discovery
+        elements = discovery.discover()
+        if not elements:
+            print(f"  [discovery] no elements found on page")
+            return None
+
+        # Resolve plan step target
+        target = plan_step.target
+        for key, val in plan_inputs.items():
+            target = target.replace(f"{{{{{key}}}}}", val)
+
+        step_desc = f"{plan_step.action}: {target}" if target else plan_step.action
+        text_to_type = plan_step.params.get("text", "")
+        for key, val in plan_inputs.items():
+            text_to_type = text_to_type.replace(f"{{{{{key}}}}}", val)
+
+        # Build context from step log
+        context = ""
+        if step_log:
+            context = "What has been done so far:\n" + "\n".join(f"  {s}" for s in step_log[-5:])
+
+        # Ask brain to choose an element
+        choice_prompt = discovery.build_choice_prompt(step_desc, elements, context)
+
+        print(f"  [discovery] {len(elements)} elements found, asking brain...")
+
+        recent_frames = frame_history[-self.frames_per_inference:]
+        try:
+            result = self.brain.think(
+                frames=recent_frames,
+                task=choice_prompt,
+                action_history=[],
+                screen_size=self.env.screen_size,
+            )
+        except Exception as e:
+            print(f"  [discovery] brain error: {e}")
+            return None
+
+        # Parse the brain's response — it might be in thinking or in action params
+        response_text = getattr(result, "thinking", "") or ""
+        # Also check if the brain returned a done action with summary containing the number
+        action = result.action
+        if action.action_type == ActionType.DONE:
+            response_text += " " + action.params.get("summary", "")
+        # Check raw output too
+        raw = getattr(result, "raw_output", "")
+        if raw:
+            response_text += " " + raw
+
+        idx, extra_text = parse_brain_choice(response_text)
+
+        if idx is None:
+            print(f"  [discovery] brain could not pick an element (response: {response_text[:100]})")
+            return None
+
+        el = discovery.get_element_by_index(idx)
+        if not el:
+            print(f"  [discovery] element [{idx}] not found")
+            return None
+
+        print(f"  [discovery] brain chose [{idx}]: {el.describe()}")
+
+        # Execute based on plan step action
+        import time as _time
+
+        if plan_step.action in ("click", "navigate"):
+            success = discovery.click_element(idx)
+            _time.sleep(1.5)
+            if success:
+                return f"clicked [{idx}] {el.tag} '{el.text[:40]}'"
+
+        elif plan_step.action == "type":
+            typed = extra_text or text_to_type
+            if typed:
+                success = discovery.type_into_element(idx, typed)
+                _time.sleep(1.5)
+                if success:
+                    return f"typed '{typed}' into [{idx}] {el.tag}"
+            else:
+                # Just click to focus
+                discovery.click_element(idx)
+                _time.sleep(0.5)
+                return f"focused [{idx}] {el.tag} for typing"
+
+        print(f"  [discovery] execution failed for [{idx}]")
+        return None
 
     @staticmethod
     def _extract_plan(thinking: str) -> str | None:
