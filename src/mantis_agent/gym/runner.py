@@ -141,10 +141,15 @@ class GymRunner:
         total_reward = 0.0
         plan_inputs = dict(plan_inputs or {})
 
-        # Plan state — auto-add url to inputs for {{url}} resolution
+        # Plan state — resolve all inputs including defaults
         if plan:
+            # Add url
             if "url" not in plan_inputs and plan.url:
                 plan_inputs["url"] = plan.url
+            # Resolve defaults from plan inputs
+            for inp in plan.inputs:
+                if inp.name not in plan_inputs and inp.default is not None:
+                    plan_inputs[inp.name] = inp.default
             if plan_steps is None:
                 plan_steps = plan.to_instruction()
         agent_plan: str | None = plan_steps
