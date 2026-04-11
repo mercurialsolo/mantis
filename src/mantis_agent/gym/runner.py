@@ -290,14 +290,8 @@ class GymRunner:
                     effective_task += dom_hint
                     dom_hint = ""
 
-                # Inject SoM element list and DOM state from latest observation
-                if latest_obs and hasattr(latest_obs, "extras"):
-                    el_text = latest_obs.extras.get("element_text", "")
-                    dom_state = latest_obs.extras.get("dom_state", "")
-                    if el_text:
-                        effective_task += f"\n\n{el_text}"
-                    if dom_state:
-                        effective_task += f"\n\n{dom_state}"
+                # Pure visual mode — no SoM element list, no DOM state injection
+                # The model works from screenshots only
 
                 t_infer = time.time()
                 result = self.brain.think(

@@ -49,15 +49,6 @@ Your job:
 2. REASON step by step about what to do next
 3. CALL exactly one tool to perform the next action
 
-# Set-of-Mark (SoM)
-The screenshot has RED NUMBERED LABELS [0], [1], [2]... on every interactive element.
-You also receive a text list of these elements with their types, values, and names.
-Use these labels to identify elements precisely — click the CENTER of the labeled element.
-
-# Form state
-You receive a FORM STATE summary showing what each input field currently contains.
-Use this to know if your previous typing action succeeded — if a field shows your value, move on to the next field.
-
 # Core rules
 - Coordinates are absolute screen pixels. Aim for the CENTER of the target element.
 - Look at the LAST frame for current state. Earlier frames show what changed.

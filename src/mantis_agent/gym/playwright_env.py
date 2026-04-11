@@ -147,16 +147,7 @@ class PlaywrightGymEnv(GymEnvironment):
             "title": self._page.title(),
         }
 
-        # After click: detect if an input field is now focused
-        if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
-            info["focused_input"] = self._detect_focused_input()
-
-        # After type: verify text was actually entered into the field
-        if action.action_type == ActionType.TYPE:
-            typed_text = action.params.get("text", "")
-            verify = self._verify_typed_text(typed_text)
-            info["type_verified"] = verify
-
+        # Pure visual mode — no DOM inspection, no focus detection, no type verification
         return GymResult(
             observation=obs,
             reward=0.0,
@@ -330,9 +321,6 @@ class PlaywrightGymEnv(GymEnvironment):
 
         screenshot = Image.open(io.BytesIO(png_bytes))
 
-        # Build DOM state summary — what form fields contain
-        dom_state = self._get_dom_state()
-
         return GymObservation(
             screenshot=screenshot,
             extras={
@@ -340,7 +328,7 @@ class PlaywrightGymEnv(GymEnvironment):
                 "title": self._page.title(),
                 "elements": elements,
                 "element_text": element_text,
-                "dom_state": dom_state,
+                # No DOM state — SoM only, no DOM inspection
             },
         )
 
@@ -508,9 +496,7 @@ class PlaywrightGymEnv(GymEnvironment):
             case ActionType.CLICK:
                 x, y = action.params["x"], action.params["y"]
                 button = action.params.get("button", "left")
-                # Snap to SoM element center if click lands inside a known bbox.
-                # This auto-corrects imprecise coordinates from the brain.
-                x, y = self._snap_to_element(x, y)
+                # Pure visual — no DOM snapping
                 self._page.mouse.click(x, y, button=button)
 
             case ActionType.DOUBLE_CLICK:
@@ -519,29 +505,8 @@ class PlaywrightGymEnv(GymEnvironment):
 
             case ActionType.TYPE:
                 text = action.params["text"]
-                # Use focused element's fill() for framework compatibility.
-                try:
-                    info = self._page.evaluate("""() => {
-                        const el = document.activeElement;
-                        if (!el) return null;
-                        return {tag: el.tagName, id: el.id, name: el.name || '', type: el.type || '', value: el.value || ''};
-                    }""")
-                    print(f"  [type] focused: {info}")
-                    if info and info["tag"] in ("INPUT", "TEXTAREA"):
-                        # Use fill() on the focused element — dispatches all events
-                        selector = f"#{info['id']}" if info.get("id") else f"[name='{info['name']}']" if info.get("name") else None
-                        if selector:
-                            self._page.fill(selector, text)
-                            print(f"  [type] fill('{selector}', '{text}') OK")
-                        else:
-                            self._page.keyboard.type(text)
-                            print(f"  [type] keyboard.type (no selector)")
-                    else:
-                        self._page.keyboard.type(text)
-                        print(f"  [type] keyboard.type (not input)")
-                except Exception as e:
-                    print(f"  [type] error: {e}, falling back to keyboard")
-                    self._page.keyboard.type(text)
+                # Pure keyboard typing — no DOM inspection
+                self._page.keyboard.type(text)
 
             case ActionType.KEY_PRESS:
                 combo = action.params["keys"]
