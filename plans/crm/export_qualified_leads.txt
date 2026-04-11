@@ -7,7 +7,7 @@ Inputs:
   status_filter = "Qualified" (Lead status to filter by)
 
 Steps:
-1. Go to the Leads Page
-2. Filter leads by "{{status_filter}}" status
-3. Export the list as CSV
-4. Verify: CSV file should be downloaded
+1. Click on "LEADS"
+2. Click on "{{status_filter}}"
+3. Click on "Export CSV"
+4. Verify: page should contain "Export"

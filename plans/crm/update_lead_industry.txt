@@ -8,9 +8,11 @@ Inputs:
   industry_value (required) (New industry vertical value)
 
 Steps:
-1. Go to the Leads Page
-2. Select the first lead with the "{{lead_status}}" status
-3. Go to the Edit Lead page for this lead
-4. Update the Industry Vertical to "{{industry_value}}"
-5. Click "Update Lead"
-6. Verify: page should contain "{{industry_value}}"
+1. Click on "LEADS"
+2. Click on "{{lead_status}}"
+3. Click on the first lead row in the table
+4. Click on "Edit"
+5. Click on the "Industry Vertical" input field
+6. Type "{{industry_value}}"
+7. Click on "Update Lead"
+8. Verify: page should contain "{{industry_value}}"

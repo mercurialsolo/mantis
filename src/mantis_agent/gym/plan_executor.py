@@ -287,34 +287,66 @@ class PlanExecutor:
         return None
 
     def _find_clickable(self, target: str):
-        """Find a clickable element (button, link, etc.) by text content."""
-        target_lower = target.lower().strip('"\'')
+        """Find a clickable element (button, link, etc.) by text content.
 
-        # Direct text match on buttons and links
+        Handles patterns like:
+          "LEADS" → matches "LEADS (67)" via substring
+          "Sign In button" → matches button with "Sign In" text
+          "Update Lead" → matches button with exact text
+          "first lead row in the table" → falls back to table row
+          "Edit" → matches link/button containing "Edit"
+        """
+        # Clean target: strip quotes, "button", "link" suffixes
+        clean = target.strip('"\'')
+        clean = re.sub(r'\s+(button|link|tab|menu item)\s*$', '', clean, flags=re.IGNORECASE).strip()
+
+        # Strategy 1: exact role match (button, link)
         for role in ["button", "link"]:
             try:
-                el = self._page.get_by_role(role, name=re.compile(re.escape(target_lower), re.IGNORECASE)).first
+                el = self._page.get_by_role(role, name=re.compile(re.escape(clean), re.IGNORECASE)).first
+                if el.is_visible():
+                    return el
+            except Exception:
+                pass
+
+        # Strategy 2: get_by_text (substring match)
+        try:
+            el = self._page.get_by_text(clean, exact=False).first
+            if el.is_visible():
+                return el
+        except Exception:
+            pass
+
+        # Strategy 3: try each significant word individually (catches "LEADS" in "LEADS (67)")
+        words = [w for w in clean.split() if len(w) > 2 and w.lower() not in (
+            "the", "button", "link", "click", "on", "in", "for", "this", "first",
+            "row", "table", "page", "field", "input", "menu", "navigation",
+        )]
+        for word in words:
+            try:
+                el = self._page.get_by_text(word, exact=False).first
+                if el.is_visible():
+                    return el
+            except Exception:
+                pass
+
+        # Strategy 4: CSS href contains keyword (for navigation links)
+        for word in words:
+            try:
+                el = self._page.query_selector(f'a[href*="{word.lower()}"]')
                 if el and el.is_visible():
                     return el
             except Exception:
                 pass
 
-        # Try get_by_text for broader matching
-        try:
-            el = self._page.get_by_text(target_lower, exact=False).first
-            if el and el.is_visible():
-                return el
-        except Exception:
-            pass
-
-        # Try matching partial text in common clickable elements
-        keywords = [w for w in target_lower.split() if len(w) > 2 and w not in ("the", "button", "link", "click", "on")]
-        if keywords:
-            search_term = " ".join(keywords[:3])
+        # Strategy 5: table rows (for "first lead row" type targets)
+        if any(w in target.lower() for w in ("row", "first", "item", "entry")):
             try:
-                el = self._page.get_by_text(search_term, exact=False).first
-                if el and el.is_visible():
-                    return el
+                rows = self._page.query_selector_all("table tbody tr, [role='row'], .lead-row, .list-item")
+                if rows:
+                    for row in rows:
+                        if row.is_visible():
+                            return row
             except Exception:
                 pass
 
