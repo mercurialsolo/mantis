@@ -144,7 +144,7 @@ def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
         "-c", "32768",      # Gemma4 needs larger context for vision (native 256K)
         "-ub", "2048",       # Must be >= image token batch (~972 for 1920x1080)
         "--jinja",           # Required for proper Gemma4 chat template
-        "--reasoning-budget", "0",  # Prevents <unused24> token spam on CUDA
+        "--reasoning-budget", "4096",  # Extended thinking for multi-step planning
         "--flash-attn", "on", # EXP-11: ~30-50% faster attention, identical outputs
     ]
 

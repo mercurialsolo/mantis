@@ -127,6 +127,7 @@ def run_web_tasks(
     mode: str = "playwright",
     max_steps: int = 30,
     frames_per_inference: int = 5,
+    max_retries: int = 2,
 ):
     """Run Mantis agent against live web tasks.
 
@@ -307,36 +308,56 @@ def run_web_tasks(
                     discoverer = PageDiscovery(env=env, max_elements=50)
                     print(f"  Execution: direct + discovery fallback")
 
-            runner = GymRunner(
-                brain=brain,
-                env=env,
-                max_steps=max_steps,
-                frames_per_inference=frames_per_inference,
-                plan_executor=executor,
-                page_discovery=discoverer if active_plan else None,
-            )
+            # Retry loop with learning distillation
+            prior_learnings = ""
+            success = False
+            result = None
+            verified = False
 
-            result = runner.run(
-                task=intent,
-                task_id=task_id,
-                plan=active_plan,
-                plan_inputs=plan_inputs,
-            )
+            for attempt in range(1, max_retries + 1):
+                attempt_intent = intent
+                if prior_learnings:
+                    attempt_intent += prior_learnings
+                    print(f"  Attempt {attempt}/{max_retries} — with learnings from prior failure")
+
+                runner = GymRunner(
+                    brain=brain,
+                    env=env,
+                    max_steps=max_steps,
+                    frames_per_inference=frames_per_inference,
+                    plan_executor=executor,
+                    page_discovery=discoverer if active_plan else None,
+                )
+
+                result = runner.run(
+                    task=attempt_intent,
+                    task_id=task_id,
+                    plan=active_plan,
+                    plan_inputs=plan_inputs,
+                )
+
+                # Save session after login
+                if task_config.get("save_session"):
+                    current_url = env.current_url
+                    if result.success or (current_url and "login" not in current_url.lower()):
+                        saved_path = env.save_session(session_name)
+                        print(f"  Session saved: {saved_path}")
+
+                # Verify task completion
+                verify_config = task_config.get("verify", {})
+                verified = _verify_task(env, verify_config)
+                success = result.success or verified
+
+                if success:
+                    print(f"  Attempt {attempt}: PASS")
+                    break
+
+                # Distill learning from failure for next attempt
+                if attempt < max_retries:
+                    prior_learnings = _distill_failure(result)
+                    print(f"  Attempt {attempt}: FAIL — distilled learning for retry")
 
             task_duration = time.time() - task_start
-
-            # Save session after login
-            if task_config.get("save_session"):
-                current_url = env.current_url
-                if result.success or (current_url and "login" not in current_url.lower()):
-                    saved_path = env.save_session(session_name)
-                    print(f"  Session saved: {saved_path}")
-
-            # Verify task completion
-            verify_config = task_config.get("verify", {})
-            verified = _verify_task(env, verify_config)
-
-            success = result.success or verified
             score = 1.0 if success else 0.0
             scores.append(score)
 
@@ -596,6 +617,60 @@ class QemuGymEnv:
         return None
 
 
+def _distill_failure(result) -> str:
+    """Analyze a failed run's trajectory and distill actionable learnings.
+
+    Returns a hint string to inject into the next attempt's task prompt.
+    """
+    if not result or not result.trajectory:
+        return ""
+
+    # Analyze what happened
+    actions = [str(s.action)[:60] for s in result.trajectory]
+    unique_actions = set(a.split("(")[0] for a in actions)
+    total_steps = len(result.trajectory)
+    reason = result.termination_reason
+
+    # Count action types
+    clicks = sum(1 for a in actions if "click" in a)
+    types = sum(1 for a in actions if "type_text" in a)
+    waits = sum(1 for a in actions if "wait" in a)
+
+    parts = ["\n\nPRIOR ATTEMPT FAILED — learn from these mistakes:"]
+
+    if reason == "loop":
+        repeated = actions[-1] if actions else "unknown"
+        parts.append(f"- You got stuck repeating: {repeated}")
+        parts.append("- Do NOT repeat the same action. Try a completely different approach.")
+
+    if reason == "max_steps":
+        parts.append(f"- You used all {total_steps} steps without completing the task.")
+        parts.append("- Be more efficient — don't waste steps on actions that don't change the page.")
+
+    if clicks > total_steps * 0.6:
+        parts.append(f"- You clicked {clicks}/{total_steps} times — too many clicks. After clicking an input field ONCE, immediately use type_text() to enter text.")
+
+    if types == 0:
+        parts.append("- You never typed any text! For login forms, you MUST use type_text() after clicking the input field.")
+
+    if waits > total_steps * 0.3:
+        parts.append(f"- You waited {waits}/{total_steps} times — too much waiting. Act more decisively.")
+
+    # Extract last few actions as context
+    last_actions = actions[-5:] if len(actions) >= 5 else actions
+    parts.append(f"- Your last actions were: {' → '.join(last_actions)}")
+
+    # Specific guidance based on patterns
+    if any("login" in str(s.action).lower() or "password" in str(getattr(s, 'thinking', '')).lower() for s in result.trajectory[:5]):
+        parts.append(
+            "- FOR LOGIN: click username field → type_text('username') → "
+            "key_press('tab') → type_text('password') → key_press('enter'). "
+            "Do this EXACTLY in order. Do NOT click the same field twice."
+        )
+
+    return "\n".join(parts)
+
+
 def _verify_task(env, verify_config: dict) -> bool:
     """Run verification checks against the current browser state."""
     if not verify_config:
@@ -642,6 +717,7 @@ def main(
     plan_dir: str = "plans/crm",
     mode: str = "playwright",
     max_steps: int = 30,
+    max_retries: int = 2,
     inputs: str = "",
 ):
     """Run Mantis against live web tasks on Modal A100.
@@ -691,6 +767,7 @@ def main(
     result = run_web_tasks.remote(
         task_file_contents=task_file_contents,
         plan_files=plan_files,
+        max_retries=max_retries,
         plan_inputs=plan_inputs,
         mode=mode,
         max_steps=max_steps,
