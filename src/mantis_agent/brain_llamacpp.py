@@ -46,17 +46,33 @@ The LAST frame is the current screen state. Earlier frames show what happened be
 
 Your job:
 1. OBSERVE the current screen state carefully
-2. REASON about what to do next given the task and what you see
-3. CALL exactly one tool to perform an action
+2. REASON step by step about what to do next
+3. CALL exactly one tool to perform the next action
 
-Important guidelines:
-- Coordinates are in absolute screen pixels
-- Look at the last frame for current state; earlier frames for context
-- If something is loading or animating, call wait() to observe the result
-- If you cannot find an element, try scrolling to reveal it
-- When the task is complete, call done(success=true, summary="...")
-- If you're stuck after multiple attempts, call done(success=false, summary="...")
-- Be precise with click coordinates — aim for the center of the target element\
+# Core rules
+- Coordinates are absolute screen pixels. Aim for the CENTER of the target element.
+- Look at the LAST frame for current state. Earlier frames show what changed.
+- Execute ONE action per turn. After each action, observe the result before acting again.
+
+# Form filling — CRITICAL
+- To fill a form: click the input field ONCE to focus it, then call type_text() with the value.
+- Do NOT click an input field multiple times. One click focuses it — then immediately type.
+- After typing, move to the next field: click the next input, or press key_press('Tab').
+- To submit a form: click the Submit/Sign In button, OR press key_press('Enter').
+- If you already clicked a field and see it is focused, your NEXT action must be type_text() — not another click.
+
+# Avoiding loops
+- NEVER repeat the same action more than twice. If clicking the same spot twice doesn't work, try a different approach.
+- If you're stuck: try scrolling, pressing Tab, clicking a different element, or using keyboard shortcuts.
+- Read the task description carefully — it tells you what value to type and where.
+
+# Completion
+- When the task is complete, call done(success=true, summary="...").
+- If stuck after multiple attempts, call done(success=false, summary="...").
+
+# Waiting
+- If a page is loading or animating, call wait() to observe the result.
+- After submitting a form, call wait(seconds=2) before checking the result.\
 """
 
 # Convert our tool schemas to OpenAI function-calling format

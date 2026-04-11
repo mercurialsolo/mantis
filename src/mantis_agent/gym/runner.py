@@ -160,6 +160,7 @@ class GymRunner:
         last_url: str = ""
         last_title: str = ""
         last_focused_input: dict | None = None
+        last_thinking: str = ""  # Model's reasoning from previous step
         dom_hint: str = ""  # Extra DOM context hint when direct exec fails
 
         # Reset environment
@@ -281,6 +282,7 @@ class GymRunner:
                     last_focused_input=last_focused_input,
                     action_history=action_history,
                     has_predefined_plan=plan_steps is not None,
+                    last_thinking=last_thinking,
                 )
                 # Append DOM hint if direct execution failed
                 if dom_hint:
@@ -298,6 +300,7 @@ class GymRunner:
 
                 action = result.action
                 thinking = getattr(result, "thinking", "")
+                last_thinking = thinking  # Persist for next step's prompt
                 logger.info(f"Action: {action} ({inference_time:.2f}s)")
 
                 # Step 0: extract plan from model's thinking
@@ -380,13 +383,19 @@ class GymRunner:
         last_focused_input: dict | None,
         action_history: list[Action],
         has_predefined_plan: bool = False,
+        last_thinking: str = "",
     ) -> str:
         """Build the full task prompt for this step with all accumulated context."""
         parts = [task]
 
+        # Inject curriculum techniques (form filling, navigation, etc.)
+        if step_num == 1:
+            curriculum = self._get_curriculum(task)
+            if curriculum:
+                parts.append(f"\n\nRelevant techniques:\n{curriculum}")
+
         if step_num == 1:
             if has_predefined_plan and agent_plan:
-                # Plan was provided upfront — inject it and tell model to start
                 parts.append(f"\n\nFollow this plan step by step:\n{agent_plan}")
                 parts.append(
                     "\nExecute the FIRST step of the plan now. "
@@ -394,7 +403,6 @@ class GymRunner:
                     "Complete one action at a time."
                 )
             else:
-                # No predefined plan — ask model to generate one
                 parts.append(
                     "\n\nFIRST, write a brief numbered plan:\n"
                     "1. <what to do first>\n"
@@ -413,7 +421,6 @@ class GymRunner:
                 parts.append("\n\nWhat you have done so far:")
                 parts.append("\n".join(f"  {entry}" for entry in recent_log))
 
-                # Determine which plan step we're on based on progress
                 completed_count = len(step_log)
                 parts.append(
                     f"\nYou have completed {completed_count} actions. "
@@ -423,12 +430,27 @@ class GymRunner:
                     f"current step until it's actually done before moving on."
                 )
 
+            # Inject previous thinking so model can learn from its own reasoning
+            if last_thinking:
+                # Truncate to avoid context overflow
+                think_snippet = last_thinking[:300]
+                parts.append(f"\n\nYour previous reasoning:\n{think_snippet}")
+
             # Soft loop nudge
             if self._detect_repeat(action_history, self.soft_loop_window):
                 nudge = self._build_nudge(action_history, last_focused_input)
                 parts.append(nudge)
 
         return "\n".join(parts)
+
+    @staticmethod
+    def _get_curriculum(task: str) -> str:
+        """Load relevant curriculum techniques for this task."""
+        try:
+            from mantis_agent.curriculum import select_techniques
+            return select_techniques(task, domain="chrome", max_topics=2)
+        except Exception:
+            return ""
 
     def _try_discovery_execution(
         self,

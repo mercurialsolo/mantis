@@ -41,10 +41,67 @@ from modal_osworld_direct import (
     GEMMA4_MODEL,
     GGUF_CONFIGS,
     download_model,
-    start_llama_server,
+    start_llama_server as _start_llama_server_base,
     image as base_image,
     vol,
 )
+
+
+def start_llama_server(model_path: str, port: int = 8080):
+    """Start llama-server with reasoning budget ENABLED.
+
+    The base function sets --reasoning-budget 0 (disables thinking).
+    For web tasks, thinking is critical for multi-step form filling.
+    We start the server and then verify reasoning is available.
+    """
+    import subprocess
+
+    model_dir = os.path.dirname(model_path)
+    cfg = GGUF_CONFIGS[GEMMA4_MODEL]
+    mmproj_path = os.path.join(model_dir, cfg["mmproj_file"])
+
+    cmd = [
+        "/opt/llama.cpp/build/bin/llama-server",
+        "-m", model_path,
+        "--host", "0.0.0.0", "--port", str(port),
+        "-ngl", "99",
+        "-c", "32768",
+        "-ub", "2048",
+        "--jinja",
+        "--reasoning-budget", "2048",  # ENABLED — allows extended thinking
+        "--flash-attn", "on",
+    ]
+    if os.path.exists(mmproj_path):
+        cmd.extend(["--mmproj", mmproj_path])
+
+    print(f"Starting llama-server with reasoning-budget=2048: {' '.join(cmd[-8:])}")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=open("/tmp/llama.log", "w"),
+        stderr=subprocess.STDOUT,
+    )
+
+    import time as _time
+    _time.sleep(3)
+    if proc.poll() is not None:
+        print(f"llama-server crashed: {open('/tmp/llama.log').read()[-2000:]}")
+        raise RuntimeError("llama-server crashed")
+
+    import requests
+    for i in range(90):
+        try:
+            r = requests.get(f"http://localhost:{port}/v1/models", timeout=2)
+            if r.status_code == 200:
+                print(f"llama-server ready on :{port} ({i*2}s) — reasoning ENABLED")
+                return proc
+        except Exception:
+            pass
+        if proc.poll() is not None:
+            print(f"llama-server died: {open('/tmp/llama.log').read()[-2000:]}")
+            raise RuntimeError("llama-server died")
+        _time.sleep(2)
+
+    raise RuntimeError("llama-server startup timeout")
 
 app = modal.App("gemma4-web-tasks")
 
