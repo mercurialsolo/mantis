@@ -207,12 +207,11 @@ class PlanExecutor:
     def _find_input(self, target: str):
         """Find an input element matching a natural language target.
 
-        Strategy order (most specific → most general):
-        1. Type-based: password, email, search → input[type=X]
-        2. ID/name keyword match via JS (avoids CSS 'i' flag issues)
-        3. Placeholder keyword match via JS
-        4. Label text match
-        5. Playwright get_by_placeholder / get_by_label
+        Uses Playwright's native locators (most reliable in headless):
+        1. Type-based: password, email → input[type=X]
+        2. get_by_placeholder (regex, handles case)
+        3. get_by_label (for label-associated inputs)
+        4. CSS id/name selectors built from keywords
         """
         target_lower = target.lower()
 
@@ -231,43 +230,40 @@ class PlanExecutor:
                 except Exception:
                     pass
 
-        # Strategy 2: find by id/name/placeholder via JS (reliable, no CSS 'i' issues)
+        # Extract meaningful keywords from target
         keywords = [w for w in target_lower.split() if len(w) > 2 and w not in (
             "the", "input", "field", "for", "this", "into", "text", "enter", "your",
         )]
-        if keywords:
-            try:
-                el = self._page.evaluate_handle("""(keywords) => {
-                    const inputs = document.querySelectorAll('input, textarea, select');
-                    for (const el of inputs) {
-                        if (!el.offsetParent && el.type !== 'hidden') continue;
-                        const haystack = [
-                            el.id, el.name, el.placeholder,
-                            el.getAttribute('aria-label') || '',
-                        ].join(' ').toLowerCase();
-                        for (const kw of keywords) {
-                            if (haystack.includes(kw)) return el;
-                        }
-                    }
-                    return null;
-                }""", keywords)
-                if el:
-                    as_element = el.as_element()
-                    if as_element and as_element.is_visible():
-                        return as_element
-            except Exception:
-                pass
 
-        # Strategy 3: Playwright's get_by_placeholder (fuzzy)
+        # Strategy 2: Playwright get_by_placeholder (most reliable native locator)
         for kw in keywords:
             try:
                 el = self._page.get_by_placeholder(re.compile(kw, re.IGNORECASE)).first
-                if el and el.is_visible():
+                if el.is_visible():
                     return el
             except Exception:
                 pass
 
-        # Strategy 4: label text match
+        # Strategy 3: Playwright get_by_label
+        for kw in keywords:
+            try:
+                el = self._page.get_by_label(re.compile(kw, re.IGNORECASE)).first
+                if el.is_visible():
+                    return el
+            except Exception:
+                pass
+
+        # Strategy 4: CSS selectors by id/name (case-sensitive but common IDs are lowercase)
+        for kw in keywords:
+            for selector in [f'input#{kw}', f'input[name="{kw}"]', f'textarea#{kw}']:
+                try:
+                    el = self._page.query_selector(selector)
+                    if el and el.is_visible():
+                        return el
+                except Exception:
+                    pass
+
+        # Strategy 5: label for= association
         try:
             labels = self._page.query_selector_all("label")
             for label in labels:
@@ -278,9 +274,6 @@ class PlanExecutor:
                         el = self._page.query_selector(f"#{for_id}")
                         if el and el.is_visible():
                             return el
-                    child = label.query_selector("input, textarea, select")
-                    if child and child.is_visible():
-                        return child
         except Exception:
             pass
 
