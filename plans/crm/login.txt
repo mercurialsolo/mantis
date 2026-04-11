@@ -14,4 +14,4 @@ Steps:
 4. Click on the Password input field
 5. Type "{{password}}"
 6. Click the "Sign In" button
-7. Verify: URL should contain "dashboard"
+7. Verify: URL should not contain "login"

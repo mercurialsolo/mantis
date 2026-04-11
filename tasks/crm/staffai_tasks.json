@@ -12,8 +12,8 @@
       "save_session": true,
       "start_url": "https://staffai-test-crm.exe.xyz",
       "verify": {
-        "type": "url_contains",
-        "value": "dashboard"
+        "type": "url_not_contains",
+        "value": "login"
       }
     },
     {

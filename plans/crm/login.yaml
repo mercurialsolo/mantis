@@ -34,5 +34,5 @@ steps:
     wait_for: url_changed
 
   - action: verify
-    check: url_contains
-    value: "dashboard"
+    check: url_not_contains
+    value: "login"

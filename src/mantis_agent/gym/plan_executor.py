@@ -177,6 +177,11 @@ class PlanExecutor:
                 return StepResult(success=True, method="direct", detail=f"URL contains '{value}'")
             return StepResult(success=False, method="direct", detail=f"URL '{self._page.url}' does not contain '{value}'")
 
+        elif check == "url_not_contains":
+            if value.lower() not in self._page.url.lower():
+                return StepResult(success=True, method="direct", detail=f"URL does not contain '{value}' (good)")
+            return StepResult(success=False, method="direct", detail=f"URL '{self._page.url}' still contains '{value}'")
+
         elif check == "page_contains_text":
             try:
                 body_text = self._page.inner_text("body")

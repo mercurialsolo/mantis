@@ -547,6 +547,9 @@ def _verify_task(env, verify_config: dict) -> bool:
         if vtype == "url_contains":
             return value.lower() in env.current_url.lower()
 
+        elif vtype == "url_not_contains":
+            return value.lower() not in env.current_url.lower()
+
         elif vtype == "url_exact":
             return env.current_url == value
 
