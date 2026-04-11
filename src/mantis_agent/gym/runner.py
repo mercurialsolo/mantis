@@ -404,7 +404,9 @@ class GymRunner:
                 )
             else:
                 parts.append(
-                    "\n\nFIRST, write a brief numbered plan:\n"
+                    "\n\nThe page is already loaded in the browser — you can see it in the screenshot. "
+                    "Do NOT navigate to any URL. Start interacting with what is on screen.\n\n"
+                    "FIRST, write a brief numbered plan:\n"
                     "1. <what to do first>\n"
                     "2. <what to do next>\n"
                     "...\n"
