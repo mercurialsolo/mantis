@@ -312,17 +312,175 @@ class PlaywrightGymEnv(GymEnvironment):
         except Exception:
             return None
 
-    def _capture(self) -> GymObservation:
-        """Take a screenshot and return as GymObservation."""
+    def _capture(self, annotate_som: bool = True) -> GymObservation:
+        """Take a screenshot and return as GymObservation.
+
+        If annotate_som=True, overlays numbered red labels on all interactive
+        elements (Set-of-Mark), and includes the element list in extras.
+        """
         png_bytes = self._page.screenshot(type="png")
+
+        elements = []
+        element_text = ""
+        if annotate_som:
+            elements = self._get_interactive_elements()
+            if elements:
+                png_bytes = self._annotate_screenshot(png_bytes, elements)
+                element_text = self._format_element_list(elements)
+
         screenshot = Image.open(io.BytesIO(png_bytes))
+
+        # Build DOM state summary — what form fields contain
+        dom_state = self._get_dom_state()
+
         return GymObservation(
             screenshot=screenshot,
             extras={
                 "url": self._page.url,
                 "title": self._page.title(),
+                "elements": elements,
+                "element_text": element_text,
+                "dom_state": dom_state,
             },
         )
+
+    def _get_interactive_elements(self) -> list[dict]:
+        """Query DOM for all interactive elements with bounding boxes."""
+        try:
+            elements = self._page.evaluate("""() => {
+                const selectors = [
+                    'a[href]', 'button', 'input', 'select', 'textarea',
+                    '[role="button"]', '[role="link"]', '[role="menuitem"]',
+                    '[role="tab"]', '[role="checkbox"]', '[role="radio"]',
+                    '[role="option"]', '[role="switch"]', '[role="combobox"]',
+                    '[onclick]', '[tabindex]',
+                    'label', 'summary',
+                ];
+                const seen = new Set();
+                const result = [];
+                for (const sel of selectors) {
+                    for (const el of document.querySelectorAll(sel)) {
+                        if (seen.has(el)) continue;
+                        seen.add(el);
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 5 || rect.height < 5) continue;
+                        if (rect.top > window.innerHeight || rect.left > window.innerWidth) continue;
+                        if (rect.bottom < 0 || rect.right < 0) continue;
+                        const text = (el.textContent || '').trim().substring(0, 80).replace(/\\s+/g, ' ');
+                        const value = (el.value || '').substring(0, 50);
+                        const placeholder = el.placeholder || el.getAttribute('placeholder') || '';
+                        result.push({
+                            tag: el.tagName.toLowerCase(),
+                            text: text,
+                            type: el.getAttribute('type') || '',
+                            role: el.getAttribute('role') || '',
+                            id: el.id || '',
+                            name: el.getAttribute('name') || '',
+                            value: value,
+                            placeholder: placeholder,
+                            bbox: {
+                                x: Math.round(rect.x), y: Math.round(rect.y),
+                                w: Math.round(rect.width), h: Math.round(rect.height),
+                            },
+                        });
+                    }
+                }
+                return result;
+            }""")
+            return [{"id": i, **el} for i, el in enumerate(elements)]
+        except Exception:
+            return []
+
+    def _annotate_screenshot(self, png_bytes: bytes, elements: list[dict]) -> bytes:
+        """Draw numbered SoM labels on the screenshot."""
+        from PIL import ImageDraw, ImageFont
+
+        img = Image.open(io.BytesIO(png_bytes))
+        draw = ImageDraw.Draw(img)
+
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
+        except Exception:
+            font = ImageFont.load_default()
+
+        for el in elements:
+            bbox = el["bbox"]
+            x, y, w, h = bbox["x"], bbox["y"], bbox["w"], bbox["h"]
+            eid = el["id"]
+
+            draw.rectangle([x, y, x + w, y + h], outline="red", width=1)
+
+            label = str(eid)
+            label_w = len(label) * 8 + 4
+            label_h = 14
+            lx, ly = max(0, x), max(0, y - label_h)
+            draw.rectangle([lx, ly, lx + label_w, ly + label_h], fill="red")
+            draw.text((lx + 2, ly), label, fill="white", font=font)
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    @staticmethod
+    def _format_element_list(elements: list[dict]) -> str:
+        """Format elements as a numbered text list for the brain prompt."""
+        lines = ["INTERACTIVE ELEMENTS (use element number to identify targets):"]
+        for el in elements[:40]:
+            parts = [f"[{el['id']}]"]
+            tag = el["tag"]
+            if tag == "input":
+                parts.append(f"<input type={el.get('type', 'text')}>")
+                if el.get("value"):
+                    parts.append(f'value="{el["value"]}"')
+                elif el.get("placeholder"):
+                    parts.append(f'placeholder="{el["placeholder"]}"')
+                if el.get("name"):
+                    parts.append(f'name="{el["name"]}"')
+            elif tag == "button":
+                parts.append(f'<button> "{el["text"][:40]}"')
+            elif tag == "a":
+                parts.append(f'<link> "{el["text"][:40]}"')
+            elif tag == "select":
+                parts.append(f"<dropdown>")
+                if el.get("name"):
+                    parts.append(f'name="{el["name"]}"')
+            else:
+                parts.append(f'<{tag}> "{el["text"][:40]}"')
+            lines.append("  " + " ".join(parts))
+        if len(elements) > 40:
+            lines.append(f"  ... ({len(elements) - 40} more)")
+        return "\n".join(lines)
+
+    def _get_dom_state(self) -> str:
+        """Get a summary of current form field states visible on page."""
+        try:
+            fields = self._page.evaluate("""() => {
+                const inputs = document.querySelectorAll('input, textarea, select');
+                const result = [];
+                for (const el of inputs) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width < 5 || rect.height < 5) continue;
+                    const tag = el.tagName.toLowerCase();
+                    const name = el.name || el.id || el.placeholder || el.type || tag;
+                    const value = el.value || '';
+                    const focused = el === document.activeElement;
+                    result.push({name, value: value.substring(0, 100), type: el.type || '', focused, tag});
+                }
+                return result;
+            }""")
+            if not fields:
+                return ""
+            lines = ["FORM STATE:"]
+            for f in fields:
+                status = "FOCUSED" if f["focused"] else ""
+                val = f["value"] if f["value"] else "(empty)"
+                line = f"  {f['name']}: {val}"
+                if status:
+                    line += f" [{status}]"
+                lines.append(line)
+            return "\n".join(lines)
+        except Exception:
+            return ""
 
     def _execute_action(self, action: Action) -> None:
         """Translate and execute a Mantis Action via Playwright."""

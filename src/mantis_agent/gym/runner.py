@@ -172,6 +172,7 @@ class GymRunner:
         frame_history.append(obs.screenshot)
         last_url = obs.extras.get("url", "")
         last_title = obs.extras.get("title", "")
+        latest_obs = obs  # Track latest obs for SoM/DOM state injection
 
         termination_reason = "max_steps"
 
@@ -270,7 +271,7 @@ class GymRunner:
                             f"Use the screenshot to find the correct element and execute this step."
                         )
 
-            # ── Brain inference (with plan context + DOM hints) ──
+            # ── Brain inference (with plan context + SoM + DOM state) ──
             if not direct_executed:
                 recent_frames = frame_history[-self.frames_per_inference:]
 
@@ -287,7 +288,16 @@ class GymRunner:
                 # Append DOM hint if direct execution failed
                 if dom_hint:
                     effective_task += dom_hint
-                    dom_hint = ""  # Clear after use
+                    dom_hint = ""
+
+                # Inject SoM element list and DOM state from latest observation
+                if latest_obs and hasattr(latest_obs, "extras"):
+                    el_text = latest_obs.extras.get("element_text", "")
+                    dom_state = latest_obs.extras.get("dom_state", "")
+                    if el_text:
+                        effective_task += f"\n\n{el_text}"
+                    if dom_state:
+                        effective_task += f"\n\n{dom_state}"
 
                 t_infer = time.time()
                 result = self.brain.think(
@@ -323,6 +333,7 @@ class GymRunner:
                 action_history.append(action)
                 frame_history.append(gym_result.observation.screenshot)
                 total_reward += gym_result.reward
+                latest_obs = gym_result.observation  # Update for next step's SoM
 
                 feedback = self._build_feedback(
                     action=action, gym_result=gym_result,
