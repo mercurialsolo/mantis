@@ -451,6 +451,26 @@ class PlaywrightGymEnv(GymEnvironment):
             lines.append(f"  ... ({len(elements) - 40} more)")
         return "\n".join(lines)
 
+    def _snap_to_element(self, x: int, y: int) -> tuple[int, int]:
+        """If (x,y) lands inside a SoM element's bbox, snap to its center.
+
+        This corrects imprecise coordinate predictions from the brain.
+        If the click doesn't land inside any known element, returns original coords.
+        """
+        try:
+            elements = self._get_interactive_elements()
+            for el in elements:
+                bbox = el["bbox"]
+                bx, by, bw, bh = bbox["x"], bbox["y"], bbox["w"], bbox["h"]
+                if bx <= x <= bx + bw and by <= y <= by + bh:
+                    cx, cy = bx + bw // 2, by + bh // 2
+                    if (cx, cy) != (x, y):
+                        print(f"  [snap] ({x},{y}) → ({cx},{cy}) [{el['id']}] {el.get('tag','')} '{el.get('text','')[:30]}'")
+                    return cx, cy
+        except Exception:
+            pass
+        return x, y
+
     def _get_dom_state(self) -> str:
         """Get a summary of current form field states visible on page."""
         try:
@@ -488,6 +508,9 @@ class PlaywrightGymEnv(GymEnvironment):
             case ActionType.CLICK:
                 x, y = action.params["x"], action.params["y"]
                 button = action.params.get("button", "left")
+                # Snap to SoM element center if click lands inside a known bbox.
+                # This auto-corrects imprecise coordinates from the brain.
+                x, y = self._snap_to_element(x, y)
                 self._page.mouse.click(x, y, button=button)
 
             case ActionType.DOUBLE_CLICK:
