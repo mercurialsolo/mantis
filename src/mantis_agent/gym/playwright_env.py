@@ -312,7 +312,7 @@ class PlaywrightGymEnv(GymEnvironment):
         except Exception:
             return None
 
-    def _capture(self, annotate_som: bool = True) -> GymObservation:
+    def _capture(self, annotate_som: bool = False) -> GymObservation:
         """Take a screenshot and return as GymObservation.
 
         If annotate_som=True, overlays numbered red labels on all interactive

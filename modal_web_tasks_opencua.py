@@ -56,8 +56,7 @@ CUA_MODELS = {
     },
 }
 
-CUA_MODEL_KEY = os.environ.get("CUA_MODEL", "evocua-8b")
-CUA_CONFIG = CUA_MODELS.get(CUA_MODEL_KEY, CUA_MODELS["evocua-8b"])
+DEFAULT_CUA_MODEL = "evocua-8b"
 
 image = (
     modal.Image.from_registry(
@@ -142,7 +141,7 @@ def start_vllm_server(model_dir: str, port: int = 8000, tp: int = 4) -> subproce
 
 
 @app.function(
-    gpu=CUA_CONFIG["gpus"],
+    gpu="A100-80GB:4",  # Request max, models use what they need via TP
     image=image,
     volumes={"/data": vol},
     timeout=7200,
@@ -151,6 +150,7 @@ def start_vllm_server(model_dir: str, port: int = 8000, tp: int = 4) -> subproce
 )
 def run_opencua_tasks(
     task_file_contents: str,
+    cua_model: str = "evocua-8b",
     plan_files: dict[str, str] | None = None,
     plan_inputs: dict[str, str] | None = None,
     max_steps: int = 30,
@@ -169,9 +169,24 @@ def run_opencua_tasks(
     started_at = datetime.now(timezone.utc).isoformat()
     t0 = time.time()
 
-    # 1. Download + start vLLM
-    model_dir = download_model("/data")
-    tp = CUA_CONFIG["tp"]
+    # 1. Resolve model config
+    cua_config = CUA_MODELS.get(cua_model, CUA_MODELS[DEFAULT_CUA_MODEL])
+
+    # Download + start vLLM
+    slug = cua_model.replace("-", "_")
+    model_dir = os.path.join("/data", "models", slug)
+    marker = os.path.join(model_dir, ".download_complete")
+    if not os.path.exists(marker):
+        os.makedirs(model_dir, exist_ok=True)
+        print(f"Downloading {cua_config['repo']}...")
+        from huggingface_hub import snapshot_download
+        snapshot_download(cua_config["repo"], local_dir=model_dir, ignore_patterns=["*.md", "*.txt"])
+        open(marker, "w").write("done")
+        vol.commit()
+    else:
+        print(f"{cua_config['name']} cached at {model_dir}")
+
+    tp = cua_config["tp"]
     vllm_proc = start_vllm_server(model_dir, port=8000, tp=tp)
 
     r = req.get("http://localhost:8000/v1/models")
@@ -186,11 +201,11 @@ def run_opencua_tasks(
     plan_inputs = plan_inputs or {}
 
     print(f"\n{'='*60}")
-    print(f"Mantis — {CUA_CONFIG['name']} Web Tasks")
+    print(f"Mantis — {cua_config['name']} Web Tasks")
     print(f"  Session:  {session_name}")
     print(f"  Base URL: {base_url}")
     print(f"  Tasks:    {len(tasks)}")
-    print(f"  Model:    {CUA_CONFIG['name']} (vLLM, TP={tp})")
+    print(f"  Model:    {cua_config['name']} (vLLM, TP={tp})")
     print(f"  Steps:    {max_steps}")
     print(f"{'='*60}")
 
@@ -254,7 +269,7 @@ def run_opencua_tasks(
             "session_name": session_name,
             "base_url": base_url,
             "domain": session_name,
-            "model": CUA_CONFIG["name"],
+            "model": cua_config["name"],
             "tasks_run": len(ordered_tasks),
             "started_at": started_at,
             "completed_at": completed_at,
@@ -405,17 +420,22 @@ def run_opencua_tasks(
 @app.local_entrypoint()
 def main(
     task_file: str = "tasks/crm/original_test.json",
+    model: str = "evocua-8b",
     plan_dir: str = "",
     max_steps: int = 30,
     max_retries: int = 2,
     inputs: str = "",
 ):
-    """Run OpenCUA-32B against web tasks on Modal."""
+    """Run CUA model against web tasks on Modal.
+
+    Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b
+    """
     import glob
 
-    print(f"Mantis — OpenCUA-32B Web Tasks (Modal)")
+    cfg = CUA_MODELS.get(model, CUA_MODELS[DEFAULT_CUA_MODEL])
+    print(f"Mantis — {cfg['name']} Web Tasks (Modal)")
     print(f"  Task file: {task_file}")
-    print(f"  Model:     {CUA_CONFIG['name']} ({CUA_CONFIG['gpus']})")
+    print(f"  Model:     {cfg['name']} ({cfg['gpus']})")
     print(f"  Max steps: {max_steps}")
 
     with open(task_file) as f:
@@ -440,6 +460,7 @@ def main(
 
     result = run_opencua_tasks.remote(
         task_file_contents=task_file_contents,
+        cua_model=model,
         plan_files=plan_files,
         plan_inputs=plan_inputs,
         max_steps=max_steps,
