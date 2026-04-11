@@ -1,0 +1,335 @@
+"""Playwright-based GymEnvironment for live web applications.
+
+Drives a real browser (Chromium/Firefox) against any URL — CRMs, SaaS tools,
+internal apps, public websites. No Docker container needed.
+
+This is the environment to use when:
+- The target is a live web app at a URL (not a Docker image)
+- Authentication is part of the task (login flow) or pre-injected via cookies
+- You need Playwright's DOM access for verification (URL check, element state)
+
+Architecture:
+    GymRunner
+       ↕ step(Action) / screenshot
+    PlaywrightGymEnv
+       ↕ Playwright page.mouse / page.keyboard / page.screenshot
+    Chromium (headless or headed)
+       ↕ HTTP
+    Live web app (CRM, SaaS, etc.)
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Any
+
+from PIL import Image
+
+from ..actions import Action, ActionType
+from .base import GymEnvironment, GymObservation, GymResult
+
+logger = logging.getLogger(__name__)
+
+
+class PlaywrightGymEnv(GymEnvironment):
+    """Gym environment backed by a Playwright browser session.
+
+    Supports session persistence: after a login task completes, call
+    save_session() to snapshot cookies/localStorage to disk. Future tasks
+    that need an authenticated user pass the saved state file as
+    storage_state and skip the login flow entirely.
+
+    Args:
+        start_url: Initial URL to navigate to on reset.
+        viewport: Browser viewport size as (width, height).
+        headless: Run browser in headless mode.
+        browser_type: "chromium", "firefox", or "webkit".
+        storage_state: Path to Playwright storage state JSON for pre-auth.
+            If the file exists, cookies/localStorage are restored on launch.
+        session_dir: Directory to store session state files. Defaults to
+            .sessions/ in the current working directory.
+        settle_time: Seconds to wait after each action for page to settle.
+        timeout: Page navigation timeout in milliseconds.
+    """
+
+    def __init__(
+        self,
+        start_url: str = "about:blank",
+        viewport: tuple[int, int] = (1280, 720),
+        headless: bool = True,
+        browser_type: str = "chromium",
+        storage_state: str | None = None,
+        session_dir: str = ".sessions",
+        settle_time: float = 1.0,
+        timeout: int = 30000,
+    ):
+        self._start_url = start_url
+        self._viewport = viewport
+        self._headless = headless
+        self._browser_type = browser_type
+        self._storage_state = storage_state
+        self._session_dir = Path(session_dir)
+        self._settle_time = settle_time
+        self._timeout = timeout
+
+        self._pw_ctx = None
+        self._browser = None
+        self._context = None
+        self._page = None
+
+    def _launch_browser(self) -> None:
+        """Launch Playwright browser and create page."""
+        from playwright.sync_api import sync_playwright
+
+        self._pw_ctx = sync_playwright().start()
+
+        launcher = getattr(self._pw_ctx, self._browser_type)
+        self._browser = launcher.launch(headless=self._headless)
+
+        ctx_kwargs: dict[str, Any] = {
+            "viewport": {"width": self._viewport[0], "height": self._viewport[1]},
+        }
+        if self._storage_state:
+            import os
+            if os.path.exists(self._storage_state):
+                ctx_kwargs["storage_state"] = self._storage_state
+
+        self._context = self._browser.new_context(**ctx_kwargs)
+        self._context.set_default_timeout(self._timeout)
+        self._page = self._context.new_page()
+
+    def reset(self, task: str, **kwargs: Any) -> GymObservation:
+        """Launch browser and navigate to start URL.
+
+        Args:
+            task: Task description (used by the runner, not the browser).
+            **kwargs: Optional overrides:
+                - start_url: Override the default start URL.
+                - storage_state: Override pre-auth state.
+        """
+        if self._page is not None:
+            self.close()
+
+        # Allow per-task overrides
+        if "start_url" in kwargs:
+            self._start_url = kwargs["start_url"]
+        if "storage_state" in kwargs:
+            self._storage_state = kwargs["storage_state"]
+
+        self._launch_browser()
+
+        if self._start_url and self._start_url != "about:blank":
+            self._page.goto(self._start_url, wait_until="domcontentloaded")
+            time.sleep(self._settle_time)
+
+        return self._capture()
+
+    def step(self, action: Action) -> GymResult:
+        """Execute a Mantis action via Playwright and return a screenshot."""
+        if self._page is None:
+            raise RuntimeError("Browser not initialized — call reset() first")
+
+        self._execute_action(action)
+
+        # Let the page settle after the action
+        if action.action_type not in (ActionType.WAIT, ActionType.DONE):
+            time.sleep(self._settle_time)
+
+        obs = self._capture()
+
+        return GymResult(
+            observation=obs,
+            reward=0.0,  # no automatic reward — verification happens externally
+            done=False,
+            info={
+                "url": self._page.url,
+                "title": self._page.title(),
+            },
+        )
+
+    def close(self) -> None:
+        """Shut down the browser."""
+        for resource in (self._context, self._browser):
+            if resource:
+                try:
+                    resource.close()
+                except Exception:
+                    pass
+        if self._pw_ctx:
+            try:
+                self._pw_ctx.stop()
+            except Exception:
+                pass
+        self._page = None
+        self._context = None
+        self._browser = None
+        self._pw_ctx = None
+
+    @property
+    def screen_size(self) -> tuple[int, int]:
+        return self._viewport
+
+    @property
+    def page(self):
+        """Direct access to the Playwright page for verification."""
+        return self._page
+
+    @property
+    def current_url(self) -> str:
+        """Current page URL."""
+        if self._page:
+            return self._page.url
+        return ""
+
+    # ── Session persistence ──────────────────────────────────────────────
+
+    def session_path_for(self, name: str) -> str:
+        """Return the file path where a named session would be stored.
+
+        Args:
+            name: Session name (e.g., "staffai_crm", "classifieds").
+                  Used as the filename stem.
+        """
+        self._session_dir.mkdir(parents=True, exist_ok=True)
+        return str(self._session_dir / f"{name}_state.json")
+
+    def save_session(self, name: str) -> str:
+        """Persist current browser session (cookies + localStorage) to disk.
+
+        Call this after a login task succeeds. The saved file can be passed
+        as storage_state to skip login on subsequent tasks.
+
+        Args:
+            name: Session name for the file (e.g., "staffai_crm").
+
+        Returns:
+            Path to the saved state file.
+        """
+        if self._context is None:
+            raise RuntimeError("No active browser context — call reset() first")
+
+        path = self.session_path_for(name)
+        state = self._context.storage_state()
+        with open(path, "w") as f:
+            json.dump(state, f, indent=2)
+        logger.info(f"Session saved: {path} ({len(state.get('cookies', []))} cookies)")
+        return path
+
+    def has_session(self, name: str) -> bool:
+        """Check if a saved session exists for the given name."""
+        return os.path.exists(self.session_path_for(name))
+
+    def load_session(self, name: str) -> None:
+        """Set the storage_state to a previously saved session.
+
+        Call this before reset() to restore a logged-in session.
+
+        Args:
+            name: Session name used in save_session().
+        """
+        path = self.session_path_for(name)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"No saved session found: {path}")
+        self._storage_state = path
+        logger.info(f"Session loaded: {path}")
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _capture(self) -> GymObservation:
+        """Take a screenshot and return as GymObservation."""
+        png_bytes = self._page.screenshot(type="png")
+        screenshot = Image.open(io.BytesIO(png_bytes))
+        return GymObservation(
+            screenshot=screenshot,
+            extras={
+                "url": self._page.url,
+                "title": self._page.title(),
+            },
+        )
+
+    def _execute_action(self, action: Action) -> None:
+        """Translate and execute a Mantis Action via Playwright."""
+        match action.action_type:
+            case ActionType.CLICK:
+                x, y = action.params["x"], action.params["y"]
+                button = action.params.get("button", "left")
+                self._page.mouse.click(x, y, button=button)
+
+            case ActionType.DOUBLE_CLICK:
+                x, y = action.params["x"], action.params["y"]
+                self._page.mouse.dblclick(x, y)
+
+            case ActionType.TYPE:
+                text = action.params["text"]
+                self._page.keyboard.type(text)
+
+            case ActionType.KEY_PRESS:
+                combo = action.params["keys"]
+                pw_combo = self._normalize_key_combo(combo)
+                self._page.keyboard.press(pw_combo)
+
+            case ActionType.SCROLL:
+                direction = action.params["direction"]
+                amount = action.params.get("amount", 3)
+                x = action.params.get("x", self._viewport[0] // 2)
+                y = action.params.get("y", self._viewport[1] // 2)
+                dx, dy = 0, 0
+                if direction == "up":
+                    dy = -amount * 100
+                elif direction == "down":
+                    dy = amount * 100
+                elif direction == "left":
+                    dx = -amount * 100
+                elif direction == "right":
+                    dx = amount * 100
+                self._page.mouse.move(x, y)
+                self._page.mouse.wheel(dx, dy)
+
+            case ActionType.DRAG:
+                sx, sy = action.params["start_x"], action.params["start_y"]
+                ex, ey = action.params["end_x"], action.params["end_y"]
+                self._page.mouse.move(sx, sy)
+                self._page.mouse.down()
+                self._page.mouse.move(ex, ey, steps=10)
+                self._page.mouse.up()
+
+            case ActionType.WAIT:
+                seconds = action.params.get("seconds", 1.0)
+                time.sleep(min(seconds, 10.0))
+
+            case ActionType.DONE:
+                pass  # Handled by the runner
+
+    @staticmethod
+    def _normalize_key_combo(combo: str) -> str:
+        """Normalize key names to Playwright format.
+
+        e.g. 'ctrl+c' → 'Control+c', 'enter' → 'Enter', 'command+v' → 'Meta+v'
+        """
+        key_map = {
+            "ctrl": "Control", "control": "Control",
+            "alt": "Alt", "option": "Alt",
+            "shift": "Shift",
+            "meta": "Meta", "cmd": "Meta", "command": "Meta", "win": "Meta", "super": "Meta",
+            "return": "Enter", "enter": "Enter",
+            "escape": "Escape", "esc": "Escape",
+            "tab": "Tab", "backspace": "Backspace", "delete": "Delete",
+            "home": "Home", "end": "End",
+            "pageup": "PageUp", "page_up": "PageUp",
+            "pagedown": "PageDown", "page_down": "PageDown",
+            "up": "ArrowUp", "arrowup": "ArrowUp",
+            "down": "ArrowDown", "arrowdown": "ArrowDown",
+            "left": "ArrowLeft", "arrowleft": "ArrowLeft",
+            "right": "ArrowRight", "arrowright": "ArrowRight",
+        }
+        parts = [p.strip() for p in combo.split("+")]
+        normalized = [key_map.get(p.lower(), p) for p in parts]
+        return "+".join(normalized)
+
+    def __repr__(self) -> str:
+        return f"PlaywrightGymEnv(url={self._start_url!r}, viewport={self._viewport})"

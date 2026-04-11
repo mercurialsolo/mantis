@@ -13,6 +13,7 @@ Architecture:
 """
 
 from .base import GymEnvironment, GymObservation, GymResult
+from .playwright_env import PlaywrightGymEnv
 from .runner import GymRunner
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "GymObservation",
     "GymResult",
     "GymRunner",
+    "PlaywrightGymEnv",
 ]
