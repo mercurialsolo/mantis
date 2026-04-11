@@ -1,15 +1,20 @@
-"""GymRunner — drives any GymEnvironment with a Mantis brain.
+"""GymRunner — intelligent agent loop for any GymEnvironment.
 
-This is the generic evaluation loop, analogous to StreamingCUA.run() but
-decoupled from local screen capture (ScreenStreamer) and local execution
-(ActionExecutor). Instead, it uses the GymEnvironment abstraction for
-observation and action.
+Matches the architecture that scored 91.7% on OSWorld:
+1. Step 0 planning — model generates a numbered plan, persisted across steps
+2. Action feedback — after each step, model sees what actually happened
+   (URL change, field focused, text entered, page title changed)
+3. Progressive context — builds a running narrative of completed actions
+4. Two-tier loop detection — soft nudge at 3 repeats, hard stop at 8
+5. Form-aware nudges — detects focused inputs, tells model to type
 
-The runner handles:
-- Frame history (rolling window of recent screenshots)
-- Action history (for brain context + loop detection)
-- Loop detection (identical actions → early termination)
-- Trajectory recording for post-hoc analysis
+The key insight: the model needs to LEARN from each step, not just re-plan
+from scratch. Each step's task prompt includes:
+  - The original task
+  - The plan (from step 0, persisted)
+  - What was done so far (action log with outcomes)
+  - What changed (URL, page title, focused field)
+  - Nudge if stuck (form-aware)
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ class TrajectoryStep:
     reward: float
     done: bool
     inference_time: float
+    feedback: str = ""
     timestamp: float = field(default_factory=time.time)
 
 
@@ -69,13 +75,7 @@ class RunResult:
 
 
 class GymRunner:
-    """Drives a Mantis brain against any GymEnvironment.
-
-    Includes two-tier loop detection:
-    - Soft loop (3 repeats): Nudges the model with context about what it
-      already did and what to do next. Form-aware: if an input field is
-      focused, tells the model to type instead of clicking again.
-    - Hard loop (8 repeats): Terminates the task.
+    """Intelligent agent loop that drives a Mantis brain against any GymEnvironment.
 
     Args:
         brain: Any object implementing the Brain protocol (think method).
@@ -103,13 +103,7 @@ class GymRunner:
         self.hard_loop_window = hard_loop_window
 
     def run(self, task: str, task_id: str = "default", seed: int | None = None) -> RunResult:
-        """Execute a task and return the evaluation result.
-
-        Args:
-            task: Natural language task description.
-            task_id: Environment-specific task identifier.
-            seed: Optional seed for reproducibility.
-        """
+        """Execute a task with plan persistence, feedback, and context."""
         logger.info(f"Starting task: {task!r} (id={task_id})")
         t0 = time.time()
 
@@ -117,7 +111,12 @@ class GymRunner:
         action_history: list[Action] = []
         trajectory: list[TrajectoryStep] = []
         total_reward = 0.0
-        nudge: str = ""  # Appended to task when soft loop detected
+
+        # Persistent state across steps
+        agent_plan: str | None = None
+        step_log: list[str] = []  # Human-readable log: "Step 1: clicked User ID field → field focused"
+        last_url: str = ""
+        last_title: str = ""
         last_focused_input: dict | None = None
 
         # Reset environment
@@ -127,17 +126,25 @@ class GymRunner:
 
         obs = self.env.reset(task, **reset_kwargs)
         frame_history.append(obs.screenshot)
+        last_url = obs.extras.get("url", "")
+        last_title = obs.extras.get("title", "")
 
         termination_reason = "max_steps"
 
         for step_num in range(1, self.max_steps + 1):
             logger.info(f"--- Step {step_num}/{self.max_steps} ---")
 
-            # Feed recent frames to the brain
             recent_frames = frame_history[-self.frames_per_inference:]
 
-            # Build effective task: original + any nudge from loop detection
-            effective_task = task + nudge if nudge else task
+            # Build the full context-rich prompt for this step
+            effective_task = self._build_step_prompt(
+                task=task,
+                step_num=step_num,
+                agent_plan=agent_plan,
+                step_log=step_log,
+                last_focused_input=last_focused_input,
+                action_history=action_history,
+            )
 
             t_infer = time.time()
             result = self.brain.think(
@@ -152,26 +159,24 @@ class GymRunner:
             thinking = getattr(result, "thinking", "")
             logger.info(f"Action: {action} ({inference_time:.2f}s)")
 
+            # Step 0: extract plan from model's thinking
+            if step_num == 1 and thinking and not agent_plan:
+                agent_plan = self._extract_plan(thinking)
+                if agent_plan:
+                    logger.info(f"Plan captured: {agent_plan[:120]}...")
+
             # Check if agent signals done
             if action.action_type == ActionType.DONE:
                 success = action.params.get("success", False)
                 trajectory.append(TrajectoryStep(
-                    step=step_num,
-                    action=action,
-                    thinking=thinking,
-                    reward=0.0,
-                    done=True,
-                    inference_time=inference_time,
+                    step=step_num, action=action, thinking=thinking,
+                    reward=0.0, done=True, inference_time=inference_time,
                 ))
                 termination_reason = "done"
                 return RunResult(
-                    task=task,
-                    task_id=task_id,
-                    success=success,
-                    total_reward=total_reward,
-                    total_steps=step_num,
-                    total_time=time.time() - t0,
-                    trajectory=trajectory,
+                    task=task, task_id=task_id, success=success,
+                    total_reward=total_reward, total_steps=step_num,
+                    total_time=time.time() - t0, trajectory=trajectory,
                     termination_reason=termination_reason,
                 )
 
@@ -181,19 +186,36 @@ class GymRunner:
             frame_history.append(gym_result.observation.screenshot)
             total_reward += gym_result.reward
 
-            # Track focused input for form-aware nudges
+            # Build feedback: what changed after this action?
+            feedback = self._build_feedback(
+                action=action,
+                gym_result=gym_result,
+                last_url=last_url,
+                last_title=last_title,
+            )
+
+            # Track focused input
             focused_input = gym_result.info.get("focused_input")
             if focused_input is not None:
                 last_focused_input = focused_input
+            elif action.action_type not in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+                # Clear focused input after non-click actions (e.g., after typing)
+                last_focused_input = None
+
+            # Update tracking state
+            last_url = gym_result.info.get("url", last_url)
+            last_title = gym_result.info.get("title", last_title)
+
+            # Add to step log (persisted across steps for context)
+            step_log.append(f"Step {step_num}: {action} → {feedback}")
 
             trajectory.append(TrajectoryStep(
-                step=step_num,
-                action=action,
-                thinking=thinking,
-                reward=gym_result.reward,
-                done=gym_result.done,
-                inference_time=inference_time,
+                step=step_num, action=action, thinking=thinking,
+                reward=gym_result.reward, done=gym_result.done,
+                inference_time=inference_time, feedback=feedback,
             ))
+
+            logger.info(f"Feedback: {feedback}")
 
             # Environment signaled completion
             if gym_result.done:
@@ -201,16 +223,10 @@ class GymRunner:
                 break
 
             # Two-tier loop detection
-            nudge = ""  # Reset each step
-
             if self._detect_repeat(action_history, self.hard_loop_window):
                 logger.warning("Hard action loop detected — stopping")
                 termination_reason = "loop"
                 break
-
-            if self._detect_repeat(action_history, self.soft_loop_window):
-                nudge = self._build_nudge(action_history, last_focused_input)
-                logger.info(f"Soft loop — nudge: {nudge[:100]}")
 
             # Trim frame history to prevent unbounded memory growth
             if len(frame_history) > self.frames_per_inference * 3:
@@ -223,17 +239,131 @@ class GymRunner:
         )
 
         return RunResult(
-            task=task,
-            task_id=task_id,
+            task=task, task_id=task_id,
             success=termination_reason == "env_done" and total_reward > 0,
-            total_reward=total_reward,
-            total_steps=len(trajectory),
-            total_time=total_time,
-            trajectory=trajectory,
+            total_reward=total_reward, total_steps=len(trajectory),
+            total_time=total_time, trajectory=trajectory,
             termination_reason=termination_reason,
         )
 
-    def _detect_repeat(self, action_history: list[Action], window: int) -> bool:
+    # ── Prompt construction ──────────────────────────────────────────────
+
+    def _build_step_prompt(
+        self,
+        task: str,
+        step_num: int,
+        agent_plan: str | None,
+        step_log: list[str],
+        last_focused_input: dict | None,
+        action_history: list[Action],
+    ) -> str:
+        """Build the full task prompt for this step with all accumulated context."""
+        parts = [task]
+
+        # Step 0: ask for a plan
+        if step_num == 1:
+            parts.append(
+                "\n\nFIRST, write a brief numbered plan:\n"
+                "1. <what to do first>\n"
+                "2. <what to do next>\n"
+                "...\n"
+                "Then execute the first action."
+            )
+        else:
+            # Inject persistent plan
+            if agent_plan:
+                parts.append(f"\n\nYour plan:\n{agent_plan}")
+
+            # Inject step log (last 8 steps for context window)
+            if step_log:
+                recent_log = step_log[-8:]
+                parts.append("\n\nWhat you have done so far:")
+                parts.append("\n".join(f"  {entry}" for entry in recent_log))
+
+                # Guide the model to continue
+                parts.append(
+                    "\nLook at the screenshot. Based on what changed, "
+                    "execute the NEXT action toward completing the task."
+                )
+
+            # Soft loop nudge
+            if self._detect_repeat(action_history, self.soft_loop_window):
+                nudge = self._build_nudge(action_history, last_focused_input)
+                parts.append(nudge)
+
+        return "\n".join(parts)
+
+    @staticmethod
+    def _extract_plan(thinking: str) -> str | None:
+        """Extract a numbered plan from the model's thinking output."""
+        import re
+
+        lines = thinking.split("\n")
+        plan_lines: list[str] = []
+
+        # Look for numbered lines (1. xxx, 2. xxx, etc.)
+        in_plan = False
+        for line in lines:
+            stripped = line.strip()
+            if re.match(r"^\d+[\.\)]\s", stripped):
+                in_plan = True
+                plan_lines.append(stripped)
+            elif in_plan and not stripped:
+                break  # Empty line ends the plan block
+            elif in_plan and not re.match(r"^\d+[\.\)]\s", stripped):
+                break  # Non-numbered line ends the plan
+
+        if plan_lines:
+            return "\n".join(plan_lines[:10])  # Cap at 10 steps
+        return None
+
+    @staticmethod
+    def _build_feedback(
+        action: Action,
+        gym_result: Any,
+        last_url: str,
+        last_title: str,
+    ) -> str:
+        """Describe what happened after executing an action."""
+        parts: list[str] = []
+
+        new_url = gym_result.info.get("url", "")
+        new_title = gym_result.info.get("title", "")
+        focused = gym_result.info.get("focused_input")
+
+        # URL change
+        if new_url and new_url != last_url:
+            parts.append(f"page navigated to {new_url}")
+
+        # Title change
+        if new_title and new_title != last_title:
+            parts.append(f"page title: \"{new_title}\"")
+
+        # Focused input detection
+        if focused:
+            field_name = (
+                focused.get("placeholder") or focused.get("name")
+                or focused.get("id") or focused.get("type") or "input"
+            )
+            if focused.get("empty"):
+                parts.append(f"'{field_name}' field is now focused (empty)")
+            else:
+                parts.append(f"'{field_name}' field focused, contains: \"{focused.get('value', '')}\"")
+
+        # Action-specific feedback
+        if action.action_type == ActionType.TYPE:
+            parts.append(f"typed \"{action.params.get('text', '')}\"")
+        elif action.action_type == ActionType.KEY_PRESS:
+            parts.append(f"pressed {action.params.get('keys', '')}")
+        elif action.action_type == ActionType.CLICK and not parts:
+            parts.append("clicked (no visible change)")
+
+        return "; ".join(parts) if parts else "no visible change"
+
+    # ── Loop detection ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _detect_repeat(action_history: list[Action], window: int) -> bool:
         """Check if the last N actions are identical (type + params)."""
         if len(action_history) < window:
             return False
@@ -246,11 +376,7 @@ class GymRunner:
 
     @staticmethod
     def _build_nudge(action_history: list[Action], focused_input: dict | None) -> str:
-        """Build a contextual nudge to break the model out of a loop.
-
-        Form-aware: if an input field is focused, tells the model to type
-        instead of clicking again. Otherwise, suggests a different approach.
-        """
+        """Build a contextual nudge to break the model out of a loop."""
         last = action_history[-1]
         repeated_action = f"{last.action_type.value}({last.params})"
 
@@ -281,7 +407,7 @@ class GymRunner:
                     f"the new value. Do NOT click the same field again."
                 )
 
-        # Generic nudge: model is repeating the same action
+        # Generic nudge
         return (
             f"\n\nIMPORTANT: You have repeated the same action ({repeated_action}) "
             f"multiple times with no progress. This approach is not working. "
