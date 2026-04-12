@@ -310,10 +310,15 @@ def main():
                 continue
 
             # Filters
-            alignment = task.get("alignment_score", 0) or 0
-            if alignment < args.min_alignment:
-                skipped_alignment += 1
-                continue
+            alignment = task.get("alignment_score")
+            # Skip alignment filter if field is missing/None
+            if alignment is not None and args.min_alignment > 0:
+                try:
+                    if int(alignment) < args.min_alignment:
+                        skipped_alignment += 1
+                        continue
+                except (ValueError, TypeError):
+                    pass  # Field exists but not numeric — don't filter
 
             if args.completed_only and not task.get("task_completed", False):
                 skipped_incomplete += 1

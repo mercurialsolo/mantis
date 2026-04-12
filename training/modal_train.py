@@ -129,7 +129,7 @@ def train_gemma4_cua(
             "--screen-width", "1280",
             "--screen-height", "720",
             "--max-tasks", str(max_tasks),
-            "--min-alignment", "6",
+            "--min-alignment", "0",  # Don't filter — field may be missing in dataset
             "--min-steps", "2",
             "--max-steps", "25",
         ]
