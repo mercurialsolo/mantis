@@ -32,13 +32,10 @@ image = (
     )
     .apt_install("git", "build-essential", "curl", "wget")
     .pip_install(
-        # Unsloth for fast QLoRA training
-        "unsloth[colab-new]",
-        # Core training deps
+        # Core training deps (NO unsloth at build time — needs GPU)
         "transformers>=4.52", "torch>=2.1", "datasets",
         "trl>=0.14", "peft>=0.15", "bitsandbytes>=0.45",
         "accelerate>=1.5", "huggingface-hub",
-        # Data processing
         "pillow",
     )
     .add_local_dir("training", remote_path="/root/training")
@@ -64,6 +61,13 @@ def train_gemma4_cua(
     export_gguf: bool = True,
 ):
     """Full training pipeline on A100."""
+    import subprocess
+
+    # Install unsloth at runtime (needs GPU, can't install at image build time)
+    print("Installing unsloth (requires GPU)...")
+    subprocess.run([
+        sys.executable, "-m", "pip", "install", "unsloth[colab-new]", "--quiet",
+    ], check=False)
 
     data_dir = "/data/training"
     agentnet_dir = os.path.join(data_dir, "agentnet")
