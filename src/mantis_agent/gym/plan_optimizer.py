@@ -93,13 +93,122 @@ FORM_PATTERNS = [
 SITE_BOUNDARY_PATTERN = re.compile(r'https?://([^/\s]+)')
 
 
+LLM_PLAN_PROMPT = """\
+You are a workflow optimizer. Given a plan text, break it into executable sections for a CUA (Computer Use Agent).
+
+Output a JSON array of sections. Each section has:
+- task_id: string (snake_case, e.g. "search_setup", "extract_listing_1")
+- intent: string (detailed instruction for the agent, 2-5 sentences)
+- phase: "pre_auth" | "setup" | "extract" | "entry" | "cleanup"
+- max_steps: int (60 for extraction, 80 for auth/entry/setup)
+- save_session: bool (true for auth and setup sections)
+- require_session: bool (true for sections that need prior auth)
+- start_url: string (URL to navigate to, include https://)
+
+Rules:
+- Auth/login flows MUST be separate sections with save_session=true
+- Loops ("for each listing", "process all") should be unrolled into individual sections
+- Each section should be completable in max_steps actions
+- Include pagination as a note in the last extraction section's intent
+- Form entry sections need explicit field-by-field instructions
+
+Plan text:
+---
+{plan_text}
+---
+
+Inputs:
+{inputs_text}
+
+Respond with ONLY a JSON array. No other text."""
+
+
+def _try_llm_optimize(brain: Any, plan_text: str, inputs: dict[str, str],
+                       session_name: str, max_listings: int) -> dict | None:
+    """Try to optimize plan using LLM brain. Returns None on failure."""
+    if brain is None or not hasattr(brain, "query"):
+        return None
+
+    inputs_text = "\n".join(f"  {k}: {v}" for k, v in inputs.items()) if inputs else "  (none)"
+    prompt = LLM_PLAN_PROMPT.format(plan_text=plan_text[:4000], inputs_text=inputs_text)
+
+    try:
+        response = brain.query(prompt, response_format="json")
+        if not response:
+            return None
+
+        # Extract JSON from response (may have markdown wrapping)
+        json_text = response.strip()
+        if json_text.startswith("```"):
+            json_text = json_text.split("```")[1]
+            if json_text.startswith("json"):
+                json_text = json_text[4:]
+        if json_text.endswith("```"):
+            json_text = json_text[:-3]
+
+        sections = json.loads(json_text.strip())
+        if not isinstance(sections, list) or len(sections) == 0:
+            return None
+
+        # Validate and convert to task suite
+        tasks = []
+        for s in sections:
+            if not isinstance(s, dict) or "task_id" not in s or "intent" not in s:
+                continue
+            task = {
+                "task_id": s["task_id"],
+                "intent": s["intent"],
+                "start_url": s.get("start_url", ""),
+            }
+            if s.get("save_session"):
+                task["save_session"] = True
+            if s.get("require_session"):
+                task["require_session"] = True
+            if s.get("verify_type"):
+                task["verify"] = {"type": s["verify_type"], "value": s.get("verify_value", "")}
+            # Emit loop metadata if phase is "extract" and intent mentions iteration
+            if s.get("loop"):
+                task["loop"] = s["loop"]
+            tasks.append(task)
+
+        if not tasks:
+            return None
+
+        # Resolve input variables in all intents and URLs
+        for task in tasks:
+            for key, val in inputs.items():
+                task["intent"] = task["intent"].replace(f"{{{{{key}}}}}", val).replace(f"{{{key}}}", val)
+                if task.get("start_url"):
+                    task["start_url"] = task["start_url"].replace(f"{{{{{key}}}}}", val)
+
+        base_url = tasks[0].get("start_url", "")
+        return {
+            "session_name": session_name,
+            "base_url": base_url,
+            "tasks": tasks,
+            "_optimization": {
+                "method": "llm",
+                "sections_generated": len(tasks),
+            },
+        }
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"LLM plan optimization failed: {e}")
+        return None
+
+
 def optimize_plan(
     plan_text: str,
     inputs: dict[str, str] | None = None,
     session_name: str = "workflow",
     max_listings: int = 5,
+    brain: Any = None,
 ) -> dict:
     """Optimize a text plan for CUA execution.
+
+    If a brain with query() is provided, uses LLM to parse the plan
+    into sections. Falls back to regex heuristics if LLM fails.
 
     Analyzes the plan and produces a task suite with:
     - Pre-auth sections (separated, with session save)
@@ -109,7 +218,13 @@ def optimize_plan(
     """
     inputs = inputs or {}
 
-    # Resolve input variables
+    # Try LLM-based optimization first (if brain available)
+    if brain is not None:
+        llm_result = _try_llm_optimize(brain, plan_text, inputs, session_name, max_listings)
+        if llm_result is not None:
+            return llm_result
+
+    # Fall back to regex-based optimization
     resolved = plan_text
     for key, value in inputs.items():
         resolved = resolved.replace(f"{{{key}}}", value)

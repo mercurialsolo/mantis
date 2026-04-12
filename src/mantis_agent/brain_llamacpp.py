@@ -140,6 +140,40 @@ class LlamaCppBrain:
                 f"Error: {e}"
             )
 
+    def query(self, prompt: str, response_format: str = "json") -> str:
+        """Send a text-only prompt (no images) and return the model's text response.
+
+        Used for structured analysis: plan parsing, classification, extraction.
+        Unlike think(), does not send images or expect tool calls.
+
+        Args:
+            prompt: Text prompt.
+            response_format: "json" for JSON output, "text" for plain text.
+
+        Returns:
+            Raw text response from the model.
+        """
+        messages = [{"role": "user", "content": prompt}]
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            "temperature": 0.0,
+        }
+        # Don't request tools — we want text output
+        try:
+            resp = requests.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"].get("content", "")
+        except Exception as e:
+            logger.error(f"query failed: {e}")
+            return ""
+
     def think(
         self,
         frames: list[Image.Image],
