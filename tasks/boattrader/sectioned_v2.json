@@ -1,0 +1,49 @@
+{
+  "session_name": "boattrader_v2",
+  "base_url": "https://www.boattrader.com/boats/",
+  "tasks": [
+    {
+      "task_id": "s1_search",
+      "intent": "You are on BoatTrader. Apply these search filters:\n1. Enter 33101 in the zip code/location field\n2. Set radius to 35 miles\n3. Set minimum price to 35000\n4. Select 'Private Seller' in seller type filter\n5. Sort by 'Recently Updated' newest first\n6. Wait for results\n\nCall terminate('success') and report how many results you see.",
+      "save_session": true,
+      "start_url": "https://www.boattrader.com/boats/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s2_listing1",
+      "intent": "You are on BoatTrader results (private sellers, $35K+, near 33101).\n\nProcess the FIRST listing:\n1. Click first listing to open it\n2. Scroll through — read Description and More Details\n3. Look for phone: (555)555-5555, 555-555-5555, 10+ digits\n4. Extract: year, make, model, price, phone, boat type, URL from address bar, seller name\n5. Go back (Alt+Left)\n\nterminate('success') with: VIABLE/SKIPPED + all data",
+      "require_session": true,
+      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s3_listing2",
+      "intent": "You are on BoatTrader results. Process the SECOND listing (scroll past the first):\n1. Find and click the second listing\n2. Read Description + More Details for phone number\n3. Extract all data if viable\n4. Go back (Alt+Left)\n\nterminate('success') with: VIABLE/SKIPPED + data",
+      "require_session": true,
+      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s4_listing3",
+      "intent": "You are on BoatTrader results. Process the THIRD listing (scroll past first two):\n1. Find and click the third listing\n2. Read Description + More Details for phone number\n3. Extract all data if viable\n4. Go back (Alt+Left)\n\nterminate('success') with: VIABLE/SKIPPED + data",
+      "require_session": true,
+      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s5_popyachts_login",
+      "intent": "Log into PopYachts admin. This is a multi-step authentication process — be patient and precise.\n\n1. Press Ctrl+T for new tab\n2. Type https://admin.popyachts.com/ in address bar, press Enter\n3. Wait for page to load\n4. Click 'Sign in with Google'\n5. Wait for Google login page\n6. Click the email field, type: svsg@popsells.com\n7. Click Next\n8. Wait for password page\n9. Click password field, type: SelfService38#\n10. Click Next\n11. If 2FA/authenticator code requested: call terminate('failure') with message '2FA required'\n12. Wait for redirect back to PopYachts\n13. Scroll DOWN the page — past all dashboard content — until you find 'User Management'\n    IMPORTANT: Do NOT use the dropdown at the top-left of the page\n14. In User Management section, click the user dropdown and select 'Erin NesSmith'\n15. Wait for impersonation to activate\n16. Click address bar, type: https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html\n17. Press Enter, wait for lead entry form\n\nONE attempt only. If login fails, terminate('failure').\nIf successful, terminate('success') confirming you're on the lead entry form.",
+      "require_session": true,
+      "save_session": true,
+      "start_url": "https://www.boattrader.com/boats/",
+      "verify": { "type": "url_contains", "value": "popyachts" }
+    },
+    {
+      "task_id": "s6_enter_lead",
+      "intent": "You should be on the PopYachts lead entry form.\n\nEnter a boat lead. Use data from a previously inspected listing, or these defaults:\n- Year: 2020\n- Make: Boston Whaler\n- Model: 270 Dauntless\n- Type: Center Console\n- Asking Price: 95000\n- Seller Name: Unknown\n- Seller Phone: 305-555-1234\n- URL: https://www.boattrader.com/boat/example-listing\n\n1. If 'Outside Boat Lead' selector exists, select it\n2. For each form field: click it, type the value\n3. Scroll through the form to find ALL fields\n4. Click Submit\n5. Check URL — if it changed with new parameters = success\n6. If form cleared but URL unchanged = silent rejection, do NOT retry\n\nterminate('success') if submitted, terminate('failure') if rejected.",
+      "require_session": true,
+      "start_url": "https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html",
+      "verify": { "type": "url_contains", "value": "popyachts" }
+    }
+  ]
+}
