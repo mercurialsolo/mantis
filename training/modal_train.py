@@ -103,14 +103,16 @@ def train_gemma4_cua(
 
     # ── Step 2: Convert to Gemma4 format ──
     if not skip_convert:
-        meta_path = os.path.join(agentnet_dir, "meta_data_merged.jsonl")
+        # AgentNet has separate files: ubuntu_5k has trajectories, meta_data is metadata only
+        meta_path = os.path.join(agentnet_dir, "agentnet_ubuntu_5k.jsonl")
         if not os.path.exists(meta_path):
-            # Try alternative paths
-            for alt in ["train.jsonl", "data.jsonl"]:
+            # Try alternatives
+            for alt in ["agentnet_win_mac_18k.jsonl", "meta_data_merged.jsonl", "train.jsonl"]:
                 alt_path = os.path.join(agentnet_dir, alt)
                 if os.path.exists(alt_path):
                     meta_path = alt_path
                     break
+        print(f"Using data file: {meta_path}")
 
         if not os.path.exists(meta_path):
             print(f"ERROR: AgentNet metadata not found at {meta_path}")
