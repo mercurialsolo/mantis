@@ -47,8 +47,9 @@ image = (
     image=image,
     volumes={"/data": vol},
     timeout=86400,  # 24 hours max
-    memory=65536,
+    memory=81920,
     cpu=8,
+    scaledown_window=600,
 )
 def train_gemma4_cua(
     max_tasks: int = 5000,
