@@ -124,8 +124,10 @@ def optimize_plan(
     # Generate optimized sections
     sections = _generate_sections(phases, resolved, inputs, sites, max_listings)
 
-    # Build task suite
+    # Build task suite — ensure URLs have protocol
     base_url = sites[0] if sites else ""
+    if base_url and not base_url.startswith("http"):
+        base_url = "https://" + base_url
     tasks = [s.to_task() for s in sections]
 
     return {

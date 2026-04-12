@@ -1,6 +1,6 @@
 {
   "session_name": "boattrader_opt",
-  "base_url": "www.boattrader.com",
+  "base_url": "https://www.boattrader.com",
   "tasks": [
     {
       "task_id": "pre_auth_login",
