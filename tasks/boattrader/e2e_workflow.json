@@ -1,0 +1,15 @@
+{
+  "session_name": "boattrader_e2e",
+  "base_url": "https://www.boattrader.com/boats/",
+  "tasks": [
+    {
+      "task_id": "bt_e2e",
+      "intent": "You are a computer use agent executing a BoatTrader lead extraction → PopYachts lead entry workflow.\n\nExecute through normal browser interactions only — mouse clicks, keyboard typing, scrolling, reading visible text. No developer tools, no console, no scripts.\n\n=== STEP 1: Search BoatTrader ===\n1. You are on https://www.boattrader.com/boats/\n2. Enter 33101 in the zip code/location field\n3. Set radius to 35 miles\n4. Set minimum price to 35000\n5. Select 'Private Seller' in the seller type filter\n6. Sort by 'Recently Updated' newest first\n7. Wait for results to load\n\n=== STEP 2: Process first 2 listings ===\nFor each listing:\na) Click the listing to open it\nb) Scroll through the page. Read the Description and More Details sections.\nc) Look for a phone number: (555) 555-5555, 555-555-5555, 555.555.5555, or 10+ consecutive digits.\n   NOT viable: prices, years, zip codes, obfuscated numbers.\nd) If phone found (VIABLE): note the phone number, seller name (or 'Unknown'), year, make, model (from title), asking price, boat type, and read the URL from the address bar.\ne) If no phone found: mark as 'not viable - no phone'\nf) Go back to search results (Alt+Left or browser back)\ng) Process the next listing\n\n=== STEP 3: For the FIRST viable lead, enter it into PopYachts ===\nOnly do this once you have a viable lead with a phone number.\n\na) Open a new tab (Ctrl+T)\nb) Navigate to https://admin.popyachts.com/\nc) Click 'Sign in with Google'\nd) Enter email: svsg@popsells.com, click Next\ne) Enter password: SelfService38#, click Next\nf) If 2FA code is requested, report it and wait\ng) After login, scroll DOWN past the dashboard to find 'User Management' section\n   IMPORTANT: Do NOT use the dropdown in the top-left corner. Scroll DOWN.\nh) In User Management, select 'Erin NesSmith'\ni) Navigate to: https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html\nj) Select 'Outside Boat Lead' if a lead type selector exists\nk) Fill in ALL fields: Year, Make, Model, Type, Asking Price, Seller Name, Seller Phone, Listing URL\nl) Click Submit\nm) Check if URL changed (success) or stayed same (failure)\n\n=== STEP 4: Report ===\nCall terminate('success') with a detailed report:\n- Each listing processed: viable/skipped, data extracted\n- Lead entry result: success/failure\n- Any issues encountered\n\nCRITICAL RULES:\n- ONE login attempt only for PopYachts — do not retry if it fails\n- If a form submission fails or is silently rejected, do NOT retry — move on\n- Read ALL data visually from the screen\n- Read URLs from the browser address bar",
+      "start_url": "https://www.boattrader.com/boats/",
+      "verify": {
+        "type": "url_contains",
+        "value": "boattrader.com"
+      }
+    }
+  ]
+}
