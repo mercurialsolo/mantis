@@ -37,7 +37,6 @@
       "task_id": "extract_listing_1",
       "intent": "You are on search results. Process the first listing:\n1. Find the first listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
       "start_url": "https://www.boattrader.com/boats/",
-      "require_session": true,
       "verify": {
         "type": "url_contains",
         "value": "www.boattrader.com"
@@ -47,7 +46,6 @@
       "task_id": "extract_listing_2",
       "intent": "You are on search results. Process the second listing:\n1. Find the second listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
       "start_url": "https://www.boattrader.com/boats/",
-      "require_session": true,
       "verify": {
         "type": "url_contains",
         "value": "www.boattrader.com"
@@ -57,7 +55,6 @@
       "task_id": "extract_listing_3",
       "intent": "You are on search results. Process the third listing:\n1. Find the third listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
       "start_url": "https://www.boattrader.com/boats/",
-      "require_session": true,
       "verify": {
         "type": "url_contains",
         "value": "www.boattrader.com"
@@ -67,7 +64,6 @@
       "task_id": "extract_listing_4",
       "intent": "You are on search results. Process the fourth listing:\n1. Find the fourth listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
       "start_url": "https://www.boattrader.com/boats/",
-      "require_session": true,
       "verify": {
         "type": "url_contains",
         "value": "www.boattrader.com"
@@ -77,7 +73,6 @@
       "task_id": "extract_listing_5",
       "intent": "You are on search results. Process the fifth listing:\n1. Find the fifth listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
       "start_url": "https://www.boattrader.com/boats/",
-      "require_session": true,
       "verify": {
         "type": "url_contains",
         "value": "www.boattrader.com"
