@@ -307,7 +307,37 @@ def run_opencua_tasks(
                     executor = PlanExecutor(env=env, settle_time=1.5)
                     discoverer = PageDiscovery(env=env, max_elements=50)
 
-            # Retry loop
+            # Check for dynamic loop section
+            if task_config.get("loop"):
+                from mantis_agent.gym.workflow_runner import WorkflowRunner, LoopConfig
+                loop_cfg = LoopConfig(
+                    iteration_intent=intent,
+                    pagination_intent=task_config["loop"].get("pagination_intent",
+                        "Scroll to bottom, click Next page. If no next page, terminate('failure')."),
+                    max_iterations=task_config["loop"].get("max_iterations", 50),
+                    max_pages=task_config["loop"].get("max_pages", 10),
+                    max_steps_per_iteration=max_steps,
+                )
+                wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg)
+                iteration_results = wf_runner.run_loop()
+                task_duration = time.time() - task_start
+                viable = sum(1 for r in iteration_results if r.success)
+                total_iters = len(iteration_results)
+                success = viable > 0
+                scores.append(1.0 if success else 0.0)
+                task_details.append({
+                    "task_id": task_id, "success": success,
+                    "steps": sum(r.steps for r in iteration_results),
+                    "duration_s": round(task_duration),
+                    "termination_reason": "loop_complete",
+                    "iterations": total_iters, "viable": viable,
+                    "data": [r.data[:200] for r in iteration_results if r.data],
+                })
+                print(f"  Loop: {viable}/{total_iters} viable ({task_duration:.0f}s)")
+                save_progress()
+                continue
+
+            # Retry loop (non-loop sections)
             prior_learnings = ""
             success = False
             result = None
