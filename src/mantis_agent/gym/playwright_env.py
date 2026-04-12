@@ -511,7 +511,11 @@ class PlaywrightGymEnv(GymEnvironment):
             case ActionType.KEY_PRESS:
                 combo = action.params["keys"]
                 pw_combo = self._normalize_key_combo(combo)
-                self._page.keyboard.press(pw_combo)
+                try:
+                    self._page.keyboard.press(pw_combo)
+                except Exception as e:
+                    # Gracefully handle unknown keys (f5, etc.)
+                    logger.warning(f"Key press failed '{pw_combo}': {e}")
 
             case ActionType.SCROLL:
                 direction = action.params["direction"]
@@ -562,6 +566,9 @@ class PlaywrightGymEnv(GymEnvironment):
             "home": "Home", "end": "End",
             "pageup": "PageUp", "page_up": "PageUp",
             "pagedown": "PageDown", "page_down": "PageDown",
+            "f1": "F1", "f2": "F2", "f3": "F3", "f4": "F4", "f5": "F5",
+            "f6": "F6", "f7": "F7", "f8": "F8", "f9": "F9", "f10": "F10",
+            "f11": "F11", "f12": "F12", "space": " ",
             "up": "ArrowUp", "arrowup": "ArrowUp",
             "down": "ArrowDown", "arrowdown": "ArrowDown",
             "left": "ArrowLeft", "arrowleft": "ArrowLeft",

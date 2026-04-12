@@ -1,0 +1,15 @@
+{
+  "session_name": "boattrader",
+  "base_url": "https://www.boattrader.com/boats/",
+  "tasks": [
+    {
+      "task_id": "bt_full_workflow",
+      "intent": "You are a computer use agent executing a BoatTrader lead extraction workflow.\n\nINPUTS:\n- zip_code: 33101\n- search_radius: 35 miles\n- pop_password: SelfService38#\n\n=== STEP 1: Navigate to BoatTrader ===\nGo to https://www.boattrader.com/boats/\n\n=== STEP 2: Apply search filters ===\n- Enter 33101 in the zip code/location field\n- Set radius to 35 miles (or closest option)\n- Set minimum price to 35000\n- Select 'Private Seller' in seller type filter\n- Sort by 'Recently Updated' newest first\n- Wait for results\n\n=== STEP 3: Process listings ===\nFor the first 3 listings on the results page:\n\na) Click the listing to open it\nb) Scroll through the page. Look in Description and More Details for a phone number.\n   Phone patterns: (555) 555-5555, 555-555-5555, 555.555.5555, or 10 digits.\nc) If a phone number is found (VIABLE):\n   - Note: year, make, model (from title), asking price, boat type, seller name, seller phone\n   - Read the URL from the address bar\nd) If NO phone number found (NOT VIABLE): note as skipped\ne) Go back to the search results (browser back button or Alt+Left)\nf) Move to the next listing\n\n=== STEP 4: Report results ===\nAfter processing 3 listings, call terminate('success') with a detailed report:\n- Listing 1: [viable/skipped] [year make model] [price] [phone] [URL]\n- Listing 2: [viable/skipped] [year make model] [price] [phone] [URL]\n- Listing 3: [viable/skipped] [year make model] [price] [phone] [URL]\n\nDo NOT attempt to enter leads into PopYachts in this test run.",
+      "start_url": "https://www.boattrader.com/boats/",
+      "verify": {
+        "type": "url_contains",
+        "value": "boattrader.com"
+      }
+    }
+  ]
+}
