@@ -1,0 +1,122 @@
+{
+  "session_name": "boattrader_opt",
+  "base_url": "www.boattrader.com",
+  "tasks": [
+    {
+      "task_id": "pre_auth_login",
+      "intent": "Log into the admin panel at https://admin.popyachts.com/\n\n1. Navigate to https://admin.popyachts.com/\n2. Click 'Sign in with Google' (or the login button)\n3. Enter email: , click Next\n4. Enter password: SelfService38#, click Next\n5. If 2FA requested: terminate('failure') with '2FA required'\n6. Wait for redirect back to admin panel\n\nONE attempt only. terminate('success') when logged in.",
+      "start_url": "https://admin.popyachts.com/",
+      "save_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "admin.popyachts.com"
+      }
+    },
+    {
+      "task_id": "pre_auth_impersonate",
+      "intent": "Set up user impersonation on the admin panel.\n\n1. Scroll DOWN past the dashboard content\n2. Find the 'User Management' section\n3. Do NOT use the dropdown at the top-left corner\n4. In User Management, select 'Private Seller'\n5. Navigate to: https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html\n\nterminate('success') when on the target form page.",
+      "start_url": "https://admin.popyachts.com/",
+      "save_session": true,
+      "require_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "admin.popyachts.com"
+      }
+    },
+    {
+      "task_id": "setup_search",
+      "intent": "Apply search filters on the page:\n1. Enter 33101 in the location/zip code field\n2. Set search radius to 35 miles\n3. Set minimum price to 35000\n4. Select 'Private Seller' in the seller type filter\n5. Sort by 'Recently Updated' or newest first\n6. Wait for results to load\n\nterminate('success') and report how many results you see.",
+      "start_url": "https://www.boattrader.com/boats/",
+      "save_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "www.boattrader.com"
+      }
+    },
+    {
+      "task_id": "extract_listing_1",
+      "intent": "You are on search results. Process the first listing:\n1. Find the first listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
+      "start_url": "https://www.boattrader.com/boats/",
+      "require_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "www.boattrader.com"
+      }
+    },
+    {
+      "task_id": "extract_listing_2",
+      "intent": "You are on search results. Process the second listing:\n1. Find the second listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
+      "start_url": "https://www.boattrader.com/boats/",
+      "require_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "www.boattrader.com"
+      }
+    },
+    {
+      "task_id": "extract_listing_3",
+      "intent": "You are on search results. Process the third listing:\n1. Find the third listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
+      "start_url": "https://www.boattrader.com/boats/",
+      "require_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "www.boattrader.com"
+      }
+    },
+    {
+      "task_id": "extract_listing_4",
+      "intent": "You are on search results. Process the fourth listing:\n1. Find the fourth listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
+      "start_url": "https://www.boattrader.com/boats/",
+      "require_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "www.boattrader.com"
+      }
+    },
+    {
+      "task_id": "extract_listing_5",
+      "intent": "You are on search results. Process the fifth listing:\n1. Find the fifth listing (scroll if needed)\n2. Click it to open\n3. Scroll through the page \u2014 read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type,\n   seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
+      "start_url": "https://www.boattrader.com/boats/",
+      "require_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "www.boattrader.com"
+      }
+    },
+    {
+      "task_id": "enter_lead_1",
+      "intent": "Enter lead #1 into the form.\n\nNavigate to: https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html\n\n1. Select the appropriate lead type if a selector exists\n2. For each form field: click it, type the value\n3. Scroll through to find all fields\n4. Fill: Year, Make, Model, Type, Price, Seller Name, Phone, URL\n5. Click Submit\n6. URL changed = success. Form cleared but URL same = rejection (do NOT retry)\n\nterminate('success') if submitted, terminate('failure') if rejected.",
+      "start_url": "https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html",
+      "require_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "popyachts"
+      }
+    },
+    {
+      "task_id": "enter_lead_2",
+      "intent": "Enter lead #2 into the form.\n\nNavigate to: https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html\n\n1. Select the appropriate lead type if a selector exists\n2. For each form field: click it, type the value\n3. Scroll through to find all fields\n4. Fill: Year, Make, Model, Type, Price, Seller Name, Phone, URL\n5. Click Submit\n6. URL changed = success. Form cleared but URL same = rejection (do NOT retry)\n\nterminate('success') if submitted, terminate('failure') if rejected.",
+      "start_url": "https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html",
+      "require_session": true,
+      "verify": {
+        "type": "url_contains",
+        "value": "popyachts"
+      }
+    }
+  ],
+  "_optimization": {
+    "sites_detected": [
+      "www.boattrader.com",
+      "admin.popyachts.com"
+    ],
+    "phases": [
+      "auth",
+      "setup",
+      "extract_loop",
+      "entry"
+    ],
+    "sections_generated": 10,
+    "auth_separated": true,
+    "loops_unrolled": 5
+  }
+}
