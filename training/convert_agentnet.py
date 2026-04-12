@@ -324,7 +324,14 @@ def main():
                 skipped_incomplete += 1
                 continue
 
-            traj = task.get("traj", [])
+            # AgentNet may use "traj", "trajectory", or "steps" field
+            traj = task.get("traj") or task.get("trajectory") or task.get("steps") or []
+            if total_tasks <= 3:
+                # Debug: print first few task keys to understand format
+                print(f"  DEBUG task keys: {list(task.keys())[:15]}")
+                print(f"  DEBUG traj type: {type(traj)}, len: {len(traj) if isinstance(traj, list) else 'N/A'}")
+                if isinstance(traj, list) and traj:
+                    print(f"  DEBUG first step keys: {list(traj[0].keys()) if isinstance(traj[0], dict) else traj[0][:100]}")
             if len(traj) < args.min_steps:
                 skipped_short += 1
                 continue
