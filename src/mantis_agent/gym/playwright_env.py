@@ -505,17 +505,56 @@ class PlaywrightGymEnv(GymEnvironment):
 
             case ActionType.TYPE:
                 text = action.params["text"]
-                # Pure keyboard typing — no DOM inspection
-                self._page.keyboard.type(text)
+                # If it looks like a URL and we just pressed Ctrl+L, navigate directly
+                if text.startswith("http://") or text.startswith("https://"):
+                    try:
+                        self._page.goto(text, wait_until="domcontentloaded", timeout=15000)
+                        logger.info(f"Navigated to {text}")
+                    except Exception:
+                        # Fallback to typing
+                        self._page.keyboard.type(text)
+                else:
+                    self._page.keyboard.type(text)
 
             case ActionType.KEY_PRESS:
                 combo = action.params["keys"]
                 pw_combo = self._normalize_key_combo(combo)
-                try:
-                    self._page.keyboard.press(pw_combo)
-                except Exception as e:
-                    # Gracefully handle unknown keys (f5, etc.)
-                    logger.warning(f"Key press failed '{pw_combo}': {e}")
+
+                # Handle tab management shortcuts that Playwright headless
+                # doesn't support natively via keyboard
+                combo_lower = combo.lower().replace(" ", "")
+                if combo_lower in ("ctrl+t", "control+t"):
+                    # Open new tab
+                    new_page = self._context.new_page()
+                    self._pages = getattr(self, '_pages', [self._page])
+                    self._pages.append(new_page)
+                    self._page = new_page
+                    logger.info(f"New tab opened ({len(self._pages)} tabs)")
+                elif combo_lower in ("ctrl+w", "control+w"):
+                    # Close current tab, switch to previous
+                    pages = getattr(self, '_pages', [self._page])
+                    if len(pages) > 1:
+                        self._page.close()
+                        pages.remove(self._page)
+                        self._page = pages[-1]
+                        self._page.bring_to_front()
+                        logger.info(f"Tab closed ({len(pages)} tabs remaining)")
+                elif combo_lower in ("ctrl+tab", "control+tab"):
+                    # Switch to next tab
+                    pages = getattr(self, '_pages', [self._page])
+                    if len(pages) > 1:
+                        idx = pages.index(self._page)
+                        self._page = pages[(idx + 1) % len(pages)]
+                        self._page.bring_to_front()
+                        logger.info(f"Switched to tab {pages.index(self._page) + 1}/{len(pages)}")
+                elif combo_lower in ("alt+left", "alt+arrowleft"):
+                    # Browser back
+                    self._page.go_back()
+                else:
+                    try:
+                        self._page.keyboard.press(pw_combo)
+                    except Exception as e:
+                        logger.warning(f"Key press failed '{pw_combo}': {e}")
 
             case ActionType.SCROLL:
                 direction = action.params["direction"]
