@@ -247,13 +247,9 @@ def run_opencua_tasks(
         except Exception as e:
             print(f"  Warning: plan parse failed for {task_id}: {e}")
 
-    # 6. Order tasks
-    login_tasks = [t for t in tasks if t.get("save_session")]
-    other_tasks = [t for t in tasks if not t.get("save_session")]
-    if not env.has_session(session_name) and login_tasks:
-        ordered_tasks = login_tasks + other_tasks
-    else:
-        ordered_tasks = tasks
+    # 6. Preserve declared task order — do NOT reorder
+    # The task file author controls the sequence (e.g., listings before login)
+    ordered_tasks = tasks
 
     # 7. Run tasks
     scores = []
