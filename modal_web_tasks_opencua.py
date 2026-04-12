@@ -445,6 +445,7 @@ def run_opencua_tasks(
                     pass
 
                 success = result.success or verified
+                original_error = task_details[idx].get("error", task_details[idx].get("termination_reason", ""))
                 if success:
                     scores[idx] = 1.0
                     task_details[idx] = {
@@ -457,9 +458,25 @@ def run_opencua_tasks(
                     }
                     print(f"  Retry {task_id}: PASS ({result.total_steps} steps)")
                 else:
-                    print(f"  Retry {task_id}: FAIL again")
+                    task_details[idx] = {
+                        "task_id": task_id, "success": False,
+                        "steps": result.total_steps,
+                        "duration_s": round(time.time() - retry_start),
+                        "termination_reason": result.termination_reason,
+                        "final_url": env.current_url,
+                        "retry": True, "retry_failed": True,
+                        "original_error": original_error,
+                    }
+                    print(f"  Retry {task_id}: FAIL again ({result.total_steps} steps)")
 
             except Exception as e:
+                original_error = task_details[idx].get("error", task_details[idx].get("termination_reason", ""))
+                task_details[idx] = {
+                    "task_id": task_id, "success": False,
+                    "error": str(e), "duration_s": round(time.time() - retry_start),
+                    "retry": True, "retry_failed": True,
+                    "original_error": original_error,
+                }
                 print(f"  Retry {task_id}: ERROR {e}")
 
             save_progress()
