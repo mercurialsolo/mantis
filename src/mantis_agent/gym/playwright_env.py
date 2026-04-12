@@ -142,10 +142,13 @@ class PlaywrightGymEnv(GymEnvironment):
 
         obs = self._capture()
 
-        info: dict[str, Any] = {
-            "url": self._page.url,
-            "title": self._page.title(),
-        }
+        try:
+            info: dict[str, Any] = {
+                "url": self._page.url,
+                "title": self._page.title(),
+            }
+        except Exception:
+            info = {"url": "", "title": ""}
 
         # Pure visual mode — no DOM inspection, no focus detection, no type verification
         return GymResult(
@@ -534,9 +537,14 @@ class PlaywrightGymEnv(GymEnvironment):
                     # Close current tab, switch to previous
                     pages = getattr(self, '_pages', [self._page])
                     if len(pages) > 1:
-                        self._page.close()
-                        pages.remove(self._page)
+                        closing = self._page
+                        if closing in pages:
+                            pages.remove(closing)
                         self._page = pages[-1]
+                        try:
+                            closing.close()
+                        except Exception:
+                            pass
                         self._page.bring_to_front()
                         logger.info(f"Tab closed ({len(pages)} tabs remaining)")
                 elif combo_lower in ("ctrl+tab", "control+tab"):

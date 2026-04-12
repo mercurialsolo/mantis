@@ -337,7 +337,7 @@ def run_opencua_tasks(
                         env.save_session(session_name)
 
                 verify_config = task_config.get("verify", {})
-                # Inline verify
+                # Pure CUA verify — URL only (no DOM access)
                 verified = False
                 vtype = verify_config.get("type", "")
                 value = verify_config.get("value", "")
@@ -346,8 +346,7 @@ def run_opencua_tasks(
                         verified = value.lower() in env.current_url.lower()
                     elif vtype == "url_not_contains":
                         verified = value.lower() not in env.current_url.lower()
-                    elif vtype == "page_contains_text" and env.page:
-                        verified = value.lower() in env.page.inner_text("body").lower()
+                    # page_contains_text requires DOM — skip in pure CUA mode
                 except Exception:
                     pass
 
@@ -396,6 +395,74 @@ def run_opencua_tasks(
             })
 
         save_progress()
+
+    # Auto-retry failed sections
+    failed_indices = [i for i, s in enumerate(scores) if s == 0.0]
+    if failed_indices and max_retries > 1:
+        print(f"\n{'='*60}")
+        print(f"RETRYING {len(failed_indices)} failed sections...")
+        print(f"{'='*60}")
+
+        for idx in failed_indices:
+            task_config = ordered_tasks[idx]
+            task_id = task_config["task_id"]
+            intent = task_config["intent"]
+
+            print(f"\n  Retry: {task_id}")
+            retry_start = time.time()
+
+            try:
+                if task_config.get("require_session") and env.has_session(session_name):
+                    env.load_session(session_name)
+
+                runner = GymRunner(
+                    brain=brain, env=env,
+                    max_steps=max_steps,
+                    frames_per_inference=frames_per_inference,
+                )
+                # Add learning from the failure
+                fail_detail = task_details[idx]
+                retry_intent = intent + (
+                    f"\n\nPREVIOUS ATTEMPT FAILED: {fail_detail.get('error', fail_detail.get('termination_reason', 'unknown'))}. "
+                    f"Try a different approach."
+                )
+
+                result = runner.run(task=retry_intent, task_id=task_id)
+
+                if task_config.get("save_session"):
+                    if result.success or ("login" not in env.current_url.lower()):
+                        env.save_session(session_name)
+
+                verified = False
+                vc = task_config.get("verify", {})
+                vtype, value = vc.get("type", ""), vc.get("value", "")
+                try:
+                    if vtype == "url_contains":
+                        verified = value.lower() in env.current_url.lower()
+                    elif vtype == "url_not_contains":
+                        verified = value.lower() not in env.current_url.lower()
+                except Exception:
+                    pass
+
+                success = result.success or verified
+                if success:
+                    scores[idx] = 1.0
+                    task_details[idx] = {
+                        "task_id": task_id, "success": True,
+                        "steps": result.total_steps,
+                        "duration_s": round(time.time() - retry_start),
+                        "termination_reason": result.termination_reason,
+                        "final_url": env.current_url,
+                        "retry": True,
+                    }
+                    print(f"  Retry {task_id}: PASS ({result.total_steps} steps)")
+                else:
+                    print(f"  Retry {task_id}: FAIL again")
+
+            except Exception as e:
+                print(f"  Retry {task_id}: ERROR {e}")
+
+            save_progress()
 
     env.close()
     vllm_proc.terminate()
