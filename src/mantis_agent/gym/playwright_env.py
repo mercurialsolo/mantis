@@ -68,6 +68,8 @@ class PlaywrightGymEnv(GymEnvironment):
         settle_time: float = 1.0,
         timeout: int = 30000,
         proxy: dict | None = None,
+        cdp_url: str | None = None,
+        human_speed: bool = False,
     ):
         self._start_url = start_url
         self._viewport = viewport
@@ -77,7 +79,9 @@ class PlaywrightGymEnv(GymEnvironment):
         self._session_dir = Path(session_dir)
         self._settle_time = settle_time
         self._timeout = timeout
-        self._proxy = proxy  # {"server": "http://host:port", "username": "...", "password": "..."}
+        self._proxy = proxy
+        self._cdp_url = cdp_url  # Connect to existing Chrome via CDP
+        self._human_speed = human_speed  # Realistic human-like delays
 
         self._pw_ctx = None
         self._browser = None
@@ -85,13 +89,26 @@ class PlaywrightGymEnv(GymEnvironment):
         self._page = None
 
     def _launch_browser(self) -> None:
-        """Launch Playwright browser with stealth anti-detection."""
+        """Launch browser — supports CDP (existing Chrome), stealth, and proxy."""
         from playwright.sync_api import sync_playwright
+        import random
 
         self._pw_ctx = sync_playwright().start()
 
+        # Mode 1: Connect to existing Chrome via CDP (best for CF bypass)
+        if self._cdp_url:
+            self._browser = self._pw_ctx.chromium.connect_over_cdp(self._cdp_url)
+            self._context = self._browser.contexts[0] if self._browser.contexts else self._browser.new_context(
+                viewport={"width": self._viewport[0], "height": self._viewport[1]},
+            )
+            self._context.set_default_timeout(self._timeout)
+            pages = self._context.pages
+            self._page = pages[0] if pages else self._context.new_page()
+            logger.info(f"Connected to Chrome via CDP: {self._cdp_url}")
+            return
+
+        # Mode 2: Launch new browser with stealth
         launcher = getattr(self._pw_ctx, self._browser_type)
-        # Stealth: launch with args that avoid Cloudflare detection
         launch_args = [
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
@@ -105,12 +122,12 @@ class PlaywrightGymEnv(GymEnvironment):
             launch_kwargs["proxy"] = self._proxy
         self._browser = launcher.launch(**launch_kwargs)
 
-        # Stealth context: real user-agent, locale, timezone
+        # Stealth context
         ctx_kwargs: dict[str, Any] = {
             "viewport": {"width": self._viewport[0], "height": self._viewport[1]},
             "user_agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
             ),
             "locale": "en-US",
             "timezone_id": "America/New_York",
@@ -125,20 +142,18 @@ class PlaywrightGymEnv(GymEnvironment):
 
         self._page = self._context.new_page()
 
-        # Apply playwright-stealth (comprehensive anti-detection)
+        # Apply stealth
         try:
             from playwright_stealth import stealth_sync
             stealth_sync(self._page)
-            logger.info("Stealth mode applied (playwright-stealth)")
+            logger.info("Stealth mode applied")
         except ImportError:
-            # Fallback: manual stealth patches
             self._context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
                 Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
                 window.chrome = {runtime: {}};
             """)
-            logger.info("Stealth mode applied (manual fallback)")
+            logger.info("Stealth mode applied (fallback)")
 
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
         """Launch browser and navigate to start URL.
@@ -171,11 +186,25 @@ class PlaywrightGymEnv(GymEnvironment):
         if self._page is None:
             raise RuntimeError("Browser not initialized — call reset() first")
 
+        # Human-like pre-action delay (realistic browsing pace)
+        if self._human_speed:
+            import random
+            if action.action_type == ActionType.CLICK:
+                time.sleep(random.uniform(0.3, 1.0))  # Think before clicking
+            elif action.action_type == ActionType.TYPE:
+                time.sleep(random.uniform(0.5, 1.5))  # Pause before typing
+            elif action.action_type == ActionType.SCROLL:
+                time.sleep(random.uniform(0.2, 0.6))  # Reading pace
+
         self._execute_action(action)
 
-        # Let the page settle after the action
+        # Post-action settle time (longer for human speed)
         if action.action_type not in (ActionType.WAIT, ActionType.DONE):
-            time.sleep(self._settle_time)
+            settle = self._settle_time
+            if self._human_speed:
+                import random
+                settle += random.uniform(0.5, 2.0)  # Variable reading time
+            time.sleep(settle)
 
         obs = self._capture()
 
@@ -545,14 +574,18 @@ class PlaywrightGymEnv(GymEnvironment):
 
             case ActionType.TYPE:
                 text = action.params["text"]
-                # If it looks like a URL and we just pressed Ctrl+L, navigate directly
                 if text.startswith("http://") or text.startswith("https://"):
                     try:
                         self._page.goto(text, wait_until="domcontentloaded", timeout=15000)
                         logger.info(f"Navigated to {text}")
                     except Exception:
-                        # Fallback to typing
                         self._page.keyboard.type(text)
+                elif self._human_speed:
+                    # Type character by character with realistic delays
+                    import random
+                    for char in text:
+                        self._page.keyboard.type(char)
+                        time.sleep(random.uniform(0.03, 0.12))  # 30-120ms per keystroke
                 else:
                     self._page.keyboard.type(text)
 
