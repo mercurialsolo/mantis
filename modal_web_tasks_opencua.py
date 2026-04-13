@@ -225,7 +225,10 @@ def run_opencua_tasks(
     session_dir = "/data/sessions"
     os.makedirs(session_dir, exist_ok=True)
 
-    # Proxy for Cloudflare bypass (set via PROXY_URL env var or .env)
+    # Proxy for Cloudflare bypass
+    # Debug: show what env vars are available
+    proxy_vars = {k: v[:20]+"..." for k, v in os.environ.items() if "PROXY" in k.upper()}
+    print(f"  Proxy env vars: {proxy_vars}")
     proxy = None
     proxy_url = os.environ.get("PROXY_URL", "")
     if proxy_url:
