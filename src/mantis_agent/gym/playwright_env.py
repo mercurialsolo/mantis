@@ -83,16 +83,32 @@ class PlaywrightGymEnv(GymEnvironment):
         self._page = None
 
     def _launch_browser(self) -> None:
-        """Launch Playwright browser and create page."""
+        """Launch Playwright browser with stealth anti-detection."""
         from playwright.sync_api import sync_playwright
 
         self._pw_ctx = sync_playwright().start()
 
         launcher = getattr(self._pw_ctx, self._browser_type)
-        self._browser = launcher.launch(headless=self._headless)
+        # Stealth: launch with args that avoid Cloudflare detection
+        launch_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+        ]
+        self._browser = launcher.launch(
+            headless=self._headless,
+            args=launch_args,
+        )
 
+        # Stealth context: real user-agent, locale, timezone
         ctx_kwargs: dict[str, Any] = {
             "viewport": {"width": self._viewport[0], "height": self._viewport[1]},
+            "user_agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "locale": "en-US",
+            "timezone_id": "America/New_York",
         }
         if self._storage_state:
             import os
@@ -101,6 +117,15 @@ class PlaywrightGymEnv(GymEnvironment):
 
         self._context = self._browser.new_context(**ctx_kwargs)
         self._context.set_default_timeout(self._timeout)
+
+        # Remove navigator.webdriver flag (Cloudflare checks this)
+        self._context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+            window.chrome = {runtime: {}};
+        """)
+
         self._page = self._context.new_page()
 
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
