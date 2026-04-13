@@ -142,9 +142,10 @@ def start_vllm_server(model_dir: str, port: int = 8000, tp: int = 4) -> subproce
 
 
 @app.function(
-    gpu="A100-80GB:4",  # Request max, models use what they need via TP
+    gpu="A100-80GB:4",
     image=image,
     volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],  # Load .env (PROXY_URL, PROXY_USER, PROXY_PASS, POP_PASSWORD)
     timeout=7200,
     memory=65536,
     cpu=16,
