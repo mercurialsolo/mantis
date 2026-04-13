@@ -41,12 +41,15 @@ def main():
     parser.add_argument("--task-file", required=True, help="Task suite JSON")
     parser.add_argument("--brain-url", default="http://localhost:8080/v1", help="Brain API endpoint")
     parser.add_argument("--brain-type", choices=["gemma4", "gemma4-cua", "evocua"], default="gemma4")
+    parser.add_argument("--env-type", choices=["playwright", "xdotool"], default="playwright",
+                        help="Environment type: playwright (automation) or xdotool (pure screen-level)")
     parser.add_argument("--headed", action="store_true", help="Show browser window")
     parser.add_argument("--max-steps", type=int, default=80)
     parser.add_argument("--max-retries", type=int, default=3)
-    parser.add_argument("--proxy", default="", help="Proxy URL (e.g., http://user:pass@host:port)")
-    parser.add_argument("--use-cdp", default="", help="Connect to existing Chrome via CDP (e.g., http://localhost:9222)")
-    parser.add_argument("--human-speed", action="store_true", help="Realistic human-like delays (slower but less detectable)")
+    parser.add_argument("--proxy", default="", help="Proxy URL (for playwright only)")
+    parser.add_argument("--use-cdp", default="", help="Connect to existing Chrome via CDP")
+    parser.add_argument("--browser", default="chromium-browser", help="Browser command (for xdotool mode)")
+    parser.add_argument("--human-speed", action="store_true", help="Realistic human-like delays")
     parser.add_argument("--output", default="results/local_run.json")
 
     args = parser.parse_args()
@@ -81,29 +84,42 @@ def main():
     brain.load()
     logger.info(f"Brain: {args.brain_type} at {args.brain_url}")
 
-    # Create local Playwright env
-    proxy = None
-    if args.proxy:
-        proxy = {"server": args.proxy}
-        logger.info(f"Proxy: {args.proxy}")
+    # Create environment
+    if args.env_type == "xdotool":
+        from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+        env = XdotoolGymEnv(
+            start_url=base_url,
+            viewport=(1280, 720),
+            browser=args.browser,
+            display=os.environ.get("DISPLAY"),
+            settle_time=1.5,
+            human_speed=args.human_speed,
+        )
+        logger.info(f"Environment: xdotool (Xvfb + {args.browser} + xdotool)")
+    else:
+        proxy = None
+        if args.proxy:
+            proxy = {"server": args.proxy}
+            logger.info(f"Proxy: {args.proxy}")
 
-    from mantis_agent.gym.playwright_env import PlaywrightGymEnv
-    env = PlaywrightGymEnv(
-        start_url=base_url,
-        viewport=(1280, 720),
-        headless=not args.headed,
-        browser_type="chromium",
-        session_dir=".sessions",
-        settle_time=1.5,
-        proxy=proxy,
-        cdp_url=args.use_cdp or None,
-        human_speed=args.human_speed,
-    )
+        from mantis_agent.gym.playwright_env import PlaywrightGymEnv
+        env = PlaywrightGymEnv(
+            start_url=base_url,
+            viewport=(1280, 720),
+            headless=not args.headed,
+            browser_type="chromium",
+            session_dir=".sessions",
+            settle_time=1.5,
+            proxy=proxy,
+            cdp_url=args.use_cdp or None,
+            human_speed=args.human_speed,
+        )
+        if args.use_cdp:
+            logger.info(f"CDP: Connected to Chrome at {args.use_cdp}")
+        logger.info(f"Environment: playwright")
 
-    if args.use_cdp:
-        logger.info(f"CDP: Connected to Chrome at {args.use_cdp}")
     if args.human_speed:
-        logger.info("Human speed: enabled (realistic browsing delays)")
+        logger.info("Human speed: enabled")
 
     from mantis_agent.gym.runner import GymRunner
 
