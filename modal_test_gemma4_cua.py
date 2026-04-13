@@ -1,13 +1,12 @@
 """Test fine-tuned Gemma4-CUA model on web tasks.
 
-Serves Gemma4-31B + LoRA adapter via vLLM, runs CRM test suite,
-compares against base model.
+Uses llama.cpp (not vLLM — vLLM doesn't support gemma4 model type yet).
+Two modes:
+  1. Fine-tuned: merge LoRA adapter into base, quantize to GGUF, serve via llama-server
+  2. Baseline: use existing base Gemma4 GGUF from OSWorld runs
 
 Usage:
-    # Test fine-tuned model
     modal run modal_test_gemma4_cua.py --task-file tasks/crm/original_test.json
-
-    # Compare fine-tuned vs base
     modal run modal_test_gemma4_cua.py --task-file tasks/crm/original_test.json --baseline
 """
 
@@ -19,82 +18,63 @@ import time
 
 import modal
 
+from modal_osworld_direct import (
+    GEMMA4_MODEL,
+    GGUF_CONFIGS,
+    download_model as download_base_model,
+    start_llama_server as start_base_llama_server,
+    image as base_image,
+    vol,
+)
+
 app = modal.App("gemma4-cua-test")
 
-vol = modal.Volume.from_name("osworld-data", create_if_missing=True)
-
-BASE_MODEL = "google/gemma-4-31b-it"
 ADAPTER_DIR = "/data/training/gemma4-31b-cua"
 
 image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11"
-    )
-    .apt_install("git", "build-essential", "curl", "wget")
-    .pip_install(
-        "vllm>=0.12.0",
-        "openai", "requests", "pillow", "playwright",
-        "huggingface-hub", "torch", "peft",
-    )
-    .pip_install(
-        # Gemma4 needs transformers >= 4.52 for model support
-        "transformers>=4.52",
-    )
-    .run_commands("playwright install --with-deps chromium || true")
+    base_image
+    .pip_install("peft", "unsloth")
     .add_local_python_source("mantis_agent")
 )
 
 
-def start_vllm_gemma4(adapter_dir: str | None, port: int = 8000) -> subprocess.Popen:
-    """Start vLLM with optional LoRA adapter."""
-    cmd = [
-        sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-        "--model", BASE_MODEL,
-        "--trust-remote-code",
-        "--tensor-parallel-size", "2",
-        "--host", "0.0.0.0", "--port", str(port),
-        "--gpu-memory-utilization", "0.90",
-        "--max-model-len", "16384",
-    ]
+def merge_and_quantize_adapter(adapter_dir: str, output_dir: str) -> str:
+    """Merge LoRA adapter into base model and quantize to GGUF."""
+    gguf_path = os.path.join(output_dir, "gemma4-cua-Q4_K_M.gguf")
+    if os.path.exists(gguf_path):
+        print(f"Merged GGUF cached at {gguf_path}")
+        return gguf_path
 
-    model_name = "gemma4-base"
-    if adapter_dir and os.path.exists(adapter_dir):
-        cmd.extend([
-            "--enable-lora",
-            "--lora-modules", f"gemma4-cua={adapter_dir}",
-        ])
-        model_name = "gemma4-cua"
-        print(f"Starting vLLM with LoRA adapter: {adapter_dir}")
-    else:
-        print(f"Starting vLLM base model (no adapter)")
-
-    cmd.extend(["--served-model-name", model_name])
-
-    print(f"vLLM command: {' '.join(cmd[-8:])}")
-    proc = subprocess.Popen(cmd, stdout=open("/tmp/vllm.log", "w"), stderr=subprocess.STDOUT)
-
-    import requests
-    for i in range(120):
-        try:
-            r = requests.get(f"http://localhost:{port}/v1/models", timeout=2)
-            if r.status_code == 200:
-                print(f"vLLM ready on :{port} ({i*5}s) — model: {model_name}")
-                return proc
-        except Exception:
-            pass
-        if proc.poll() is not None:
-            print(f"vLLM crashed: {open('/tmp/vllm.log').read()[-2000:]}")
-            raise RuntimeError("vLLM crashed")
-        time.sleep(5)
-    raise RuntimeError("vLLM timeout")
+    print("Merging LoRA adapter + quantizing to GGUF...")
+    try:
+        from unsloth import FastLanguageModel
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            adapter_dir,
+            max_seq_length=4096,
+            load_in_4bit=True,
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        model.save_pretrained_gguf(
+            output_dir,
+            tokenizer,
+            quantization_method="q4_k_m",
+        )
+        vol.commit()
+        # Find the GGUF file
+        for f in os.listdir(output_dir):
+            if f.endswith(".gguf"):
+                return os.path.join(output_dir, f)
+    except Exception as e:
+        print(f"Merge/quantize failed: {e}")
+    return ""
 
 
 @app.function(
-    gpu="A100-80GB:2",
+    gpu="A100-80GB",
     image=image,
     volumes={"/data": vol},
     timeout=7200,
-    memory=65536,
+    memory=81920,
     cpu=8,
 )
 def test_model(
@@ -103,7 +83,7 @@ def test_model(
     max_steps: int = 30,
     max_retries: int = 2,
 ):
-    """Test Gemma4 (base or fine-tuned) on web tasks."""
+    """Test Gemma4 (base or fine-tuned) on web tasks via llama.cpp."""
     import requests as req
     from datetime import datetime, timezone
 
@@ -114,17 +94,29 @@ def test_model(
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     t0 = time.time()
 
-    # Start vLLM
-    adapter = ADAPTER_DIR if use_adapter else None
-    vllm_proc = start_vllm_gemma4(adapter)
-    model_name = "gemma4-cua" if use_adapter and os.path.exists(ADAPTER_DIR) else "gemma4-base"
+    if use_adapter and os.path.exists(ADAPTER_DIR):
+        # Merge adapter + quantize to GGUF
+        gguf_dir = "/data/training/gemma4-cua-gguf"
+        gguf_path = merge_and_quantize_adapter(ADAPTER_DIR, gguf_dir)
+        if not gguf_path:
+            print("GGUF merge failed — falling back to base model")
+            use_adapter = False
 
-    r = req.get("http://localhost:8000/v1/models")
+    if not use_adapter or not os.path.exists(ADAPTER_DIR):
+        # Use base Gemma4 GGUF (same as OSWorld)
+        gguf_path = download_base_model("/data")
+        print(f"Using base model: {gguf_path}")
+
+    model_name = "gemma4-cua" if use_adapter else "gemma4-base"
+
+    # Start llama-server
+    llama_proc = start_base_llama_server(gguf_path)
+
+    r = req.get("http://localhost:8080/v1/models")
     print(f"Model: {r.json()['data'][0]['id']}")
 
-    # Create brain (Gemma4 uses tool-calling, not pyautogui)
     brain = LlamaCppBrain(
-        base_url="http://localhost:8000/v1",
+        base_url="http://localhost:8080/v1",
         model=model_name,
         max_tokens=2048,
         temperature=0.0,
@@ -187,7 +179,7 @@ def test_model(
             print(f"  ERROR: {e}")
 
     env.close()
-    vllm_proc.terminate()
+    llama_proc.terminate()
 
     passed = sum(1 for s in scores if s > 0)
     total_time = time.time() - t0
