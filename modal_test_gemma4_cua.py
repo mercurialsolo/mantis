@@ -33,6 +33,7 @@ ADAPTER_DIR = "/data/training/gemma4-31b-cua"
 
 image = (
     base_image
+    .apt_install("libssl-dev", "libcurl4-openssl-dev")  # Needed by unsloth GGUF converter
     .add_local_python_source("mantis_agent")
 )
 
