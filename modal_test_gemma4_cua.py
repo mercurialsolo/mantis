@@ -36,9 +36,9 @@ image = (
         "openai", "requests", "pillow", "playwright",
         "huggingface-hub", "torch", "peft",
     )
-    .run_commands(
-        # Gemma4 needs latest transformers (not yet in stable release)
-        "pip install git+https://github.com/huggingface/transformers.git --quiet",
+    .pip_install(
+        # Gemma4 needs transformers >= 4.52 for model support
+        "transformers>=4.52",
     )
     .run_commands("playwright install --with-deps chromium || true")
     .add_local_python_source("mantis_agent")
