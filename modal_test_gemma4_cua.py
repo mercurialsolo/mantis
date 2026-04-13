@@ -39,10 +39,14 @@ image = (
 
 def merge_and_quantize_adapter(adapter_dir: str, output_dir: str) -> str:
     """Merge LoRA adapter into base model and quantize to GGUF."""
-    gguf_path = os.path.join(output_dir, "gemma4-cua-Q4_K_M.gguf")
-    if os.path.exists(gguf_path):
-        print(f"Merged GGUF cached at {gguf_path}")
-        return gguf_path
+    # Check for previously generated GGUF in output_dir or _gguf suffix dir
+    for search_dir in [output_dir, output_dir + "_gguf"]:
+        if os.path.isdir(search_dir):
+            for f in os.listdir(search_dir):
+                if f.endswith(".gguf") and "Q4_K_M" in f:
+                    path = os.path.join(search_dir, f)
+                    print(f"Merged GGUF cached at {path}")
+                    return path
 
     print("Merging LoRA adapter + quantizing to GGUF...")
     try:
@@ -59,10 +63,12 @@ def merge_and_quantize_adapter(adapter_dir: str, output_dir: str) -> str:
             quantization_method="q4_k_m",
         )
         vol.commit()
-        # Find the GGUF file
-        for f in os.listdir(output_dir):
-            if f.endswith(".gguf"):
-                return os.path.join(output_dir, f)
+        # Unsloth saves to output_dir + "_gguf" subdirectory
+        for search_dir in [output_dir, output_dir + "_gguf"]:
+            if os.path.isdir(search_dir):
+                for f in os.listdir(search_dir):
+                    if f.endswith(".gguf") and "Q4_K_M" in f:
+                        return os.path.join(search_dir, f)
     except Exception as e:
         print(f"Merge/quantize failed: {e}")
     return ""
