@@ -119,8 +119,45 @@ def test_model(
 
     model_name = "gemma4-cua" if use_adapter else "gemma4-base"
 
-    # Start llama-server
-    llama_proc = start_base_llama_server(gguf_path)
+    # Start llama-server with correct mmproj
+    if use_adapter and gguf_path:
+        # Find mmproj in the same directory as the GGUF
+        gguf_dir = os.path.dirname(gguf_path)
+        mmproj = ""
+        for f in os.listdir(gguf_dir):
+            if "mmproj" in f.lower() and f.endswith(".gguf"):
+                mmproj = os.path.join(gguf_dir, f)
+                break
+        # Custom llama-server start for CUA model
+        cmd = [
+            "/opt/llama.cpp/build/bin/llama-server",
+            "-m", gguf_path,
+            "--host", "0.0.0.0", "--port", "8080",
+            "-ngl", "99", "-c", "32768", "-ub", "2048",
+            "--jinja", "--reasoning-budget", "4096",
+            "--flash-attn", "on",
+        ]
+        if mmproj:
+            cmd.extend(["--mmproj", mmproj])
+            print(f"Using mmproj: {mmproj}")
+        print(f"Starting llama-server: {' '.join(cmd[-6:])}")
+        llama_proc = subprocess.Popen(cmd, stdout=open("/tmp/llama.log", "w"), stderr=subprocess.STDOUT)
+        time.sleep(3)
+        import requests as _req
+        for i in range(90):
+            try:
+                r = _req.get("http://localhost:8080/v1/models", timeout=2)
+                if r.status_code == 200:
+                    print(f"llama-server ready ({i*2}s)")
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+        else:
+            print(f"llama-server timeout: {open('/tmp/llama.log').read()[-2000:]}")
+            raise RuntimeError("llama-server timeout")
+    else:
+        llama_proc = start_base_llama_server(gguf_path)
 
     r = req.get("http://localhost:8080/v1/models")
     print(f"Model: {r.json()['data'][0]['id']}")
