@@ -33,7 +33,6 @@ ADAPTER_DIR = "/data/training/gemma4-31b-cua"
 
 image = (
     base_image
-    .apt_install("libssl-dev", "libcurl4-openssl-dev")  # Needed by unsloth GGUF converter
     .add_local_python_source("mantis_agent")
 )
 
@@ -94,7 +93,9 @@ def test_model(
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     t0 = time.time()
 
-    # Install unsloth at runtime (needs GPU)
+    # Install deps at runtime
+    subprocess.run(["apt-get", "update", "-qq"], check=False, capture_output=True)
+    subprocess.run(["apt-get", "install", "-y", "-qq", "libssl-dev", "libcurl4-openssl-dev"], check=False, capture_output=True)
     subprocess.run([sys.executable, "-m", "pip", "install", "unsloth[colab-new]", "peft", "--quiet"], check=False)
 
     if use_adapter and os.path.exists(ADAPTER_DIR):
