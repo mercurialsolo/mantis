@@ -402,6 +402,17 @@ def run_opencua_tasks(
             score = 1.0 if success else 0.0
             scores.append(score)
 
+            # Extract data from model's terminate/done message
+            extracted_data = ""
+            if result and result.trajectory:
+                for step in reversed(result.trajectory):
+                    if step.action.action_type.value == "done":
+                        extracted_data = step.action.params.get("summary", "")
+                        break
+                    if step.thinking and len(step.thinking) > 20:
+                        extracted_data = step.thinking
+                        break
+
             task_details.append({
                 "task_id": task_id,
                 "instruction": intent[:200],
@@ -410,10 +421,13 @@ def run_opencua_tasks(
                 "duration_s": round(task_duration),
                 "termination_reason": result.termination_reason if result else "error",
                 "final_url": env.current_url,
+                "extracted_data": extracted_data[:1000],  # Capture model's findings
             })
 
             status = "PASS" if success else "FAIL"
             print(f"  Result: {status} ({result.total_steps if result else 0} steps, {task_duration:.0f}s)")
+            if extracted_data:
+                print(f"  Data: {extracted_data[:200]}")
 
         except Exception as e:
             task_duration = time.time() - task_start
