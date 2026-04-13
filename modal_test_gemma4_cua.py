@@ -33,7 +33,6 @@ ADAPTER_DIR = "/data/training/gemma4-31b-cua"
 
 image = (
     base_image
-    .pip_install("peft", "unsloth")
     .add_local_python_source("mantis_agent")
 )
 
@@ -93,6 +92,9 @@ def test_model(
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     t0 = time.time()
+
+    # Install unsloth at runtime (needs GPU)
+    subprocess.run([sys.executable, "-m", "pip", "install", "unsloth[colab-new]", "peft", "--quiet"], check=False)
 
     if use_adapter and os.path.exists(ADAPTER_DIR):
         # Merge adapter + quantize to GGUF
