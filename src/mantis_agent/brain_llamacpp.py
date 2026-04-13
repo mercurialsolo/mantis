@@ -275,7 +275,10 @@ class LlamaCppBrain:
             # No tool call — try to parse action from text content
             content = message.get("content", "")
             thinking = message.get("reasoning_content", "") or ""
-            action = self._parse_text_action(content)
+            # Try content first, then thinking for action text
+            action_text = content or thinking
+            print(f"  [brain] content={content[:100]!r} thinking={thinking[:100]!r}")
+            action = self._parse_text_action(action_text)
             if not thinking:
                 thinking = content
 
