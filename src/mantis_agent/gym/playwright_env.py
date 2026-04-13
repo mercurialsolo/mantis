@@ -123,15 +123,22 @@ class PlaywrightGymEnv(GymEnvironment):
         self._context = self._browser.new_context(**ctx_kwargs)
         self._context.set_default_timeout(self._timeout)
 
-        # Remove navigator.webdriver flag (Cloudflare checks this)
-        self._context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-            Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-            window.chrome = {runtime: {}};
-        """)
-
         self._page = self._context.new_page()
+
+        # Apply playwright-stealth (comprehensive anti-detection)
+        try:
+            from playwright_stealth import stealth_sync
+            stealth_sync(self._page)
+            logger.info("Stealth mode applied (playwright-stealth)")
+        except ImportError:
+            # Fallback: manual stealth patches
+            self._context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                window.chrome = {runtime: {}};
+            """)
+            logger.info("Stealth mode applied (manual fallback)")
 
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
         """Launch browser and navigate to start URL.

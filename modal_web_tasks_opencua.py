@@ -66,6 +66,7 @@ image = (
     .pip_install(
         "vllm>=0.12.0",
         "openai", "requests", "pillow", "playwright",
+        "playwright-stealth",
         "huggingface-hub", "transformers", "torch",
     )
     .run_commands(
