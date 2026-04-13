@@ -167,6 +167,8 @@ def test_model(
         model=model_name,
         max_tokens=2048,
         temperature=0.0,
+        # CUA model outputs text actions, not structured tool calls
+        use_tool_calling=not use_adapter,
     )
     brain.load()
 

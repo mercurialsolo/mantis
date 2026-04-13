@@ -118,13 +118,15 @@ class LlamaCppBrain:
         model: str = "gemma-4",
         max_tokens: int = 2048,
         temperature: float = 0.0,
+        use_tool_calling: bool = True,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.model_name = model  # For compatibility with OSWorld adapter
+        self.model_name = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self.enable_thinking = True  # For compatibility
+        self.enable_thinking = True
+        self.use_tool_calling = use_tool_calling
 
     def load(self) -> None:
         """Verify the llama-server is running."""
@@ -187,11 +189,12 @@ class LlamaCppBrain:
         payload = {
             "model": self.model,
             "messages": messages,
-            "tools": OPENAI_TOOLS,
-            "tool_choice": "required",
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         }
+        if self.use_tool_calling:
+            payload["tools"] = OPENAI_TOOLS
+            payload["tool_choice"] = "required"
 
         try:
             resp = requests.post(
@@ -266,17 +269,15 @@ class LlamaCppBrain:
                 args = json.loads(func.get("arguments", "{}"))
             except json.JSONDecodeError:
                 args = {}
-            # llama.cpp puts thinking in reasoning_content, not content
             thinking = message.get("reasoning_content", "") or message.get("content", "") or ""
             action = parse_tool_call(name, args, reasoning=thinking)
         else:
-            # No tool call — extract from content
+            # No tool call — try to parse action from text content
             content = message.get("content", "")
-            logger.warning(f"No tool call, treating as wait: {content[:200]}")
-            action = Action(
-                ActionType.WAIT, {"seconds": 1.0}, reasoning=content
-            )
-            thinking = content
+            thinking = message.get("reasoning_content", "") or ""
+            action = self._parse_text_action(content)
+            if not thinking:
+                thinking = content
 
         return InferenceResult(
             action=action,
@@ -284,3 +285,54 @@ class LlamaCppBrain:
             thinking=thinking,
             tokens_used=data.get("usage", {}).get("total_tokens", 0),
         )
+
+    @staticmethod
+    def _parse_text_action(text: str) -> Action:
+        """Parse action from text output (for models without tool calling).
+
+        Handles formats:
+          Action: click({"x": 500, "y": 300})
+          click(x=500, y=300)
+          pyautogui.click(500, 300)
+          type_text({"text": "hello"})
+          done({"success": true})
+        """
+        import re
+
+        text = text.strip()
+
+        # Try Gemma4 tool-call format: Action: name({"key": value})
+        tool_match = re.search(r'(?:Action:\s*)?(\w+)\(\s*(\{.*?\})\s*\)', text, re.DOTALL)
+        if tool_match:
+            name = tool_match.group(1)
+            try:
+                args = json.loads(tool_match.group(2))
+                return parse_tool_call(name, args)
+            except json.JSONDecodeError:
+                pass
+
+        # Try pyautogui format: pyautogui.click(x=500, y=300)
+        click_match = re.search(r'click\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', text)
+        if click_match:
+            return Action(ActionType.CLICK, {"x": int(click_match.group(1)), "y": int(click_match.group(2))})
+
+        type_match = re.search(r'(?:type_text|typewrite|write)\([\'"](.+?)[\'"]\)', text)
+        if type_match:
+            return Action(ActionType.TYPE, {"text": type_match.group(1)})
+
+        key_match = re.search(r'(?:key_press|press|hotkey)\([\'"](.+?)[\'"]\)', text)
+        if key_match:
+            return Action(ActionType.KEY_PRESS, {"keys": key_match.group(1)})
+
+        scroll_match = re.search(r'scroll\(.*?[\'"](\w+)[\'"]', text)
+        if scroll_match:
+            return Action(ActionType.SCROLL, {"direction": scroll_match.group(1), "amount": 3})
+
+        if re.search(r'done|DONE|terminate.*success', text, re.IGNORECASE):
+            return Action(ActionType.DONE, {"success": True, "summary": text[:200]})
+
+        if re.search(r'fail|FAIL|terminate.*fail', text, re.IGNORECASE):
+            return Action(ActionType.DONE, {"success": False, "summary": text[:200]})
+
+        logger.warning(f"No action parsed from text: {text[:100]}")
+        return Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=text[:100])
