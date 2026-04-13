@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--headed", action="store_true", help="Show browser window")
     parser.add_argument("--max-steps", type=int, default=80)
     parser.add_argument("--max-retries", type=int, default=3)
+    parser.add_argument("--proxy", default="", help="Proxy URL (e.g., http://user:pass@host:port)")
     parser.add_argument("--output", default="results/local_run.json")
 
     args = parser.parse_args()
@@ -78,7 +79,13 @@ def main():
     brain.load()
     logger.info(f"Brain: {args.brain_type} at {args.brain_url}")
 
-    # Create local Playwright env — your real IP, not datacenter
+    # Create local Playwright env — your real IP (or proxy)
+    proxy = None
+    if args.proxy:
+        # Parse proxy URL: http://user:pass@host:port
+        proxy = {"server": args.proxy}
+        logger.info(f"Proxy: {args.proxy}")
+
     from mantis_agent.gym.playwright_env import PlaywrightGymEnv
     env = PlaywrightGymEnv(
         start_url=base_url,
@@ -87,6 +94,7 @@ def main():
         browser_type="chromium",
         session_dir=".sessions",
         settle_time=1.5,
+        proxy=proxy,
     )
 
     from mantis_agent.gym.runner import GymRunner
