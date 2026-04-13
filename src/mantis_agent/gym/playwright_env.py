@@ -67,6 +67,7 @@ class PlaywrightGymEnv(GymEnvironment):
         session_dir: str = ".sessions",
         settle_time: float = 1.0,
         timeout: int = 30000,
+        proxy: dict | None = None,
     ):
         self._start_url = start_url
         self._viewport = viewport
@@ -76,6 +77,7 @@ class PlaywrightGymEnv(GymEnvironment):
         self._session_dir = Path(session_dir)
         self._settle_time = settle_time
         self._timeout = timeout
+        self._proxy = proxy  # {"server": "http://host:port", "username": "...", "password": "..."}
 
         self._pw_ctx = None
         self._browser = None
@@ -95,10 +97,13 @@ class PlaywrightGymEnv(GymEnvironment):
             "--no-sandbox",
             "--disable-dev-shm-usage",
         ]
-        self._browser = launcher.launch(
-            headless=self._headless,
-            args=launch_args,
-        )
+        launch_kwargs = {
+            "headless": self._headless,
+            "args": launch_args,
+        }
+        if self._proxy:
+            launch_kwargs["proxy"] = self._proxy
+        self._browser = launcher.launch(**launch_kwargs)
 
         # Stealth context: real user-agent, locale, timezone
         ctx_kwargs: dict[str, Any] = {

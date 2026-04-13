@@ -223,6 +223,18 @@ def run_opencua_tasks(
     session_dir = "/data/sessions"
     os.makedirs(session_dir, exist_ok=True)
 
+    # Proxy for Cloudflare bypass (set via PROXY_URL env var or .env)
+    proxy = None
+    proxy_url = os.environ.get("PROXY_URL", "")
+    if proxy_url:
+        proxy = {"server": proxy_url}
+        proxy_user = os.environ.get("PROXY_USER", "")
+        proxy_pass = os.environ.get("PROXY_PASS", "")
+        if proxy_user:
+            proxy["username"] = proxy_user
+            proxy["password"] = proxy_pass
+        print(f"  Proxy: {proxy_url}")
+
     env = PlaywrightGymEnv(
         start_url=base_url,
         viewport=(1280, 720),
@@ -230,6 +242,7 @@ def run_opencua_tasks(
         browser_type="chromium",
         session_dir=session_dir,
         settle_time=1.5,
+        proxy=proxy,
     )
 
     # 5. Parse plans
