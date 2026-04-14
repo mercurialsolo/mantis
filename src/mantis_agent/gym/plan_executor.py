@@ -63,7 +63,7 @@ class PlanExecutor:
 
     def can_execute(self, step) -> bool:
         """Check if a plan step can be executed directly (no brain needed)."""
-        return step.action in ("navigate", "type", "click", "key", "wait", "verify")
+        return step.action in ("navigate", "type", "click", "key", "scroll", "wait", "verify")
 
     def execute(self, step, resolved_params: dict[str, str] | None = None) -> StepResult:
         """Execute a plan step directly via Playwright.
@@ -90,6 +90,8 @@ class PlanExecutor:
                 return self._click(step, resolved_params)
             elif action == "key":
                 return self._key(step, resolved_params)
+            elif action == "scroll":
+                return self._scroll(step)
             elif action == "wait":
                 return self._wait(step)
             elif action == "verify":
@@ -200,6 +202,25 @@ class PlanExecutor:
         self._page.keyboard.press(keys)
         time.sleep(self._settle_time)
         return StepResult(success=True, method="direct", detail=f"pressed {keys}")
+
+    def _scroll(self, step) -> StepResult:
+        direction = step.params.get("direction", "down")
+        amount = step.params.get("amount", 3)
+        vw, vh = 1280, 720  # Default viewport
+        x, y = vw // 2, vh // 2
+        dx, dy = 0, 0
+        if direction == "up":
+            dy = -amount * 100
+        elif direction == "down":
+            dy = amount * 100
+        elif direction == "left":
+            dx = -amount * 100
+        elif direction == "right":
+            dx = amount * 100
+        self._page.mouse.move(x, y)
+        self._page.mouse.wheel(dx, dy)
+        time.sleep(self._settle_time)
+        return StepResult(success=True, method="direct", detail=f"scrolled {direction} {amount}x")
 
     def _wait(self, step) -> StepResult:
         seconds = step.params.get("seconds", 2.0)

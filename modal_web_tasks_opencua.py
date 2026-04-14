@@ -58,6 +58,10 @@ CUA_MODELS = {
 
 DEFAULT_CUA_MODEL = "evocua-8b"
 
+# Resolve model at import time so @app.function GPU decorator matches
+CUA_MODEL_KEY = os.environ.get("CUA_MODEL", DEFAULT_CUA_MODEL)
+CUA_CONFIG = CUA_MODELS.get(CUA_MODEL_KEY, CUA_MODELS[DEFAULT_CUA_MODEL])
+
 image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11"
@@ -142,7 +146,7 @@ def start_vllm_server(model_dir: str, port: int = 8000, tp: int = 4) -> subproce
 
 
 @app.function(
-    gpu="A100-80GB:4",
+    gpu=CUA_CONFIG["gpus"],
     image=image,
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],  # Load .env (PROXY_URL, PROXY_USER, PROXY_PASS, POP_PASSWORD)
@@ -246,8 +250,9 @@ def run_opencua_tasks(
         headless=True,
         browser_type="chromium",
         session_dir=session_dir,
-        settle_time=1.5,
+        settle_time=2.0,
         proxy=proxy,
+        human_speed=True,
     )
 
     # 5. Parse plans
@@ -328,6 +333,31 @@ def run_opencua_tasks(
             # Check for dynamic loop section
             if task_config.get("loop"):
                 from mantis_agent.gym.workflow_runner import WorkflowRunner, LoopConfig
+
+                # Live progress callback — writes intermediate results after each iteration
+                def on_loop_iteration(iter_num, iter_result, all_results):
+                    viable_so_far = sum(1 for r in all_results if r.success)
+                    total_so_far = len(all_results)
+                    elapsed = time.time() - task_start
+                    # Update task_details in-place for live monitoring
+                    loop_detail = {
+                        "task_id": task_id, "success": viable_so_far > 0,
+                        "steps": sum(r.steps for r in all_results),
+                        "duration_s": round(elapsed),
+                        "termination_reason": "loop_in_progress",
+                        "iterations": total_so_far, "viable": viable_so_far,
+                        "data": [r.data[:200] for r in all_results if r.data],
+                    }
+                    # Replace or append the loop task detail
+                    if task_details and task_details[-1].get("task_id") == task_id:
+                        task_details[-1] = loop_detail
+                    else:
+                        scores.append(0.0)  # Placeholder, updated on completion
+                        task_details.append(loop_detail)
+                    save_progress()
+                    status = "VIABLE" if iter_result.success else "SKIP"
+                    print(f"  [{iter_num}] {status} — {viable_so_far}/{total_so_far} viable ({elapsed:.0f}s)")
+
                 loop_cfg = LoopConfig(
                     iteration_intent=intent,
                     pagination_intent=task_config["loop"].get("pagination_intent",
@@ -336,21 +366,30 @@ def run_opencua_tasks(
                     max_pages=task_config["loop"].get("max_pages", 10),
                     max_steps_per_iteration=max_steps,
                 )
-                wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg)
+                wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
+                                           on_iteration=on_loop_iteration)
                 iteration_results = wf_runner.run_loop()
                 task_duration = time.time() - task_start
                 viable = sum(1 for r in iteration_results if r.success)
                 total_iters = len(iteration_results)
                 success = viable > 0
-                scores.append(1.0 if success else 0.0)
-                task_details.append({
+
+                # Finalize the loop task score/detail
+                final_detail = {
                     "task_id": task_id, "success": success,
                     "steps": sum(r.steps for r in iteration_results),
                     "duration_s": round(task_duration),
                     "termination_reason": "loop_complete",
                     "iterations": total_iters, "viable": viable,
                     "data": [r.data[:200] for r in iteration_results if r.data],
-                })
+                }
+                if task_details and task_details[-1].get("task_id") == task_id:
+                    task_details[-1] = final_detail
+                    scores[-1] = 1.0 if success else 0.0
+                else:
+                    scores.append(1.0 if success else 0.0)
+                    task_details.append(final_detail)
+
                 print(f"  Loop: {viable}/{total_iters} viable ({task_duration:.0f}s)")
                 save_progress()
                 continue
@@ -561,14 +600,26 @@ def run_opencua_tasks(
 
 @app.local_entrypoint()
 def main(
-    task_file: str = "tasks/crm/original_test.json",
+    task_file: str = "",
+    plan_file: str = "",
     model: str = "evocua-8b",
     plan_dir: str = "",
     max_steps: int = 30,
     max_retries: int = 2,
     inputs: str = "",
+    session_name: str = "",
+    max_listings: int = 30,
+    planner_url: str = "http://localhost:8080/v1",
 ):
     """Run CUA model against web tasks on Modal.
+
+    Two modes:
+      --task-file tasks/boattrader/dynamic_production.json  (pre-built task suite)
+      --plan-file plans/boattrader/spec.txt                 (raw text plan → auto-optimize)
+
+    The plan-file mode uses Gemma4 (via llama-server) to analyze the free-text
+    plan and produce structured task sections with loop configs, session
+    management, and proper ordering — before sending to EvoCUA for execution.
 
     Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b
     """
@@ -576,13 +627,76 @@ def main(
 
     cfg = CUA_MODELS.get(model, CUA_MODELS[DEFAULT_CUA_MODEL])
     print(f"Mantis — {cfg['name']} Web Tasks (Modal)")
-    print(f"  Task file: {task_file}")
-    print(f"  Model:     {cfg['name']} ({cfg['gpus']})")
-    print(f"  Max steps: {max_steps}")
 
-    with open(task_file) as f:
-        task_file_contents = f.read()
+    # Parse inputs early (used by both modes)
+    plan_inputs = {}
+    if inputs:
+        for pair in inputs.split(","):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                plan_inputs[k.strip()] = v.strip()
 
+    # Mode 1: Raw text plan → Gemma4 preprocesses into task suite
+    if plan_file:
+        from mantis_agent.brain_llamacpp import LlamaCppBrain
+        from mantis_agent.gym.plan_optimizer import optimize_plan
+
+        print(f"  Plan file: {plan_file}")
+        print(f"  Mode:      LLM plan optimization (Gemma4 → task suite → EvoCUA)")
+        print(f"  Planner:   {planner_url}")
+        print(f"  Executor:  {cfg['name']} ({cfg['gpus']})")
+
+        with open(plan_file) as f:
+            plan_text = f.read()
+
+        # Generate session name from plan filename if not provided
+        if not session_name:
+            session_name = os.path.splitext(os.path.basename(plan_file))[0]
+
+        # Create Gemma4 brain for plan preprocessing
+        planner_brain = LlamaCppBrain(
+            base_url=planner_url,
+            model="model",
+            max_tokens=4096,
+            temperature=0.0,
+        )
+
+        # Optimize: Gemma4 analyzes plan → structured sections with loops
+        print(f"  Preprocessing plan with Gemma4...")
+        task_suite = optimize_plan(
+            plan_text=plan_text,
+            inputs=plan_inputs,
+            session_name=session_name,
+            max_listings=max_listings,
+            brain=planner_brain,
+        )
+
+        opt_info = task_suite.pop("_optimization", {})
+        print(f"  Sections:  {opt_info.get('sections_generated', '?')}")
+        print(f"  Method:    {opt_info.get('method', 'unknown')}")
+        print(f"  Max steps: {max_steps}")
+
+        # Show generated task summary
+        for t in task_suite.get("tasks", []):
+            loop_tag = " [LOOP]" if t.get("loop") else ""
+            print(f"    {t['task_id']:25s} {t.get('start_url', '')[:45]}{loop_tag}")
+
+        task_file_contents = json.dumps(task_suite)
+
+    # Mode 2: Pre-built task suite JSON
+    elif task_file:
+        print(f"  Task file: {task_file}")
+        print(f"  Model:     {cfg['name']} ({cfg['gpus']})")
+        print(f"  Max steps: {max_steps}")
+
+        with open(task_file) as f:
+            task_file_contents = f.read()
+
+    else:
+        print("ERROR: Provide --task-file or --plan-file")
+        sys.exit(1)
+
+    # Load per-task plan files (for hybrid DOM execution)
     plan_files = {}
     if plan_dir and os.path.isdir(plan_dir):
         for ext in ("*.txt", "*.yaml", "*.yml"):
@@ -592,12 +706,6 @@ def main(
                     plan_files[tid] = f.read()
         print(f"  Plans:     {list(plan_files.keys())}")
 
-    plan_inputs = {}
-    if inputs:
-        for pair in inputs.split(","):
-            if "=" in pair:
-                k, v = pair.split("=", 1)
-                plan_inputs[k.strip()] = v.strip()
     print()
 
     result = run_opencua_tasks.remote(

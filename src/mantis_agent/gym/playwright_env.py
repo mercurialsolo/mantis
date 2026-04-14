@@ -158,20 +158,40 @@ class PlaywrightGymEnv(GymEnvironment):
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
         """Launch browser and navigate to start URL.
 
+        If the browser is already running, reuses it instead of tearing
+        down and relaunching (avoids proxy tunnel re-establishment).
+
         Args:
             task: Task description (used by the runner, not the browser).
             **kwargs: Optional overrides:
                 - start_url: Override the default start URL.
                 - storage_state: Override pre-auth state.
         """
-        if self._page is not None:
-            self.close()
-
         # Allow per-task overrides
         if "start_url" in kwargs:
             self._start_url = kwargs["start_url"]
         if "storage_state" in kwargs:
             self._storage_state = kwargs["storage_state"]
+
+        if self._page is not None and self._browser is not None:
+            # Browser already running — reuse it, just navigate
+            logger.info("Reusing existing browser session (skipping teardown)")
+            if self._start_url and self._start_url != "about:blank":
+                try:
+                    self._page.goto(self._start_url, wait_until="domcontentloaded")
+                    time.sleep(self._settle_time)
+                except Exception as e:
+                    logger.warning(f"Navigation failed on reuse, relaunching browser: {e}")
+                    self.close()
+                    self._launch_browser()
+                    if self._start_url and self._start_url != "about:blank":
+                        self._page.goto(self._start_url, wait_until="domcontentloaded")
+                        time.sleep(self._settle_time)
+            return self._capture()
+
+        # No browser running — launch fresh
+        if self._page is not None:
+            self.close()
 
         self._launch_browser()
 

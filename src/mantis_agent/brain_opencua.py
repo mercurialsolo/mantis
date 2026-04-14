@@ -142,18 +142,24 @@ class OpenCUABrain:
         self.enable_thinking = True
 
     def load(self) -> None:
-        """Verify the vLLM server is running."""
-        try:
-            resp = requests.get(f"{self.base_url}/models", timeout=10)
-            resp.raise_for_status()
-            models = resp.json()
-            logger.info(f"vLLM server connected: {models}")
-        except Exception as e:
-            raise RuntimeError(
-                f"Cannot connect to vLLM at {self.base_url}. "
-                f"Start with: vllm serve xlangai/OpenCUA-7B --trust-remote-code\n"
-                f"Error: {e}"
-            )
+        """Verify the vLLM server is running. Waits for cold start."""
+        for attempt in range(36):  # Wait up to 6 minutes for cold start (vLLM 32B loading)
+            try:
+                resp = requests.get(f"{self.base_url}/models", timeout=30)
+                resp.raise_for_status()
+                models = resp.json()
+                logger.info(f"vLLM server connected: {models}")
+                return
+            except Exception as e:
+                if attempt < 35:
+                    logger.info(f"Brain not ready (attempt {attempt+1}/36), waiting 10s...")
+                    import time
+                    time.sleep(10)
+                else:
+                    raise RuntimeError(
+                        f"Cannot connect to vLLM at {self.base_url} after 2 minutes.\n"
+                        f"Error: {e}"
+                    )
 
     def query(self, prompt: str, response_format: str = "json") -> str:
         """Send a text-only prompt and return text response. No images, no actions."""

@@ -54,6 +54,7 @@ class OptimizedSection:
     start_url: str = ""
     verify_type: str = ""
     verify_value: str = ""
+    loop: dict | None = None  # WorkflowRunner loop config
 
     def to_task(self) -> dict:
         task = {
@@ -67,6 +68,8 @@ class OptimizedSection:
             task["require_session"] = True
         if self.verify_type:
             task["verify"] = {"type": self.verify_type, "value": self.verify_value}
+        if self.loop:
+            task["loop"] = self.loop
         return task
 
 
@@ -97,20 +100,26 @@ LLM_PLAN_PROMPT = """\
 You are a workflow optimizer. Given a plan text, break it into executable sections for a CUA (Computer Use Agent).
 
 Output a JSON array of sections. Each section has:
-- task_id: string (snake_case, e.g. "search_setup", "extract_listing_1")
-- intent: string (detailed instruction for the agent, 2-5 sentences)
-- phase: "pre_auth" | "setup" | "extract" | "entry" | "cleanup"
-- max_steps: int (60 for extraction, 80 for auth/entry/setup)
+- task_id: string (snake_case, e.g. "setup_search", "extract_all", "auth_login")
+- intent: string (detailed step-by-step instruction for the agent)
+- phase: "setup" | "extract" | "pre_auth" | "entry" | "cleanup"
 - save_session: bool (true for auth and setup sections)
-- require_session: bool (true for sections that need prior auth)
+- require_session: bool (true for sections that need prior session state)
 - start_url: string (URL to navigate to, include https://)
 
-Rules:
-- Auth/login flows MUST be separate sections with save_session=true
-- Loops ("for each listing", "process all") should be unrolled into individual sections
-- Each section should be completable in max_steps actions
-- Include pagination as a note in the last extraction section's intent
-- Form entry sections need explicit field-by-field instructions
+For extraction/iteration phases ("for each listing", "process all", "repeat"):
+- Create ONE section with a "loop" field containing:
+  - pagination_intent: instruction to click Next page
+  - max_iterations: number (e.g. 30)
+  - max_pages: number (e.g. 6)
+- The intent should use {{ORDINAL}} placeholder (e.g. "Process the {{ORDINAL}} listing")
+- Do NOT unroll loops into individual sections — the runtime handles iteration dynamically
+
+Task ordering rules:
+- Search/filter setup comes FIRST (before auth) when on a different site
+- Auth/login sections come AFTER search if the auth is for a separate site
+- Entry sections always come LAST
+- Auth sections MUST have save_session=true
 
 Plan text:
 ---
@@ -202,61 +211,44 @@ def optimize_plan(
     plan_text: str,
     inputs: dict[str, str] | None = None,
     session_name: str = "workflow",
-    max_listings: int = 5,
+    max_listings: int = 30,
     brain: Any = None,
 ) -> dict:
-    """Optimize a text plan for CUA execution.
+    """Optimize a text plan for CUA execution using an LLM brain.
 
-    If a brain with query() is provided, uses LLM to parse the plan
-    into sections. Falls back to regex heuristics if LLM fails.
+    Requires a brain with query() (e.g. Gemma4 via llama.cpp or vLLM).
+    The LLM analyzes the plan and produces structured task sections with
+    proper ordering, session management, and loop configs.
 
-    Analyzes the plan and produces a task suite with:
-    - Pre-auth sections (separated, with session save)
-    - Unrolled loops (bounded iterations)
-    - Site-boundary sections
-    - Form fill instructions decomposed into click+type steps
+    Args:
+        plan_text: Free-text plan/spec describing the workflow.
+        inputs: Variable substitutions (e.g. {"zip_code": "33101"}).
+        session_name: Name for session persistence.
+        max_listings: Cap for loop iterations.
+        brain: LLM brain with query() method. Required.
+
+    Returns:
+        Task suite JSON dict (compatible with modal_web_tasks_opencua.py).
+
+    Raises:
+        ValueError: If no brain is provided.
     """
     inputs = inputs or {}
 
-    # Try LLM-based optimization first (if brain available)
-    if brain is not None:
-        llm_result = _try_llm_optimize(brain, plan_text, inputs, session_name, max_listings)
-        if llm_result is not None:
-            return llm_result
+    if brain is None:
+        raise ValueError(
+            "optimize_plan requires a brain with query() for plan parsing. "
+            "Pass a Gemma4/LlamaCpp brain, or use a pre-built task JSON instead."
+        )
 
-    # Fall back to regex-based optimization
-    resolved = plan_text
-    for key, value in inputs.items():
-        resolved = resolved.replace(f"{{{key}}}", value)
-        resolved = resolved.replace(f"{{{{{key}}}}}", value)
+    result = _try_llm_optimize(brain, plan_text, inputs, session_name, max_listings)
+    if result is not None:
+        return result
 
-    # Detect sites mentioned in the plan
-    sites = _detect_sites(resolved)
-
-    # Detect plan phases
-    phases = _detect_phases(resolved, sites)
-
-    # Generate optimized sections
-    sections = _generate_sections(phases, resolved, inputs, sites, max_listings)
-
-    # Build task suite — ensure URLs have protocol
-    base_url = sites[0] if sites else ""
-    if base_url and not base_url.startswith("http"):
-        base_url = "https://" + base_url
-    tasks = [s.to_task() for s in sections]
-
-    return {
-        "session_name": session_name,
-        "base_url": base_url,
-        "tasks": tasks,
-        "_optimization": {
-            "sites_detected": sites,
-            "phases": [p["type"] for p in phases],
-            "sections_generated": len(sections),
-            "auth_separated": any(s.phase == "pre_auth" for s in sections),
-            "loops_unrolled": sum(1 for s in sections if s.phase == "extract"),
-        },
-    }
+    raise RuntimeError(
+        "LLM plan optimization failed. Check that the brain is running and "
+        "can handle text queries. Use a pre-built task JSON as fallback."
+    )
 
 
 def _detect_sites(text: str) -> list[str]:
@@ -368,21 +360,29 @@ def _generate_sections(
             verify_value=main_url.split("//")[-1].split("/")[0] if main_url else "",
         ))
 
-    # Phase 3: Loop unrolling — create N listing sections
+    # Phase 3: Dynamic loop with pagination (uses WorkflowRunner)
     if any(p["type"] == "extract_loop" for p in phases):
         extract_intent_base = _build_extract_intent(text)
-        for i in range(1, max_listings + 1):
-            ordinal = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth"}.get(i, f"#{i}")
-            sections.append(OptimizedSection(
-                task_id=f"extract_listing_{i}",
-                intent=extract_intent_base.replace("{ORDINAL}", ordinal).replace("{N}", str(i)),
-                phase="extract",
-                max_steps=60,
-                require_session=True,
-                start_url=main_url,
-                verify_type="url_contains",
-                verify_value=main_url.split("//")[-1].split("/")[0] if main_url else "",
-            ))
+        sections.append(OptimizedSection(
+            task_id="extract_all",
+            intent=extract_intent_base,
+            phase="extract",
+            max_steps=60,
+            require_session=True,
+            start_url=main_url,
+            verify_type="url_contains",
+            verify_value=main_url.split("//")[-1].split("/")[0] if main_url else "",
+            loop={
+                "pagination_intent": (
+                    "Scroll to the bottom of the search results. Look for a 'Next' button, "
+                    "'>' arrow, or page numbers. If there is a next page, click it and wait "
+                    "for results to load. Call terminate('success'). If there is no next page, "
+                    "call terminate('failure') with 'no more pages'."
+                ),
+                "max_iterations": max_listings,
+                "max_pages": max(max_listings // 5, 3),
+            },
+        ))
 
     # Phase 4: Entry sections (one per expected viable lead)
     if any(p["type"] == "entry" for p in phases):

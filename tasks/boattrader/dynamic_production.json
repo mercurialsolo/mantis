@@ -11,10 +11,11 @@
     },
     {
       "task_id": "s2_extract_all",
+      "require_session": true,
       "intent": "You are on search results. Process the {ORDINAL} listing:\n1. Find the {ORDINAL} listing (scroll if needed)\n2. Click it to open\n3. Scroll through — read Description and More Details\n4. Look for a phone number: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes\n5. If phone found: extract year, make, model, price, phone, boat type, seller name (or Unknown), read URL from address bar\n6. Go back to results (Alt+Left)\n\nIf there are no more listings visible, call terminate('failure') with 'no more listings'.\nOtherwise call terminate('success') with: VIABLE or SKIPPED + all extracted data.",
       "loop": {
         "pagination_intent": "Scroll to the bottom of the search results. Look for a 'Next' button, '>' arrow, or page numbers. If there is a next page, click it and wait for results to load. Call terminate('success'). If there is no next page, call terminate('failure') with 'no more pages'.",
-        "max_iterations": 30,
+        "max_iterations": 50,
         "max_pages": 5
       },
       "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",

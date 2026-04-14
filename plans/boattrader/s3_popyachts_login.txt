@@ -1,0 +1,22 @@
+Log into PopYachts admin and navigate to lead entry form
+URL: https://admin.popyachts.com/
+Save session after login: yes
+
+Inputs:
+  email = "svsg@popsells.com" (Google login email)
+  password (required) (Google login password)
+
+Steps:
+1. Go to {{url}}
+2. Click on Sign in with Google button
+3. Click on email input field
+4. Type "{{email}}"
+5. Click on Next button
+6. Click on password input field
+7. Type "{{password}}"
+8. Click on Next button
+9. Scroll down
+10. Click on User Management
+11. Click on Erin NesSmith
+12. Go to https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html
+13. Verify: URL should contain "popyachts"

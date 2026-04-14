@@ -45,7 +45,6 @@ image = (
     timeout=86400,
     memory=65536,
     cpu=8,
-    allow_concurrent_inputs=10,
 )
 @modal.web_server(port=8000)
 def brain():

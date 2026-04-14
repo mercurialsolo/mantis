@@ -474,6 +474,32 @@ def _parse_text_step(line: str) -> PlanStep | None:
                 return PlanStep(action="verify", params={"check": "page_contains_text", "value": value})
         return PlanStep(action="verify", params={"check": "custom", "value": verify_text})
 
+    # Scroll
+    if text_lower.startswith("scroll"):
+        direction = "down"
+        for d in ("up", "down", "left", "right"):
+            if d in text_lower:
+                direction = d
+                break
+        amount = 3
+        amount_match = re.search(r'(\d+)', text)
+        if amount_match:
+            amount = int(amount_match.group(1))
+        return PlanStep(action="scroll", params={"direction": direction, "amount": amount})
+
+    # Wait
+    if text_lower.startswith("wait"):
+        seconds = 2.0
+        secs_match = re.search(r'(\d+(?:\.\d+)?)\s*s', text)
+        if secs_match:
+            seconds = float(secs_match.group(1))
+        return PlanStep(action="wait", params={"seconds": seconds}, wait_for=text[4:].strip())
+
+    # Press key
+    if text_lower.startswith("press"):
+        keys = text[5:].strip()
+        return PlanStep(action="key", params={"keys": keys})
+
     # Click
     if text_lower.startswith("click"):
         target = re.sub(r"^click\s+(?:on\s+)?(?:the\s+)?", "", text, flags=re.IGNORECASE).strip()

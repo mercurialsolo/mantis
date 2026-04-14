@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -76,11 +77,13 @@ class WorkflowRunner:
     """
 
     def __init__(self, brain: Any, env: Any, loop_config: LoopConfig,
-                 session_name: str = "workflow"):
+                 session_name: str = "workflow",
+                 on_iteration: Any = None):
         self.brain = brain
         self.env = env
         self.config = loop_config
         self.session_name = session_name
+        self.on_iteration = on_iteration  # Callback: fn(iteration_num, result, all_results)
 
     def run_loop(self) -> list[IterationResult]:
         """Execute the full loop: iterate items on each page, paginate."""
@@ -111,6 +114,12 @@ class WorkflowRunner:
             logger.info(f"Iteration {global_iteration} (page {page}, item {page_iteration})")
             t0 = time.time()
 
+            # Human-like delay between iterations to avoid bot detection
+            if global_iteration > 1:
+                delay = random.uniform(2.0, 5.0)
+                logger.info(f"  Inter-iteration delay: {delay:.1f}s")
+                time.sleep(delay)
+
             # Run bounded iteration
             result = self._run_iteration(intent, f"iter_{global_iteration}")
 
@@ -130,9 +139,17 @@ class WorkflowRunner:
             if iter_result.data:
                 logger.info(f"  Data: {iter_result.data[:100]}")
 
+            # Progress callback — allows caller to write intermediate results
+            if self.on_iteration:
+                try:
+                    self.on_iteration(global_iteration, iter_result, results)
+                except Exception as e:
+                    logger.warning(f"on_iteration callback error: {e}")
+
             # Check for end of page
             if iter_result.no_more_items:
                 logger.info(f"No more items on page {page}. Attempting pagination...")
+                time.sleep(random.uniform(3.0, 6.0))  # Pause before pagination
                 paginated = self._run_pagination()
                 if paginated:
                     page += 1
