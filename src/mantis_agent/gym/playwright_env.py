@@ -180,6 +180,7 @@ class PlaywrightGymEnv(GymEnvironment):
                 try:
                     self._page.goto(self._start_url, wait_until="domcontentloaded")
                     time.sleep(self._settle_time)
+                    self.dismiss_popups()
                 except Exception as e:
                     logger.warning(f"Navigation failed on reuse, relaunching browser: {e}")
                     self.close()
@@ -198,6 +199,7 @@ class PlaywrightGymEnv(GymEnvironment):
         if self._start_url and self._start_url != "about:blank":
             self._page.goto(self._start_url, wait_until="domcontentloaded")
             time.sleep(self._settle_time)
+            self.dismiss_popups()
 
         return self._capture()
 
@@ -225,6 +227,10 @@ class PlaywrightGymEnv(GymEnvironment):
                 import random
                 settle += random.uniform(0.5, 2.0)  # Variable reading time
             time.sleep(settle)
+
+        # Auto-dismiss popups before capturing screenshot
+        # Clears cookie banners, notification prompts, etc. via DOM
+        self.dismiss_popups()
 
         obs = self._capture()
 
@@ -391,6 +397,48 @@ class PlaywrightGymEnv(GymEnvironment):
                 }
         except Exception:
             return None
+
+    def dismiss_popups(self) -> None:
+        """Auto-dismiss common popups (cookies, notifications) via DOM.
+
+        Called before each observation to clear UI obstacles that waste
+        vision model steps. Uses DOM selectors — no vision needed.
+        """
+        if not self._page:
+            return
+
+        # Common cookie consent patterns
+        selectors = [
+            # By text
+            'button:has-text("Accept")',
+            'button:has-text("Accept All")',
+            'button:has-text("Accept Cookies")',
+            'button:has-text("I Accept")',
+            'button:has-text("OK")',
+            'button:has-text("Got it")',
+            'button:has-text("Agree")',
+            # By common IDs/classes
+            '#onetrust-accept-btn-handler',
+            '.cookie-accept',
+            '[data-testid="cookie-accept"]',
+            '.cc-accept',
+            '.cc-btn.cc-dismiss',
+            '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+            # Close/X buttons on overlays
+            'button[aria-label="Close"]',
+            'button[aria-label="Dismiss"]',
+        ]
+
+        for selector in selectors:
+            try:
+                el = self._page.query_selector(selector)
+                if el and el.is_visible():
+                    el.click()
+                    logger.info(f"Dismissed popup: {selector}")
+                    time.sleep(0.5)
+                    return  # One dismissal per call
+            except Exception:
+                continue
 
     def _capture(self, annotate_som: bool = False) -> GymObservation:
         """Take a screenshot and return as GymObservation.
