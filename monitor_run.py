@@ -273,6 +273,17 @@ def main():
 
             # Check if run is complete
             if data.get("completed_at"):
+                # If containers are still running, this is a stale completed file —
+                # a new run hasn't written its results yet. Keep waiting.
+                if check_containers():
+                    if not getattr(main, '_warned_stale', False):
+                        print(f"\n{YELLOW}Previous run complete. Waiting for new results from active container...{RESET}")
+                        main._warned_stale = True
+                    # Reset to look for a newer file next poll
+                    prev_file = None
+                    time.sleep(args.interval)
+                    continue
+
                 scores = data.get("scores", [])
                 details = data.get("task_details", [])
                 n_pass = sum(1 for s in scores if s > 0)

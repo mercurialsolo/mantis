@@ -123,18 +123,24 @@ class WorkflowRunner:
             # Run bounded iteration
             result = self._run_iteration(intent, f"iter_{global_iteration}")
 
+            extracted = self._extract_data(result)
+            viable = self._validate_viable(extracted)
+
             iter_result = IterationResult(
                 iteration=global_iteration,
                 page=page,
-                success=result.success,
-                data=self._extract_data(result),
+                success=viable,
+                data=extracted,
                 no_more_items=self._check_no_more(result),
                 steps=result.total_steps,
                 duration=time.time() - t0,
             )
             results.append(iter_result)
 
-            status = "VIABLE" if result.success else ("END_OF_PAGE" if iter_result.no_more_items else "SKIP")
+            if result.success and not viable:
+                logger.warning(f"  Model claimed success but data failed validation (Cloudflare/empty)")
+
+            status = "VIABLE" if viable else ("END_OF_PAGE" if iter_result.no_more_items else "SKIP")
             logger.info(f"  → {status} ({result.total_steps} steps, {iter_result.duration:.0f}s)")
             if iter_result.data:
                 logger.info(f"  Data: {iter_result.data[:100]}")
@@ -255,3 +261,57 @@ class WorkflowRunner:
             if step.thinking and len(step.thinking) > 50:
                 return step.thinking[:500]
         return ""
+
+    @staticmethod
+    def _validate_viable(data: str) -> bool:
+        """Check if extracted data contains actual lead content.
+
+        A viable extraction must contain at least one of:
+        - A phone number pattern (3+ digit groups)
+        - A price/dollar amount
+        - The word VIABLE (model's explicit signal)
+        - Boat-related keywords + data (year, make, model together)
+
+        Rejects iterations that only mention Cloudflare, verification,
+        blank pages, or generic failure messages.
+        """
+        if not data:
+            return False
+
+        text = data.lower()
+
+        # Reject obvious non-extractions
+        reject_signals = [
+            "cloudflare", "verify you are human", "verifying",
+            "about:blank", "blank page", "captcha",
+            "page isn't loading", "not on the search",
+        ]
+        if any(sig in text for sig in reject_signals):
+            # Even if model said success, CF page = not viable
+            return False
+
+        # Check for explicit VIABLE signal from model
+        if "viable" in text:
+            return True
+
+        # Check for phone number pattern (3+ digits separated by dashes/dots/parens)
+        import re
+        phone_pattern = re.compile(r'\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}')
+        if phone_pattern.search(data):
+            return True
+
+        # Check for price/dollar amount
+        if re.search(r'\$\s*[\d,]+', data) or re.search(r'(?:price|asking)[:\s]*\d', text):
+            return True
+
+        # Check for boat data keywords (need at least 2 of: year, make, model)
+        boat_signals = 0
+        if re.search(r'20[12]\d', data):  # Year like 2019-2026
+            boat_signals += 1
+        for kw in ["make", "model", "hull", "engine", "footer", "console", "cabin"]:
+            if kw in text:
+                boat_signals += 1
+        if boat_signals >= 2:
+            return True
+
+        return False
