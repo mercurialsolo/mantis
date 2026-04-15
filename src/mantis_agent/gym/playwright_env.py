@@ -178,16 +178,15 @@ class PlaywrightGymEnv(GymEnvironment):
             logger.info("Reusing existing browser session (skipping teardown)")
             if self._start_url and self._start_url != "about:blank":
                 try:
-                    self._page.goto(self._start_url, wait_until="domcontentloaded")
-                    time.sleep(self._settle_time)
+                    # Use "commit" instead of "domcontentloaded" — faster, doesn't
+                    # hang on heavy JS sites. CDP Chrome + proxy can be slow.
+                    self._page.goto(self._start_url, wait_until="commit", timeout=45000)
+                    time.sleep(self._settle_time + 1.0)  # Extra settle for JS
                     self.dismiss_popups()
                 except Exception as e:
-                    logger.warning(f"Navigation failed on reuse, relaunching browser: {e}")
-                    self.close()
-                    self._launch_browser()
-                    if self._start_url and self._start_url != "about:blank":
-                        self._page.goto(self._start_url, wait_until="domcontentloaded")
-                        time.sleep(self._settle_time)
+                    logger.warning(f"Navigation failed on reuse: {e}")
+                    # Don't relaunch browser (kills CDP) — just continue with current page
+                    logger.info("Continuing with current page state")
             return self._capture()
 
         # No browser running — launch fresh
@@ -197,8 +196,9 @@ class PlaywrightGymEnv(GymEnvironment):
         self._launch_browser()
 
         if self._start_url and self._start_url != "about:blank":
-            self._page.goto(self._start_url, wait_until="domcontentloaded")
-            time.sleep(self._settle_time)
+            wait_strategy = "commit" if self._cdp_url else "domcontentloaded"
+            self._page.goto(self._start_url, wait_until=wait_strategy, timeout=45000)
+            time.sleep(self._settle_time + (1.0 if self._cdp_url else 0))
             self.dismiss_popups()
 
         return self._capture()
@@ -695,8 +695,12 @@ class PlaywrightGymEnv(GymEnvironment):
                         self._page.bring_to_front()
                         logger.info(f"Switched to tab {pages.index(self._page) + 1}/{len(pages)}")
                 elif combo_lower in ("alt+left", "alt+arrowleft"):
-                    # Browser back
-                    self._page.go_back()
+                    # Browser back — use short timeout to avoid hanging on heavy pages
+                    try:
+                        self._page.go_back(wait_until="commit", timeout=15000)
+                    except Exception:
+                        logger.warning("go_back timed out, using keyboard shortcut")
+                        self._page.keyboard.press("Alt+ArrowLeft")
                 else:
                     try:
                         self._page.keyboard.press(pw_combo)
