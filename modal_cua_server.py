@@ -186,16 +186,86 @@ def gemma4_planner():
 # B) Real Chrome via CDP — bypasses Cloudflare
 # ═══════════════════════════════════════════════════════════════════
 
+def _start_local_proxy(upstream_proxy: dict, local_port: int = 3128) -> subprocess.Popen:
+    """Start a local forward proxy that handles authentication with the upstream proxy.
+
+    Chrome --proxy-server doesn't support user:pass in URLs.
+    This starts a tiny Python proxy on localhost that forwards to the
+    authenticated upstream (IPRoyal etc).
+    """
+    proxy_server = upstream_proxy.get("server", "")
+    proxy_user = upstream_proxy.get("username", "")
+    proxy_pass = upstream_proxy.get("password", "")
+
+    # Write a minimal proxy forwarder script
+    script = f"""
+import http.server, urllib.request, socketserver, base64, ssl
+
+class ProxyHandler(http.server.BaseHTTPRequestHandler):
+    upstream = "{proxy_server}"
+    auth = base64.b64encode(b"{proxy_user}:{proxy_pass}").decode()
+
+    def do_CONNECT(self):
+        import socket
+        from urllib.parse import urlparse
+        p = urlparse(self.upstream)
+        try:
+            s = socket.create_connection((p.hostname, p.port), timeout=30)
+            connect_req = f"CONNECT {{self.path}} HTTP/1.1\\r\\nHost: {{self.path}}\\r\\nProxy-Authorization: Basic {{self.auth}}\\r\\n\\r\\n"
+            s.sendall(connect_req.encode())
+            resp = s.recv(4096)
+            if b"200" in resp:
+                self.send_response(200)
+                self.end_headers()
+                import threading
+                def forward(src, dst):
+                    try:
+                        while True:
+                            data = src.recv(65536)
+                            if not data: break
+                            dst.sendall(data)
+                    except: pass
+                c = self.request
+                t1 = threading.Thread(target=forward, args=(c, s), daemon=True)
+                t2 = threading.Thread(target=forward, args=(s, c), daemon=True)
+                t1.start(); t2.start(); t1.join(); t2.join()
+            else:
+                self.send_error(502)
+        except Exception as e:
+            self.send_error(502, str(e))
+
+    def log_message(self, *a): pass
+
+with socketserver.ThreadingTCPServer(("127.0.0.1", {local_port}), ProxyHandler) as srv:
+    srv.serve_forever()
+"""
+    with open("/tmp/local_proxy.py", "w") as f:
+        f.write(script)
+
+    proc = subprocess.Popen(
+        [sys.executable, "/tmp/local_proxy.py"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    time.sleep(1)
+    if proc.poll() is not None:
+        raise RuntimeError("Local proxy forwarder crashed on startup")
+    print(f"  Local proxy forwarder on :{local_port} → {proxy_server}")
+    return proc
+
+
 def _start_chrome_cdp(proxy: dict | None = None, port: int = 9222) -> subprocess.Popen:
     """Launch real Google Chrome with remote debugging for CDP connection.
 
     Real Chrome has authentic fingerprints that pass Cloudflare verification,
     unlike Playwright's bundled Chromium which is trivially detectable.
+
+    For authenticated proxies, starts a local forwarder since Chrome
+    --proxy-server doesn't support user:pass in proxy URLs.
     """
     import requests as req
 
     # Start Xvfb (virtual display for headless Chrome)
-    xvfb_proc = subprocess.Popen(
+    subprocess.Popen(
         ["Xvfb", ":99", "-screen", "0", "1280x720x24", "-ac"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -218,21 +288,15 @@ def _start_chrome_cdp(proxy: dict | None = None, port: int = 9222) -> subprocess
         "--window-size=1280,720",
     ]
 
-    # Proxy: Chrome --proxy-server handles the connection.
-    # For authenticated proxies (IPRoyal), embed user:pass in the URL
-    # since Chrome doesn't support --proxy-auth flag.
+    # Proxy setup
     if proxy:
-        proxy_server = proxy.get("server", "")
-        proxy_user = proxy.get("username", "")
-        proxy_pass = proxy.get("password", "")
-        if proxy_server and proxy_user:
-            # http://user:pass@host:port
-            from urllib.parse import urlparse
-            parsed = urlparse(proxy_server)
-            auth_url = f"{parsed.scheme}://{proxy_user}:{proxy_pass}@{parsed.hostname}:{parsed.port}"
-            cmd.append(f"--proxy-server={auth_url}")
-        elif proxy_server:
-            cmd.append(f"--proxy-server={proxy_server}")
+        if proxy.get("username"):
+            # Authenticated proxy: use local forwarder
+            _start_local_proxy(proxy, local_port=3128)
+            cmd.append("--proxy-server=http://127.0.0.1:3128")
+        else:
+            # Unauthenticated proxy: direct
+            cmd.append(f"--proxy-server={proxy['server']}")
 
     cmd.append("about:blank")
 
@@ -240,8 +304,6 @@ def _start_chrome_cdp(proxy: dict | None = None, port: int = 9222) -> subprocess
     env["DISPLAY"] = ":99"
 
     print(f"Starting Chrome CDP on :{port}")
-    if proxy:
-        print(f"  Proxy: {proxy.get('server', '')}")
     chrome_proc = subprocess.Popen(
         cmd, env=env,
         stdout=open("/tmp/chrome.log", "w"),
@@ -252,7 +314,7 @@ def _start_chrome_cdp(proxy: dict | None = None, port: int = 9222) -> subprocess
     if chrome_proc.poll() is not None:
         log = open("/tmp/chrome.log").read()[-2000:]
         print(f"Chrome crashed: {log}")
-        raise RuntimeError(f"Chrome crashed on startup")
+        raise RuntimeError("Chrome crashed on startup")
 
     # Wait for CDP port
     for i in range(30):
@@ -868,7 +930,12 @@ def _run_gemma4_cua_executor(
 
 @app.function(
     gpu="A100-80GB",
-    image=planner_image.pip_install(
+    image=planner_image.run_commands(
+        "apt-get update && apt-get install -y gnupg curl wget",
+        "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
+        "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
+        "apt-get update && apt-get install -y google-chrome-stable xvfb || true",
+    ).pip_install(
         "openai", "requests", "pillow", "playwright", "playwright-stealth",
     ).run_commands("playwright install --with-deps chromium || true")
     .add_local_python_source("mantis_agent"),
