@@ -96,25 +96,24 @@ planner_image = (
     .pip_install("huggingface-hub[cli]", "requests")
 )
 
-# EvoCUA executor: vLLM + real Chrome (CDP) + Playwright + Xvfb
+# EvoCUA executor: vLLM + real Chrome + Xvfb + xdotool (zero automation fingerprints)
 executor_image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11"
     )
-    .apt_install("git", "build-essential", "curl", "wget", "gnupg")
+    .apt_install("git", "build-essential", "curl", "wget", "gnupg",
+                 "xvfb", "xdotool", "scrot")
     .run_commands(
-        # Install real Google Chrome (not Chromium) for CF bypass
+        # Install real Google Chrome (not Chromium)
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
-        "apt-get update && apt-get install -y google-chrome-stable xvfb || true",
+        "apt-get update && apt-get install -y google-chrome-stable || true",
     )
     .pip_install(
         "vllm>=0.12.0",
-        "openai", "requests", "pillow", "playwright",
-        "playwright-stealth",
+        "openai", "requests", "pillow", "mss",
         "huggingface-hub", "transformers", "torch",
     )
-    .run_commands("playwright install --with-deps chromium || true")
     .add_local_python_source("mantis_agent")
 )
 
@@ -403,7 +402,7 @@ def _run_executor(
     from datetime import datetime, timezone
 
     from mantis_agent.brain_opencua import OpenCUABrain
-    from mantis_agent.gym.playwright_env import PlaywrightGymEnv
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
     from mantis_agent.gym.runner import GymRunner
 
     plan_inputs = plan_inputs or {}
@@ -452,29 +451,31 @@ def _run_executor(
     )
     brain.load()
 
-    # Launch real Chrome via CDP (bypasses Cloudflare)
-    session_dir = "/data/sessions"
-    os.makedirs(session_dir, exist_ok=True)
-
+    # Xvfb + xdotool + real Chrome (zero automation fingerprints)
     proxy = _build_proxy_config()
+    proxy_server = ""
     if proxy:
-        print(f"  Proxy: {proxy['server']}")
+        # Start local auth forwarder for authenticated proxy
+        if proxy.get("username"):
+            _start_local_proxy(proxy, local_port=3128)
+            proxy_server = "http://127.0.0.1:3128"
+        else:
+            proxy_server = proxy["server"]
+        print(f"  Proxy: {proxy.get('server', '')}")
 
-    chrome_proc = _start_chrome_cdp(proxy=proxy, port=9222)
-
-    env = PlaywrightGymEnv(
+    env = XdotoolGymEnv(
         start_url=base_url,
         viewport=(1280, 720),
-        session_dir=session_dir,
+        browser="google-chrome",
         settle_time=2.0,
-        proxy=proxy,
-        cdp_url="http://localhost:9222",
         human_speed=True,
+        proxy_server=proxy_server,
     )
 
     # Run tasks
     scores = []
     task_details = []
+    chrome_proc = None  # Not needed — XdotoolGymEnv manages its own browser
     results_path = f"/data/results/cua_results_{session_name}_{run_id}.json"
     os.makedirs("/data/results", exist_ok=True)
 
@@ -694,7 +695,7 @@ def _run_gemma4_cua_executor(
     from datetime import datetime, timezone
 
     from mantis_agent.brain_llamacpp import LlamaCppBrain
-    from mantis_agent.gym.playwright_env import PlaywrightGymEnv
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
     from mantis_agent.gym.runner import GymRunner
 
     plan_inputs = plan_inputs or {}
@@ -767,29 +768,30 @@ def _run_gemma4_cua_executor(
     )
     brain.load()
 
-    # Launch real Chrome via CDP (bypasses Cloudflare)
-    session_dir = "/data/sessions"
-    os.makedirs(session_dir, exist_ok=True)
-
+    # Xvfb + xdotool + real Chrome (zero automation fingerprints)
     proxy = _build_proxy_config()
+    proxy_server = ""
     if proxy:
-        print(f"  Proxy: {proxy['server']}")
+        if proxy.get("username"):
+            _start_local_proxy(proxy, local_port=3128)
+            proxy_server = "http://127.0.0.1:3128"
+        else:
+            proxy_server = proxy["server"]
+        print(f"  Proxy: {proxy.get('server', '')}")
 
-    chrome_proc = _start_chrome_cdp(proxy=proxy, port=9222)
-
-    env = PlaywrightGymEnv(
+    env = XdotoolGymEnv(
         start_url=base_url,
         viewport=(1280, 720),
-        session_dir=session_dir,
+        browser="google-chrome",
         settle_time=2.0,
-        proxy=proxy,
-        cdp_url="http://localhost:9222",
         human_speed=True,
+        proxy_server=proxy_server,
     )
 
     # Run tasks (same loop as _run_executor)
     scores = []
     task_details = []
+    chrome_proc = None
     results_path = f"/data/results/gemma4cua_results_{session_name}_{run_id}.json"
     os.makedirs("/data/results", exist_ok=True)
 
