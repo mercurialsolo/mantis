@@ -196,13 +196,56 @@ TOOLS: list[dict] = [
 
 
 def parse_tool_call(name: str, arguments: dict[str, Any], reasoning: str = "") -> Action:
-    """Convert a Gemma4 tool call into an Action."""
+    """Convert a Gemma4 tool call into an Action.
+
+    Normalizes common argument format variations:
+    - coordinate: [x, y] → x: X, y: Y
+    - start_coordinate/end_coordinate → start_x/y, end_x/y
+    - text/content → text
+    - key/keys/hotkey → keys
+    """
+    # Normalize coordinate formats
+    args = dict(arguments)
+
+    # [x, y] list format → separate x, y
+    for coord_key in ("coordinate", "coordinates", "position", "point"):
+        if coord_key in args:
+            val = args.pop(coord_key)
+            if isinstance(val, (list, tuple)) and len(val) >= 2:
+                args.setdefault("x", int(val[0]))
+                args.setdefault("y", int(val[1]))
+
+    # start_coordinate/end_coordinate for drag
+    for prefix in ("start_", "end_"):
+        key = f"{prefix}coordinate"
+        if key in args:
+            val = args.pop(key)
+            if isinstance(val, (list, tuple)) and len(val) >= 2:
+                args.setdefault(f"{prefix}x", int(val[0]))
+                args.setdefault(f"{prefix}y", int(val[1]))
+
+    # Normalize text keys
+    if "content" in args and "text" not in args:
+        args["text"] = args.pop("content")
+
+    # Normalize key press keys
+    if "key" in args and "keys" not in args:
+        args["keys"] = args.pop("key")
+    if "hotkey" in args and "keys" not in args:
+        args["keys"] = args.pop("hotkey")
+
+    # Normalize done/terminate
+    name_lower = name.lower()
+    if name_lower in ("terminate", "done", "finish", "complete"):
+        name = "done"
+    elif name_lower in ("typewrite", "type_text", "write", "enter_text"):
+        name = "type"
+
     try:
         action_type = ActionType(name)
     except ValueError:
-        # Fallback: treat unknown tool calls as wait
         return Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=f"Unknown action: {name}")
-    return Action(action_type, arguments, reasoning=reasoning)
+    return Action(action_type, args, reasoning=reasoning)
 
 
 def parse_model_output(output_text: str) -> list[Action]:

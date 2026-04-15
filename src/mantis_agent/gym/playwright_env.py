@@ -583,13 +583,14 @@ class PlaywrightGymEnv(GymEnvironment):
         """Translate and execute a Mantis Action via Playwright."""
         match action.action_type:
             case ActionType.CLICK:
-                x, y = action.params["x"], action.params["y"]
+                x = action.params.get("x", self._viewport[0] // 2)
+                y = action.params.get("y", self._viewport[1] // 2)
                 button = action.params.get("button", "left")
-                # Pure visual — no DOM snapping
                 self._page.mouse.click(x, y, button=button)
 
             case ActionType.DOUBLE_CLICK:
-                x, y = action.params["x"], action.params["y"]
+                x = action.params.get("x", self._viewport[0] // 2)
+                y = action.params.get("y", self._viewport[1] // 2)
                 self._page.mouse.dblclick(x, y)
 
             case ActionType.TYPE:
