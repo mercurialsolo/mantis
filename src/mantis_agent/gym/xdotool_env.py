@@ -63,6 +63,7 @@ class XdotoolGymEnv(GymEnvironment):
         display: str | None = None,
         settle_time: float = 1.5,
         human_speed: bool = False,
+        proxy_server: str = "",
     ):
         self._start_url = start_url
         self._viewport = viewport
@@ -70,6 +71,7 @@ class XdotoolGymEnv(GymEnvironment):
         self._display = display
         self._settle_time = settle_time
         self._human_speed = human_speed
+        self._proxy_server = proxy_server  # e.g. "http://127.0.0.1:3128"
 
         self._xvfb_proc = None
         self._browser_proc = None
@@ -104,8 +106,12 @@ class XdotoolGymEnv(GymEnvironment):
             "--disable-infobars",
             f"--window-size={self._viewport[0]},{self._viewport[1]}",
             "--start-maximized",
-            url,
         ]
+        # Proxy support
+        if self._proxy_server:
+            cmd.append(f"--proxy-server={self._proxy_server}")
+        cmd.append(url)
+
         self._browser_proc = subprocess.Popen(
             cmd, env=self._env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -161,20 +167,31 @@ class XdotoolGymEnv(GymEnvironment):
 
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
         """Start Xvfb + browser, navigate to URL."""
+        url = kwargs.get("start_url", self._start_url)
+
+        # Browser already running — navigate via address bar (no restart)
+        if self._browser_proc and self._browser_proc.poll() is None:
+            logger.info("Reusing existing browser (xdotool navigate)")
+            if url and url != "about:blank":
+                # Navigate: Ctrl+L → select all → type URL → Enter
+                self._xdotool("key", "ctrl+l")
+                time.sleep(0.3)
+                self._xdotool("key", "ctrl+a")
+                time.sleep(0.2)
+                self._xdotool_type(url)
+                time.sleep(0.3)
+                self._xdotool("key", "Return")
+                time.sleep(self._settle_time + 2)
+            return self._capture()
+
+        # Fresh start
         if self._browser_proc:
             self.close()
 
-        # Allow URL override
-        url = kwargs.get("start_url", self._start_url)
-
-        # Start display
         display = self._start_xvfb()
         self._env = {**os.environ, "DISPLAY": display}
 
-        # Start browser
         self._start_browser(url)
-
-        # Wait for page to load
         time.sleep(self._settle_time + 2)
 
         return self._capture()
@@ -235,7 +252,8 @@ class XdotoolGymEnv(GymEnvironment):
         """Translate Mantis Action to xdotool commands."""
         match action.action_type:
             case ActionType.CLICK:
-                x, y = action.params["x"], action.params["y"]
+                x = action.params.get("x", self._viewport[0] // 2)
+                y = action.params.get("y", self._viewport[1] // 2)
                 button = action.params.get("button", "left")
                 btn_num = {"left": "1", "middle": "2", "right": "3"}.get(button, "1")
                 # Move mouse smoothly, then click
@@ -247,7 +265,8 @@ class XdotoolGymEnv(GymEnvironment):
                 self._xdotool("click", btn_num)
 
             case ActionType.DOUBLE_CLICK:
-                x, y = action.params["x"], action.params["y"]
+                x = action.params.get("x", self._viewport[0] // 2)
+                y = action.params.get("y", self._viewport[1] // 2)
                 self._xdotool("mousemove", str(x), str(y))
                 self._xdotool("click", "--repeat", "2", "1")
 
