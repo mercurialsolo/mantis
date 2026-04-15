@@ -332,8 +332,20 @@ def _start_chrome_cdp(proxy: dict | None = None, port: int = 9222) -> subprocess
     raise RuntimeError("Chrome CDP startup timeout")
 
 
-def _build_proxy_config() -> dict | None:
-    """Build proxy config from environment variables."""
+def _build_proxy_config(city: str = "", state: str = "", session_id: str = "") -> dict | None:
+    """Build proxy config from environment variables.
+
+    IPRoyal residential proxy supports geo-targeting via password suffixes:
+      _country-us          → US IPs (default in .env)
+      _city-miami          → Miami residential IP
+      _state-florida       → Florida state
+      _session-{id}        → sticky session (same IP across requests)
+
+    Args:
+        city: Target city (e.g. "miami"). Appended as _city-{city}.
+        state: Target state (e.g. "florida"). Appended as _state-{state}.
+        session_id: Sticky session ID. Appended as _session-{id}.
+    """
     proxy_url = os.environ.get("PROXY_URL", "")
     if not proxy_url:
         return None
@@ -342,6 +354,13 @@ def _build_proxy_config() -> dict | None:
     proxy_user = os.environ.get("PROXY_USER", "")
     proxy_pass = os.environ.get("PROXY_PASS", "")
     if proxy_user:
+        # Append geo-targeting suffixes to password
+        if city and f"_city-" not in proxy_pass:
+            proxy_pass = f"{proxy_pass}_city-{city}"
+        if state and f"_state-" not in proxy_pass:
+            proxy_pass = f"{proxy_pass}_state-{state}"
+        if session_id and f"_session-" not in proxy_pass:
+            proxy_pass = f"{proxy_pass}_session-{session_id}"
         proxy["username"] = proxy_user
         proxy["password"] = proxy_pass
     return proxy
@@ -452,7 +471,7 @@ def _run_executor(
     brain.load()
 
     # Xvfb + xdotool + real Chrome (zero automation fingerprints)
-    proxy = _build_proxy_config()
+    proxy = _build_proxy_config(city="miami", session_id=f"mantis{run_id.replace('_','')}")
     proxy_server = ""
     if proxy:
         # Start local auth forwarder for authenticated proxy
@@ -769,7 +788,7 @@ def _run_gemma4_cua_executor(
     brain.load()
 
     # Xvfb + xdotool + real Chrome (zero automation fingerprints)
-    proxy = _build_proxy_config()
+    proxy = _build_proxy_config(city="miami", session_id=f"mantis{run_id.replace('_','')}")
     proxy_server = ""
     if proxy:
         if proxy.get("username"):
