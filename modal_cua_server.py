@@ -96,12 +96,18 @@ planner_image = (
     .pip_install("huggingface-hub[cli]", "requests")
 )
 
-# EvoCUA executor: vLLM + Playwright + stealth
+# EvoCUA executor: vLLM + real Chrome (CDP) + Playwright + Xvfb
 executor_image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11"
     )
-    .apt_install("git", "build-essential", "curl", "wget")
+    .apt_install("git", "build-essential", "curl", "wget", "gnupg")
+    .run_commands(
+        # Install real Google Chrome (not Chromium) for CF bypass
+        "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
+        "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
+        "apt-get update && apt-get install -y google-chrome-stable xvfb || true",
+    )
     .pip_install(
         "vllm>=0.12.0",
         "openai", "requests", "pillow", "playwright",
@@ -177,7 +183,111 @@ def gemma4_planner():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# B) Shared executor logic
+# B) Real Chrome via CDP — bypasses Cloudflare
+# ═══════════════════════════════════════════════════════════════════
+
+def _start_chrome_cdp(proxy: dict | None = None, port: int = 9222) -> subprocess.Popen:
+    """Launch real Google Chrome with remote debugging for CDP connection.
+
+    Real Chrome has authentic fingerprints that pass Cloudflare verification,
+    unlike Playwright's bundled Chromium which is trivially detectable.
+    """
+    import requests as req
+
+    # Start Xvfb (virtual display for headless Chrome)
+    xvfb_proc = subprocess.Popen(
+        ["Xvfb", ":99", "-screen", "0", "1280x720x24", "-ac"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    os.environ["DISPLAY"] = ":99"
+    time.sleep(1)
+
+    # Build Chrome command
+    cmd = [
+        "google-chrome",
+        f"--remote-debugging-port={port}",
+        "--remote-debugging-address=0.0.0.0",
+        "--user-data-dir=/tmp/chrome-cdp-profile",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-features=Translate",
+        "--disable-infobars",
+        "--disable-session-crashed-bubble",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--window-size=1280,720",
+    ]
+
+    # Proxy: Chrome --proxy-server handles the connection.
+    # For authenticated proxies (IPRoyal), embed user:pass in the URL
+    # since Chrome doesn't support --proxy-auth flag.
+    if proxy:
+        proxy_server = proxy.get("server", "")
+        proxy_user = proxy.get("username", "")
+        proxy_pass = proxy.get("password", "")
+        if proxy_server and proxy_user:
+            # http://user:pass@host:port
+            from urllib.parse import urlparse
+            parsed = urlparse(proxy_server)
+            auth_url = f"{parsed.scheme}://{proxy_user}:{proxy_pass}@{parsed.hostname}:{parsed.port}"
+            cmd.append(f"--proxy-server={auth_url}")
+        elif proxy_server:
+            cmd.append(f"--proxy-server={proxy_server}")
+
+    cmd.append("about:blank")
+
+    env = os.environ.copy()
+    env["DISPLAY"] = ":99"
+
+    print(f"Starting Chrome CDP on :{port}")
+    if proxy:
+        print(f"  Proxy: {proxy.get('server', '')}")
+    chrome_proc = subprocess.Popen(
+        cmd, env=env,
+        stdout=open("/tmp/chrome.log", "w"),
+        stderr=subprocess.STDOUT,
+    )
+
+    time.sleep(3)
+    if chrome_proc.poll() is not None:
+        log = open("/tmp/chrome.log").read()[-2000:]
+        print(f"Chrome crashed: {log}")
+        raise RuntimeError(f"Chrome crashed on startup")
+
+    # Wait for CDP port
+    for i in range(30):
+        try:
+            r = req.get(f"http://localhost:{port}/json/version", timeout=2)
+            if r.status_code == 200:
+                browser_info = r.json()
+                print(f"Chrome CDP ready ({i}s): {browser_info.get('Browser', '?')}")
+                return chrome_proc
+        except Exception:
+            pass
+        time.sleep(1)
+
+    log = open("/tmp/chrome.log").read()[-2000:]
+    print(f"Chrome CDP timeout: {log}")
+    raise RuntimeError("Chrome CDP startup timeout")
+
+
+def _build_proxy_config() -> dict | None:
+    """Build proxy config from environment variables."""
+    proxy_url = os.environ.get("PROXY_URL", "")
+    if not proxy_url:
+        return None
+
+    proxy = {"server": proxy_url}
+    proxy_user = os.environ.get("PROXY_USER", "")
+    proxy_pass = os.environ.get("PROXY_PASS", "")
+    if proxy_user:
+        proxy["username"] = proxy_user
+        proxy["password"] = proxy_pass
+    return proxy
+
+
+# ═══════════════════════════════════════════════════════════════════
+# C) Shared executor logic
 # ═══════════════════════════════════════════════════════════════════
 
 def _start_vllm(model_dir: str, port: int, tp: int) -> subprocess.Popen:
@@ -280,29 +390,23 @@ def _run_executor(
     )
     brain.load()
 
-    # Create environment with proxy + human speed
+    # Launch real Chrome via CDP (bypasses Cloudflare)
     session_dir = "/data/sessions"
     os.makedirs(session_dir, exist_ok=True)
 
-    proxy = None
-    proxy_url = os.environ.get("PROXY_URL", "")
-    if proxy_url:
-        proxy = {"server": proxy_url}
-        proxy_user = os.environ.get("PROXY_USER", "")
-        proxy_pass = os.environ.get("PROXY_PASS", "")
-        if proxy_user:
-            proxy["username"] = proxy_user
-            proxy["password"] = proxy_pass
-        print(f"  Proxy: {proxy_url}")
+    proxy = _build_proxy_config()
+    if proxy:
+        print(f"  Proxy: {proxy['server']}")
+
+    chrome_proc = _start_chrome_cdp(proxy=proxy, port=9222)
 
     env = PlaywrightGymEnv(
         start_url=base_url,
         viewport=(1280, 720),
-        headless=True,
-        browser_type="chromium",
         session_dir=session_dir,
         settle_time=2.0,
         proxy=proxy,
+        cdp_url="http://localhost:9222",
         human_speed=True,
     )
 
@@ -439,6 +543,8 @@ def _run_executor(
 
     env.close()
     vllm_proc.terminate()
+    if chrome_proc:
+        chrome_proc.terminate()
 
     passed = sum(1 for s in scores if s > 0)
     avg = sum(scores) / len(scores) * 100 if scores else 0
@@ -599,29 +705,23 @@ def _run_gemma4_cua_executor(
     )
     brain.load()
 
-    # Create environment with proxy + human speed
+    # Launch real Chrome via CDP (bypasses Cloudflare)
     session_dir = "/data/sessions"
     os.makedirs(session_dir, exist_ok=True)
 
-    proxy = None
-    proxy_url = os.environ.get("PROXY_URL", "")
-    if proxy_url:
-        proxy = {"server": proxy_url}
-        proxy_user = os.environ.get("PROXY_USER", "")
-        proxy_pass = os.environ.get("PROXY_PASS", "")
-        if proxy_user:
-            proxy["username"] = proxy_user
-            proxy["password"] = proxy_pass
-        print(f"  Proxy: {proxy_url}")
+    proxy = _build_proxy_config()
+    if proxy:
+        print(f"  Proxy: {proxy['server']}")
+
+    chrome_proc = _start_chrome_cdp(proxy=proxy, port=9222)
 
     env = PlaywrightGymEnv(
         start_url=base_url,
         viewport=(1280, 720),
-        headless=True,
-        browser_type="chromium",
         session_dir=session_dir,
         settle_time=2.0,
         proxy=proxy,
+        cdp_url="http://localhost:9222",
         human_speed=True,
     )
 
@@ -752,6 +852,8 @@ def _run_gemma4_cua_executor(
 
     env.close()
     llama_proc.terminate()
+    if chrome_proc:
+        chrome_proc.terminate()
 
     passed = sum(1 for s in scores if s > 0)
     avg = sum(scores) / len(scores) * 100 if scores else 0
