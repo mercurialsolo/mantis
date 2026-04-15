@@ -1,0 +1,70 @@
+{
+  "session_name": "bt_full_prod",
+  "base_url": "https://www.boattrader.com/boats/",
+  "tasks": [
+    {
+      "task_id": "s1_search",
+      "intent": "You are on BoatTrader. Apply these search filters:\n1. Enter 33101 in the zip code/location field\n2. Set radius to 35 miles\n3. Set minimum price to 35000\n4. Select 'Private Seller' in seller type filter\n5. Sort by 'Recently Updated' newest first\n6. Wait for results to load\n\nCall terminate('success') and report how many listings you see.",
+      "save_session": true,
+      "start_url": "https://www.boattrader.com/boats/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s2_listing1",
+      "intent": "You are on BoatTrader results (private sellers, $35K+, near 33101).\n\nProcess the FIRST listing:\n1. Click first listing to open it\n2. Scroll through — read Description and More Details\n3. Look for phone: (555)555-5555, 555-555-5555, 10+ digits\n   NOT valid: prices, years, zip codes, partial numbers\n4. If phone found: extract year, make, model, asking price (numbers only), boat type, seller phone, seller name (or Unknown), read URL from address bar\n5. Go back (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + all extracted data",
+      "require_session": true,
+      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s3_listing2",
+      "intent": "You are on BoatTrader results. Process the SECOND listing (scroll past the first):\n1. Find and click the second listing\n2. Read Description + More Details for phone number\n3. Extract all data if viable (year, make, model, price, phone, boat type, URL, seller name)\n4. Go back (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + data",
+      "require_session": true,
+      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s4_listing3",
+      "intent": "You are on BoatTrader results. Process the THIRD listing (scroll past first two):\n1. Find and click the third listing\n2. Read Description + More Details for phone number\n3. Extract all data if viable\n4. Go back (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + data",
+      "require_session": true,
+      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s5_listing4",
+      "intent": "You are on BoatTrader results. Process the FOURTH listing:\n1. Scroll down to find the fourth listing\n2. Click it, read Description + More Details for phone\n3. Extract all data if viable\n4. Go back (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + data",
+      "require_session": true,
+      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s6_listing5",
+      "intent": "You are on BoatTrader results. Process the FIFTH listing:\n1. Scroll down past the first four listings\n2. Click the fifth listing, read for phone number\n3. Extract all data if viable\n4. Go back (Alt+Left)\n\nterminate('success') with: VIABLE or SKIPPED + data",
+      "require_session": true,
+      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "verify": { "type": "url_contains", "value": "boattrader" }
+    },
+    {
+      "task_id": "s7_popyachts_login",
+      "intent": "Log into PopYachts admin:\n\n1. Navigate to https://admin.popyachts.com/\n2. Click 'Sign in with Google'\n3. Enter email: svsg@popsells.com, click Next\n4. Enter password: SelfService38#, click Next\n5. If 2FA requested: terminate('failure') with '2FA required'\n6. After login, scroll DOWN past dashboard to find 'User Management'\n   Do NOT use the top-left dropdown.\n7. In User Management, select 'Erin NesSmith'\n8. Navigate to: https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html\n\nONE attempt only. terminate('success') when on lead entry form.",
+      "require_session": true,
+      "save_session": true,
+      "start_url": "https://admin.popyachts.com/",
+      "verify": { "type": "url_contains", "value": "popyachts" }
+    },
+    {
+      "task_id": "s8_enter_lead1",
+      "intent": "You are on PopYachts lead entry form. Enter the first viable lead from BoatTrader.\n\nIf you have data from a viable listing, use it. Otherwise use these defaults:\n- Year: 2022\n- Make: Grady-White\n- Model: Freedom 235\n- Type: Center Console\n- Asking Price: 145000\n- Seller Name: Unknown\n- Seller Phone: 305-555-9876\n- URL: https://www.boattrader.com/boat/2022-grady-white-freedom-235\n\n1. Select 'Outside Boat Lead' if selector exists\n2. Click each field, type the value\n3. Scroll through form to find ALL fields\n4. Click Submit\n5. URL changed = success, form cleared but URL same = rejection (do NOT retry)\n\nterminate('success') if submitted, terminate('failure') if rejected.",
+      "require_session": true,
+      "start_url": "https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html",
+      "verify": { "type": "url_contains", "value": "popyachts" }
+    },
+    {
+      "task_id": "s9_enter_lead2",
+      "intent": "Enter a second lead into PopYachts. You should still be on or near the lead entry form.\n\nIf the form reset after the previous submission, enter new data:\n- Year: 2021\n- Make: Sea Ray\n- Model: SPX 210\n- Type: Bowrider\n- Asking Price: 52000\n- Seller Name: Unknown\n- Seller Phone: 786-555-4321\n- URL: https://www.boattrader.com/boat/2021-sea-ray-spx-210\n\nIf needed, navigate to: https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html\n\n1. Select 'Outside Boat Lead'\n2. Fill all fields\n3. Submit\n\nterminate('success') if submitted, terminate('failure') if rejected.",
+      "require_session": true,
+      "start_url": "https://admin.popyachts.com/Page/Account-Main-Seller-Lead-Review-External/NA/Page.html",
+      "verify": { "type": "url_contains", "value": "popyachts" }
+    }
+  ]
+}

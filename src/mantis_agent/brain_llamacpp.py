@@ -46,17 +46,33 @@ The LAST frame is the current screen state. Earlier frames show what happened be
 
 Your job:
 1. OBSERVE the current screen state carefully
-2. REASON about what to do next given the task and what you see
-3. CALL exactly one tool to perform an action
+2. REASON step by step about what to do next
+3. CALL exactly one tool to perform the next action
 
-Important guidelines:
-- Coordinates are in absolute screen pixels
-- Look at the last frame for current state; earlier frames for context
-- If something is loading or animating, call wait() to observe the result
-- If you cannot find an element, try scrolling to reveal it
-- When the task is complete, call done(success=true, summary="...")
-- If you're stuck after multiple attempts, call done(success=false, summary="...")
-- Be precise with click coordinates — aim for the center of the target element\
+# Core rules
+- Coordinates are absolute screen pixels. Aim for the CENTER of the target element.
+- Look at the LAST frame for current state. Earlier frames show what changed.
+- Execute ONE action per turn. After each action, observe the result before acting again.
+
+# Form filling — CRITICAL
+- To fill a form: click the input field ONCE to focus it, then call type_text() with the value.
+- Do NOT click an input field multiple times. One click focuses it — then immediately type.
+- After typing, move to the next field: click the next input, or press key_press('Tab').
+- To submit a form: press key_press('Enter') — this is the most reliable method. Only click the Submit button if Enter doesn't work.
+- If you already clicked a field and see it is focused, your NEXT action must be type_text() — not another click.
+
+# Avoiding loops
+- NEVER repeat the same action more than twice. If clicking the same spot twice doesn't work, try a different approach.
+- If you're stuck: try scrolling, pressing Tab, clicking a different element, or using keyboard shortcuts.
+- Read the task description carefully — it tells you what value to type and where.
+
+# Completion
+- When the task is complete, call done(success=true, summary="...").
+- If stuck after multiple attempts, call done(success=false, summary="...").
+
+# Waiting
+- If a page is loading or animating, call wait() to observe the result.
+- After submitting a form, call wait(seconds=2) before checking the result.\
 """
 
 # Convert our tool schemas to OpenAI function-calling format
@@ -102,13 +118,15 @@ class LlamaCppBrain:
         model: str = "gemma-4",
         max_tokens: int = 2048,
         temperature: float = 0.0,
+        use_tool_calling: bool = True,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.model_name = model  # For compatibility with OSWorld adapter
+        self.model_name = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self.enable_thinking = True  # For compatibility
+        self.enable_thinking = True
+        self.use_tool_calling = use_tool_calling
 
     def load(self) -> None:
         """Verify the llama-server is running."""
@@ -124,6 +142,40 @@ class LlamaCppBrain:
                 f"Error: {e}"
             )
 
+    def query(self, prompt: str, response_format: str = "json") -> str:
+        """Send a text-only prompt (no images) and return the model's text response.
+
+        Used for structured analysis: plan parsing, classification, extraction.
+        Unlike think(), does not send images or expect tool calls.
+
+        Args:
+            prompt: Text prompt.
+            response_format: "json" for JSON output, "text" for plain text.
+
+        Returns:
+            Raw text response from the model.
+        """
+        messages = [{"role": "user", "content": prompt}]
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            "temperature": 0.0,
+        }
+        # Don't request tools — we want text output
+        try:
+            resp = requests.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"].get("content", "")
+        except Exception as e:
+            logger.error(f"query failed: {e}")
+            return ""
+
     def think(
         self,
         frames: list[Image.Image],
@@ -137,11 +189,12 @@ class LlamaCppBrain:
         payload = {
             "model": self.model,
             "messages": messages,
-            "tools": OPENAI_TOOLS,
-            "tool_choice": "required",
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         }
+        if self.use_tool_calling:
+            payload["tools"] = OPENAI_TOOLS
+            payload["tool_choice"] = "required"
 
         try:
             resp = requests.post(
@@ -216,17 +269,17 @@ class LlamaCppBrain:
                 args = json.loads(func.get("arguments", "{}"))
             except json.JSONDecodeError:
                 args = {}
-            # llama.cpp puts thinking in reasoning_content, not content
             thinking = message.get("reasoning_content", "") or message.get("content", "") or ""
             action = parse_tool_call(name, args, reasoning=thinking)
         else:
-            # No tool call — extract from content
+            # No tool call — try to parse action from text content or thinking
             content = message.get("content", "")
-            logger.warning(f"No tool call, treating as wait: {content[:200]}")
-            action = Action(
-                ActionType.WAIT, {"seconds": 1.0}, reasoning=content
-            )
-            thinking = content
+            thinking = message.get("reasoning_content", "") or ""
+            # Try content first, then thinking (model may put action in reasoning)
+            action_text = content if content.strip() else thinking
+            action = self._parse_text_action(action_text)
+            if not thinking:
+                thinking = content
 
         return InferenceResult(
             action=action,
@@ -234,3 +287,54 @@ class LlamaCppBrain:
             thinking=thinking,
             tokens_used=data.get("usage", {}).get("total_tokens", 0),
         )
+
+    @staticmethod
+    def _parse_text_action(text: str) -> Action:
+        """Parse action from text output (for models without tool calling).
+
+        Handles formats:
+          Action: click({"x": 500, "y": 300})
+          click(x=500, y=300)
+          pyautogui.click(500, 300)
+          type_text({"text": "hello"})
+          done({"success": true})
+        """
+        import re
+
+        text = text.strip()
+
+        # Try Gemma4 tool-call format: Action: name({"key": value})
+        tool_match = re.search(r'(?:Action:\s*)?(\w+)\(\s*(\{.*?\})\s*\)', text, re.DOTALL)
+        if tool_match:
+            name = tool_match.group(1)
+            try:
+                args = json.loads(tool_match.group(2))
+                return parse_tool_call(name, args)
+            except json.JSONDecodeError:
+                pass
+
+        # Try pyautogui format: pyautogui.click(x=500, y=300)
+        click_match = re.search(r'click\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', text)
+        if click_match:
+            return Action(ActionType.CLICK, {"x": int(click_match.group(1)), "y": int(click_match.group(2))})
+
+        type_match = re.search(r'(?:type_text|typewrite|write)\([\'"](.+?)[\'"]\)', text)
+        if type_match:
+            return Action(ActionType.TYPE, {"text": type_match.group(1)})
+
+        key_match = re.search(r'(?:key_press|press|hotkey)\([\'"](.+?)[\'"]\)', text)
+        if key_match:
+            return Action(ActionType.KEY_PRESS, {"keys": key_match.group(1)})
+
+        scroll_match = re.search(r'scroll\(.*?[\'"](\w+)[\'"]', text)
+        if scroll_match:
+            return Action(ActionType.SCROLL, {"direction": scroll_match.group(1), "amount": 3})
+
+        if re.search(r'done|DONE|terminate.*success', text, re.IGNORECASE):
+            return Action(ActionType.DONE, {"success": True, "summary": text[:200]})
+
+        if re.search(r'fail|FAIL|terminate.*fail', text, re.IGNORECASE):
+            return Action(ActionType.DONE, {"success": False, "summary": text[:200]})
+
+        logger.warning(f"No action parsed from text: {text[:100]}")
+        return Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=text[:100])

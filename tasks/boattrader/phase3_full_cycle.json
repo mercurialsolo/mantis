@@ -1,0 +1,15 @@
+{
+  "session_name": "boattrader",
+  "base_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+  "tasks": [
+    {
+      "task_id": "bt_full_cycle",
+      "intent": "You are on BoatTrader search results. Process the first 3 listings:\n\nFor EACH listing:\n1. Click on the listing to open it\n2. Scroll through the page looking for a phone number in Description or More Details\n3. Phone patterns: (555) 555-5555, 555-555-5555, 555.555.5555, or 10 digits\n4. If you find a phone number, note it along with: year, make, model (from title), asking price, boat type, seller name (if visible), and the page URL\n5. If no phone number, mark as 'not viable'\n6. Go back to the search results page (click browser back button)\n7. Move to the next listing\n\nAfter processing 3 listings, call done(success=true) with a report:\n- Listing 1: [viable/not viable] [details if viable]\n- Listing 2: [viable/not viable] [details if viable]\n- Listing 3: [viable/not viable] [details if viable]",
+      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "verify": {
+        "type": "url_contains",
+        "value": "boattrader.com"
+      }
+    }
+  ]
+}

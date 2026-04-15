@@ -1,0 +1,15 @@
+{
+  "session_name": "boattrader",
+  "base_url": "https://www.boattrader.com/boats/",
+  "tasks": [
+    {
+      "task_id": "bt_search_setup",
+      "intent": "You are on the BoatTrader boats page. Apply these search filters:\n1. In the location/zip code field, enter 33101\n2. Set the search radius to 100 miles\n3. Set the minimum price to 35000\n4. Find and select 'Private Seller' in the seller type or 'For Sale By' filter\n5. Sort results by 'Recently Updated' or newest first\n6. Wait for results to load\n\nWhen all filters are applied and results are showing, call done(success=true) with a summary of how many results you see.",
+      "start_url": "https://www.boattrader.com/boats/",
+      "verify": {
+        "type": "url_contains",
+        "value": "boattrader.com"
+      }
+    }
+  ]
+}
