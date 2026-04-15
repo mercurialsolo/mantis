@@ -91,6 +91,7 @@ class WorkflowRunner:
         page = 1
         global_iteration = 0
         page_iteration = 0
+        learnings: list[str] = []  # Agentic: accumulate learnings from prior iterations
 
         logger.info(f"Starting dynamic loop (max {self.config.max_iterations} items, {self.config.max_pages} pages)")
 
@@ -110,6 +111,12 @@ class WorkflowRunner:
             # Add context about position
             if page_iteration > 1:
                 intent += f"\n\nYou are on page {page}. You have already processed {page_iteration - 1} listings on this page. Scroll past them to find the {ordinal} one."
+
+            # Agentic learning: inject what worked/failed in prior iterations
+            if learnings:
+                intent += "\n\nLEARNINGS FROM PRIOR LISTINGS (apply these):"
+                for learning in learnings[-5:]:  # Last 5 learnings
+                    intent += f"\n- {learning}"
 
             logger.info(f"Iteration {global_iteration} (page {page}, item {page_iteration})")
             t0 = time.time()
@@ -139,6 +146,12 @@ class WorkflowRunner:
 
             if result.success and not viable:
                 logger.warning(f"  Model claimed success but data failed validation (Cloudflare/empty)")
+
+            # Agentic learning: distill what happened for future iterations
+            learning = self._distill_learning(result, iter_result, viable)
+            if learning:
+                learnings.append(learning)
+                logger.info(f"  Learning: {learning}")
 
             status = "VIABLE" if viable else ("END_OF_PAGE" if iter_result.no_more_items else "SKIP")
             logger.info(f"  → {status} ({result.total_steps} steps, {iter_result.duration:.0f}s)")
@@ -249,6 +262,50 @@ class WorkflowRunner:
                         return True
 
         return False
+
+    @staticmethod
+    def _distill_learning(result, iter_result, viable: bool) -> str:
+        """Distill a single actionable learning from this iteration.
+
+        These learnings are injected into future iteration prompts so
+        the model improves over time without hardcoded hints.
+        """
+        data = iter_result.data.lower() if iter_result.data else ""
+        steps = result.total_steps
+
+        # Cloudflare block
+        if "cloudflare" in data or "verify you are human" in data:
+            return "Cloudflare blocked a listing. Press Alt+Left and try the next one instead of retrying."
+
+        # Model didn't click into listing (stayed on search results)
+        actions = [str(s.action)[:60] for s in result.trajectory] if result.trajectory else []
+        clicks = sum(1 for a in actions if "click" in a.lower())
+        scrolls = sum(1 for a in actions if "scroll" in a.lower())
+        if scrolls > clicks * 2 and not viable:
+            return "Too much scrolling without clicking. CLICK the listing card/image/title first, THEN scroll on the detail page."
+
+        # Model used all steps without extracting
+        if steps >= result.total_steps and not viable and "cookie" in data:
+            return "Cookie popup appeared. Dismiss it immediately by clicking Accept/X, then proceed."
+
+        # Model couldn't go back
+        if "timeout" in data or "go_back" in data:
+            return "Page.go_back timed out. Use key_press('Alt+ArrowLeft') instead of browser back button."
+
+        # Successful extraction — note what worked
+        if viable and iter_result.data:
+            # Extract the approach that worked
+            return f"Successfully extracted data. Keep using the same approach: click→scroll down→read description→back."
+
+        # Model ran out of steps
+        if result.termination_reason == "max_steps" and not viable:
+            return "Ran out of steps. Be more efficient: click listing, scroll down 5x fast, read text, go back. Don't re-scroll the same area."
+
+        # Generic skip
+        if not viable and iter_result.data:
+            return "Listing had no phone number. That's OK — move to next listing quickly."
+
+        return ""
 
     @staticmethod
     def _extract_data(result) -> str:

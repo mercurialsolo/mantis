@@ -538,7 +538,7 @@ def _run_executor(
                         "Scroll to bottom, click Next page. If no next, terminate('failure')."),
                     max_iterations=task_config["loop"].get("max_iterations", 50),
                     max_pages=task_config["loop"].get("max_pages", 10),
-                    max_steps_per_iteration=max_steps,
+                    max_steps_per_iteration=task_config["loop"].get("max_steps_per_iteration", max_steps),
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration)
@@ -850,7 +850,7 @@ def _run_gemma4_cua_executor(
                         "Scroll to bottom, click Next page. If no next, terminate('failure')."),
                     max_iterations=task_config["loop"].get("max_iterations", 50),
                     max_pages=task_config["loop"].get("max_pages", 10),
-                    max_steps_per_iteration=max_steps,
+                    max_steps_per_iteration=task_config["loop"].get("max_steps_per_iteration", max_steps),
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration)
