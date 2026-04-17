@@ -613,8 +613,7 @@ def _run_executor(
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
-                                           start_url=task_config.get("start_url", ""),
-                                           grounding=grounding if "grounding" in dir() else None)
+                                           start_url=task_config.get("start_url", ""))
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -646,8 +645,7 @@ def _run_executor(
                                frames_per_inference=frames_per_inference,
 
                                on_step=viewer_event_bus.emit if viewer_event_bus else None)
-            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
-                                           grounding=grounding if "grounding" in dir() else None)
+            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
 
             if task_config.get("save_session"):
                 if result.success or ("login" not in env.current_url.lower()):
@@ -1219,8 +1217,7 @@ def _run_gemma4_cua_executor(
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
-                                           start_url=task_config.get("start_url", ""),
-                                           grounding=grounding if "grounding" in dir() else None)
+                                           start_url=task_config.get("start_url", ""))
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -1250,8 +1247,7 @@ def _run_gemma4_cua_executor(
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps, frames_per_inference=2,
 
                                on_step=viewer_event_bus.emit if viewer_event_bus else None)
-            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
-                                           grounding=grounding if "grounding" in dir() else None)
+            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
 
             if task_config.get("save_session"):
                 if result.success or ("login" not in env.current_url.lower()):
@@ -1525,8 +1521,7 @@ def _run_claude_executor(
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
-                                           start_url=task_config.get("start_url", ""),
-                                           grounding=grounding if "grounding" in dir() else None)
+                                           start_url=task_config.get("start_url", ""))
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -1558,8 +1553,7 @@ def _run_claude_executor(
                                frames_per_inference=frames_per_inference,
 
                                on_step=viewer_event_bus.emit if viewer_event_bus else None)
-            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
-                                           grounding=grounding if "grounding" in dir() else None)
+            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
 
             # Save trajectory for distillation
             save_trajectory(task_id, intent, result)
