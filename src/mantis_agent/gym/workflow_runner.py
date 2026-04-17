@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..actions import ActionType
 from .runner import GymRunner
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ class IterationResult:
     no_more_items: bool     # Model signaled end of items on page
     steps: int
     duration: float
+    parse_failures: int = 0  # Steps where action couldn't be parsed (WAIT fallback)
 
 
 class WorkflowRunner:
@@ -80,6 +82,9 @@ class WorkflowRunner:
                  session_name: str = "workflow",
                  on_iteration: Any = None):
         self.brain = brain
+        # Dedup: track processed phone numbers and listing URLs
+        self._seen_phones: set[str] = set()
+        self._seen_urls: set[str] = set()
         self.env = env
         self.config = loop_config
         self.session_name = session_name
@@ -133,6 +138,9 @@ class WorkflowRunner:
             extracted = self._extract_data(result)
             viable = self._validate_viable(extracted)
 
+            # Count parse failures — steps where the brain couldn't produce a valid action
+            parse_failures = self._count_parse_failures(result)
+
             iter_result = IterationResult(
                 iteration=global_iteration,
                 page=page,
@@ -141,11 +149,18 @@ class WorkflowRunner:
                 no_more_items=self._check_no_more(result),
                 steps=result.total_steps,
                 duration=time.time() - t0,
+                parse_failures=parse_failures,
             )
             results.append(iter_result)
 
             if result.success and not viable:
                 logger.warning(f"  Model claimed success but data failed validation (Cloudflare/empty)")
+
+            # Mostly-failed iterations = model couldn't act, don't count as real progress
+            if parse_failures > 0 and result.total_steps > 0:
+                fail_ratio = parse_failures / result.total_steps
+                if fail_ratio > 0.5:
+                    logger.warning(f"  {parse_failures}/{result.total_steps} steps had parse failures — model is stuck")
 
             # Agentic learning: distill what happened for future iterations
             learning = self._distill_learning(result, iter_result, viable)
@@ -154,7 +169,7 @@ class WorkflowRunner:
                 logger.info(f"  Learning: {learning}")
 
             status = "VIABLE" if viable else ("END_OF_PAGE" if iter_result.no_more_items else "SKIP")
-            logger.info(f"  → {status} ({result.total_steps} steps, {iter_result.duration:.0f}s)")
+            logger.info(f"  → {status} ({result.total_steps} steps, {parse_failures} parse failures, {iter_result.duration:.0f}s)")
             if iter_result.data:
                 logger.info(f"  Data: {iter_result.data[:100]}")
 
@@ -197,7 +212,7 @@ class WorkflowRunner:
             brain=self.brain,
             env=self.env,
             max_steps=self.config.max_steps_per_iteration,
-            frames_per_inference=3,
+            frames_per_inference=2,
         )
 
         # Retry loop
@@ -248,8 +263,8 @@ class WorkflowRunner:
         # Check terminate message in trajectory
         for step in result.trajectory:
             if step.action.action_type.value == "done":
-                summary = step.action.params.get("summary", "").lower()
-                thinking = (step.thinking or "").lower()
+                summary = str(step.action.params.get("summary", "")).lower()
+                thinking = str(step.thinking or "").lower()
                 text = summary + " " + thinking
 
                 for signal in NO_MORE_SIGNALS:
@@ -264,111 +279,231 @@ class WorkflowRunner:
         return False
 
     @staticmethod
-    def _distill_learning(result, iter_result, viable: bool) -> str:
-        """Distill a single actionable learning from this iteration.
+    def _count_parse_failures(result) -> int:
+        """Count steps where the brain failed to produce a valid action.
 
-        These learnings are injected into future iteration prompts so
-        the model improves over time without hardcoded hints.
+        These are WAIT actions with 'Could not parse' reasoning — the model
+        outputted text but the parser couldn't extract an action. They represent
+        wasted steps that shouldn't count as real navigation progress.
         """
-        data = iter_result.data.lower() if iter_result.data else ""
+        count = 0
+        for step in result.trajectory:
+            if step.action.action_type == ActionType.WAIT:
+                reasoning = getattr(step.action, "reasoning", "") or ""
+                # WAIT with parse failure reasoning
+                if "could not parse" in reasoning.lower():
+                    count += 1
+                    continue
+                # WAIT from vLLM/llama-server errors (empty response)
+                if not step.thinking and not reasoning:
+                    count += 1
+        return count
+
+    @staticmethod
+    def _distill_learning(result, iter_result, viable: bool) -> str:
+        """Analyze the trajectory and distill actionable learnings.
+
+        Examines the full trajectory to detect failure patterns:
+        - Off-site navigation (Facebook, Instagram, external dealer sites)
+        - Backtracking loops (repeated Alt+Left)
+        - Image gallery traps
+        - Wrong clicks (ads, social icons, menus)
+        - Cookie/popup blocking
+        - Successful patterns to reinforce
+
+        Returns a specific, actionable learning for future iterations.
+        """
+        data = str(iter_result.data).lower() if iter_result.data else ""
+        all_thinking = " ".join(str(s.thinking or "") for s in result.trajectory).lower()
+        actions = [str(s.action)[:80] for s in result.trajectory] if result.trajectory else []
         steps = result.total_steps
 
-        # Cloudflare block
-        if "cloudflare" in data or "verify you are human" in data:
-            return "Cloudflare blocked a listing. Press Alt+Left and try the next one instead of retrying."
+        # ── Off-site navigation (highest priority — wastes entire iteration) ──
+        offsite_domains = [
+            "facebook.com", "instagram.com", "twitter.com", "x.com",
+            "youtube.com", "tiktok.com", "pinterest.com", "linkedin.com",
+        ]
+        for domain in offsite_domains:
+            if domain in all_thinking or domain in data:
+                return (
+                    f"CRITICAL: You navigated to {domain} by clicking a social media link. "
+                    f"Social icons are SMALL colored squares (20-40px): blue=Facebook, gradient=Instagram. "
+                    f"They appear in the FOOTER (bottom of page, y>650) or SIDEBAR (right edge, x>1100). "
+                    f"Listing cards are LARGE rectangles (~250px tall) in the CENTER showing: "
+                    f"[boat photo] [Year Make Model] [$Price]. ONLY click elements with a boat photo AND a price."
+                )
 
-        # Model didn't click into listing (stayed on search results)
-        actions = [str(s.action)[:60] for s in result.trajectory] if result.trajectory else []
+        # External dealer/brand sites
+        external_sites = [
+            "hanover yachts", "tige boats", "cobalt boats", "bayliner.com",
+            "sea ray.com", "boston whaler.com", "grady-white.com",
+        ]
+        for site in external_sites:
+            if site in all_thinking or site in data:
+                return (
+                    f"You navigated to an external dealer/brand website ({site}). "
+                    f"Only click listings within BoatTrader search results. "
+                    f"If you end up on a different site, press Alt+Left immediately to go back."
+                )
+
+        # ── Backtracking loops (model clicking wrong things repeatedly) ──
+        back_actions = sum(1 for a in actions if "alt" in a.lower() and "left" in a.lower())
+        if back_actions >= 3:
+            return (
+                "You pressed Alt+Left (back) too many times — you keep clicking wrong elements. "
+                "STOP and look carefully at the search results. Listing cards show a boat image, "
+                "Year/Make/Model text, and a price. Click the TITLE TEXT or the BOAT IMAGE, "
+                "not menu items, ads, social icons, or the 'Research' dropdown."
+            )
+
+        # ── Image gallery trap ──
+        if "image viewer" in all_thinking or "lightbox" in all_thinking or "1 of" in all_thinking:
+            return (
+                "You got trapped in an image gallery/lightbox viewer. "
+                "Press Escape or click the X to close it, then scroll DOWN past all photos "
+                "to the Description/Seller Notes text section where phone numbers are."
+            )
+
+        # ── 404 / Page Not Found ──
+        if "page not found" in all_thinking or "404" in all_thinking:
+            return (
+                "The listing returned a 404 Page Not Found. This listing was removed. "
+                "Press Alt+Left to go back and try the next listing. Don't waste steps on dead links."
+            )
+
+        # ── Cloudflare / verification ──
+        if "cloudflare" in data or "verify you are human" in data:
+            return "Cloudflare blocked this listing. Press Alt+Left and skip to the next one."
+
+        # ── Cookie/popup blocking ──
+        if "cookie" in all_thinking and steps > 10 and not viable:
+            return "Cookie popup appeared. It should be auto-dismissed. If you see it, click Accept once and move on."
+
+        # ── Too much scrolling, no clicking ──
         clicks = sum(1 for a in actions if "click" in a.lower())
         scrolls = sum(1 for a in actions if "scroll" in a.lower())
         if scrolls > clicks * 2 and not viable:
-            return "Too much scrolling without clicking. CLICK the listing card/image/title first, THEN scroll on the detail page."
+            return (
+                "Too much scrolling without clicking into a listing. "
+                "CLICK the boat listing card first (title or image), THEN scroll on the detail page."
+            )
 
-        # Model used all steps without extracting
-        if steps >= result.total_steps and not viable and "cookie" in data:
-            return "Cookie popup appeared. Dismiss it immediately by clicking Accept/X, then proceed."
-
-        # Model couldn't go back
-        if "timeout" in data or "go_back" in data:
-            return "Page.go_back timed out. Use key_press('Alt+ArrowLeft') instead of browser back button."
-
-        # Successful extraction — note what worked
-        if viable and iter_result.data:
-            # Extract the approach that worked
-            return f"Successfully extracted data. Keep using the same approach: click→scroll down→read description→back."
-
-        # Model ran out of steps
+        # ── Model ran out of steps ──
         if result.termination_reason == "max_steps" and not viable:
-            return "Ran out of steps. Be more efficient: click listing, scroll down 5x fast, read text, go back. Don't re-scroll the same area."
+            return (
+                "Ran out of steps. Be faster: click listing → scroll down 5x aggressively → "
+                "read Description/Seller Notes for phone → Alt+Left back. Don't re-scroll."
+            )
 
-        # Generic skip
+        # ── Successful extraction — reinforce what worked ──
+        if viable and iter_result.data:
+            return "Successfully extracted data. Keep using: click listing title → scroll past photos → read description → Alt+Left back."
+
+        # ── Model couldn't navigate back ──
+        if "timeout" in data or "go_back" in data:
+            return "Navigation back failed. Use key_press('alt+Left') — do NOT click browser back button."
+
+        # ── Parse failures (model producing unparseable output) ──
+        pf = getattr(iter_result, 'parse_failures', 0) or 0
+        if pf > steps * 0.4:
+            return (
+                f"{pf}/{steps} of your actions couldn't be parsed. "
+                f"Output actions in the correct format. Don't just describe what you see — ACT."
+            )
+
+        # ── Generic: no phone found (legitimate) ──
         if not viable and iter_result.data:
-            return "Listing had no phone number. That's OK — move to next listing quickly."
+            return "No phone found on this listing. That's OK — skip quickly and try the next one."
 
         return ""
+
+    @staticmethod
+    def _extract_phone(text: str) -> str | None:
+        """Extract first real phone number from text.
+
+        Real = 10+ digits, not 555 exchange, not embedded in URLs.
+        Per spec: (555)555-5555, 555-555-5555, 555.555.5555, 10+ digits.
+        NOT: prices, years, zip codes, partial numbers, URL fragments.
+        """
+        import re
+        # Match phone patterns
+        phone_pattern = re.compile(r'\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}')
+        for match in phone_pattern.finditer(text):
+            phone = match.group()
+            digits = re.sub(r'\D', '', phone)
+            if len(digits) < 10 or len(digits) > 11:
+                continue
+            # Filter 555 exchange (fictitious)
+            if digits[3:6] == "555":
+                continue
+            # Filter if embedded in URL
+            start = max(0, match.start() - 20)
+            context = text[start:match.start()].lower()
+            if any(c in context for c in ["http", "://", "url=", "&", "?"]):
+                continue
+            return phone
+        return None
 
     @staticmethod
     def _extract_data(result) -> str:
-        """Extract data from the model's terminate message."""
+        """Extract data from the model's terminate() summary.
+
+        Simple: the model should call terminate('success') with structured data.
+        If it didn't, check the last few steps' thinking for phone numbers.
+        """
+        # Priority 1: done() action summary
         for step in reversed(result.trajectory):
             if step.action.action_type.value == "done":
-                summary = step.action.params.get("summary", "")
-                if summary:
+                summary = str(step.action.params.get("summary", ""))
+                if summary and len(summary) > 10:
                     return summary
-            if step.thinking and len(step.thinking) > 50:
-                return step.thinking[:500]
+
+        # Priority 2: Last 3 steps' thinking (model may embed findings)
+        for step in reversed(result.trajectory):
+            thinking = str(step.thinking or "")
+            if len(thinking) > 30:
+                return thinking[:500]
+
         return ""
 
-    @staticmethod
-    def _validate_viable(data: str) -> bool:
-        """Check if extracted data contains actual lead content.
+    def _validate_viable(self, data: str) -> bool:
+        """Strict phone-only viability per spec.
 
-        A viable extraction must contain at least one of:
-        - A phone number pattern (3+ digit groups)
-        - A price/dollar amount
-        - The word VIABLE (model's explicit signal)
-        - Boat-related keywords + data (year, make, model together)
-
-        Rejects iterations that only mention Cloudflare, verification,
-        blank pages, or generic failure messages.
+        A listing is VIABLE only if a real phone number exists.
+        Deduplicates against previously seen phones.
         """
         if not data:
             return False
 
-        text = data.lower()
+        data = str(data)
 
         # Reject obvious non-extractions
+        text = data.lower()
         reject_signals = [
-            "cloudflare", "verify you are human", "verifying",
+            "cloudflare", "verify you are human",
             "about:blank", "blank page", "captcha",
-            "page isn't loading", "not on the search",
+            "page not found", "404",
         ]
         if any(sig in text for sig in reject_signals):
-            # Even if model said success, CF page = not viable
             return False
 
-        # Check for explicit VIABLE signal from model
-        if "viable" in text:
-            return True
+        # Reject prompt echoes
+        prompt_markers = ["formats like", "do not confuse", "output format",
+                         "terminate('success') with:", "terminate('failure') with:"]
+        if sum(1 for m in prompt_markers if m in text) >= 2:
+            return False
 
-        # Check for phone number pattern (3+ digits separated by dashes/dots/parens)
+        # Extract phone — strict: must be a real phone, not in a URL
+        phone = self._extract_phone(data)
+        if not phone:
+            return False
+
+        # Dedup by phone digits
         import re
-        phone_pattern = re.compile(r'\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}')
-        if phone_pattern.search(data):
-            return True
+        digits = re.sub(r'\D', '', phone)
+        if digits in self._seen_phones:
+            logger.info(f"  Dedup: phone {phone} already seen, skipping")
+            return False
 
-        # Check for price/dollar amount
-        if re.search(r'\$\s*[\d,]+', data) or re.search(r'(?:price|asking)[:\s]*\d', text):
-            return True
-
-        # Check for boat data keywords (need at least 2 of: year, make, model)
-        boat_signals = 0
-        if re.search(r'20[12]\d', data):  # Year like 2019-2026
-            boat_signals += 1
-        for kw in ["make", "model", "hull", "engine", "footer", "console", "cabin"]:
-            if kw in text:
-                boat_signals += 1
-        if boat_signals >= 2:
-            return True
-
-        return False
+        self._seen_phones.add(digits)
+        return True

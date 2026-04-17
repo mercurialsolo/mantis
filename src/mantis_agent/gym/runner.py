@@ -594,12 +594,21 @@ class GymRunner:
         last_url: str,
         last_title: str,
     ) -> str:
-        """Describe what happened after executing an action."""
+        """Describe what happened after executing an action.
+
+        Includes URL changes and off-site backtrack warnings so the model
+        gets immediate feedback about navigation errors.
+        """
         parts: list[str] = []
 
         new_url = gym_result.info.get("url", "")
         new_title = gym_result.info.get("title", "")
         focused = gym_result.info.get("focused_input")
+
+        # Off-site backtrack warning — highest priority feedback
+        if gym_result.info.get("backtracked"):
+            warning = gym_result.info.get("warning", "Off-site navigation detected")
+            parts.append(f"WARNING: {warning}. Do NOT click social media icons or external links.")
 
         # URL change
         if new_url and new_url != last_url:
@@ -620,7 +629,7 @@ class GymRunner:
             else:
                 parts.append(f"'{field_name}' field focused, contains: \"{focused.get('value', '')}\"")
 
-        # Type verification — did the text actually land?
+        # Type verification
         type_verify = gym_result.info.get("type_verified")
         if action.action_type == ActionType.TYPE:
             typed = action.params.get("text", "")

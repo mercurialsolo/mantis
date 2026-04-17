@@ -61,6 +61,11 @@ CUA_MODELS = {
         "name": "Gemma4-31B-CUA",
         "tp": 1,
     },
+    "claude": {
+        "repo": "api",
+        "name": "Claude (Anthropic API)",
+        "tp": 0,  # No GPU needed
+    },
 }
 
 # Fine-tuned Gemma4-31B-CUA (trained on AgentNet, native tool calling)
@@ -535,12 +540,16 @@ def _run_executor(
                     viable = sum(1 for r in all_results if r.success)
                     total = len(all_results)
                     elapsed = time.time() - task_start
+                    total_parse_failures = sum(getattr(r, 'parse_failures', 0) for r in all_results)
+                    real_iterations = sum(1 for r in all_results if getattr(r, 'parse_failures', 0) < max(r.steps // 2, 1))
                     detail = {
                         "task_id": task_id, "success": viable > 0,
                         "steps": sum(r.steps for r in all_results),
                         "duration_s": round(elapsed),
                         "termination_reason": "loop_in_progress",
                         "iterations": total, "viable": viable,
+                        "real_iterations": real_iterations,
+                        "parse_failures": total_parse_failures,
                         "data": [r.data[:200] for r in all_results if r.data],
                     }
                     if task_details and task_details[-1].get("task_id") == task_id:
@@ -566,12 +575,16 @@ def _run_executor(
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
                 success = viable > 0
+                total_parse_failures = sum(getattr(r, 'parse_failures', 0) for r in results)
+                real_iterations = sum(1 for r in results if getattr(r, 'parse_failures', 0) < max(r.steps // 2, 1))
                 final = {
                     "task_id": task_id, "success": success,
                     "steps": sum(r.steps for r in results),
                     "duration_s": round(time.time() - task_start),
                     "termination_reason": "loop_complete",
                     "iterations": total, "viable": viable,
+                    "real_iterations": real_iterations,
+                    "parse_failures": total_parse_failures,
                     "data": [r.data[:200] for r in results if r.data],
                 }
                 if task_details and task_details[-1].get("task_id") == task_id:
@@ -580,7 +593,7 @@ def _run_executor(
                 else:
                     scores.append(1.0 if success else 0.0)
                     task_details.append(final)
-                print(f"  Loop: {viable}/{total} viable")
+                print(f"  Loop: {viable}/{total} viable ({real_iterations} real, {total_parse_failures} parse failures)")
                 save_progress()
                 continue
 
@@ -648,7 +661,7 @@ def _run_executor(
     image=executor_image,
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
-    timeout=7200,
+    timeout=14400,  # 4 hours
     memory=65536,
     cpu=16,
 )
@@ -662,7 +675,7 @@ def run_cua_1gpu(task_file_contents: str, cua_model: str = "evocua-8b", **kwargs
     image=executor_image,
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
-    timeout=7200,
+    timeout=14400,  # 4 hours
     memory=65536,
     cpu=16,
 )
@@ -676,7 +689,7 @@ def run_cua_2gpu(task_file_contents: str, cua_model: str = "evocua-32b", **kwarg
     image=executor_image,
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
-    timeout=7200,
+    timeout=14400,  # 4 hours
     memory=65536,
     cpu=16,
 )
@@ -690,7 +703,7 @@ def run_cua_4gpu(task_file_contents: str, cua_model: str = "opencua-32b", **kwar
     image=executor_image,
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
-    timeout=7200,
+    timeout=14400,  # 4 hours
     memory=131072,
     cpu=32,
 )
@@ -738,8 +751,8 @@ def _run_gemma4_cua_executor(
         "/opt/llama.cpp/build/bin/llama-server",
         "-m", model_path,
         "--host", "0.0.0.0", "--port", "8080",
-        "-ngl", "99", "-c", "32768", "-ub", "2048",
-        "--jinja", "--reasoning-budget", "4096",
+        "-ngl", "99", "-c", "8192", "-ub", "2048",
+        "--jinja", "--reasoning-budget", "512",
         "--flash-attn", "on",
     ]
     if mmproj:
@@ -781,7 +794,7 @@ def _run_gemma4_cua_executor(
     brain = LlamaCppBrain(
         base_url="http://localhost:8080/v1",
         model="gemma4-cua",
-        max_tokens=2048,
+        max_tokens=512,
         temperature=0.0,
         use_tool_calling=True,
     )
@@ -849,12 +862,16 @@ def _run_gemma4_cua_executor(
                     viable = sum(1 for r in all_results if r.success)
                     total = len(all_results)
                     elapsed = time.time() - task_start
+                    total_parse_failures = sum(getattr(r, 'parse_failures', 0) for r in all_results)
+                    real_iterations = sum(1 for r in all_results if getattr(r, 'parse_failures', 0) < max(r.steps // 2, 1))
                     detail = {
                         "task_id": task_id, "success": viable > 0,
                         "steps": sum(r.steps for r in all_results),
                         "duration_s": round(elapsed),
                         "termination_reason": "loop_in_progress",
                         "iterations": total, "viable": viable,
+                        "real_iterations": real_iterations,
+                        "parse_failures": total_parse_failures,
                         "data": [r.data[:200] for r in all_results if r.data],
                     }
                     if task_details and task_details[-1].get("task_id") == task_id:
@@ -879,12 +896,16 @@ def _run_gemma4_cua_executor(
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
                 success = viable > 0
+                total_parse_failures = sum(getattr(r, 'parse_failures', 0) for r in results)
+                real_iterations = sum(1 for r in results if getattr(r, 'parse_failures', 0) < max(r.steps // 2, 1))
                 final = {
                     "task_id": task_id, "success": success,
                     "steps": sum(r.steps for r in results),
                     "duration_s": round(time.time() - task_start),
                     "termination_reason": "loop_complete",
                     "iterations": total, "viable": viable,
+                    "real_iterations": real_iterations,
+                    "parse_failures": total_parse_failures,
                     "data": [r.data[:200] for r in results if r.data],
                 }
                 if task_details and task_details[-1].get("task_id") == task_id:
@@ -893,11 +914,11 @@ def _run_gemma4_cua_executor(
                 else:
                     scores.append(1.0 if success else 0.0)
                     task_details.append(final)
-                print(f"  Loop: {viable}/{total} viable")
+                print(f"  Loop: {viable}/{total} viable ({real_iterations} real, {total_parse_failures} parse failures)")
                 save_progress()
                 continue
 
-            runner = GymRunner(brain=brain, env=env, max_steps=max_steps, frames_per_inference=5)
+            runner = GymRunner(brain=brain, env=env, max_steps=max_steps, frames_per_inference=2)
             result = runner.run(task=intent, task_id=task_id)
 
             if task_config.get("save_session"):
@@ -952,17 +973,16 @@ def _run_gemma4_cua_executor(
 @app.function(
     gpu="A100-80GB",
     image=planner_image.run_commands(
-        "apt-get update && apt-get install -y gnupg curl wget",
+        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool scrot",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
-        "apt-get update && apt-get install -y google-chrome-stable xvfb || true",
+        "apt-get update && apt-get install -y google-chrome-stable || true",
     ).pip_install(
-        "openai", "requests", "pillow", "playwright", "playwright-stealth",
-    ).run_commands("playwright install --with-deps chromium || true")
-    .add_local_python_source("mantis_agent"),
+        "openai", "requests", "pillow", "mss",
+    ).add_local_python_source("mantis_agent"),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
-    timeout=7200,
+    timeout=14400,  # 4 hours — Gemma4 via llama.cpp is slower per step
     memory=65536,
     cpu=16,
 )
@@ -970,6 +990,287 @@ def run_gemma4_cua(task_file_contents: str, **kwargs) -> dict:
     """Gemma4-31B-CUA executor (1× A100, llama.cpp, native tool calling)."""
     kwargs.pop("cua_model", None)  # Not used — model is always Gemma4-31B-CUA
     return _run_gemma4_cua_executor(task_file_contents, **kwargs)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# C.3) Claude CUA executor (Anthropic API, no GPU needed)
+# ═══════════════════════════════════════════════════════════════════
+
+# Lightweight image: just Chrome + xdotool (no vLLM, no llama.cpp)
+claude_executor_image = (
+    modal.Image.from_registry("ubuntu:22.04", add_python="3.11")
+    .apt_install("curl", "wget", "gnupg", "xvfb", "xdotool", "scrot")
+    .run_commands(
+        "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
+        "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
+        "apt-get update && apt-get install -y google-chrome-stable || true",
+    )
+    .pip_install("requests", "pillow", "mss")
+    .add_local_python_source("mantis_agent")
+)
+
+
+def _run_claude_executor(
+    task_file_contents: str,
+    plan_inputs: dict[str, str] | None = None,
+    max_steps: int = 30,
+    max_retries: int = 2,
+    frames_per_inference: int = 5,
+    claude_model: str = "claude-sonnet-4-20250514",
+    thinking_budget: int = 2048,
+) -> dict:
+    """Execute tasks using Claude CUA via Anthropic API.
+
+    No GPU needed — inference is via API. Only needs Chrome + xdotool.
+    Trajectories are saved for potential distillation training.
+    """
+    from datetime import datetime, timezone
+
+    from mantis_agent.brain_claude import ClaudeBrain
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+    from mantis_agent.gym.runner import GymRunner
+
+    plan_inputs = plan_inputs or {}
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    started_at = datetime.now(timezone.utc).isoformat()
+    t0 = time.time()
+
+    # Parse task suite
+    task_suite = json.loads(task_file_contents)
+    session_name = task_suite.get("session_name", "claude_cua")
+    base_url = task_suite.get("base_url", "")
+    tasks = task_suite.get("tasks", [])
+
+    print(f"\n{'='*60}")
+    print(f"Mantis CUA Server — Claude ({claude_model})")
+    print(f"  Session:  {session_name}")
+    print(f"  Tasks:    {len(tasks)}")
+    print(f"  Thinking: {thinking_budget} tokens")
+    print(f"{'='*60}")
+
+    # Create brain (API-based, no GPU)
+    brain = ClaudeBrain(
+        model=claude_model,
+        max_tokens=4096,
+        thinking_budget=thinking_budget,
+        screen_size=(1280, 720),
+    )
+    brain.load()
+
+    # Xvfb + xdotool + real Chrome (zero automation fingerprints)
+    proxy = _build_proxy_config(city="miami", session_id=f"mantis{run_id.replace('_', '')}")
+    proxy_server = ""
+    if proxy:
+        if proxy.get("username"):
+            _start_local_proxy(proxy, local_port=3128)
+            proxy_server = "http://127.0.0.1:3128"
+        else:
+            proxy_server = proxy["server"]
+        print(f"  Proxy: {proxy.get('server', '')}")
+
+    env = XdotoolGymEnv(
+        start_url=base_url,
+        viewport=(1280, 720),
+        browser="google-chrome",
+        settle_time=2.0,
+        human_speed=True,
+        proxy_server=proxy_server,
+    )
+
+    # Run tasks
+    scores = []
+    task_details = []
+    trajectories = []  # Save for distillation
+    results_path = f"/data/results/claude_results_{session_name}_{run_id}.json"
+    trajectories_path = f"/data/results/claude_trajectories_{session_name}_{run_id}.jsonl"
+    os.makedirs("/data/results", exist_ok=True)
+
+    api_cost = 0.0  # Track Claude API spend
+
+    def save_progress():
+        completed_at = datetime.now(timezone.utc).isoformat() if len(scores) == len(tasks) else ""
+        summary = {
+            "run_id": run_id,
+            "session_name": session_name,
+            "model": f"Claude ({claude_model})",
+            "tasks_run": len(tasks),
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "total_time_s": round(time.time() - t0),
+            "estimated_api_cost_usd": round(api_cost, 2),
+            "scores": scores,
+            "task_details": task_details,
+        }
+        with open(results_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        vol.commit()
+
+    def save_trajectory(task_id: str, intent: str, result):
+        """Save trajectory for distillation training data."""
+        traj_entry = {
+            "task_id": task_id,
+            "intent": intent,
+            "success": result.success,
+            "steps": result.total_steps,
+            "termination_reason": result.termination_reason,
+            "trajectory": [
+                {
+                    "step": s.step,
+                    "action": str(s.action),
+                    "action_type": s.action.action_type.value,
+                    "action_params": s.action.params,
+                    "thinking": s.thinking,
+                    "feedback": s.feedback,
+                    "inference_time": s.inference_time,
+                }
+                for s in result.trajectory
+            ],
+        }
+        with open(trajectories_path, "a") as f:
+            f.write(json.dumps(traj_entry) + "\n")
+
+    for i, task_config in enumerate(tasks):
+        task_id = task_config["task_id"]
+        intent = task_config["intent"]
+        print(f"\nTask {i+1}/{len(tasks)}: {task_id}")
+        task_start = time.time()
+
+        try:
+            if task_config.get("require_session") and env.has_session(session_name):
+                env.load_session(session_name)
+
+            # Dynamic loop task
+            if task_config.get("loop"):
+                from mantis_agent.gym.workflow_runner import WorkflowRunner, LoopConfig
+
+                def on_loop_iteration(iter_num, iter_result, all_results):
+                    viable = sum(1 for r in all_results if r.success)
+                    total = len(all_results)
+                    elapsed = time.time() - task_start
+                    total_parse_failures = sum(getattr(r, 'parse_failures', 0) for r in all_results)
+                    real_iterations = sum(1 for r in all_results if getattr(r, 'parse_failures', 0) < max(r.steps // 2, 1))
+                    detail = {
+                        "task_id": task_id, "success": viable > 0,
+                        "steps": sum(r.steps for r in all_results),
+                        "duration_s": round(elapsed),
+                        "termination_reason": "loop_in_progress",
+                        "iterations": total, "viable": viable,
+                        "real_iterations": real_iterations,
+                        "parse_failures": total_parse_failures,
+                        "data": [r.data[:200] for r in all_results if r.data],
+                    }
+                    if task_details and task_details[-1].get("task_id") == task_id:
+                        task_details[-1] = detail
+                    else:
+                        scores.append(0.0)
+                        task_details.append(detail)
+                    save_progress()
+                    print(f"  [{iter_num}] {'VIABLE' if iter_result.success else 'SKIP'} — {viable}/{total} viable ({elapsed:.0f}s)")
+
+                loop_cfg = LoopConfig(
+                    iteration_intent=intent,
+                    pagination_intent=task_config["loop"].get("pagination_intent",
+                        "Scroll to bottom, click Next page. If no next, terminate('failure')."),
+                    max_iterations=task_config["loop"].get("max_iterations", 50),
+                    max_pages=task_config["loop"].get("max_pages", 10),
+                    max_steps_per_iteration=task_config["loop"].get("max_steps_per_iteration", max_steps),
+                )
+                wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
+                                           on_iteration=on_loop_iteration)
+                results = wf_runner.run_loop()
+                viable = sum(1 for r in results if r.success)
+                total = len(results)
+                success = viable > 0
+                total_parse_failures = sum(getattr(r, 'parse_failures', 0) for r in results)
+                real_iterations = sum(1 for r in results if getattr(r, 'parse_failures', 0) < max(r.steps // 2, 1))
+                final = {
+                    "task_id": task_id, "success": success,
+                    "steps": sum(r.steps for r in results),
+                    "duration_s": round(time.time() - task_start),
+                    "termination_reason": "loop_complete",
+                    "iterations": total, "viable": viable,
+                    "real_iterations": real_iterations,
+                    "parse_failures": total_parse_failures,
+                    "data": [r.data[:200] for r in results if r.data],
+                }
+                if task_details and task_details[-1].get("task_id") == task_id:
+                    task_details[-1] = final
+                    scores[-1] = 1.0 if success else 0.0
+                else:
+                    scores.append(1.0 if success else 0.0)
+                    task_details.append(final)
+                print(f"  Loop: {viable}/{total} viable ({real_iterations} real, {total_parse_failures} parse failures)")
+                save_progress()
+                continue
+
+            # Standard task with retry
+            runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
+                               frames_per_inference=frames_per_inference)
+            result = runner.run(task=intent, task_id=task_id)
+
+            # Save trajectory for distillation
+            save_trajectory(task_id, intent, result)
+
+            if task_config.get("save_session"):
+                if result.success or ("login" not in env.current_url.lower()):
+                    env.save_session(session_name)
+
+            verify = task_config.get("verify", {})
+            verified = False
+            vtype, value = verify.get("type", ""), verify.get("value", "")
+            try:
+                if vtype == "url_contains":
+                    verified = value.lower() in env.current_url.lower()
+            except Exception:
+                pass
+
+            success = result.success or verified
+            scores.append(1.0 if success else 0.0)
+            task_details.append({
+                "task_id": task_id, "success": success,
+                "steps": result.total_steps,
+                "duration_s": round(time.time() - task_start),
+                "termination_reason": result.termination_reason,
+                "final_url": env.current_url,
+            })
+            print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
+
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            scores.append(0.0)
+            task_details.append({
+                "task_id": task_id, "success": False,
+                "error": str(e), "duration_s": round(time.time() - task_start),
+            })
+
+        save_progress()
+
+    env.close()
+
+    passed = sum(1 for s in scores if s > 0)
+    avg = sum(scores) / len(scores) * 100 if scores else 0
+    print(f"\n{'='*60}")
+    print(f"COMPLETE: {passed}/{len(scores)} ({avg:.1f}%)")
+    print(f"Time: {(time.time()-t0)/60:.0f} min | API cost: ~${api_cost:.2f}")
+    print(f"Trajectories saved: {trajectories_path}")
+    print(f"{'='*60}")
+
+    save_progress()
+    return {"passed": passed, "total": len(scores), "score": avg}
+
+
+@app.function(
+    image=claude_executor_image,
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],
+    timeout=14400,  # 4 hours
+    memory=8192,
+    cpu=4,
+)
+def run_claude_cua(task_file_contents: str, claude_model: str = "claude-sonnet-4-20250514", **kwargs) -> dict:
+    """Claude CUA executor (no GPU — API-based inference, Chrome + xdotool only)."""
+    kwargs.pop("cua_model", None)
+    return _run_claude_executor(task_file_contents, claude_model=claude_model, **kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -983,9 +1284,112 @@ EXECUTOR_MAP = {
     "opencua-32b": run_cua_4gpu,
     "opencua-72b": run_cua_8gpu,
     "gemma4-cua": run_gemma4_cua,
+    "claude": run_claude_cua,
 }
 
 APP_NAME = "mantis-cua-server"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# E) Parallel extraction — fan-out across N workers
+# ═══════════════════════════════════════════════════════════════════
+
+def _make_page_task(original_task: dict, worker_id: int, page: int) -> dict:
+    """Create an extraction task for one page of results.
+
+    Each worker processes ALL listings on a single page (~25 per page).
+    No pagination needed — one worker, one page, all listings.
+    """
+    base_url = original_task.get("start_url", "")
+    if page > 1:
+        # BoatTrader pagination: /page-N/ suffix
+        base_url = base_url.rstrip("/") + f"/page-{page}/"
+
+    loop = dict(original_task.get("loop", {}))
+    loop["max_iterations"] = 30  # ~25 listings per page + buffer
+    loop["max_pages"] = 1        # Stay on assigned page, no pagination
+
+    return {
+        "session_name": f"bt_worker_{worker_id}_page_{page}",
+        "base_url": base_url,
+        "tasks": [
+            {
+                "task_id": f"extract_p{page}_w{worker_id}",
+                "intent": original_task["intent"],
+                "loop": loop,
+                "start_url": base_url,
+                "verify": {"type": "url_contains", "value": "boattrader"},
+            }
+        ],
+    }
+
+
+@app.function(
+    gpu="A100-80GB",
+    image=planner_image.run_commands(
+        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool scrot",
+        "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
+        "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
+        "apt-get update && apt-get install -y google-chrome-stable || true",
+    ).pip_install(
+        "openai", "requests", "pillow", "mss",
+    ).add_local_python_source("mantis_agent"),
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],
+    timeout=14400,  # 4 hours per page worker
+    memory=65536,
+    cpu=16,
+    retries=3,  # Auto-retry on preemption/crash
+)
+def run_gemma4_cua_worker(task_file_contents: str, worker_id: int = 0, **kwargs) -> dict:
+    """Single Gemma4-CUA extraction worker with retry logic.
+
+    Retries up to 3 times on failure. Logs failure mode for analysis.
+    """
+    kwargs.pop("cua_model", None)
+    max_attempts = 3
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = _run_gemma4_cua_executor(task_file_contents, **kwargs)
+
+            # Check if extraction actually produced results
+            passed = result.get("passed", 0)
+            total = result.get("total", 0)
+            score = result.get("score", 0)
+
+            if total == 0 and attempt < max_attempts:
+                print(f"  Worker {worker_id}: attempt {attempt} produced 0 results, retrying...")
+                continue
+
+            return result
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"  Worker {worker_id}: attempt {attempt}/{max_attempts} failed — {error_msg[:200]}")
+
+            if attempt == max_attempts:
+                # Log failure for analysis
+                failure_log = {
+                    "worker_id": worker_id,
+                    "attempts": attempt,
+                    "error": error_msg[:500],
+                    "passed": 0, "total": 0, "score": 0.0,
+                }
+                # Save failure to volume
+                import json as _json
+                fail_path = f"/data/results/worker_failure_{worker_id}_{int(time.time())}.json"
+                os.makedirs("/data/results", exist_ok=True)
+                with open(fail_path, "w") as f:
+                    _json.dump(failure_log, f, indent=2)
+                vol.commit()
+                print(f"  Worker {worker_id}: all {max_attempts} attempts failed. Logged to {fail_path}")
+                return {"passed": 0, "total": 0, "score": 0.0, "error": error_msg[:200]}
+
+            # Brief pause before retry
+            time.sleep(5)
+
+    return {"passed": 0, "total": 0, "score": 0.0}
 
 
 @app.local_entrypoint()
@@ -998,6 +1402,9 @@ def main(
     inputs: str = "",
     session_name: str = "",
     max_listings: int = 50,
+    claude_model: str = "claude-sonnet-4-20250514",
+    thinking_budget: int = 2048,
+    workers: int = 1,
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
 
@@ -1005,7 +1412,9 @@ def main(
       --plan-file plans/boattrader/full_spec.txt   (Gemma4 preprocesses → EvoCUA executes)
       --task-file tasks/boattrader/dynamic.json     (direct execution, no planner)
 
-    Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b
+    Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, gemma4-cua, claude
+    Parallel: --workers 5   (auto fan-out looped tasks across N GPUs)
+    Claude options: --claude-model claude-sonnet-4-20250514 --thinking-budget 2048
     """
     cua_config = CUA_MODELS.get(model, CUA_MODELS["evocua-8b"])
     print(f"Mantis CUA Server — {cua_config['name']}")
@@ -1018,7 +1427,7 @@ def main(
                 k, v = pair.split("=", 1)
                 plan_inputs[k.strip()] = v.strip()
 
-    # Mode 1: Plan file → Gemma4 preprocessing → EvoCUA execution
+    # Mode 1: Plan file → Gemma4 preprocessing → executor
     if plan_file:
         print(f"  Plan:    {plan_file}")
         print(f"  Mode:    Gemma4 → {cua_config['name']}")
@@ -1029,11 +1438,9 @@ def main(
         if not session_name:
             session_name = os.path.splitext(os.path.basename(plan_file))[0]
 
-        # Resolve planner URL from deployed app
         planner_url = f"https://{APP_NAME}--gemma4-planner.modal.run"
         print(f"  Planner: {planner_url}")
 
-        # Verify planner is reachable
         import requests
         try:
             r = requests.get(f"{planner_url}/v1/models", timeout=10)
@@ -1046,24 +1453,19 @@ def main(
             print(f"  Deploy first: uv run modal deploy modal_cua_server.py")
             sys.exit(1)
 
-        # Use Gemma4 to preprocess the plan
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
         from mantis_agent.brain_llamacpp import LlamaCppBrain
         from mantis_agent.gym.plan_optimizer import optimize_plan
 
         planner_brain = LlamaCppBrain(
-            base_url=f"{planner_url}/v1",
-            model="model",
-            max_tokens=4096,
-            temperature=0.0,
+            base_url=f"{planner_url}/v1", model="model",
+            max_tokens=4096, temperature=0.0,
         )
 
         print(f"  Preprocessing plan with Gemma4...")
         task_suite = optimize_plan(
-            plan_text=plan_text,
-            inputs=plan_inputs,
-            session_name=session_name,
-            max_listings=max_listings,
+            plan_text=plan_text, inputs=plan_inputs,
+            session_name=session_name, max_listings=max_listings,
             brain=planner_brain,
         )
 
@@ -1087,16 +1489,162 @@ def main(
         print("ERROR: Provide --plan-file or --task-file")
         sys.exit(1)
 
-    # Route to correct GPU-tier executor
-    executor_fn = EXECUTOR_MAP.get(model, run_cua_1gpu)
-    print(f"\n  Launching {cua_config['name']} on Modal ({cua_config['tp']}× A100)...")
+    # ── Auto-parallelize looped tasks ──────────────────────────────
+    task_suite = json.loads(task_file_contents)
+    tasks = task_suite.get("tasks", [])
+    loop_tasks = [t for t in tasks if t.get("loop")]
+    non_loop_tasks = [t for t in tasks if not t.get("loop")]
 
-    result = executor_fn.remote(
-        task_file_contents=task_file_contents,
-        cua_model=model,
-        plan_inputs=plan_inputs,
-        max_steps=max_steps,
-        max_retries=max_retries,
-    )
+    # Auto-detect: if workers > 1 and there are looped tasks, fan out
+    # Works with any model — routes to the correct executor per model type
+    if workers > 1 and loop_tasks:
+        print(f"\n  ═══ PARALLEL MODE: {workers} concurrent workers ═══")
+
+        for loop_task in loop_tasks:
+            max_pages = loop_task["loop"].get("max_pages", 5)
+
+            print(f"  Task: {loop_task['task_id']}")
+            print(f"    Pages: {max_pages} | Workers: {workers}")
+            print(f"    Strategy: 1 worker = 1 page, dynamic queue")
+
+            # Page queue — workers pull from this
+            import queue
+            import threading
+
+            page_queue = queue.Queue()
+            for p in range(1, max_pages + 1):
+                page_queue.put(p)
+
+            total_viable = 0
+            total_scanned = 0
+            results_lock = threading.Lock()
+            worker_results = []
+
+            def process_worker(worker_id: int):
+                """Worker loop: grab page → process → grab next until queue empty."""
+                nonlocal total_viable, total_scanned
+                while True:
+                    try:
+                        page = page_queue.get_nowait()
+                    except queue.Empty:
+                        break
+
+                    print(f"    Worker {worker_id}: starting page {page}")
+                    page_task = _make_page_task(loop_task, worker_id, page)
+                    page_contents = json.dumps(page_task)
+
+                    try:
+                        result = run_gemma4_cua_worker.remote(
+                            task_file_contents=page_contents,
+                            worker_id=worker_id,
+                            max_steps=max_steps,
+                        )
+                        passed = result.get("passed", 0)
+                        total = result.get("total", 0)
+                        with results_lock:
+                            total_viable += passed
+                            total_scanned += total
+                            worker_results.append({
+                                "worker": worker_id, "page": page,
+                                "passed": passed, "total": total,
+                            })
+                        print(f"    Worker {worker_id}: page {page} done — {passed}/{total} viable")
+                    except Exception as e:
+                        print(f"    Worker {worker_id}: page {page} ERROR — {e}")
+
+            # Launch worker pool — each grabs pages from the queue
+            # Use .spawn() for parallel Modal execution, then collect
+            # Simpler: spawn all pages upfront, workers=min(workers, pages)
+            active_workers = min(workers, max_pages)
+            page_handles = []
+
+            for page in range(1, max_pages + 1):
+                w = (page - 1) % active_workers
+                page_task = _make_page_task(loop_task, worker_id=w, page=page)
+                page_contents = json.dumps(page_task)
+                print(f"    → Page {page} → Worker {w}")
+
+                spawn_kwargs = {
+                    "task_file_contents": page_contents,
+                    "max_steps": max_steps,
+                }
+                if model == "gemma4-cua":
+                    spawn_kwargs["worker_id"] = w
+                    handle = run_gemma4_cua_worker.spawn(**spawn_kwargs)
+                else:
+                    spawn_kwargs["cua_model"] = model
+                    handle = worker_fn.spawn(**spawn_kwargs)
+                page_handles.append((page, w, handle))
+
+            # Route to the right worker function based on model
+            worker_fn_map = {
+                "gemma4-cua": run_gemma4_cua_worker,
+                "evocua-8b": run_cua_1gpu,
+                "evocua-32b": run_cua_2gpu,
+                "opencua-32b": run_cua_4gpu,
+            }
+            worker_fn = worker_fn_map.get(model, run_gemma4_cua_worker)
+
+            # Collect results as workers complete
+            print(f"\n  Waiting for {len(page_handles)} page workers...")
+            total_viable = 0
+            total_scanned = 0
+
+            for page, w, handle in page_handles:
+                try:
+                    result = handle.get()
+                    passed = result.get("passed", 0)
+                    total = result.get("total", 0)
+                    total_viable += passed
+                    total_scanned += total
+                    print(f"    Page {page} (W{w}): {passed}/{total} viable")
+                except Exception as e:
+                    print(f"    Page {page} (W{w}): ERROR — {e}")
+
+            # Summary
+            print(f"\n  ═══ PARALLEL RESULTS ═══")
+            print(f"  Pages:     {max_pages}")
+            print(f"  Workers:   {active_workers}")
+            print(f"  Scanned:   {total_scanned}")
+            print(f"  Viable:    {total_viable}")
+            print(f"  Hit rate:  {total_viable/max(total_scanned,1)*100:.0f}%")
+
+        # Run non-loop tasks sequentially (login, lead entry)
+        if non_loop_tasks:
+            print(f"\n  Running {len(non_loop_tasks)} sequential tasks...")
+            seq_suite = dict(task_suite)
+            seq_suite["tasks"] = non_loop_tasks
+            seq_contents = json.dumps(seq_suite)
+
+            executor_fn = EXECUTOR_MAP.get(model, run_cua_1gpu)
+            kwargs = {
+                "task_file_contents": seq_contents,
+                "max_steps": max_steps, "max_retries": max_retries,
+            }
+            if model == "claude":
+                kwargs["claude_model"] = claude_model
+            result = executor_fn.remote(**kwargs)
+            print(f"  Sequential: {json.dumps(result, indent=2)}")
+
+        return
+
+    # ── Single worker (default) ──────────────────────────────────
+    executor_fn = EXECUTOR_MAP.get(model, run_cua_1gpu)
+    gpu_desc = f"{cua_config['tp']}× A100" if cua_config['tp'] > 0 else "no GPU (API)"
+    print(f"\n  Launching {cua_config['name']} on Modal ({gpu_desc})...")
+
+    kwargs = {
+        "task_file_contents": task_file_contents,
+        "plan_inputs": plan_inputs,
+        "max_steps": max_steps,
+        "max_retries": max_retries,
+    }
+    if model == "claude":
+        kwargs["claude_model"] = claude_model
+        kwargs["thinking_budget"] = thinking_budget
+    else:
+        kwargs["cua_model"] = model
+
+    result = executor_fn.remote(**kwargs)
 
     print(f"\nResult: {json.dumps(result, indent=2)}")

@@ -238,8 +238,8 @@ def parse_tool_call(name: str, arguments: dict[str, Any], reasoning: str = "") -
     name_lower = name.lower()
     if name_lower in ("terminate", "done", "finish", "complete"):
         name = "done"
-    elif name_lower in ("typewrite", "type_text", "write", "enter_text"):
-        name = "type"
+    elif name_lower in ("typewrite", "type_text", "type", "write", "enter_text"):
+        name = "type_text"
 
     try:
         action_type = ActionType(name)
