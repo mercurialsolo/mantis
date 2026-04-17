@@ -58,8 +58,8 @@ The LAST frame is the current screen state. Earlier frames show what happened be
 
 Your job:
 1. OBSERVE the current screen state carefully
-2. REASON about what to do next given the task and what you see
-3. CALL exactly one tool to perform an action
+2. REASON briefly about what to do next
+3. Output EXACTLY ONE action using the format below
 
 Important guidelines:
 - Coordinates are in absolute screen pixels
@@ -91,7 +91,18 @@ Data extraction:
 Loop avoidance:
 - NEVER repeat the same action more than twice in a row
 - If an action fails twice, try a completely different approach
-- If you cannot make progress after 5 actions, call done(success=false)\
+- If you cannot make progress after 5 actions, call done(success=false)
+
+ACTION FORMAT — output exactly one of these per turn:
+- click(x=<int>, y=<int>) — click at coordinates
+- type_text(text="<string>") — type text into focused field
+- key_press(keys="<string>") — press key or combo (e.g. "enter", "alt+left", "tab")
+- scroll(direction="down", amount=5) — scroll the page
+- wait(seconds=2) — wait for page to load
+- done(success=true, summary="<result>") — task complete
+- done(success=false, summary="<reason>") — task failed
+
+You MUST end your response with one of these action calls. Do NOT just describe what you would do.\
 """
 
 # ── OpenAI function-calling tool format ─────────────────────────────────────
@@ -187,10 +198,12 @@ class Holo3Brain:
         temperature: float = 0.0,
         screen_size: tuple[int, int] = (1280, 720),
         enable_thinking: bool = True,
+        use_tool_calling: bool = False,  # llama.cpp often breaks with tools — text parsing is more reliable
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key or os.environ.get("HAI_API_KEY", "")
+        self.use_tool_calling = use_tool_calling
         self.model_name = "Holo3-35B-A3B"
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -260,11 +273,13 @@ class Holo3Brain:
         payload: dict = {
             "model": self.model,
             "messages": messages,
-            "tools": OPENAI_TOOLS,
-            "tool_choice": "auto",
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         }
+
+        if self.use_tool_calling:
+            payload["tools"] = OPENAI_TOOLS
+            payload["tool_choice"] = "auto"
 
         # Holo3 native thinking toggle (H Company API format)
         if not self.enable_thinking:
