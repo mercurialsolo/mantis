@@ -757,6 +757,8 @@ def _run_holo3_executor(
     max_steps: int = 30,
     max_retries: int = 2,
     frames_per_inference: int = 5,
+    viewer: bool = False,
+    **_extra,
 ) -> dict:
     """Execute tasks using Holo3-35B-A3B via H Company hosted API.
 
@@ -956,19 +958,6 @@ def _run_holo3_executor(
     save_progress()
     return {"passed": passed, "total": len(scores), "score": avg}
 
-
-@app.function(
-    image=claude_executor_image,  # Same lightweight image as Claude (no GPU)
-    volumes={"/data": vol},
-    secrets=[modal.Secret.from_dotenv()],
-    timeout=14400,  # 4 hours
-    memory=16384,
-    cpu=4,
-)
-def run_holo3(task_file_contents: str, **kwargs) -> dict:
-    """Holo3-35B-A3B executor (H Company API, no GPU needed)."""
-    kwargs.pop("cua_model", None)
-    return _run_holo3_executor(task_file_contents, **kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1570,6 +1559,20 @@ def run_claude_cua(task_file_contents: str, claude_model: str = "claude-sonnet-4
     """Claude CUA executor (no GPU — API-based inference, Chrome + xdotool only)."""
     kwargs.pop("cua_model", None)
     return _run_claude_executor(task_file_contents, claude_model=claude_model, **kwargs)
+
+
+@app.function(
+    image=claude_executor_image,  # Same lightweight image (no GPU — API-based)
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],
+    timeout=14400,  # 4 hours
+    memory=16384,
+    cpu=4,
+)
+def run_holo3(task_file_contents: str, **kwargs) -> dict:
+    """Holo3-35B-A3B executor (H Company API, no GPU needed)."""
+    kwargs.pop("cua_model", None)
+    return _run_holo3_executor(task_file_contents, **kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════
