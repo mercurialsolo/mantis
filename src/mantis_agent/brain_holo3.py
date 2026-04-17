@@ -284,6 +284,9 @@ class Holo3Brain:
                     logger.warning(f"Rate limited (429), waiting {wait}s (attempt {attempt+1}/4)")
                     time.sleep(wait)
                     continue
+                if resp.status_code == 400:
+                    body = resp.text[:500]
+                    logger.warning(f"Bad request (400): {body}")
                 resp.raise_for_status()
                 data = resp.json()
                 break
@@ -600,7 +603,7 @@ class Holo3Brain:
         cleaned = re.sub(r'```(?:json|python|)\s*\n?', '', text)
         cleaned = re.sub(r'\n?```', '', cleaned)
 
-        match = re.search(r'\{[^{}]*"(?:action|command)"\s*:\s*"[^"]*"[^{}]*\}', cleaned)
+        match = re.search(r'\{[^{}]*"(?:action|command|code)"\s*:\s*"[^"]*"[^{}]*\}', cleaned)
         if not match:
             return None
 
@@ -609,7 +612,14 @@ class Holo3Brain:
         except json.JSONDecodeError:
             return None
 
+        # Holo3 outputs varying keys: "action", "command", or "code" (which is a function call string)
         action_type = obj.get("action", obj.get("command", "")).lower()
+        if not action_type:
+            # "code" field contains function call like "wait()" or "click(x=100, y=200)"
+            code = obj.get("code", "")
+            if code:
+                # Delegate to holo3 action parser which handles function call strings
+                return self._parse_holo3_action(code, screen_size)
 
         if action_type == "click":
             x, y = int(obj.get("x", 0)), int(obj.get("y", 0))
