@@ -544,16 +544,23 @@ class Holo3Brain:
             for kv in re.findall(r"(\w+)\s*=\s*['\"]?([^'\",:}]+)['\"]?", raw_args):
                 args[kv[0]] = kv[1].strip()
 
+        def _safe_int(val, default=0) -> int:
+            """Extract first integer from possibly malformed value."""
+            if isinstance(val, (int, float)):
+                return int(val)
+            m = re.match(r'-?\d+', str(val).strip())
+            return int(m.group(0)) if m else default
+
         # Map to Action
         if func_name in ("click",):
-            x = int(args.get("x", 0))
-            y = int(args.get("y", 0))
+            x = _safe_int(args.get("x", 0))
+            y = _safe_int(args.get("y", 0))
             sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
             return Action(ActionType.CLICK, {"x": sx, "y": sy, "button": args.get("button", "left")})
 
         if func_name in ("double_click", "doubleclick"):
-            x = int(args.get("x", 0))
-            y = int(args.get("y", 0))
+            x = _safe_int(args.get("x", 0))
+            y = _safe_int(args.get("y", 0))
             sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
             return Action(ActionType.DOUBLE_CLICK, {"x": sx, "y": sy})
 
@@ -568,7 +575,7 @@ class Holo3Brain:
 
         if func_name == "scroll":
             direction = str(args.get("direction", "down"))
-            amount = int(args.get("amount", 3))
+            amount = _safe_int(args.get("amount", 3), default=3)
             return Action(ActionType.SCROLL, {"direction": direction, "amount": amount})
 
         if func_name in ("done", "terminate"):
