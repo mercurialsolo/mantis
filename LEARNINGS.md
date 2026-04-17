@@ -138,7 +138,9 @@ We're building a CUA (Computer Use Agent) that can extract leads from boat listi
 - Model generates actions but uses **varying output formats**: `{"code":"wait()"}`, `{"command":"click","x":200,"y":400}`, `Action: scroll({...})`, plus standard tool_calls
 - Required 5-strategy fallback parser (tool_calls → Holo3 text → JSON → pyautogui → keywords)
 - Coordinate values sometimes arrive as strings or comma-separated pairs — needed robust int extraction
-- **Status**: Serving and executing steps. Parsing mostly fixed. Accuracy not yet benchmarked vs Gemma4/EvoCUA.
+- **First VIABLE extraction in 104 seconds** — model navigated to listing, scrolled, found data, reported back
+- Remaining parse gaps: `Escape()` format, occasional pure-reasoning without action
+- **Status**: Working end-to-end. Needs parse tuning and full benchmark vs Gemma4/EvoCUA.
 
 ---
 
