@@ -1,0 +1,22 @@
+{
+  "session_name": "boattrader_private_seller_leads",
+  "base_url": "https://www.boattrader.com/boats/",
+  "tasks": [
+    {
+      "task_id": "setup_search_filters",
+      "intent": "WHAT TO CLICK - Set up search filters for private seller boats near Miami:\n1. Look for ZIP CODE input field (rectangular text box, usually in top area y<200)\n2. Look for RADIUS/DISTANCE dropdown (rectangular dropdown near zip field)\n3. Look for PRICE filters (Min Price text input, usually labeled clearly)\n4. Look for SELLER TYPE filter (dropdown or checkbox section, may say 'Private Seller' or 'Dealer/Private')\n5. Look for SORT BY dropdown (usually top-right of results area)\n\nWHAT TO NEVER CLICK:\n- Large boat photos (open gallery traps)\n- Social media icons (small 20-40px colored squares)\n- Navigation menu items in header\n- Advertisement banners or dealer logos\n- Footer links\n\nSTEPS:\n1. click() on zip code input field if empty, type_text('33101')\n2. click() on radius dropdown, select 25 miles option\n3. click() on minimum price field, type_text('35000')\n4. click() on seller type filter, select 'Private Seller' option\n5. click() on sort dropdown, select 'Recently Updated' or 'Newest First'\n6. click() search or apply button if present\n7. done(success=true, summary='Search filters applied')\n\nERROR HANDLERS:\n- If page loads slowly: scroll(direction='down', amount=2) then retry\n- If dropdown doesn't open: click() slightly different coordinates\n- If no results found: done(success=false, summary='No results for filters')\n- Cookie popup: click() Accept button once, continue with task",
+      "start_url": "https://www.boattrader.com/boats/"
+    },
+    {
+      "task_id": "extract_listings_from_page",
+      "intent": "WHAT TO CLICK - Extract phone numbers from each boat listing on current page:\n1. Look for LISTING RECTANGLES (large rectangular cards ~300-400px wide, showing boat photo + title + price)\n2. Click on LISTING TITLE TEXT (not the photo) - usually blue/black text showing Year Make Model\n3. Each listing card contains: boat photo (left), title text, price (right side)\n4. Title text is clickable and opens listing detail page\n\nWHAT TO NEVER CLICK:\n- Boat photos themselves (opens photo gallery trap)\n- Small thumbnail images\n- Social media share buttons (small colored icons)\n- Dealer logos or badges\n- Advertisement sections\n- Navigation breadcrumbs\n- Filter sidebar elements\n\nSTEPS FOR EACH LISTING:\n1. click() on listing title text (not photo)\n2. Wait for page load\n3. scroll(direction='down', amount=3) to see full description\n4. Look for DESCRIPTION section (large text block)\n5. Look for CONTACT INFO or SELLER INFO section\n6. Extract phone numbers matching patterns: (555)555-5555, 555-555-5555, or 10+ consecutive digits\n7. IGNORE: prices (contain $), years (4 digits), zip codes (5 digits), partial numbers\n8. If phone found: extract year, make, model, asking price, boat type, seller phone, seller name from page\n9. key_press(keys='alt+left') to return to search results\n10. Repeat for next listing on page\n\nERROR HANDLERS:\n- 404/Page Not Found: key_press(keys='alt+left'), continue to next listing\n- Photo gallery opens ('1 of N' text visible): key_press(keys='Escape'), key_press(keys='alt+left')\n- Off-site redirect (facebook/instagram URLs): key_press(keys='alt+left') immediately\n- Page won't load: wait 3 seconds, key_press(keys='alt+left')\n- No phone number found: key_press(keys='alt+left'), mark as 'No phone'\n\nOUTPUT FORMAT:\nFor each listing with phone: done(success=true, summary='PHONE_FOUND | Year Make Model | $Price | Phone: XXX-XXX-XXXX | Seller: Name')\nFor listings without phone: done(success=true, summary='NO_PHONE | Year Make Model | $Price')\nFor errors: done(success=false, summary='ERROR | Listing title | Error type')",
+      "loop": {
+        "pagination_intent": "After processing all listings on current page, look for NEXT PAGE button or pagination controls at bottom of page (y>600). Click on 'Next' button or page number. If no next page button visible, task is complete.",
+        "max_iterations": 50,
+        "max_pages": 20,
+        "max_steps_per_iteration": 25
+      },
+      "start_url": "https://www.boattrader.com/boats/"
+    }
+  ]
+}
