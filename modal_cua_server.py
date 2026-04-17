@@ -761,7 +761,7 @@ def _run_holo3_executor(
     plan_inputs: dict[str, str] | None = None,
     max_steps: int = 30,
     max_retries: int = 2,
-    frames_per_inference: int = 5,
+    frames_per_inference: int = 1,  # Holo3: single frame is sufficient, reduces context
     viewer: bool = False,
     **_extra,
 ) -> dict:
@@ -799,7 +799,7 @@ def _run_holo3_executor(
     else:
         print(f"Holo3 GGUF cached at {HOLO3_MODEL_DIR}")
 
-    # Start llama-server
+    # Start llama-server with reasoning budget (proven sweet spot from Gemma4)
     cmd = [
         "/opt/llama.cpp/build/bin/llama-server",
         "-m", model_path,
@@ -807,6 +807,7 @@ def _run_holo3_executor(
         "--host", "0.0.0.0", "--port", "8080",
         "-ngl", "99", "-c", "8192", "-ub", "2048",
         "--jinja",
+        "--reasoning-budget", "512",
         "--flash-attn", "on",
     ]
     print(f"Starting Holo3 llama-server: {' '.join(cmd[-8:])}")

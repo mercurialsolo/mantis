@@ -166,6 +166,7 @@ class WorkflowRunner:
 
             if result.success and not viable:
                 logger.warning(f"  Model claimed success but data failed validation (Cloudflare/empty)")
+                logger.warning(f"  Extracted data was: {extracted[:300]}")
 
             # Mostly-failed iterations = model couldn't act, don't count as real progress
             if parse_failures > 0 and result.total_steps > 0:
