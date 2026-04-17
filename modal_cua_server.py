@@ -638,7 +638,7 @@ def _run_executor(
             # Standard task with retry
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
                                frames_per_inference=frames_per_inference,
-                               grounding=grounding if 'grounding' in dir() else None,
+
                                on_step=viewer_event_bus.emit if viewer_event_bus else None)
             result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
                                            grounding=grounding if "grounding" in dir() else None)
@@ -1188,7 +1188,7 @@ def _run_gemma4_cua_executor(
                 continue
 
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps, frames_per_inference=2,
-                               grounding=grounding if 'grounding' in dir() else None,
+
                                on_step=viewer_event_bus.emit if viewer_event_bus else None)
             result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
                                            grounding=grounding if "grounding" in dir() else None)
@@ -1496,7 +1496,7 @@ def _run_claude_executor(
             # Standard task with retry
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
                                frames_per_inference=frames_per_inference,
-                               grounding=grounding if 'grounding' in dir() else None,
+
                                on_step=viewer_event_bus.emit if viewer_event_bus else None)
             result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
                                            grounding=grounding if "grounding" in dir() else None)
