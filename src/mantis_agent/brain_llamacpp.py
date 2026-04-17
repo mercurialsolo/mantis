@@ -318,11 +318,17 @@ class LlamaCppBrain:
                 pass
 
         # Try raw JSON: {"action": "click", "x": N, "y": N}
-        json_match = re.search(r'\{[^{}]*"action"\s*:\s*"(\w+)"[^{}]*\}', cleaned)
+        # Also handles nested: {"action": "key_press", "parameters": {"keys": "alt+left"}}
+        json_match = re.search(r'\{.*"action"\s*:\s*"(\w+)".*\}', cleaned, re.DOTALL)
         if json_match:
             try:
                 obj = json.loads(json_match.group(0))
                 action_name = obj.pop("action", "wait")
+                # Flatten nested "parameters"/"arguments" into top-level
+                for nested_key in ("parameters", "arguments", "params"):
+                    if nested_key in obj and isinstance(obj[nested_key], dict):
+                        nested = obj.pop(nested_key)
+                        obj.update(nested)
                 # Map JSON action names to our tool names
                 name_map = {
                     "click": "click", "left_click": "click",
@@ -332,7 +338,7 @@ class LlamaCppBrain:
                     "double_click": "double_click", "wait": "wait",
                 }
                 mapped = name_map.get(action_name, action_name)
-                # Normalize: "button" is extra, "text" might be in different key
+                # Normalize key variants
                 if "key" in obj and "keys" not in obj:
                     obj["keys"] = obj.pop("key")
                 return parse_tool_call(mapped, obj)
