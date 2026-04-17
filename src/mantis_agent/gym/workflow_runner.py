@@ -80,7 +80,8 @@ class WorkflowRunner:
 
     def __init__(self, brain: Any, env: Any, loop_config: LoopConfig,
                  session_name: str = "workflow",
-                 on_iteration: Any = None):
+                 on_iteration: Any = None,
+                 start_url: str | None = None):
         self.brain = brain
         # Dedup: track processed phone numbers and listing URLs
         self._seen_phones: set[str] = set()
@@ -89,6 +90,7 @@ class WorkflowRunner:
         self.config = loop_config
         self.session_name = session_name
         self.on_iteration = on_iteration  # Callback: fn(iteration_num, result, all_results)
+        self.start_url = start_url
 
     def run_loop(self) -> list[IterationResult]:
         """Execute the full loop: iterate items on each page, paginate."""
@@ -101,21 +103,22 @@ class WorkflowRunner:
         logger.info(f"Starting dynamic loop (max {self.config.max_iterations} items, {self.config.max_pages} pages)")
 
         while page <= self.config.max_pages and global_iteration < self.config.max_iterations:
-            page_iteration += 1
+            # Ordinal is tentative — only advance after confirmed progress
+            tentative_ordinal = page_iteration + 1
 
             # Build iteration intent with ordinal
-            ordinal = ORDINALS.get(page_iteration, f"#{page_iteration}")
+            ordinal = ORDINALS.get(tentative_ordinal, f"#{tentative_ordinal}")
             global_iteration += 1
 
             intent = self.config.iteration_intent
             intent = intent.replace("{ORDINAL}", ordinal)
             intent = intent.replace("{N}", str(global_iteration))
-            intent = intent.replace("{PAGE_N}", str(page_iteration))
+            intent = intent.replace("{PAGE_N}", str(tentative_ordinal))
             intent = intent.replace("{PAGE}", str(page))
 
             # Add context about position
-            if page_iteration > 1:
-                intent += f"\n\nYou are on page {page}. You have already processed {page_iteration - 1} listings on this page. Scroll past them to find the {ordinal} one."
+            if page_iteration > 0:
+                intent += f"\n\nYou are on page {page}. You have already processed {page_iteration} listings on this page. Scroll past them to find the {ordinal} one."
 
             # Agentic learning: inject what worked/failed in prior iterations
             if learnings:
@@ -123,20 +126,24 @@ class WorkflowRunner:
                 for learning in learnings[-5:]:  # Last 5 learnings
                     intent += f"\n- {learning}"
 
-            logger.info(f"Iteration {global_iteration} (page {page}, item {page_iteration})")
+            logger.info(f"Iteration {global_iteration} (page {page}, item {tentative_ordinal})")
             t0 = time.time()
 
-            # Human-like delay between iterations to avoid bot detection
+            # Brief settle delay between iterations (proxy handles bot evasion)
             if global_iteration > 1:
-                delay = random.uniform(2.0, 5.0)
-                logger.info(f"  Inter-iteration delay: {delay:.1f}s")
-                time.sleep(delay)
+                time.sleep(0.5)
 
             # Run bounded iteration
             result = self._run_iteration(intent, f"iter_{global_iteration}")
 
             extracted = self._extract_data(result)
-            viable = self._validate_viable(extracted)
+
+            # Extract listing URL for dedup before validation
+            import re as _re
+            _url_match = _re.search(r'boattrader\.com/boats?/[^\s"]+', extracted)
+            _listing_url = _url_match.group() if _url_match else None
+
+            viable = self._validate_viable(extracted, listing_url=_listing_url)
 
             # Count parse failures — steps where the brain couldn't produce a valid action
             parse_failures = self._count_parse_failures(result)
@@ -167,6 +174,14 @@ class WorkflowRunner:
             if learning:
                 learnings.append(learning)
                 logger.info(f"  Learning: {learning}")
+
+            # Advance ordinal only when the iteration produced real progress:
+            # viable data extracted, or explicit skip with actual listing data
+            iteration_had_progress = viable or (iter_result.data and len(iter_result.data) > 30 and not iter_result.no_more_items)
+            if iteration_had_progress:
+                page_iteration = tentative_ordinal
+            else:
+                logger.info(f"  Ordinal stays at {page_iteration} (no progress this iteration)")
 
             status = "VIABLE" if viable else ("END_OF_PAGE" if iter_result.no_more_items else "SKIP")
             logger.info(f"  → {status} ({result.total_steps} steps, {parse_failures} parse failures, {iter_result.duration:.0f}s)")
@@ -225,7 +240,7 @@ class WorkflowRunner:
                     f"Try a different approach."
                 )
 
-            result = runner.run(task=attempt_intent, task_id=task_id)
+            result = runner.run(task=attempt_intent, task_id=task_id, start_url=self.start_url)
             best_result = result
 
             if result.success or self._check_no_more(result):
@@ -259,21 +274,21 @@ class WorkflowRunner:
         return False
 
     def _check_no_more(self, result, check_pages: bool = False) -> bool:
-        """Check if the model signaled no more items/pages."""
-        # Check terminate message in trajectory
+        """Check if the model signaled no more items/pages.
+
+        Only inspects the terminate() summary — not thinking text, which
+        may echo the task prompt and contain false-positive signal words.
+        Requires success == False to distinguish genuine end-of-page from
+        a successful extraction that happens to mention 'no more'.
+        """
         for step in result.trajectory:
             if step.action.action_type.value == "done":
+                if step.action.params.get("success", True):
+                    continue  # Successful extraction, not an end signal
                 summary = str(step.action.params.get("summary", "")).lower()
-                thinking = str(step.thinking or "").lower()
-                text = summary + " " + thinking
 
                 for signal in NO_MORE_SIGNALS:
-                    if signal in text:
-                        return True
-
-                # Check for explicit failure with "no more" context
-                if not step.action.params.get("success", True):
-                    if any(s in text for s in ["no more", "empty", "end", "last"]):
+                    if signal in summary:
                         return True
 
         return False
@@ -466,11 +481,11 @@ class WorkflowRunner:
 
         return ""
 
-    def _validate_viable(self, data: str) -> bool:
+    def _validate_viable(self, data: str, listing_url: str | None = None) -> bool:
         """Strict phone-only viability per spec.
 
         A listing is VIABLE only if a real phone number exists.
-        Deduplicates against previously seen phones.
+        Deduplicates against previously seen phones and listing URLs.
         """
         if not data:
             return False
@@ -493,6 +508,11 @@ class WorkflowRunner:
         if sum(1 for m in prompt_markers if m in text) >= 2:
             return False
 
+        # Dedup by listing URL
+        if listing_url and listing_url in self._seen_urls:
+            logger.info(f"  Dedup: URL {listing_url} already seen, skipping")
+            return False
+
         # Extract phone — strict: must be a real phone, not in a URL
         phone = self._extract_phone(data)
         if not phone:
@@ -506,4 +526,6 @@ class WorkflowRunner:
             return False
 
         self._seen_phones.add(digits)
+        if listing_url:
+            self._seen_urls.add(listing_url)
         return True

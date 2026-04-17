@@ -118,6 +118,7 @@ class GymRunner:
         plan_steps: str | None = None,
         plan: Any = None,
         plan_inputs: dict[str, str] | None = None,
+        start_url: str | None = None,
     ) -> RunResult:
         """Execute a task with plan persistence, feedback, and context.
 
@@ -165,6 +166,8 @@ class GymRunner:
 
         # Reset environment
         reset_kwargs: dict[str, Any] = {"task_id": task_id}
+        if start_url:
+            reset_kwargs["start_url"] = start_url
         if seed is not None:
             reset_kwargs["seed"] = seed
 
@@ -409,13 +412,8 @@ class GymRunner:
                 )
             else:
                 parts.append(
-                    "\n\nThe page is already loaded in the browser — you can see it in the screenshot. "
-                    "Do NOT navigate to any URL. Start interacting with what is on screen.\n\n"
-                    "FIRST, write a brief numbered plan:\n"
-                    "1. <what to do first>\n"
-                    "2. <what to do next>\n"
-                    "...\n"
-                    "Then execute the first action."
+                    "\n\nThe browser is open with the page loaded. Look at the screenshot and "
+                    "execute your first action. Write a brief numbered plan, then execute step 1."
                 )
         else:
             # Inject persistent plan

@@ -492,7 +492,7 @@ def _run_executor(
         viewport=(1280, 720),
         browser="google-chrome",
         settle_time=2.0,
-        human_speed=True,
+        human_speed=False,
         proxy_server=proxy_server,
     )
 
@@ -570,7 +570,8 @@ def _run_executor(
                     max_steps_per_iteration=task_config["loop"].get("max_steps_per_iteration", max_steps),
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
-                                           on_iteration=on_loop_iteration)
+                                           on_iteration=on_loop_iteration,
+                                           start_url=task_config.get("start_url", ""))
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -600,22 +601,13 @@ def _run_executor(
             # Standard task with retry
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
                                frames_per_inference=frames_per_inference)
-            result = runner.run(task=intent, task_id=task_id)
+            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
 
             if task_config.get("save_session"):
                 if result.success or ("login" not in env.current_url.lower()):
                     env.save_session(session_name)
 
-            verify = task_config.get("verify", {})
-            verified = False
-            vtype, value = verify.get("type", ""), verify.get("value", "")
-            try:
-                if vtype == "url_contains":
-                    verified = value.lower() in env.current_url.lower()
-            except Exception:
-                pass
-
-            success = result.success or verified
+            success = result.success
             scores.append(1.0 if success else 0.0)
             task_details.append({
                 "task_id": task_id, "success": success,
@@ -816,7 +808,7 @@ def _run_gemma4_cua_executor(
         viewport=(1280, 720),
         browser="google-chrome",
         settle_time=2.0,
-        human_speed=True,
+        human_speed=False,
         proxy_server=proxy_server,
     )
 
@@ -891,7 +883,8 @@ def _run_gemma4_cua_executor(
                     max_steps_per_iteration=task_config["loop"].get("max_steps_per_iteration", max_steps),
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
-                                           on_iteration=on_loop_iteration)
+                                           on_iteration=on_loop_iteration,
+                                           start_url=task_config.get("start_url", ""))
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -919,22 +912,13 @@ def _run_gemma4_cua_executor(
                 continue
 
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps, frames_per_inference=2)
-            result = runner.run(task=intent, task_id=task_id)
+            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
 
             if task_config.get("save_session"):
                 if result.success or ("login" not in env.current_url.lower()):
                     env.save_session(session_name)
 
-            verify = task_config.get("verify", {})
-            verified = False
-            vtype, value = verify.get("type", ""), verify.get("value", "")
-            try:
-                if vtype == "url_contains":
-                    verified = value.lower() in env.current_url.lower()
-            except Exception:
-                pass
-
-            success = result.success or verified
+            success = result.success
             scores.append(1.0 if success else 0.0)
             task_details.append({
                 "task_id": task_id, "success": success,
@@ -1073,7 +1057,7 @@ def _run_claude_executor(
         viewport=(1280, 720),
         browser="google-chrome",
         settle_time=2.0,
-        human_speed=True,
+        human_speed=False,
         proxy_server=proxy_server,
     )
 
@@ -1176,7 +1160,8 @@ def _run_claude_executor(
                     max_steps_per_iteration=task_config["loop"].get("max_steps_per_iteration", max_steps),
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
-                                           on_iteration=on_loop_iteration)
+                                           on_iteration=on_loop_iteration,
+                                           start_url=task_config.get("start_url", ""))
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -1206,7 +1191,7 @@ def _run_claude_executor(
             # Standard task with retry
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
                                frames_per_inference=frames_per_inference)
-            result = runner.run(task=intent, task_id=task_id)
+            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
 
             # Save trajectory for distillation
             save_trajectory(task_id, intent, result)
@@ -1215,16 +1200,7 @@ def _run_claude_executor(
                 if result.success or ("login" not in env.current_url.lower()):
                     env.save_session(session_name)
 
-            verify = task_config.get("verify", {})
-            verified = False
-            vtype, value = verify.get("type", ""), verify.get("value", "")
-            try:
-                if vtype == "url_contains":
-                    verified = value.lower() in env.current_url.lower()
-            except Exception:
-                pass
-
-            success = result.success or verified
+            success = result.success
             scores.append(1.0 if success else 0.0)
             task_details.append({
                 "task_id": task_id, "success": success,
@@ -1318,7 +1294,6 @@ def _make_page_task(original_task: dict, worker_id: int, page: int) -> dict:
                 "intent": original_task["intent"],
                 "loop": loop,
                 "start_url": base_url,
-                "verify": {"type": "url_contains", "value": "boattrader"},
             }
         ],
     }
@@ -1558,6 +1533,15 @@ def main(
             active_workers = min(workers, max_pages)
             page_handles = []
 
+            # Route to the right worker function based on model
+            worker_fn_map = {
+                "gemma4-cua": run_gemma4_cua_worker,
+                "evocua-8b": run_cua_1gpu,
+                "evocua-32b": run_cua_2gpu,
+                "opencua-32b": run_cua_4gpu,
+            }
+            worker_fn = worker_fn_map.get(model, run_gemma4_cua_worker)
+
             for page in range(1, max_pages + 1):
                 w = (page - 1) % active_workers
                 page_task = _make_page_task(loop_task, worker_id=w, page=page)
@@ -1575,15 +1559,6 @@ def main(
                     spawn_kwargs["cua_model"] = model
                     handle = worker_fn.spawn(**spawn_kwargs)
                 page_handles.append((page, w, handle))
-
-            # Route to the right worker function based on model
-            worker_fn_map = {
-                "gemma4-cua": run_gemma4_cua_worker,
-                "evocua-8b": run_cua_1gpu,
-                "evocua-32b": run_cua_2gpu,
-                "opencua-32b": run_cua_4gpu,
-            }
-            worker_fn = worker_fn_map.get(model, run_gemma4_cua_worker)
 
             # Collect results as workers complete
             print(f"\n  Waiting for {len(page_handles)} page workers...")
