@@ -593,7 +593,7 @@ class Holo3Brain:
         cleaned = re.sub(r'```(?:json|python|)\s*\n?', '', text)
         cleaned = re.sub(r'\n?```', '', cleaned)
 
-        match = re.search(r'\{[^{}]*"action"\s*:\s*"[^"]*"[^{}]*\}', cleaned)
+        match = re.search(r'\{[^{}]*"(?:action|command)"\s*:\s*"[^"]*"[^{}]*\}', cleaned)
         if not match:
             return None
 
@@ -602,7 +602,7 @@ class Holo3Brain:
         except json.JSONDecodeError:
             return None
 
-        action_type = obj.get("action", "").lower()
+        action_type = obj.get("action", obj.get("command", "")).lower()
 
         if action_type == "click":
             x, y = int(obj.get("x", 0)), int(obj.get("y", 0))
