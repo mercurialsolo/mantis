@@ -270,19 +270,38 @@ class Holo3Brain:
         if not self.enable_thinking:
             payload["thinking"] = False
 
-        try:
-            resp = requests.post(
-                f"{self.base_url}/chat/completions",
-                json=payload, headers=self._headers,
-                timeout=120,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            logger.error(f"Holo3 API request failed: {e}")
+        # Retry with backoff for rate limiting (429)
+        data = None
+        for attempt in range(4):
+            try:
+                resp = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload, headers=self._headers,
+                    timeout=120,
+                )
+                if resp.status_code == 429:
+                    wait = min(2 ** attempt * 5, 30)  # 5, 10, 20, 30 sec
+                    logger.warning(f"Rate limited (429), waiting {wait}s (attempt {attempt+1}/4)")
+                    time.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except Exception as e:
+                if attempt < 3:
+                    logger.warning(f"Holo3 API attempt {attempt+1} failed: {e}")
+                    time.sleep(3)
+                else:
+                    logger.error(f"Holo3 API request failed after 4 attempts: {e}")
+                    return InferenceResult(
+                        action=Action(ActionType.WAIT, {"seconds": 2.0}, reasoning=str(e)),
+                        raw_output=str(e),
+                    )
+
+        if data is None:
             return InferenceResult(
-                action=Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=str(e)),
-                raw_output=str(e),
+                action=Action(ActionType.WAIT, {"seconds": 5.0}, reasoning="Rate limited"),
+                raw_output="429 rate limited after retries",
             )
 
         return self._parse_response(data, screen_size)
@@ -326,11 +345,13 @@ class Holo3Brain:
     # ── Response parsing (triple fallback) ──────────────────────────────────
 
     def _parse_response(self, data: dict, screen_size: tuple[int, int]) -> InferenceResult:
-        """Parse Holo3 response with triple fallback:
+        """Parse Holo3 response with 5-strategy fallback:
 
         1. Standard OpenAI tool_calls (primary path)
-        2. JSON action object in content text
-        3. pyautogui-style text in content (last resort)
+        2. Holo3 native "Action: name({...})" text format
+        3. JSON action {"action": "click", ...} in content
+        4. pyautogui-style text (pyautogui.click, etc.)
+        5. terminate/DONE/FAIL keywords
         """
         choice = data["choices"][0]
         message = choice["message"]
@@ -373,7 +394,22 @@ class Holo3Brain:
                 tokens_used=data.get("usage", {}).get("total_tokens", 0),
             )
 
-        # Strategy 2: JSON action in content text
+        # Strategy 2: Holo3 "Action: name({...})" or "Action: name(key=val)" text format
+        holo3_action = self._parse_holo3_action(content_text, screen_size)
+        if holo3_action is not None:
+            if not thinking:
+                # Everything before "Action:" is reasoning
+                action_idx = content_text.find("Action:")
+                if action_idx > 0:
+                    thinking = content_text[:action_idx].strip()
+            return InferenceResult(
+                action=holo3_action,
+                raw_output=raw_output,
+                thinking=thinking,
+                tokens_used=data.get("usage", {}).get("total_tokens", 0),
+            )
+
+        # Strategy 3: JSON action {"action": "click", ...} in content text
         json_action = self._parse_json_action(content_text, screen_size)
         if json_action is not None:
             json_match = re.search(r'\{[^{}]*"action"[^{}]*\}', content_text)
@@ -386,7 +422,7 @@ class Holo3Brain:
                 tokens_used=data.get("usage", {}).get("total_tokens", 0),
             )
 
-        # Strategy 3: pyautogui-style text
+        # Strategy 4: pyautogui-style text (pyautogui.click, etc.)
         pyautogui_action = self._parse_pyautogui(content_text, screen_size)
         if pyautogui_action is not None:
             pyautogui_match = re.search(r'pyautogui\.\w+\(.*?\)', content_text, re.DOTALL)
@@ -399,7 +435,7 @@ class Holo3Brain:
                 tokens_used=data.get("usage", {}).get("total_tokens", 0),
             )
 
-        # Strategy 4: terminate / DONE / FAIL keywords
+        # Strategy 5: terminate / DONE / FAIL keywords
         term_match = re.search(r"terminate\(['\"](\w+)['\"]\)", content_text)
         if term_match:
             success = term_match.group(1).lower() == "success"
@@ -438,25 +474,115 @@ class Holo3Brain:
 
         if action_name in spatial_actions:
             if "x" in args and "y" in args:
-                sx, sy = _model_coords_to_screen(
-                    int(args["x"]), int(args["y"]),
-                    screen_size[0], screen_size[1],
-                )
-                args["x"] = sx
-                args["y"] = sy
+                try:
+                    sx, sy = _model_coords_to_screen(
+                        int(float(str(args["x"]))), int(float(str(args["y"]))),
+                        screen_size[0], screen_size[1],
+                    )
+                    args["x"] = sx
+                    args["y"] = sy
+                except (ValueError, TypeError):
+                    pass
 
         if action_name == drag_action:
             for prefix in ("start_", "end_"):
                 xk, yk = f"{prefix}x", f"{prefix}y"
                 if xk in args and yk in args:
-                    sx, sy = _model_coords_to_screen(
-                        int(args[xk]), int(args[yk]),
-                        screen_size[0], screen_size[1],
-                    )
-                    args[xk] = sx
-                    args[yk] = sy
+                    try:
+                        sx, sy = _model_coords_to_screen(
+                            int(float(str(args[xk]))), int(float(str(args[yk]))),
+                            screen_size[0], screen_size[1],
+                        )
+                        args[xk] = sx
+                        args[yk] = sy
+                    except (ValueError, TypeError):
+                        pass
 
         return args
+
+    def _parse_holo3_action(self, text: str, screen_size: tuple[int, int]) -> Action | None:
+        """Parse Holo3's native text format: Action: name({...}) or name(key=val, ...).
+
+        Examples from real Holo3 output:
+          Action: scroll({'direction': 'down', 'amount': 5})
+          Action: click({'x': 640, 'y': 360})
+          Action: type_text({'text': '33101'})
+          Action: done({'success': true, 'summary': '...'})
+          Action: wait()
+        """
+        # Match "Action: name(...)" — the Action: prefix is optional
+        m = re.search(
+            r'(?:Action:\s*)?(\w+)\(\s*(\{.*?\}|\S.*?)\s*\)',
+            text, re.DOTALL,
+        )
+        if not m:
+            # Also try bare function call without Action: prefix
+            m = re.search(r'\b(click|scroll|type_text|key_press|done|wait|double_click)\(\s*(\{.*?\})\s*\)', text, re.DOTALL)
+        if not m:
+            return None
+
+        func_name = m.group(1).lower()
+        raw_args = m.group(2).strip()
+
+        # Try parsing as JSON (single-quoted → double-quoted)
+        args = {}
+        if raw_args.startswith("{"):
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                # Holo3 uses single quotes — convert
+                fixed = raw_args.replace("'", '"')
+                # Fix Python booleans/None
+                fixed = fixed.replace("True", "true").replace("False", "false").replace("None", "null")
+                try:
+                    args = json.loads(fixed)
+                except json.JSONDecodeError:
+                    pass
+
+        # If no JSON args parsed, try key=value format: name(key1=val1, key2=val2)
+        if not args and "=" in raw_args:
+            for kv in re.findall(r"(\w+)\s*=\s*['\"]?([^'\",:}]+)['\"]?", raw_args):
+                args[kv[0]] = kv[1].strip()
+
+        # Map to Action
+        if func_name in ("click",):
+            x = int(args.get("x", 0))
+            y = int(args.get("y", 0))
+            sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
+            return Action(ActionType.CLICK, {"x": sx, "y": sy, "button": args.get("button", "left")})
+
+        if func_name in ("double_click", "doubleclick"):
+            x = int(args.get("x", 0))
+            y = int(args.get("y", 0))
+            sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
+            return Action(ActionType.DOUBLE_CLICK, {"x": sx, "y": sy})
+
+        if func_name in ("type_text", "type", "typewrite"):
+            return Action(ActionType.TYPE, {"text": str(args.get("text", ""))})
+
+        if func_name in ("key_press", "press", "hotkey"):
+            keys = args.get("keys", args.get("key", ""))
+            if isinstance(keys, list):
+                keys = "+".join(str(k) for k in keys)
+            return Action(ActionType.KEY_PRESS, {"keys": str(keys)})
+
+        if func_name == "scroll":
+            direction = str(args.get("direction", "down"))
+            amount = int(args.get("amount", 3))
+            return Action(ActionType.SCROLL, {"direction": direction, "amount": amount})
+
+        if func_name in ("done", "terminate"):
+            success = args.get("success", True)
+            if isinstance(success, str):
+                success = success.lower() in ("true", "1", "yes", "success")
+            summary = str(args.get("summary", args.get("message", "")))[:200]
+            return Action(ActionType.DONE, {"success": bool(success), "summary": summary})
+
+        if func_name == "wait":
+            seconds = float(args.get("seconds", 1.0))
+            return Action(ActionType.WAIT, {"seconds": seconds})
+
+        return None
 
     def _parse_json_action(self, text: str, screen_size: tuple[int, int]) -> Action | None:
         """Parse JSON-formatted actions: {"action": "click", "x": N, "y": N}.
