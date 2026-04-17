@@ -1,6 +1,6 @@
 # Mantis CUA Agent — Learnings & Experiment Log
 
-_Updated: 2026-04-17 | 170 commits | ~$130+ GPU spend | Branch: feat/gym-anything-integration_
+_Updated: 2026-04-17 | 180+ commits | ~$165+ GPU spend | Branch: feat/gym-anything-integration_
 
 ---
 
@@ -55,6 +55,25 @@ We're building a CUA (Computer Use Agent) that can extract leads from boat listi
 - Dedup by phone digits + listing URL
 - Eliminates ~90% of false positives (social media links, ad tracking numbers)
 
+### 8. Screenshot Replay — 60x Faster Prompt Iteration
+- Every run now saves screenshots to Modal volume (`/data/screenshots/`)
+- `ReplayGymEnv` replays cached screenshots locally without browser/GPU
+- `test_extraction_prompt.py` tests prompts against screenshots via Claude API in 30sec
+- `replay_test.py` CLI: download, test single prompts, run full replay
+- **Key finding from screenshots**: Phone was visible on step 20 but model clicked into photo gallery and got trapped for 60 steps
+
+### 9. RegionGrounding — Heuristic Click Safety
+- Clamps click coordinates to safe content area (y>80, y<660, x>20, x<1260)
+- Prevents footer social icon clicks (y>660) and header menu clicks (y<80)
+- Zero overhead — no model, no CDP, just coordinate math
+- Graceful fallback: if grounding fails, uses brain's original coordinates
+
+### 10. JSON Nested Action Parsing
+- Gemma4-CUA sometimes outputs `{"action":"key_press","parameters":{"keys":"alt+left"}}`
+- Parser now flattens nested `parameters`/`arguments`/`params` dicts
+- Also handles markdown-fenced JSON (`\`\`\`json\n{...}\n\`\`\``)
+- Eliminated parse failures that were wasting 30%+ of steps
+
 ---
 
 ## What's NOT Working
@@ -93,9 +112,22 @@ We're building a CUA (Computer Use Agent) that can extract leads from boat listi
 
 ### 6. Off-Site Navigation Has No Runtime Safety Net
 - CDP backtrack was removed (for good reason — fingerprinting)
-- Nothing replaced it at the env level
-- Off-site avoidance is 100% prompt-based, which we know doesn't work reliably
-- 25-50% of GPU time wasted on Facebook/Instagram detours
+- RegionGrounding clamps footer/header clicks but doesn't prevent inline social links
+- Off-site avoidance is prompt-based + region clamping, but ~25% still leak through
+- **Mitigation**: RegionGrounding reduced from 50% to ~25%. Full fix needs Opus visual planner.
+
+### 7. Stale URLs Cause Silent 0% Runs
+- BoatTrader changed URL schema — `condition-used/type-power/price-35000,/zip-33101/radius-100/` returns 404
+- `seller-private/` filter URL also returns 404
+- Only `boattrader.com/boats/` (base URL) works, but shows ALL boats including dealers
+- **This caused ALL recent 0% runs** — model was on 404 pages, not extraction failures
+- **Fix needed**: Opus visual planner discovers correct URL by browsing, or model applies filters visually via s1_search
+
+### 8. Image Gallery Trap
+- Model clicks boat photos → enters lightbox/image viewer → spends 40+ steps trying to close
+- Screenshot evidence: step 20 had phone visible, steps 40-80 stuck in gallery
+- Prompt says "IGNORE the photos, scroll DOWN" but model clicks them anyway
+- **Fix needed**: Grounded click model that targets listing cards specifically, not photos
 
 ---
 
