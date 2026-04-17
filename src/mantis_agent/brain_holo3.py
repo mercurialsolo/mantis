@@ -537,6 +537,10 @@ class Holo3Brain:
             # Also try bare function call without Action: prefix
             m = re.search(r'\b(click|scroll|type_text|key_press|done|wait|double_click)\(\s*(\{.*?\})\s*\)', text, re.DOTALL)
         if not m:
+            # Bare key name like "Escape()" or "Enter()" → key_press
+            bare_key = re.search(r'\b(Escape|Enter|Tab|Backspace|Delete)\(\s*\)', text)
+            if bare_key:
+                return Action(ActionType.KEY_PRESS, {"keys": bare_key.group(1).lower()})
             return None
 
         func_name = m.group(1).lower()
