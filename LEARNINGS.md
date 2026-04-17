@@ -139,8 +139,15 @@ We're building a CUA (Computer Use Agent) that can extract leads from boat listi
 - Required 5-strategy fallback parser (tool_calls → Holo3 text → JSON → pyautogui → keywords)
 - Coordinate values sometimes arrive as strings or comma-separated pairs — needed robust int extraction
 - **First VIABLE extraction in 104 seconds** — model navigated to listing, scrolled, found data, reported back
-- Remaining parse gaps: `Escape()` format, occasional pure-reasoning without action
-- **Status**: Working end-to-end. Needs parse tuning and full benchmark vs Gemma4/EvoCUA.
+- Parse gaps fixed: `Escape()`, `{"code":"wait()"}`, `{"command":"click"}` all handled
+- Chrome `--no-sandbox` warning bar was shifting coordinates ~30px — fixed with `--test-type` flag
+- **reasoning-budget=512 makes Holo3 WORSE** — overthinks, generates paragraphs instead of action calls. Budget=0 (default) is better.
+- **Best run: 1/4 viable (25%), 0 parse failures, $0.13 total, 9-17s per listing**
+- **Persistent issues (same as Gemma4/EvoCUA)**:
+  - **Gallery trap**: model clicks boat PHOTOS instead of title text despite explicit instructions → enters fullscreen gallery ("1 of 85") → gets stuck
+  - **No structured done()**: model finds data but doesn't format `VIABLE | Year: ... | Make: ...` — outputs reasoning text instead
+  - **Action loops**: repeats same click coordinates without progress until hard loop detector kills it
+- **Key insight**: These are NOT Holo3-specific problems. Every model (Gemma4, EvoCUA, Holo3) hits the same gallery trap and formatting issues. The fix is site-specific training (distillation from Claude) or Opus visual planner, not more prompt engineering.
 
 ---
 
@@ -186,16 +193,28 @@ Action: scroll({'direction': 'down', 'amount': 5})
 
 Built a 5-strategy parser chain to handle all of these, with safe int extraction for malformed coordinates.
 
+### Holo3 Run Results
+
+| Run | Viable/Total | Time | Cost | Notes |
+|-----|-------------|------|------|-------|
+| API run 1 | 1/4 (25%) | 1 min | $0 | Rate limited, format chaos |
+| API run 2 | 0/4 (0%) | 4 min | $0 | 400 errors from tool_calls |
+| llama.cpp run 1 | 0/4 (0%) | 2 min | $0.12 | 400s from tool calling, fixed by dropping tools |
+| llama.cpp run 2 | 1/4 (25%) | 2 min | $0.13 | **First VIABLE! Zero parse failures** |
+| llama.cpp run 3 | 0/3 (0%) | 7 min | $0.38 | reasoning-budget=512 → overthinking, regressed |
+| llama.cpp run 4 | 0/2 (0%) | 3 min | $0.16 | Gallery trap on every listing |
+
 ### Cost Comparison (Holo3 vs alternatives)
 
-| Approach | GPU | Cost/step | Status |
-|----------|-----|-----------|--------|
-| Holo3 llama.cpp (Q8_0) | 1x A100 | ~$0.001 | Working — parsing needs tuning |
-| Holo3 H Company API | None | $0 (free tier) | Rate limited, unreliable |
-| Holo3 vLLM | 2x A100 | — | BLOCKED (transformers conflict) |
-| EvoCUA-32B vLLM | 2x A100 | ~$0.002 | Working, proven |
-| Gemma4-CUA llama.cpp | 1x A100 | ~$0.001 | Working, 100% CRM |
-| Claude API | None | ~$0.02-0.30 | Working, gold standard |
+| Approach | GPU | Cost/listing | Speed/listing | Status |
+|----------|-----|-------------|---------------|--------|
+| Holo3 llama.cpp (Q8_0) | 1x A100 | **~$0.03** | **9-17s** | Working — gallery trap limits accuracy |
+| Holo3 H Company API | None | $0 (free) | 15-30s | Rate limited, unreliable format |
+| EvoCUA-32B vLLM | 2x A100 | ~$0.70 | 10 min | Working, proven 23% hit rate |
+| Gemma4-CUA llama.cpp | 1x A100 | ~$0.50 | 15-20 min | Working, best per-listing accuracy |
+| Claude API | None | ~$1-5 | 30-60s | Working, gold standard |
+
+**Holo3 is 20-50x cheaper and 30-60x faster per listing than Gemma4/EvoCUA.** The bottleneck is now purely accuracy — gallery trap and done() formatting — not cost or speed.
 
 ---
 
@@ -245,9 +264,32 @@ Check results on Modal volume → Diagnose failure from logs → Repeat
 
 ---
 
+## Cross-Model Pattern: The Same 3 Problems
+
+Every model we've tested (Gemma4-CUA, EvoCUA-32B, EvoCUA-8B, Holo3-35B-A3B) hits the **same three failure modes** on BoatTrader, regardless of model quality or cost:
+
+### 1. Gallery Trap (all models)
+Model clicks the boat **photo** instead of the **title text**. Opens fullscreen image viewer ("1 of 85"). Gets stuck pressing Escape/Back for 10-40 steps. Prompt says "click TITLE TEXT not photo" — model ignores it because the photo is visually larger and more prominent.
+
+### 2. No Structured Output (all models)
+Model finds boat data (Year, Make, Model, Price visible on screen) but doesn't format `done(summary="VIABLE | Year: 2024 | Make: ...")`. Instead outputs reasoning text or incomplete summaries that fail validation.
+
+### 3. Action Loops (all models)
+After failing to make progress (gallery trap, wrong click, slow page load), model repeats the same action 10+ times until hard loop detector kills the iteration.
+
+### What This Means
+**Prompt engineering cannot fix these.** We've tried 15+ prompt iterations across 4 models. The fix is one of:
+- **Distillation**: Show the model correct trajectories (click HERE not THERE) via fine-tuning
+- **Opus visual planner**: Generate instructions with pixel-level visual anchors from actual site browsing
+- **Runtime guardrails**: Detect gallery/lightbox state from screenshot, auto-press Escape + go back
+
+The model choice affects **speed and cost**, not accuracy on this task. Holo3 at $0.03/listing and 9-17s is the right execution engine — it just needs better instructions or training.
+
+---
+
 ## Hypotheses Remaining to Test
 
-### High Priority
+### Highest Priority (execution engine is ready — need accuracy)
 
 #### H1: Opus Visual Planner (Issue #40)
 **Hypothesis**: Claude Opus browses the site first via xdotool, discovers layout visually, then generates a rich task suite with visual anchors, error handlers, and negative examples. Cheap models execute the loop.
@@ -273,27 +315,23 @@ Check results on Modal volume → Diagnose failure from logs → Repeat
 **Cost to test**: Modify extraction validation + add form-filling task to workflow
 **Expected impact**: 5-10x more leads per run at similar GPU cost
 
-### Medium Priority
-
-#### H4: EvoCUA-32B with Opus-Generated Plans
-**Hypothesis**: EvoCUA-32B's 23% hit rate was limited by generic prompts, not model capability. With Opus-generated visual plans, it could match Gemma4-CUA's per-listing accuracy at lower cost (no fine-tune needed).
-
-**Cost to test**: Depends on H1 (Opus planner)
-**Expected impact**: Best cost/lead model if parsing stays reliable
-
-#### H5: Gemma4-31B Dense for Browser CUA
-**Hypothesis**: The 31B dense model (vs 26B MoE) has native tool calling and stronger visual grounding. Could eliminate parse failures and improve click accuracy.
-
-**Cost to test**: ~$8-10 per test run (same A100, slightly slower inference)
-**Expected impact**: Fewer parse failures, potentially better visual grounding
-
-#### H6: Distillation from Claude Trajectories
+#### H4: Distillation from Claude Trajectories → Holo3
 **Hypothesis**: Run Claude (API) on BoatTrader to generate perfect trajectories. Fine-tune Gemma4 on these trajectories for site-specific CUA behavior.
 
-**Why we believe this**: Our Gemma4-CUA fine-tune (AgentNet data) achieved 100% on CRM in 3 steps. Site-specific distillation could achieve similar gains on BoatTrader.
+**Why we believe this**: Our Gemma4-CUA fine-tune (AgentNet data) achieved 100% on CRM in 3 steps. Site-specific distillation could achieve similar gains on BoatTrader. **Now even more compelling**: Holo3 is 20-50x cheaper than Gemma4/EvoCUA at $0.03/listing — even small accuracy gains from distillation would make it production-viable.
 
-**Cost to test**: ~$20 Claude API + ~$15 fine-tuning on Modal
-**Expected impact**: Near-Claude accuracy at open-weight cost
+**Cost to test**: ~$10-20 Claude API (50 listings) + ~$15-20 fine-tuning on Modal
+**Expected impact**: Fix gallery trap + structured output → 60-80% viable rate at $0.03/listing
+
+### Medium Priority
+
+#### H5: Gallery Trap Detector (Runtime Guardrail)
+**Hypothesis**: Detect fullscreen image gallery state (dark background, "X of Y" text, large centered image) from screenshots using a simple classifier or heuristic. Auto-press Escape + Alt+Left when detected.
+
+**Why we believe this**: Every model clicks photos. A runtime check is faster than retraining. Could be as simple as "if >60% of pixels are dark and 'of' text detected near top center → gallery state."
+
+**Cost to test**: ~2 hours of engineering
+**Expected impact**: Eliminate gallery trap entirely (currently wastes 30-50% of steps)
 
 ### Lower Priority / Exploratory
 
@@ -334,7 +372,10 @@ Check results on Modal volume → Diagnose failure from logs → Repeat
 | Apr 17 | Prompt engineering for off-site avoidance | FAILED — ceiling reached |
 | Apr 17 | Holo3 via vLLM (2x A100) | BLOCKED — transformers<5 vs >=5.2 conflict |
 | Apr 17 | Holo3 via H Company API | PARTIAL — rate limited, no tool_calls, format chaos |
-| Apr 17 | Holo3 via llama.cpp GGUF (1x A100) | WORKING — boots 22s, actions parsing, needs tuning |
+| Apr 17 | Holo3 via llama.cpp GGUF (1x A100) | WORKING — boots 22s, $0.03/listing, 25% viable |
+| Apr 17 | Holo3 with reasoning-budget=512 | FAILED — overthinks, worse than no budget |
+| Apr 17 | Chrome --test-type flag | SUCCESS — removed warning bar coordinate shift |
+| Apr 18 | Screenshot analysis of Holo3 runs | CONFIRMED — gallery trap is the bottleneck, not parsing |
 
 ---
 
@@ -342,8 +383,8 @@ Check results on Modal volume → Diagnose failure from logs → Repeat
 
 | Metric | Value |
 |--------|-------|
-| Total commits | 190+ |
-| Total GPU spend | ~$175+ |
+| Total commits | 200+ |
+| Total GPU spend | ~$176+ |
 | OSWorld best (OS domain) | 83.3% (20/24) |
 | CRM best (Gemma4-CUA) | 100% in 3 steps |
 | BoatTrader listings scanned | ~80 |
