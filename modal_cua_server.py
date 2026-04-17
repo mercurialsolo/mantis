@@ -1124,6 +1124,14 @@ def _run_gemma4_cua_executor(
             proxy_server = proxy["server"]
         print(f"  Proxy: {proxy.get('server', '')}")
 
+    # Start Xvfb early so the viewer capture thread can access the display
+    subprocess.Popen(
+        ["Xvfb", ":99", "-screen", "0", "1280x720x24", "-ac", "-nolisten", "tcp"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    os.environ["DISPLAY"] = ":99"
+    time.sleep(1)
+
     env = XdotoolGymEnv(
         start_url=base_url,
         viewport=(1280, 720),
@@ -1132,6 +1140,7 @@ def _run_gemma4_cua_executor(
         human_speed=False,
         proxy_server=proxy_server,
         save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
+        display=":99",
     )
 
     # Live viewer tunnel (optional)
@@ -1400,6 +1409,14 @@ def _run_claude_executor(
             proxy_server = proxy["server"]
         print(f"  Proxy: {proxy.get('server', '')}")
 
+    # Start Xvfb early so the viewer capture thread can access the display
+    subprocess.Popen(
+        ["Xvfb", ":99", "-screen", "0", "1280x720x24", "-ac", "-nolisten", "tcp"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    os.environ["DISPLAY"] = ":99"
+    time.sleep(1)
+
     env = XdotoolGymEnv(
         start_url=base_url,
         viewport=(1280, 720),
@@ -1408,6 +1425,7 @@ def _run_claude_executor(
         human_speed=False,
         proxy_server=proxy_server,
         save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
+        display=":99",
     )
 
     # Live viewer tunnel (optional)

@@ -82,9 +82,11 @@ class WorkflowRunner:
                  session_name: str = "workflow",
                  on_iteration: Any = None,
                  start_url: str | None = None,
-                 grounding: Any = None):
+                 grounding: Any = None,
+                 on_step: Any = None):
         self.brain = brain
         self.grounding = grounding
+        self.on_step = on_step  # Passed through to GymRunner for live viewer
         # Dedup: track processed phone numbers and listing URLs
         self._seen_phones: set[str] = set()
         self._seen_urls: set[str] = set()
@@ -231,6 +233,7 @@ class WorkflowRunner:
             max_steps=self.config.max_steps_per_iteration,
             frames_per_inference=2,
             grounding=self.grounding,
+            on_step=self.on_step,
         )
 
         # Retry loop
