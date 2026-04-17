@@ -35,6 +35,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -179,8 +180,9 @@ class Holo3Brain:
 
     def __init__(
         self,
-        base_url: str = "http://localhost:8000/v1",
-        model: str = "model",
+        base_url: str = "https://api.hcompany.ai/v1",
+        model: str = "holo3-35b-a3b",
+        api_key: str = "",
         max_tokens: int = 2048,
         temperature: float = 0.0,
         screen_size: tuple[int, int] = (1280, 720),
@@ -188,28 +190,38 @@ class Holo3Brain:
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.api_key = api_key or os.environ.get("HAI_API_KEY", "")
         self.model_name = "Holo3-35B-A3B"
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.default_screen_size = screen_size
         self.enable_thinking = enable_thinking
 
+    @property
+    def _headers(self) -> dict:
+        """Auth headers for API requests."""
+        h = {"Content-Type": "application/json"}
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"
+        return h
+
     def load(self) -> None:
-        """Verify the vLLM server is running. Waits for cold start."""
-        for attempt in range(36):  # Up to 6 min for 35B model loading
+        """Verify the API is reachable."""
+        for attempt in range(12):  # Up to 2 min
             try:
-                resp = requests.get(f"{self.base_url}/models", timeout=30)
+                resp = requests.get(f"{self.base_url}/models",
+                                    headers=self._headers, timeout=30)
                 resp.raise_for_status()
                 models = resp.json()
-                logger.info(f"vLLM server connected: {models}")
+                logger.info(f"Holo3 API connected: {models}")
                 return
             except Exception as e:
-                if attempt < 35:
-                    logger.info(f"Holo3 not ready (attempt {attempt + 1}/36), waiting 10s...")
+                if attempt < 11:
+                    logger.info(f"Holo3 not ready (attempt {attempt + 1}/12), waiting 10s...")
                     time.sleep(10)
                 else:
                     raise RuntimeError(
-                        f"Cannot connect to vLLM at {self.base_url} after 6 minutes.\n"
+                        f"Cannot connect to Holo3 API at {self.base_url}\n"
                         f"Error: {e}"
                     )
 
@@ -225,7 +237,7 @@ class Holo3Brain:
         try:
             resp = requests.post(
                 f"{self.base_url}/chat/completions",
-                json=payload,
+                json=payload, headers=self._headers,
                 timeout=60,
             )
             resp.raise_for_status()
@@ -254,22 +266,20 @@ class Holo3Brain:
             "temperature": self.temperature,
         }
 
-        # Holo3 native thinking toggle
+        # Holo3 native thinking toggle (H Company API format)
         if not self.enable_thinking:
-            payload["extra_body"] = {
-                "chat_template_kwargs": {"enable_thinking": False},
-            }
+            payload["thinking"] = False
 
         try:
             resp = requests.post(
                 f"{self.base_url}/chat/completions",
-                json=payload,
+                json=payload, headers=self._headers,
                 timeout=120,
             )
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            logger.error(f"vLLM request failed: {e}")
+            logger.error(f"Holo3 API request failed: {e}")
             return InferenceResult(
                 action=Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=str(e)),
                 raw_output=str(e),

@@ -62,9 +62,9 @@ CUA_MODELS = {
         "tp": 1,
     },
     "holo3": {
-        "repo": "Hcompany/Holo3-35B-A3B",
+        "repo": "api",  # Uses H Company hosted API (vLLM doesn't support qwen3_5_moe yet)
         "name": "Holo3-35B-A3B",
-        "tp": 2,  # 35B params in BF16 ~70GB, needs 2x A100-80GB
+        "tp": 0,  # No GPU needed — API-based
     },
     "claude": {
         "repo": "api",
@@ -415,8 +415,9 @@ def _start_vllm(model_dir: str, port: int, tp: int,
         except Exception:
             pass
         if proc.poll() is not None:
-            print(f"vLLM died: {open('/tmp/vllm.log').read()[-3000:]}")
-            raise RuntimeError("vLLM died during startup")
+            vllm_log = open('/tmp/vllm.log').read()[-3000:]
+            print(f"vLLM died: {vllm_log}")
+            raise RuntimeError(f"vLLM died during startup:\n{vllm_log[-500:]}")
         time.sleep(5)
 
     raise RuntimeError("vLLM startup timeout")
@@ -461,12 +462,8 @@ def _run_executor(
 
     tp = cua_config["tp"]
 
-    # Holo3 needs reasoning parser flags for vLLM
-    vllm_extra_args = None
-    if cua_model == "holo3":
-        vllm_extra_args = ["--enable-reasoning", "--reasoning-parser", "qwen3"]
-
-    vllm_proc = _start_vllm(model_dir, port=8000, tp=tp, extra_args=vllm_extra_args)
+    # Holo3: brain parses <think> blocks from text, no special vLLM flags needed
+    vllm_proc = _start_vllm(model_dir, port=8000, tp=tp)
 
     # Parse task suite
     task_suite = json.loads(task_file_contents)
@@ -754,19 +751,224 @@ def run_cua_8gpu(task_file_contents: str, cua_model: str = "opencua-72b", **kwar
     return _run_executor(task_file_contents, cua_model=cua_model, **kwargs)
 
 
+def _run_holo3_executor(
+    task_file_contents: str,
+    plan_inputs: dict[str, str] | None = None,
+    max_steps: int = 30,
+    max_retries: int = 2,
+    frames_per_inference: int = 5,
+) -> dict:
+    """Execute tasks using Holo3-35B-A3B via H Company hosted API.
+
+    No GPU needed — inference is via API, like Claude.
+    vLLM doesn't support qwen3_5_moe yet (needs transformers>=5.2, vLLM caps at <5).
+    """
+    from datetime import datetime, timezone
+
+    from mantis_agent.brain_holo3 import Holo3Brain
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+    from mantis_agent.gym.runner import GymRunner
+
+    plan_inputs = plan_inputs or {}
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    started_at = datetime.now(timezone.utc).isoformat()
+    t0 = time.time()
+
+    # Parse task suite
+    task_suite = json.loads(task_file_contents)
+    session_name = task_suite.get("session_name", "holo3_cua")
+    base_url = task_suite.get("base_url", "")
+    tasks = task_suite.get("tasks", [])
+
+    print(f"\n{'='*60}")
+    print(f"Mantis CUA Server — Holo3-35B-A3B (H Company API)")
+    print(f"  Session:  {session_name}")
+    print(f"  Tasks:    {len(tasks)}")
+    print(f"{'='*60}")
+
+    # Create brain (API-based, no GPU)
+    brain = Holo3Brain(
+        base_url="https://api.hcompany.ai/v1",
+        model="holo3-35b-a3b",
+        max_tokens=2048,
+        temperature=0.0,
+        screen_size=(1280, 720),
+    )
+    brain.load()
+
+    # Xvfb + xdotool + real Chrome (zero automation fingerprints)
+    proxy = _build_proxy_config(city="miami", session_id=f"mantis{run_id.replace('_', '')}")
+    proxy_server = ""
+    if proxy:
+        if proxy.get("username"):
+            _start_local_proxy(proxy, local_port=3128)
+            proxy_server = "http://127.0.0.1:3128"
+        else:
+            proxy_server = proxy["server"]
+        print(f"  Proxy: {proxy.get('server', '')}")
+
+    env = XdotoolGymEnv(
+        start_url=base_url,
+        viewport=(1280, 720),
+        browser="google-chrome",
+        settle_time=2.0,
+        human_speed=False,
+        proxy_server=proxy_server,
+        save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
+    )
+
+    # Run tasks
+    scores = []
+    task_details = []
+    results_path = f"/data/results/holo3_results_{session_name}_{run_id}.json"
+    os.makedirs("/data/results", exist_ok=True)
+
+    def save_progress():
+        completed_at = datetime.now(timezone.utc).isoformat() if len(scores) == len(tasks) else ""
+        summary = {
+            "run_id": run_id,
+            "session_name": session_name,
+            "model": "Holo3-35B-A3B (API)",
+            "tasks_run": len(tasks),
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "total_time_s": round(time.time() - t0),
+            "scores": scores,
+            "task_details": task_details,
+        }
+        with open(results_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        vol.commit()
+
+    for i, task_config in enumerate(tasks):
+        task_id = task_config["task_id"]
+        intent = task_config["intent"]
+        print(f"\nTask {i+1}/{len(tasks)}: {task_id}")
+        task_start = time.time()
+
+        try:
+            if task_config.get("require_session") and env.has_session(session_name):
+                env.load_session(session_name)
+
+            # Dynamic loop task
+            if task_config.get("loop"):
+                from mantis_agent.gym.workflow_runner import WorkflowRunner, LoopConfig
+
+                def on_loop_iteration(iter_num, iter_result, all_results):
+                    viable = sum(1 for r in all_results if r.success)
+                    total = len(all_results)
+                    elapsed = time.time() - task_start
+                    total_parse_failures = sum(getattr(r, 'parse_failures', 0) for r in all_results)
+                    real_iterations = sum(1 for r in all_results if getattr(r, 'parse_failures', 0) < max(r.steps // 2, 1))
+                    detail = {
+                        "task_id": task_id, "success": viable > 0,
+                        "steps": sum(r.steps for r in all_results),
+                        "duration_s": round(elapsed),
+                        "termination_reason": "loop_in_progress",
+                        "iterations": total, "viable": viable,
+                        "real_iterations": real_iterations,
+                        "parse_failures": total_parse_failures,
+                        "data": [r.data[:200] for r in all_results if r.data],
+                    }
+                    if task_details and task_details[-1].get("task_id") == task_id:
+                        task_details[-1] = detail
+                    else:
+                        scores.append(0.0)
+                        task_details.append(detail)
+                    save_progress()
+                    print(f"  [{iter_num}] {'VIABLE' if iter_result.success else 'SKIP'} — {viable}/{total} viable ({elapsed:.0f}s)")
+
+                loop_cfg = LoopConfig(
+                    iteration_intent=intent,
+                    pagination_intent=task_config["loop"].get("pagination_intent",
+                        "Scroll to bottom, click Next page. If no next, terminate('failure')."),
+                    max_iterations=task_config["loop"].get("max_iterations", 50),
+                    max_pages=task_config["loop"].get("max_pages", 10),
+                    max_steps_per_iteration=task_config["loop"].get("max_steps_per_iteration", max_steps),
+                )
+                wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
+                                           on_iteration=on_loop_iteration,
+                                           start_url=task_config.get("start_url", ""))
+                results = wf_runner.run_loop()
+                viable = sum(1 for r in results if r.success)
+                total = len(results)
+                success = viable > 0
+                total_parse_failures = sum(getattr(r, 'parse_failures', 0) for r in results)
+                real_iterations = sum(1 for r in results if getattr(r, 'parse_failures', 0) < max(r.steps // 2, 1))
+                final = {
+                    "task_id": task_id, "success": success,
+                    "steps": sum(r.steps for r in results),
+                    "duration_s": round(time.time() - task_start),
+                    "termination_reason": "loop_complete",
+                    "iterations": total, "viable": viable,
+                    "real_iterations": real_iterations,
+                    "parse_failures": total_parse_failures,
+                    "data": [r.data[:200] for r in results if r.data],
+                }
+                if task_details and task_details[-1].get("task_id") == task_id:
+                    task_details[-1] = final
+                    scores[-1] = 1.0 if success else 0.0
+                else:
+                    scores.append(1.0 if success else 0.0)
+                    task_details.append(final)
+                print(f"  Loop: {viable}/{total} viable ({real_iterations} real, {total_parse_failures} parse failures)")
+                save_progress()
+                continue
+
+            runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
+                               frames_per_inference=frames_per_inference)
+            result = runner.run(task=intent, task_id=task_id,
+                               start_url=task_config.get("start_url", ""))
+
+            if task_config.get("save_session"):
+                if result.success or ("login" not in env.current_url.lower()):
+                    env.save_session(session_name)
+
+            success = result.success
+            scores.append(1.0 if success else 0.0)
+            task_details.append({
+                "task_id": task_id, "success": success,
+                "steps": result.total_steps,
+                "duration_s": round(time.time() - task_start),
+                "termination_reason": result.termination_reason,
+            })
+            print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
+
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            scores.append(0.0)
+            task_details.append({
+                "task_id": task_id, "success": False,
+                "error": str(e), "duration_s": round(time.time() - task_start),
+            })
+
+        save_progress()
+
+    env.close()
+
+    passed = sum(1 for s in scores if s > 0)
+    avg = sum(scores) / len(scores) * 100 if scores else 0
+    print(f"\n{'='*60}")
+    print(f"COMPLETE: {passed}/{len(scores)} ({avg:.1f}%)")
+    print(f"Time: {(time.time()-t0)/60:.0f} min")
+    print(f"{'='*60}")
+
+    save_progress()
+    return {"passed": passed, "total": len(scores), "score": avg}
+
+
 @app.function(
-    gpu="A100-80GB:2",
-    image=executor_image,
+    image=claude_executor_image,  # Same lightweight image as Claude (no GPU)
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
-    memory=65536,
-    cpu=16,
+    memory=16384,
+    cpu=4,
 )
 def run_holo3(task_file_contents: str, **kwargs) -> dict:
-    """Holo3-35B-A3B executor (2x A100, TP=2, tool calling + reasoning)."""
+    """Holo3-35B-A3B executor (H Company API, no GPU needed)."""
     kwargs.pop("cua_model", None)
-    return _run_executor(task_file_contents, cua_model="holo3", **kwargs)
+    return _run_holo3_executor(task_file_contents, **kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════
