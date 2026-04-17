@@ -1,6 +1,6 @@
 # Mantis CUA Agent — Learnings & Experiment Log
 
-_Updated: 2026-04-17 | 180+ commits | ~$165+ GPU spend | Branch: feat/gym-anything-integration_
+_Updated: 2026-04-17 | 190+ commits | ~$175+ GPU spend | Branch: feat/gym-anything-integration_
 
 ---
 
@@ -128,6 +128,72 @@ We're building a CUA (Computer Use Agent) that can extract leads from boat listi
 - Screenshot evidence: step 20 had phone visible, steps 40-80 stuck in gallery
 - Prompt says "IGNORE the photos, scroll DOWN" but model clicks them anyway
 - **Fix needed**: Grounded click model that targets listing cards specifically, not photos
+
+### 9. Holo3-35B-A3B — vLLM Blocked, llama.cpp Works
+- **77.8% OSWorld-Verified** (SOTA open-weight, released Mar 31 2026)
+- Qwen3.5-based MoE: 35B total params, only 3B active per token
+- **vLLM cannot serve it**: vLLM pins `transformers<5`, Holo3's `qwen3_5_moe` architecture needs `transformers>=5.2`. Hard dependency conflict across ALL vLLM versions (0.12–0.19).
+- **H Company hosted API**: works but free tier rate-limits (429 every few requests), no proper tool_calls returned, inconsistent action formats
+- **llama.cpp GGUF: WORKS** — Q8_0 (34GB) + mmproj-f16 (0.8GB) on 1x A100, server boots in 22-26 seconds
+- Model generates actions but uses **varying output formats**: `{"code":"wait()"}`, `{"command":"click","x":200,"y":400}`, `Action: scroll({...})`, plus standard tool_calls
+- Required 5-strategy fallback parser (tool_calls → Holo3 text → JSON → pyautogui → keywords)
+- Coordinate values sometimes arrive as strings or comma-separated pairs — needed robust int extraction
+- **Status**: Serving and executing steps. Parsing mostly fixed. Accuracy not yet benchmarked vs Gemma4/EvoCUA.
+
+---
+
+## Holo3 Integration — Technical Details
+
+### What We Tried (in order)
+
+1. **vLLM self-hosted (2x A100)** — BLOCKED. `transformers<5` in vLLM vs `transformers>=5.2` for qwen3_5_moe. No version of vLLM can load this model.
+
+2. **H Company hosted API** — PARTIAL. Free tier, OpenAI-compatible. But:
+   - 429 rate limits every 3-5 rapid requests
+   - Model returns text reasoning without tool_calls ~50% of the time
+   - Coordinates arrive as strings (`"420, 84"`) or in non-standard JSON keys (`"command"` instead of `"action"`)
+   - Cost: $0 (free tier) but unreliable for production
+
+3. **llama.cpp GGUF (1x A100)** — WORKS. Using `mradermacher/Holo3-35B-A3B-GGUF`:
+   - Q8_0 quant (34.4 GB) + mmproj-f16 (0.84 GB) = ~35 GB total
+   - Fits 1x A100-80GB with ~40 GB to spare for KV cache
+   - `llama-server` with `--jinja --flash-attn on -ngl 99 -c 8192`
+   - Boots in 22-26 seconds (vs 2-5 min for vLLM cold start)
+   - Same architecture as our Gemma4-CUA executor
+
+### Action Format Challenges
+
+Holo3 outputs actions in at least 5 different formats depending on context:
+
+```
+# Format 1: Standard OpenAI tool_calls (rare from llama.cpp)
+tool_calls: [{function: {name: "click", arguments: "{\"x\":640,\"y\":360}"}}]
+
+# Format 2: Holo3 native text
+Action: scroll({'direction': 'down', 'amount': 5})
+
+# Format 3: JSON with "command" key (not "action")
+{"command":"click","x":200,"y":400}
+
+# Format 4: JSON with "code" key (function call as string)
+{"code":"wait()","description":"Wait for page to load"}
+
+# Format 5: Pure reasoning (no action — falls back to wait)
+"I need to scroll down to find the phone number..."
+```
+
+Built a 5-strategy parser chain to handle all of these, with safe int extraction for malformed coordinates.
+
+### Cost Comparison (Holo3 vs alternatives)
+
+| Approach | GPU | Cost/step | Status |
+|----------|-----|-----------|--------|
+| Holo3 llama.cpp (Q8_0) | 1x A100 | ~$0.001 | Working — parsing needs tuning |
+| Holo3 H Company API | None | $0 (free tier) | Rate limited, unreliable |
+| Holo3 vLLM | 2x A100 | — | BLOCKED (transformers conflict) |
+| EvoCUA-32B vLLM | 2x A100 | ~$0.002 | Working, proven |
+| Gemma4-CUA llama.cpp | 1x A100 | ~$0.001 | Working, 100% CRM |
+| Claude API | None | ~$0.02-0.30 | Working, gold standard |
 
 ---
 
@@ -264,6 +330,9 @@ Check results on Modal volume → Diagnose failure from logs → Repeat
 | Apr 16 | Gemma4-CUA budget=512 for accuracy | SUCCESS — best per-listing accuracy |
 | Apr 17 | Fix 10 code bugs + fast-fail 404s | SUCCESS — reduced waste significantly |
 | Apr 17 | Prompt engineering for off-site avoidance | FAILED — ceiling reached |
+| Apr 17 | Holo3 via vLLM (2x A100) | BLOCKED — transformers<5 vs >=5.2 conflict |
+| Apr 17 | Holo3 via H Company API | PARTIAL — rate limited, no tool_calls, format chaos |
+| Apr 17 | Holo3 via llama.cpp GGUF (1x A100) | WORKING — boots 22s, actions parsing, needs tuning |
 
 ---
 
@@ -271,8 +340,8 @@ Check results on Modal volume → Diagnose failure from logs → Repeat
 
 | Metric | Value |
 |--------|-------|
-| Total commits | 170 |
-| Total GPU spend | ~$130+ |
+| Total commits | 190+ |
+| Total GPU spend | ~$175+ |
 | OSWorld best (OS domain) | 83.3% (20/24) |
 | CRM best (Gemma4-CUA) | 100% in 3 steps |
 | BoatTrader listings scanned | ~80 |
