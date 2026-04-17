@@ -62,9 +62,9 @@ CUA_MODELS = {
         "tp": 1,
     },
     "holo3": {
-        "repo": "api",  # Uses H Company hosted API (vLLM doesn't support qwen3_5_moe yet)
+        "repo": "gguf:mradermacher/Holo3-35B-A3B-GGUF",  # llama.cpp — vLLM lacks qwen3_5_moe
         "name": "Holo3-35B-A3B",
-        "tp": 0,  # No GPU needed — API-based
+        "tp": 1,  # 1x A100 — Q8_0 is 34GB + mmproj 0.8GB = ~35GB
     },
     "claude": {
         "repo": "api",
@@ -78,6 +78,12 @@ CUA_MODELS = {
 GEMMA4_CUA_DIR = "/data/training/gemma4-cua-gguf_gguf"
 GEMMA4_CUA_FILE = "gemma-4-31b-it.Q4_K_M.gguf"
 GEMMA4_CUA_MMPROJ = "gemma-4-31b-it.BF16-mmproj.gguf"
+
+# Holo3-35B-A3B via llama.cpp GGUF (Q8_0 — 34GB fits 1x A100)
+HOLO3_GGUF_REPO = "mradermacher/Holo3-35B-A3B-GGUF"
+HOLO3_GGUF_FILE = "Holo3-35B-A3B.Q8_0.gguf"
+HOLO3_MMPROJ_FILE = "Holo3-35B-A3B.mmproj-f16.gguf"
+HOLO3_MODEL_DIR = "/data/models/holo3_gguf"
 
 # Fallback: base Gemma4-E4B (downloads from HuggingFace)
 GEMMA4_E4B_REPO = "ggml-org/gemma-4-E4B-it-GGUF"
@@ -761,11 +767,12 @@ def _run_holo3_executor(
     viewer: bool = False,
     **_extra,
 ) -> dict:
-    """Execute tasks using Holo3-35B-A3B via H Company hosted API.
+    """Execute tasks using Holo3-35B-A3B via llama.cpp (GGUF on 1x A100).
 
-    No GPU needed — inference is via API, like Claude.
-    vLLM doesn't support qwen3_5_moe yet (needs transformers>=5.2, vLLM caps at <5).
+    Like Gemma4-CUA: llama-server + GGUF + mmproj for vision.
+    vLLM doesn't support qwen3_5_moe yet.
     """
+    import requests as req
     from datetime import datetime, timezone
 
     from mantis_agent.brain_holo3 import Holo3Brain
@@ -777,6 +784,56 @@ def _run_holo3_executor(
     started_at = datetime.now(timezone.utc).isoformat()
     t0 = time.time()
 
+    # Download GGUF if not cached
+    model_path = os.path.join(HOLO3_MODEL_DIR, HOLO3_GGUF_FILE)
+    mmproj_path = os.path.join(HOLO3_MODEL_DIR, HOLO3_MMPROJ_FILE)
+    marker = os.path.join(HOLO3_MODEL_DIR, ".download_complete")
+
+    if not os.path.exists(marker):
+        os.makedirs(HOLO3_MODEL_DIR, exist_ok=True)
+        print(f"Downloading Holo3 GGUF ({HOLO3_GGUF_FILE})...")
+        from huggingface_hub import hf_hub_download
+        hf_hub_download(repo_id=HOLO3_GGUF_REPO, filename=HOLO3_GGUF_FILE, local_dir=HOLO3_MODEL_DIR)
+        hf_hub_download(repo_id=HOLO3_GGUF_REPO, filename=HOLO3_MMPROJ_FILE, local_dir=HOLO3_MODEL_DIR)
+        open(marker, "w").write("done")
+        vol.commit()
+        print("Download complete.")
+    else:
+        print(f"Holo3 GGUF cached at {HOLO3_MODEL_DIR}")
+
+    # Start llama-server
+    cmd = [
+        "/opt/llama.cpp/build/bin/llama-server",
+        "-m", model_path,
+        "--mmproj", mmproj_path,
+        "--host", "0.0.0.0", "--port", "8080",
+        "-ngl", "99", "-c", "8192", "-ub", "2048",
+        "--jinja",
+        "--flash-attn", "on",
+    ]
+    print(f"Starting Holo3 llama-server: {' '.join(cmd[-8:])}")
+    llama_proc = subprocess.Popen(cmd, stdout=open("/tmp/llama.log", "w"), stderr=subprocess.STDOUT)
+
+    # Wait for readiness
+    time.sleep(3)
+    for i in range(90):
+        try:
+            r = req.get("http://localhost:8080/v1/models", timeout=2)
+            if r.status_code == 200:
+                print(f"llama-server ready ({i * 2}s)")
+                break
+        except Exception:
+            pass
+        if llama_proc.poll() is not None:
+            log = open('/tmp/llama.log').read()[-3000:]
+            print(f"llama-server crashed: {log}")
+            raise RuntimeError(f"llama-server crashed:\n{log[-500:]}")
+        time.sleep(2)
+    else:
+        log = open('/tmp/llama.log').read()[-2000:]
+        print(f"llama-server timeout: {log}")
+        raise RuntimeError("llama-server timeout")
+
     # Parse task suite
     task_suite = json.loads(task_file_contents)
     session_name = task_suite.get("session_name", "holo3_cua")
@@ -784,15 +841,16 @@ def _run_holo3_executor(
     tasks = task_suite.get("tasks", [])
 
     print(f"\n{'='*60}")
-    print(f"Mantis CUA Server — Holo3-35B-A3B (H Company API)")
+    print(f"Mantis CUA Server — Holo3-35B-A3B (llama.cpp)")
     print(f"  Session:  {session_name}")
     print(f"  Tasks:    {len(tasks)}")
     print(f"{'='*60}")
 
-    # Create brain (API-based, no GPU)
+    # Create brain (local llama-server, not remote API)
     brain = Holo3Brain(
-        base_url="https://api.hcompany.ai/v1",
-        model="holo3-35b-a3b",
+        base_url="http://localhost:8080/v1",
+        model="holo3",
+        api_key="",  # No auth needed for local server
         max_tokens=2048,
         temperature=0.0,
         screen_size=(1280, 720),
@@ -949,12 +1007,14 @@ def _run_holo3_executor(
         save_progress()
 
     env.close()
+    llama_proc.terminate()
 
     passed = sum(1 for s in scores if s > 0)
     avg = sum(scores) / len(scores) * 100 if scores else 0
+    gpu_cost = (time.time() - t0) / 3600 * 3.25  # 1x A100
     print(f"\n{'='*60}")
     print(f"COMPLETE: {passed}/{len(scores)} ({avg:.1f}%)")
-    print(f"Time: {(time.time()-t0)/60:.0f} min")
+    print(f"GPU time: {(time.time()-t0)/60:.0f} min | Cost: ~${gpu_cost:.2f}")
     print(f"{'='*60}")
 
     save_progress()
@@ -1566,15 +1626,24 @@ def run_claude_cua(task_file_contents: str, claude_model: str = "claude-sonnet-4
 
 
 @app.function(
-    image=claude_executor_image,  # Same lightweight image (no GPU — API-based)
+    gpu="A100-80GB",
+    image=planner_image.run_commands(
+        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool scrot",
+        "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
+        "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
+        "apt-get update && apt-get install -y google-chrome-stable || true",
+    ).pip_install(
+        "openai", "requests", "pillow", "mss",
+        "fastapi>=0.100", "uvicorn>=0.20",
+    ).add_local_python_source("mantis_agent"),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
-    memory=16384,
-    cpu=4,
+    memory=65536,
+    cpu=16,
 )
 def run_holo3(task_file_contents: str, **kwargs) -> dict:
-    """Holo3-35B-A3B executor (H Company API, no GPU needed)."""
+    """Holo3-35B-A3B executor (1x A100, llama.cpp GGUF + mmproj)."""
     kwargs.pop("cua_model", None)
     return _run_holo3_executor(task_file_contents, **kwargs)
 
