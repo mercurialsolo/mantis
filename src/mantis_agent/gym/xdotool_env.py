@@ -305,9 +305,19 @@ class XdotoolGymEnv(GymEnvironment):
 
         return GymObservation(screenshot=screenshot, extras={})
 
+    @staticmethod
+    def _to_int(val) -> int:
+        """Safely extract an integer from a possibly malformed value."""
+        if isinstance(val, (int, float)):
+            return int(val)
+        s = str(val).strip()
+        # Extract first number from strings like "143, 417]" or "0, y>\n0..."
+        m = __import__("re").match(r'-?\d+', s)
+        return int(m.group(0)) if m else 0
+
     def _clamp(self, x: int, y: int) -> tuple[int, int]:
         """Clamp coordinates to viewport bounds."""
-        x, y = int(x), int(y)
+        x, y = self._to_int(x), self._to_int(y)
         return max(0, min(x, self._viewport[0] - 1)), max(0, min(y, self._viewport[1] - 1))
 
     def _execute_action(self, action: Action) -> None:
