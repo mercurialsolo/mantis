@@ -133,6 +133,7 @@ class XdotoolGymEnv(GymEnvironment):
         cmd = [
             self._browser_cmd,
             "--no-sandbox",
+            "--test-type",  # Suppress --no-sandbox warning bar
             "--disable-gpu",
             "--no-first-run",
             "--disable-default-apps",
