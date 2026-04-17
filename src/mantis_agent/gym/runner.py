@@ -441,6 +441,20 @@ class GymRunner:
                 think_snippet = last_thinking[:300]
                 parts.append(f"\n\nYour previous reasoning:\n{think_snippet}")
 
+            # Fast-fail nudge: if recent thinking mentions error pages, push to terminate
+            if last_thinking and step_num <= 5:
+                think_lower = last_thinking.lower()
+                if any(sig in think_lower for sig in [
+                    "page not found", "404", "this site can't be reached",
+                    "err_tunnel", "err_connection", "this page has been removed",
+                ]):
+                    parts.append(
+                        "\n\nIMPORTANT: The page shows an error (404 / can't be reached). "
+                        "Do NOT keep trying. Press Alt+Left to go back and call "
+                        "terminate('success') with: SKIPPED | page error or 404. "
+                        "Move to the next listing."
+                    )
+
             # Soft loop nudge
             if self._detect_repeat(action_history, self.soft_loop_window):
                 nudge = self._build_nudge(action_history, last_focused_input)
