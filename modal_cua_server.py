@@ -799,7 +799,7 @@ def _run_holo3_executor(
     else:
         print(f"Holo3 GGUF cached at {HOLO3_MODEL_DIR}")
 
-    # Start llama-server with reasoning budget (proven sweet spot from Gemma4)
+    # Start llama-server — no reasoning-budget (Holo3 overthinks with budget=512)
     cmd = [
         "/opt/llama.cpp/build/bin/llama-server",
         "-m", model_path,
@@ -807,7 +807,6 @@ def _run_holo3_executor(
         "--host", "0.0.0.0", "--port", "8080",
         "-ngl", "99", "-c", "8192", "-ub", "2048",
         "--jinja",
-        "--reasoning-budget", "512",
         "--flash-attn", "on",
     ]
     print(f"Starting Holo3 llama-server: {' '.join(cmd[-8:])}")
@@ -871,7 +870,7 @@ def _run_holo3_executor(
         start_url=base_url,
         viewport=(1280, 720),
         browser="google-chrome",
-        settle_time=2.0,
+        settle_time=4.0,  # Holo3 needs longer settle — sees black screen with 2s
         human_speed=False,
         proxy_server=proxy_server,
         save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
