@@ -19,7 +19,7 @@
         "max_pages": 5,
         "max_steps_per_iteration": 40
       },
-      "start_url": "https://www.boattrader.com/boats/seller-private/",
+      "start_url": "https://www.boattrader.com/boats/",
       "verify": { "type": "url_contains", "value": "boattrader" }
     },
     {
