@@ -1098,6 +1098,7 @@ def _run_claude_executor(
     frames_per_inference: int = 5,
     claude_model: str = "claude-sonnet-4-20250514",
     thinking_budget: int = 2048,
+    viewer: bool = False,
 ) -> dict:
     """Execute tasks using Claude CUA via Anthropic API.
 
@@ -1157,6 +1158,17 @@ def _run_claude_executor(
         proxy_server=proxy_server,
         save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
     )
+
+    # Live viewer tunnel (optional)
+    viewer_ctx = None
+    viewer_event_bus = None
+    if viewer:
+        try:
+            from mantis_agent.viewer_modal import modal_viewer
+            viewer_ctx = modal_viewer()
+            viewer_event_bus, _viewer_url = viewer_ctx.__enter__()
+        except Exception as e:
+            print(f"  Viewer failed to start: {e}")
 
     # Run tasks
     scores = []
@@ -1289,7 +1301,8 @@ def _run_claude_executor(
             # Standard task with retry
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
                                frames_per_inference=frames_per_inference,
-                               grounding=grounding if 'grounding' in dir() else None)
+                               grounding=grounding if 'grounding' in dir() else None,
+                               on_step=viewer_event_bus.emit if viewer_event_bus else None)
             result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
                                            grounding=grounding if "grounding" in dir() else None)
 
@@ -1322,6 +1335,13 @@ def _run_claude_executor(
         save_progress()
 
     env.close()
+
+    # Clean up viewer
+    if viewer_ctx:
+        try:
+            viewer_ctx.__exit__(None, None, None)
+        except Exception:
+            pass
 
     passed = sum(1 for s in scores if s > 0)
     avg = sum(scores) / len(scores) * 100 if scores else 0
