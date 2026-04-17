@@ -81,8 +81,10 @@ class WorkflowRunner:
     def __init__(self, brain: Any, env: Any, loop_config: LoopConfig,
                  session_name: str = "workflow",
                  on_iteration: Any = None,
-                 start_url: str | None = None):
+                 start_url: str | None = None,
+                 grounding: Any = None):
         self.brain = brain
+        self.grounding = grounding
         # Dedup: track processed phone numbers and listing URLs
         self._seen_phones: set[str] = set()
         self._seen_urls: set[str] = set()
@@ -228,6 +230,7 @@ class WorkflowRunner:
             env=self.env,
             max_steps=self.config.max_steps_per_iteration,
             frames_per_inference=2,
+            grounding=self.grounding,
         )
 
         # Retry loop

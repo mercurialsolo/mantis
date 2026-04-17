@@ -572,7 +572,8 @@ def _run_executor(
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
-                                           start_url=task_config.get("start_url", ""))
+                                           start_url=task_config.get("start_url", ""),
+                                           grounding=grounding if "grounding" in dir() else None)
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -601,8 +602,10 @@ def _run_executor(
 
             # Standard task with retry
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
-                               frames_per_inference=frames_per_inference)
-            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
+                               frames_per_inference=frames_per_inference,
+                               grounding=grounding if 'grounding' in dir() else None)
+            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
+                                           grounding=grounding if "grounding" in dir() else None)
 
             if task_config.get("save_session"):
                 if result.success or ("login" not in env.current_url.lower()):
@@ -793,6 +796,10 @@ def _run_gemma4_cua_executor(
     )
     brain.load()
 
+    # Grounded click targeting — clamp clicks to safe content region
+    from mantis_agent.grounding import RegionGrounding
+    grounding = RegionGrounding(viewport=(1280, 720))
+
     # Xvfb + xdotool + real Chrome (zero automation fingerprints)
     proxy = _build_proxy_config(city="miami", session_id=f"mantis{run_id.replace('_','')}")
     proxy_server = ""
@@ -886,7 +893,8 @@ def _run_gemma4_cua_executor(
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
-                                           start_url=task_config.get("start_url", ""))
+                                           start_url=task_config.get("start_url", ""),
+                                           grounding=grounding if "grounding" in dir() else None)
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -913,8 +921,10 @@ def _run_gemma4_cua_executor(
                 save_progress()
                 continue
 
-            runner = GymRunner(brain=brain, env=env, max_steps=max_steps, frames_per_inference=2)
-            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
+            runner = GymRunner(brain=brain, env=env, max_steps=max_steps, frames_per_inference=2,
+                               grounding=grounding if 'grounding' in dir() else None)
+            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
+                                           grounding=grounding if "grounding" in dir() else None)
 
             if task_config.get("save_session"):
                 if result.success or ("login" not in env.current_url.lower()):
@@ -1164,7 +1174,8 @@ def _run_claude_executor(
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
-                                           start_url=task_config.get("start_url", ""))
+                                           start_url=task_config.get("start_url", ""),
+                                           grounding=grounding if "grounding" in dir() else None)
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -1193,8 +1204,10 @@ def _run_claude_executor(
 
             # Standard task with retry
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
-                               frames_per_inference=frames_per_inference)
-            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
+                               frames_per_inference=frames_per_inference,
+                               grounding=grounding if 'grounding' in dir() else None)
+            result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
+                                           grounding=grounding if "grounding" in dir() else None)
 
             # Save trajectory for distillation
             save_trajectory(task_id, intent, result)

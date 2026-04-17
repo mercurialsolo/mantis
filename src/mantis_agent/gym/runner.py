@@ -100,10 +100,12 @@ class GymRunner:
         hard_loop_window: int = 8,
         plan_executor: Any = None,
         page_discovery: Any = None,
+        grounding: Any = None,
     ):
         self.brain = brain
         self.env = env
         self.max_steps = max_steps
+        self.grounding = grounding  # Optional: refine click coordinates
         self.frames_per_inference = frames_per_inference
         self.soft_loop_window = soft_loop_window
         self.hard_loop_window = hard_loop_window
@@ -324,6 +326,28 @@ class GymRunner:
                     ))
                     termination_reason = "done"
                     break
+
+                # Grounded click refinement — if grounding model available,
+                # refine click coordinates before execution
+                if self.grounding and action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+                    try:
+                        current_screenshot = frame_history[-1] if frame_history else None
+                        if current_screenshot:
+                            from ..grounding import GroundingResult
+                            gr = self.grounding.ground(
+                                screenshot=current_screenshot,
+                                description=action.reasoning or thinking[:200],
+                                initial_x=action.params.get("x"),
+                                initial_y=action.params.get("y"),
+                            )
+                            if gr.confidence > 0.3:
+                                action = Action(
+                                    action.action_type,
+                                    {**action.params, "x": gr.x, "y": gr.y},
+                                    reasoning=action.reasoning,
+                                )
+                    except Exception as e:
+                        logger.debug(f"Grounding failed, using original coords: {e}")
 
                 # Execute action in the environment
                 gym_result = self.env.step(action)
