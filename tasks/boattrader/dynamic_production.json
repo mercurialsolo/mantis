@@ -19,7 +19,7 @@
         "max_pages": 5,
         "max_steps_per_iteration": 40
       },
-      "start_url": "https://www.boattrader.com/boats/condition-used/type-power/price-35000,/zip-33101/radius-100/sort-updated:desc/",
+      "start_url": "https://www.boattrader.com/boats/seller-private/",
       "verify": { "type": "url_contains", "value": "boattrader" }
     },
     {

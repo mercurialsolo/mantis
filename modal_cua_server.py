@@ -494,6 +494,7 @@ def _run_executor(
         settle_time=2.0,
         human_speed=False,
         proxy_server=proxy_server,
+        save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
     )
 
     # Run tasks
@@ -810,6 +811,7 @@ def _run_gemma4_cua_executor(
         settle_time=2.0,
         human_speed=False,
         proxy_server=proxy_server,
+        save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
     )
 
     # Run tasks (same loop as _run_executor)
@@ -1059,6 +1061,7 @@ def _run_claude_executor(
         settle_time=2.0,
         human_speed=False,
         proxy_server=proxy_server,
+        save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
     )
 
     # Run tasks

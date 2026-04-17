@@ -63,6 +63,7 @@ class XdotoolGymEnv(GymEnvironment):
         human_speed: bool = False,
         proxy_server: str = "",
         profile_dir: str = "/data/chrome-profile",
+        save_screenshots: str = "",
     ):
         self._start_url = start_url
         self._viewport = viewport
@@ -72,6 +73,8 @@ class XdotoolGymEnv(GymEnvironment):
         self._human_speed = human_speed
         self._proxy_server = proxy_server
         self._profile_dir = profile_dir
+        self._save_screenshots = save_screenshots  # Dir to save screenshots for replay
+        self._step_counter = 0
 
         self._xvfb_proc = None
         self._browser_proc = None
@@ -289,8 +292,17 @@ class XdotoolGymEnv(GymEnvironment):
     # ��─ Internal ──���──────────────────────��───────────────────────────
 
     def _capture(self) -> GymObservation:
-        """Take screenshot and return as observation."""
+        """Take screenshot and return as observation.
+
+        If save_screenshots is set, saves each screenshot for replay testing.
+        """
         screenshot = self._screenshot()
+
+        if self._save_screenshots:
+            from .replay_env import save_screenshot
+            save_screenshot(screenshot, self._save_screenshots, self._step_counter)
+            self._step_counter += 1
+
         return GymObservation(screenshot=screenshot, extras={})
 
     def _clamp(self, x: int, y: int) -> tuple[int, int]:
