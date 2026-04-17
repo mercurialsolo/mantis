@@ -114,6 +114,7 @@ def plan_with_opus(
     api_key: str = "",
     model: str = "claude-sonnet-4-20250514",
     output_path: str = "",
+    force: bool = False,
 ) -> dict:
     """Convert a plain text plan to a CUA-aware task suite using Opus.
 
@@ -126,9 +127,22 @@ def plan_with_opus(
     Returns:
         Task suite dict ready for modal_cua_server.py
     """
+    import hashlib
+
     api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
+
+    # Cache check
+    if not force and output_path and os.path.exists(output_path):
+        try:
+            cached = json.loads(open(output_path).read())
+            plan_hash = hashlib.md5(open(plan_path, "rb").read()).hexdigest()[:8]
+            if cached.get("_plan_hash") == plan_hash:
+                logger.info(f"Using cached plan: {output_path}")
+                return cached
+        except (json.JSONDecodeError, KeyError):
+            pass
 
     with open(plan_path) as f:
         plan_text = f.read()
@@ -173,6 +187,11 @@ def plan_with_opus(
 
     task_suite = json.loads(text)
 
+    # Tag for cache
+    plan_hash = hashlib.md5(open(plan_path, "rb").read()).hexdigest()[:8]
+    task_suite["_plan_hash"] = plan_hash
+    task_suite["_generated_by"] = f"opus_planner:plan_with_opus:{model}"
+
     # Log stats
     tasks = task_suite.get("tasks", [])
     loop_tasks = sum(1 for t in tasks if t.get("loop"))
@@ -180,29 +199,239 @@ def plan_with_opus(
 
     tokens = data.get("usage", {})
     cost = (tokens.get("input_tokens", 0) * 3 + tokens.get("output_tokens", 0) * 15) / 1_000_000
+    task_suite["_cost_usd"] = round(cost, 4)
     logger.info(f"Opus tokens: {tokens.get('input_tokens', 0)} in + {tokens.get('output_tokens', 0)} out = ~${cost:.3f}")
 
     if output_path:
         with open(output_path, "w") as f:
             json.dump(task_suite, f, indent=2)
-        logger.info(f"Saved to {output_path}")
+        logger.info(f"Saved to {output_path} (hash={plan_hash})")
+
+    return task_suite
+
+
+BROWSE_PROMPT = """\
+I'm showing you screenshots from a website. Based on what you see, describe:
+
+1. LAYOUT: Where are the main content areas, navigation, sidebar, footer?
+2. LISTING CARDS: What do they look like? Size, position, content visible?
+3. CLICKABLE ELEMENTS: What text/buttons can be clicked to open a listing detail page?
+4. TRAPS TO AVOID: Social icons, ad banners, dealer logos, photo galleries — where are they?
+5. FILTERS: Where are search filters (zip, price, seller type, sort)?
+6. PAGINATION: Where are next/previous page controls?
+
+Be specific about pixel positions (top/center/bottom, left/right) and visual appearance.
+"""
+
+
+def browse_and_plan(
+    plan_path: str,
+    screenshot_dir: str,
+    api_key: str = "",
+    model: str = "claude-sonnet-4-20250514",
+    output_path: str = "",
+    max_screenshots: int = 5,
+    force: bool = False,
+) -> dict:
+    """Browse-enhanced planning: analyze cached screenshots + plain text plan.
+
+    Phase 1: Opus analyzes screenshots from prior runs to understand site layout
+    Phase 2: Opus generates a CUA-aware task suite with site-specific visual hints
+
+    This is a ONE-TIME cost (~$0.05) that produces a reusable plan.
+    Plans are cached — if output_path exists and plan_path hasn't changed,
+    returns the cached plan without calling Opus.
+    Opus never enters the extraction loop — only Gemma4 executes.
+
+    Args:
+        plan_path: Path to plain text plan file.
+        screenshot_dir: Directory with cached screenshots (from prior runs).
+        api_key: Anthropic API key.
+        model: Claude model for planning.
+        output_path: Optional path to save the generated JSON.
+        max_screenshots: Max screenshots to send for analysis.
+        force: If True, regenerate even if cached plan exists.
+
+    Returns:
+        Task suite dict with site-specific visual hints.
+    """
+    import base64
+    import hashlib
+    from io import BytesIO
+    from pathlib import Path
+
+    from PIL import Image
+
+    # Cache check: if output exists and plan text hasn't changed, use cached
+    if not force and output_path and os.path.exists(output_path):
+        try:
+            cached = json.loads(open(output_path).read())
+            plan_hash = hashlib.md5(open(plan_path, "rb").read()).hexdigest()[:8]
+            if cached.get("_plan_hash") == plan_hash:
+                logger.info(f"Using cached plan: {output_path} (hash={plan_hash})")
+                return cached
+            logger.info(f"Plan text changed (hash mismatch), regenerating...")
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
+
+    with open(plan_path) as f:
+        plan_text = f.read()
+
+    # Load screenshots
+    screenshot_dir = Path(screenshot_dir)
+    png_files = sorted(screenshot_dir.glob("*.png"))[:max_screenshots]
+
+    if not png_files:
+        logger.warning(f"No screenshots in {screenshot_dir}, falling back to text-only planning")
+        return plan_with_opus(plan_path, api_key=api_key, model=model, output_path=output_path)
+
+    logger.info(f"Browse-enhanced planning: {len(png_files)} screenshots from {screenshot_dir}")
+
+    # Phase 1: Analyze screenshots to understand site layout
+    browse_content = [{"type": "text", "text": BROWSE_PROMPT}]
+    for f in png_files:
+        img = Image.open(f)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        browse_content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": b64},
+        })
+        browse_content.append({"type": "text", "text": f"[Screenshot: {f.name}]"})
+
+    logger.info("Phase 1: Analyzing site layout from screenshots...")
+    resp = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": model,
+            "max_tokens": 2000,
+            "messages": [{"role": "user", "content": browse_content}],
+        },
+        timeout=60,
+    )
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"Browse API error: {resp.status_code} {resp.text[:200]}")
+
+    site_analysis = ""
+    for block in resp.json().get("content", []):
+        if block.get("type") == "text":
+            site_analysis = block["text"]
+            break
+
+    tokens1 = resp.json().get("usage", {})
+    cost1 = (tokens1.get("input_tokens", 0) * 3 + tokens1.get("output_tokens", 0) * 15) / 1_000_000
+    logger.info(f"Phase 1 cost: ~${cost1:.3f} ({tokens1.get('input_tokens', 0)} in)")
+    logger.info(f"Site analysis: {site_analysis[:200]}...")
+
+    # Phase 2: Generate plan with site-specific knowledge
+    enhanced_prompt = PLANNER_PROMPT.format(plan_text=plan_text)
+    enhanced_prompt += f"\n\nSITE-SPECIFIC VISUAL ANALYSIS (from real screenshots):\n{site_analysis}"
+
+    logger.info("Phase 2: Generating CUA-aware plan with visual hints...")
+    resp2 = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": model,
+            "max_tokens": 4096,
+            "system": PLANNER_SYSTEM,
+            "messages": [{"role": "user", "content": enhanced_prompt}],
+        },
+        timeout=60,
+    )
+
+    if resp2.status_code != 200:
+        raise RuntimeError(f"Plan API error: {resp2.status_code} {resp2.text[:200]}")
+
+    text = ""
+    for block in resp2.json().get("content", []):
+        if block.get("type") == "text":
+            text = block["text"]
+            break
+
+    # Parse JSON
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1]
+    if text.endswith("```"):
+        text = text.rsplit("```", 1)[0]
+    text = text.strip()
+
+    task_suite = json.loads(text)
+
+    # Tag with plan hash for cache invalidation
+    plan_hash = hashlib.md5(open(plan_path, "rb").read()).hexdigest()[:8]
+    task_suite["_plan_hash"] = plan_hash
+    task_suite["_generated_by"] = f"opus_planner:browse_and_plan:{model}"
+    task_suite["_cost_usd"] = round(cost1 + cost2, 4)
+
+    tokens2 = resp2.json().get("usage", {})
+    cost2 = (tokens2.get("input_tokens", 0) * 3 + tokens2.get("output_tokens", 0) * 15) / 1_000_000
+    total_cost = cost1 + cost2
+    logger.info(f"Phase 2 cost: ~${cost2:.3f}")
+    logger.info(f"Total browse+plan cost: ~${total_cost:.3f}")
+
+    tasks = task_suite.get("tasks", [])
+    loop_tasks = sum(1 for t in tasks if t.get("loop"))
+    logger.info(f"Generated {len(tasks)} tasks ({loop_tasks} with loops)")
+
+    if output_path:
+        with open(output_path, "w") as f:
+            json.dump(task_suite, f, indent=2)
+        logger.info(f"Saved to {output_path} (hash={plan_hash})")
 
     return task_suite
 
 
 def main():
-    """CLI: python -m mantis_agent.opus_planner plans/boattrader/extract_only.txt"""
+    """CLI: python -m mantis_agent.opus_planner <plan_file> [output_file] [--browse screenshots_dir]"""
     import sys
     logging.basicConfig(level=logging.INFO)
 
     if len(sys.argv) < 2:
-        print("Usage: python -m mantis_agent.opus_planner <plan_file> [output_file]")
+        print("Usage:")
+        print("  python -m mantis_agent.opus_planner <plan_file> [output_file]")
+        print("  python -m mantis_agent.opus_planner <plan_file> [output_file] --browse <screenshots_dir>")
         sys.exit(1)
 
     plan_path = sys.argv[1]
-    output_path = sys.argv[2] if len(sys.argv) > 2 else plan_path.replace(".txt", "_opus.json")
+    output_path = ""
+    browse_dir = ""
 
-    task_suite = plan_with_opus(plan_path, output_path=output_path)
+    args = sys.argv[2:]
+    while args:
+        if args[0] == "--browse" and len(args) > 1:
+            browse_dir = args[1]
+            args = args[2:]
+        elif not output_path:
+            output_path = args[0]
+            args = args[1:]
+        else:
+            args = args[1:]
+
+    if not output_path:
+        output_path = plan_path.replace(".txt", "_opus.json")
+
+    if browse_dir:
+        task_suite = browse_and_plan(plan_path, browse_dir, output_path=output_path)
+    else:
+        task_suite = plan_with_opus(plan_path, output_path=output_path)
+
     print(json.dumps(task_suite, indent=2))
 
 

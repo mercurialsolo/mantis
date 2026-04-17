@@ -1,0 +1,25 @@
+{
+  "session_name": "boattrader_private_sellers_miami",
+  "base_url": "https://www.boattrader.com/boats/",
+  "tasks": [
+    {
+      "task_id": "setup_search_filters",
+      "intent": "SETUP SEARCH: Set location filter to Miami 33101, radius 25 miles, minimum price $35,000, private seller only, sort by recently updated.\n\nWHAT TO CLICK:\n- Location dropdown (LEFT SIDEBAR around y=440-500, text shows 'Zip Code')\n- Distance dropdown (LEFT SIDEBAR around y=590, text '25 miles from')\n- Price filter section (LEFT SIDEBAR, expandable section)\n- Seller type filter (LEFT SIDEBAR, look for 'Private Seller' checkbox)\n- Sort dropdown (TOP RIGHT around x=1100, y=430, text 'Sort: Recommended')\n\nWHAT TO NEVER CLICK:\n- Heart/favorite icons (SMALL heart shapes in top-right corners of listing cards)\n- 'Featured' badges (SMALL colored badges in top-left of listing cards)\n- Loan pre-qualification banner (LARGE blue section around y=430 with 'Get Started' button)\n- Social media icons (SMALL colored squares in footer: YouTube, Instagram, Facebook, Twitter)\n- App download buttons (App Store/Google Play icons in bottom-right)\n- Boat photos themselves (will open gallery trap)\n\nSTEPS:\n1. click(320, 470) on location dropdown\n2. type_text('33101')\n3. key_press(keys='Enter')\n4. click(320, 590) on distance dropdown if not already '25 miles'\n5. Look for price filter section, click to expand\n6. type_text('35000') in minimum price field\n7. Look for seller type filter, check 'Private Seller' only\n8. click(1100, 430) on sort dropdown\n9. Click 'Recently Updated' or 'Newest First' option\n10. done(success=true, summary='Search filters configured for Miami private sellers $35K+')\n\nERROR HANDLERS:\n- Cookie popup \u2192 click(640, 400) on Accept button ONCE only\n- Filter not found \u2192 scroll(direction='down', amount=3) and retry\n- Page load error \u2192 key_press(keys='F5'), wait 3 seconds",
+      "start_url": "https://www.boattrader.com/boats/"
+    },
+    {
+      "task_id": "extract_listings_loop",
+      "intent": "EXTRACT LISTING DATA: Click each boat listing, extract details, find phone numbers, go back, repeat for all listings on page.\n\nWHAT TO CLICK:\n- Boat listing cards (LARGE rectangular cards in 3-column grid starting y=560)\n- Click on TITLE TEXT or boat specifications, NOT the photo\n- Cards show boat photo + year/make/model + price in bottom overlay\n- Size: approximately 400x300 pixels each\n- Position: Right side of page in grid layout\n\nWHAT TO NEVER CLICK:\n- Heart/favorite icons (SMALL heart shapes top-right corner of cards)\n- 'Featured' badges (SMALL colored rectangles top-left of cards)\n- Social media share buttons in listing details\n- Photo gallery thumbnails (will open image viewer)\n- Dealer website links or 'Visit Dealer' buttons\n- Ad banners or promotional sections\n- Similar boats recommendations\n\nSTEPS FOR EACH LISTING:\n1. click() on boat listing card title area (avoid photo)\n2. Wait for page load (look for boat details page)\n3. scroll(direction='down', amount=5) to find Description section\n4. Look for phone numbers: (555)555-5555, 555-555-5555, or 555.555.5555 format\n5. INVALID phones: prices ($55,555), years (2019), zip codes (33101), engine specs (350HP)\n6. Extract: year, make, model, asking_price, boat_type, seller_phone, seller_name\n7. Read current URL from address bar\n8. key_press(keys='alt+left') to go back to results\n9. Repeat for next listing\n\nDATA VALIDATION:\n- Phone must be 10+ digits with area code\n- Price must start with $ symbol\n- Year must be 1950-2024\n- If no valid phone found, mark as 'NO PHONE' and skip\n\nERROR HANDLERS:\n- 404 page \u2192 key_press(keys='alt+left'), continue to next listing\n- Photo gallery modal ('1 of N' overlay) \u2192 key_press(keys='Escape'), then key_press(keys='alt+left')\n- Off-site redirect (facebook.com, instagram.com) \u2192 key_press(keys='alt+left') immediately\n- Dealer website redirect \u2192 key_press(keys='alt+left') immediately\n- Page won't load \u2192 wait 5 seconds, then key_press(keys='alt+left')\n\nOUTPUT FORMAT:\n- Valid listing: done(success=true, summary='EXTRACTED | 2020 Boston Whaler 230 Vantage | $65000 | Bowrider | (305)555-1234 | John Smith | https://www.boattrader.com/boat/2020-boston-whaler-230-vantage-8234567')\n- No phone: done(success=true, summary='SKIPPED | 2019 Sea Ray 260 | $45000 | NO PHONE')\n- Error: done(success=true, summary='ERROR | Listing unreachable or off-site redirect')",
+      "loop": {
+        "pagination_intent": "NEXT PAGE: After processing all listings on current page, scroll to bottom and click Next page button. Look for pagination controls below the listing grid (arrows or page numbers). If no Next button found, end loop.",
+        "max_iterations": 50,
+        "max_pages": 10,
+        "max_steps_per_iteration": 15
+      },
+      "start_url": "https://www.boattrader.com/boats/"
+    }
+  ],
+  "_plan_hash": "09b6b254",
+  "_generated_by": "opus_planner:browse_and_plan:claude-sonnet-4-20250514",
+  "_cost_usd": 0.055
+}
