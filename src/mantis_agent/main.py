@@ -77,6 +77,17 @@ def parse_args() -> argparse.Namespace:
         help="Monitor to capture (0=all, 1=primary, default: 1)",
     )
     p.add_argument(
+        "--viewer",
+        action="store_true",
+        help="Launch live web viewer (requires: pip install mantis-agent[viewer])",
+    )
+    p.add_argument(
+        "--viewer-port",
+        type=int,
+        default=7860,
+        help="Port for the live viewer (default: 7860)",
+    )
+    p.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable verbose logging",
@@ -131,7 +142,17 @@ def main() -> None:
     brain.load()
 
     # ── Run ───────────────────────────────────────────────────────────────────
-    result = asyncio.run(agent.run(args.task))
+    if args.viewer:
+        try:
+            from .viewer import run_with_viewer
+        except ImportError:
+            print("Viewer requires extra dependencies: pip install mantis-agent[viewer]")
+            sys.exit(1)
+        result = asyncio.run(
+            run_with_viewer(agent, args.task, streamer, port=args.viewer_port)
+        )
+    else:
+        result = asyncio.run(agent.run(args.task))
 
     # ── Report ────────────────────────────────────────────────────────────────
     print()

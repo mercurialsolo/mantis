@@ -61,6 +61,11 @@ CUA_MODELS = {
         "name": "Gemma4-31B-CUA",
         "tp": 1,
     },
+    "holo3": {
+        "repo": "Hcompany/Holo3-35B-A3B",
+        "name": "Holo3-35B-A3B",
+        "tp": 2,  # 35B params in BF16 ~70GB, needs 2x A100-80GB
+    },
     "claude": {
         "repo": "api",
         "name": "Claude (Anthropic API)",
@@ -118,6 +123,7 @@ executor_image = (
         "vllm>=0.12.0",
         "openai", "requests", "pillow", "mss",
         "huggingface-hub", "transformers", "torch",
+        "fastapi>=0.100", "uvicorn>=0.20",
     )
     .add_local_python_source("mantis_agent")
 )
@@ -375,7 +381,8 @@ def _build_proxy_config(city: str = "", state: str = "", session_id: str = "") -
 # C) Shared executor logic
 # ═══════════════════════════════════════════════════════════════════
 
-def _start_vllm(model_dir: str, port: int, tp: int) -> subprocess.Popen:
+def _start_vllm(model_dir: str, port: int, tp: int,
+                extra_args: list[str] | None = None) -> subprocess.Popen:
     """Start vLLM and wait for readiness."""
     import requests as req
 
@@ -389,6 +396,8 @@ def _start_vllm(model_dir: str, port: int, tp: int) -> subprocess.Popen:
         "--gpu-memory-utilization", "0.90",
         "--max-model-len", "32768",
     ]
+    if extra_args:
+        cmd.extend(extra_args)
     print(f"Starting vLLM (TP={tp}): {' '.join(cmd[-8:])}")
     proc = subprocess.Popen(cmd, stdout=open("/tmp/vllm.log", "w"), stderr=subprocess.STDOUT)
 
@@ -420,6 +429,7 @@ def _run_executor(
     max_steps: int = 30,
     max_retries: int = 2,
     frames_per_inference: int = 5,
+    viewer: bool = False,
 ) -> dict:
     """Shared executor logic for all GPU tiers."""
     import requests as req
@@ -450,7 +460,13 @@ def _run_executor(
         print(f"{cua_config['name']} cached at {model_dir}")
 
     tp = cua_config["tp"]
-    vllm_proc = _start_vllm(model_dir, port=8000, tp=tp)
+
+    # Holo3 needs reasoning parser flags for vLLM
+    vllm_extra_args = None
+    if cua_model == "holo3":
+        vllm_extra_args = ["--enable-reasoning", "--reasoning-parser", "qwen3"]
+
+    vllm_proc = _start_vllm(model_dir, port=8000, tp=tp, extra_args=vllm_extra_args)
 
     # Parse task suite
     task_suite = json.loads(task_file_contents)
@@ -465,14 +481,24 @@ def _run_executor(
     print(f"  Model:    {cua_config['name']} (TP={tp})")
     print(f"{'='*60}")
 
-    # Create brain
-    brain = OpenCUABrain(
-        base_url="http://localhost:8000/v1",
-        model="model",
-        max_tokens=2048,
-        temperature=0.0,
-        screen_size=(1280, 720),
-    )
+    # Create brain — Holo3 uses tool calling, others use pyautogui text
+    if cua_model == "holo3":
+        from mantis_agent.brain_holo3 import Holo3Brain
+        brain = Holo3Brain(
+            base_url="http://localhost:8000/v1",
+            model="model",
+            max_tokens=2048,
+            temperature=0.0,
+            screen_size=(1280, 720),
+        )
+    else:
+        brain = OpenCUABrain(
+            base_url="http://localhost:8000/v1",
+            model="model",
+            max_tokens=2048,
+            temperature=0.0,
+            screen_size=(1280, 720),
+        )
     brain.load()
 
     # Xvfb + xdotool + real Chrome (zero automation fingerprints)
@@ -497,11 +523,23 @@ def _run_executor(
         save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
     )
 
+    # Live viewer tunnel (optional)
+    viewer_ctx = None
+    viewer_event_bus = None
+    if viewer:
+        try:
+            from mantis_agent.viewer_modal import modal_viewer
+            viewer_ctx = modal_viewer()
+            viewer_event_bus, _viewer_url = viewer_ctx.__enter__()
+        except Exception as e:
+            print(f"  Viewer failed to start: {e}")
+
     # Run tasks
     scores = []
     task_details = []
     chrome_proc = None  # Not needed — XdotoolGymEnv manages its own browser
-    results_path = f"/data/results/cua_results_{session_name}_{run_id}.json"
+    results_prefix = "holo3" if cua_model == "holo3" else "cua"
+    results_path = f"/data/results/{results_prefix}_results_{session_name}_{run_id}.json"
     os.makedirs("/data/results", exist_ok=True)
 
     def save_progress():
@@ -603,7 +641,8 @@ def _run_executor(
             # Standard task with retry
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
                                frames_per_inference=frames_per_inference,
-                               grounding=grounding if 'grounding' in dir() else None)
+                               grounding=grounding if 'grounding' in dir() else None,
+                               on_step=viewer_event_bus.emit if viewer_event_bus else None)
             result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
                                            grounding=grounding if "grounding" in dir() else None)
 
@@ -636,6 +675,13 @@ def _run_executor(
     vllm_proc.terminate()
     if chrome_proc:
         chrome_proc.terminate()
+
+    # Clean up viewer
+    if viewer_ctx:
+        try:
+            viewer_ctx.__exit__(None, None, None)
+        except Exception:
+            pass
 
     passed = sum(1 for s in scores if s > 0)
     avg = sum(scores) / len(scores) * 100 if scores else 0
@@ -708,6 +754,20 @@ def run_cua_8gpu(task_file_contents: str, cua_model: str = "opencua-72b", **kwar
     return _run_executor(task_file_contents, cua_model=cua_model, **kwargs)
 
 
+@app.function(
+    gpu="A100-80GB:2",
+    image=executor_image,
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],
+    timeout=14400,  # 4 hours
+    memory=65536,
+    cpu=16,
+)
+def run_holo3(task_file_contents: str, **kwargs) -> dict:
+    """Holo3-35B-A3B executor (2x A100, TP=2, tool calling + reasoning)."""
+    return _run_executor(task_file_contents, cua_model="holo3", **kwargs)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # C.2) Gemma4-31B-CUA executor (llama.cpp, native tool calling)
 # ═══════════════════════════════════════════════════════════════════
@@ -717,6 +777,7 @@ def _run_gemma4_cua_executor(
     plan_inputs: dict[str, str] | None = None,
     max_steps: int = 30,
     max_retries: int = 2,
+    viewer: bool = False,
 ) -> dict:
     """Execute tasks using fine-tuned Gemma4-31B-CUA via llama.cpp."""
     import requests as req
@@ -821,6 +882,17 @@ def _run_gemma4_cua_executor(
         save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
     )
 
+    # Live viewer tunnel (optional)
+    viewer_ctx = None
+    viewer_event_bus = None
+    if viewer:
+        try:
+            from mantis_agent.viewer_modal import modal_viewer
+            viewer_ctx = modal_viewer()
+            viewer_event_bus, _viewer_url = viewer_ctx.__enter__()
+        except Exception as e:
+            print(f"  Viewer failed to start: {e}")
+
     # Run tasks (same loop as _run_executor)
     scores = []
     task_details = []
@@ -922,7 +994,8 @@ def _run_gemma4_cua_executor(
                 continue
 
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps, frames_per_inference=2,
-                               grounding=grounding if 'grounding' in dir() else None)
+                               grounding=grounding if 'grounding' in dir() else None,
+                               on_step=viewer_event_bus.emit if viewer_event_bus else None)
             result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""),
                                            grounding=grounding if "grounding" in dir() else None)
 
@@ -955,6 +1028,13 @@ def _run_gemma4_cua_executor(
     if chrome_proc:
         chrome_proc.terminate()
 
+    # Clean up viewer
+    if viewer_ctx:
+        try:
+            viewer_ctx.__exit__(None, None, None)
+        except Exception:
+            pass
+
     passed = sum(1 for s in scores if s > 0)
     avg = sum(scores) / len(scores) * 100 if scores else 0
     print(f"\n{'='*60}")
@@ -975,6 +1055,7 @@ def _run_gemma4_cua_executor(
         "apt-get update && apt-get install -y google-chrome-stable || true",
     ).pip_install(
         "openai", "requests", "pillow", "mss",
+        "fastapi>=0.100", "uvicorn>=0.20",
     ).add_local_python_source("mantis_agent"),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -1001,7 +1082,10 @@ claude_executor_image = (
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
         "apt-get update && apt-get install -y google-chrome-stable || true",
     )
-    .pip_install("requests", "pillow", "mss")
+    .pip_install(
+        "requests", "pillow", "mss",
+        "fastapi>=0.100", "uvicorn>=0.20",
+    )
     .add_local_python_source("mantis_agent")
 )
 
@@ -1275,6 +1359,7 @@ EXECUTOR_MAP = {
     "evocua-32b": run_cua_2gpu,
     "opencua-32b": run_cua_4gpu,
     "opencua-72b": run_cua_8gpu,
+    "holo3": run_holo3,
     "gemma4-cua": run_gemma4_cua,
     "claude": run_claude_cua,
 }
@@ -1324,6 +1409,7 @@ def _make_page_task(original_task: dict, worker_id: int, page: int) -> dict:
         "apt-get update && apt-get install -y google-chrome-stable || true",
     ).pip_install(
         "openai", "requests", "pillow", "mss",
+        "fastapi>=0.100", "uvicorn>=0.20",
     ).add_local_python_source("mantis_agent"),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -1396,6 +1482,7 @@ def main(
     claude_model: str = "claude-sonnet-4-20250514",
     thinking_budget: int = 2048,
     workers: int = 1,
+    viewer: bool = False,
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
 
@@ -1403,9 +1490,10 @@ def main(
       --plan-file plans/boattrader/full_spec.txt   (Gemma4 preprocesses → EvoCUA executes)
       --task-file tasks/boattrader/dynamic.json     (direct execution, no planner)
 
-    Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, gemma4-cua, claude
+    Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, holo3, gemma4-cua, claude
     Parallel: --workers 5   (auto fan-out looped tasks across N GPUs)
     Claude options: --claude-model claude-sonnet-4-20250514 --thinking-budget 2048
+    Viewer: --viewer   (live web viewer via modal.forward tunnel)
     """
     cua_config = CUA_MODELS.get(model, CUA_MODELS["evocua-8b"])
     print(f"Mantis CUA Server — {cua_config['name']}")
@@ -1555,6 +1643,7 @@ def main(
                 "evocua-8b": run_cua_1gpu,
                 "evocua-32b": run_cua_2gpu,
                 "opencua-32b": run_cua_4gpu,
+                "holo3": run_holo3,
             }
             worker_fn = worker_fn_map.get(model, run_gemma4_cua_worker)
 
@@ -1629,6 +1718,7 @@ def main(
         "plan_inputs": plan_inputs,
         "max_steps": max_steps,
         "max_retries": max_retries,
+        "viewer": viewer,
     }
     if model == "claude":
         kwargs["claude_model"] = claude_model

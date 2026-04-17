@@ -26,6 +26,10 @@ hud = [
     "openai>=1.0",
     "modal>=0.73",
 ]
+viewer = [
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+]
 
 [project.scripts]
 mantis = "mantis_agent.main:main"
