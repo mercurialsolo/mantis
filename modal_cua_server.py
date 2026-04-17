@@ -765,6 +765,7 @@ def run_cua_8gpu(task_file_contents: str, cua_model: str = "opencua-72b", **kwar
 )
 def run_holo3(task_file_contents: str, **kwargs) -> dict:
     """Holo3-35B-A3B executor (2x A100, TP=2, tool calling + reasoning)."""
+    kwargs.pop("cua_model", None)
     return _run_executor(task_file_contents, cua_model="holo3", **kwargs)
 
 
