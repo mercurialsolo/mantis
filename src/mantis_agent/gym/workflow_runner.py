@@ -485,22 +485,28 @@ class WorkflowRunner:
         return ""
 
     def _validate_viable(self, data: str, listing_url: str | None = None) -> bool:
-        """Strict phone-only viability per spec.
+        """A listing is viable if we extracted ANY useful boat data.
 
-        A listing is VIABLE only if a real phone number exists.
-        Deduplicates against previously seen phones and listing URLs.
+        Per spec: fill PopYachts form with whatever we have —
+        Year, Make, Model, Type, Price, URL are always present.
+        Phone and Seller Name are optional bonus fields.
+
+        Viable = reached the listing detail page and got boat data.
+        Not viable = 404, Cloudflare, off-site, blank page, or prompt echo.
         """
         if not data:
             return False
 
+        import re
         data = str(data)
-
-        # Reject obvious non-extractions
         text = data.lower()
+
+        # Reject error/blocked pages
         reject_signals = [
             "cloudflare", "verify you are human",
             "about:blank", "blank page", "captcha",
-            "page not found", "404",
+            "page not found", "404", "can't be reached",
+            "err_tunnel", "connection failed",
         ]
         if any(sig in text for sig in reject_signals):
             return False
@@ -511,24 +517,47 @@ class WorkflowRunner:
         if sum(1 for m in prompt_markers if m in text) >= 2:
             return False
 
+        # Reject off-site pages
+        offsite = ["facebook.com", "instagram.com", "twitter.com", "youtube.com"]
+        if any(site in text for site in offsite):
+            return False
+
         # Dedup by listing URL
-        if listing_url and listing_url in self._seen_urls:
-            logger.info(f"  Dedup: URL {listing_url} already seen, skipping")
-            return False
-
-        # Extract phone — strict: must be a real phone, not in a URL
-        phone = self._extract_phone(data)
-        if not phone:
-            return False
-
-        # Dedup by phone digits
-        import re
-        digits = re.sub(r'\D', '', phone)
-        if digits in self._seen_phones:
-            logger.info(f"  Dedup: phone {phone} already seen, skipping")
-            return False
-
-        self._seen_phones.add(digits)
         if listing_url:
+            if listing_url in self._seen_urls:
+                logger.info(f"  Dedup: URL {listing_url} already seen, skipping")
+                return False
             self._seen_urls.add(listing_url)
-        return True
+
+        # Check for boat data — need at least Year OR (Make/Model + Price)
+        has_year = bool(re.search(r'(?:19|20)\d{2}', data))
+        has_price = bool(re.search(r'\$[\d,]+', data))
+        has_boat_info = False
+        boat_keywords = [
+            "make", "model", "hull", "engine", "console", "cabin",
+            "grady", "boston whaler", "sea hunt", "tracker", "yamaha",
+            "mercury", "suzuki", "honda", "evinrude", "intrepid",
+            "azimut", "sea ray", "sundeck", "walkaround", "sportfish",
+            "bayliner", "chaparral", "everglades", "cigarette", "century",
+            "cobia", "nor-tech", "may-craft", "key west", "robalo",
+        ]
+        for kw in boat_keywords:
+            if kw in text:
+                has_boat_info = True
+                break
+
+        # Viable if we have meaningful boat data
+        if has_year and (has_price or has_boat_info):
+            # Track phone for dedup if present
+            phone = self._extract_phone(data)
+            if phone:
+                digits = re.sub(r'\D', '', phone)
+                if digits not in self._seen_phones:
+                    self._seen_phones.add(digits)
+            return True
+
+        # Also viable if model explicitly said VIABLE
+        if "viable" in text[:50].lower():
+            return True
+
+        return False
