@@ -307,6 +307,7 @@ class XdotoolGymEnv(GymEnvironment):
 
     def _clamp(self, x: int, y: int) -> tuple[int, int]:
         """Clamp coordinates to viewport bounds."""
+        x, y = int(x), int(y)
         return max(0, min(x, self._viewport[0] - 1)), max(0, min(y, self._viewport[1] - 1))
 
     def _execute_action(self, action: Action) -> None:

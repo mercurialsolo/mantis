@@ -659,6 +659,7 @@ def _run_executor(
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
 
         except Exception as e:
+            import traceback; traceback.print_exc()
             print(f"  ERROR: {e}")
             scores.append(0.0)
             task_details.append({
@@ -937,6 +938,7 @@ def _run_holo3_executor(
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
 
         except Exception as e:
+            import traceback; traceback.print_exc()
             print(f"  ERROR: {e}")
             scores.append(0.0)
             task_details.append({
@@ -1206,6 +1208,7 @@ def _run_gemma4_cua_executor(
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
 
         except Exception as e:
+            import traceback; traceback.print_exc()
             print(f"  ERROR: {e}")
             scores.append(0.0)
             task_details.append({
@@ -1517,6 +1520,7 @@ def _run_claude_executor(
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
 
         except Exception as e:
+            import traceback; traceback.print_exc()
             print(f"  ERROR: {e}")
             scores.append(0.0)
             task_details.append({
