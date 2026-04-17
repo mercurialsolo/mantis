@@ -378,11 +378,15 @@ class WorkflowRunner:
             )
 
         # ── Image gallery trap ──
-        if "image viewer" in all_thinking or "lightbox" in all_thinking or "1 of" in all_thinking:
+        if "image viewer" in all_thinking or "lightbox" in all_thinking or "1 of" in all_thinking or "gallery" in all_thinking:
             return (
-                "You got trapped in an image gallery/lightbox viewer. "
-                "Press Escape or click the X to close it, then scroll DOWN past all photos "
-                "to the Description/Seller Notes text section where phone numbers are."
+                "You clicked the PHOTO and got trapped in an image gallery. "
+                "Press Escape then Alt+Left to go back. "
+                "NEXT TIME: do NOT click the boat photo. Instead click one of these:\n"
+                "  - The boat NAME TEXT (e.g. '2022 Grady-White Freedom 235')\n"
+                "  - The PRICE text (e.g. '$145,000')\n"
+                "  - A 'View Details', 'See Details', or 'Contact Seller' link\n"
+                "These open the detail page WITHOUT the gallery trap."
             )
 
         # ── 404 / Page Not Found ──

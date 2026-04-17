@@ -514,13 +514,14 @@ class GymRunner:
                 if any(sig in think_lower for sig in [
                     "image gallery", "image viewer", "lightbox", "photo viewer",
                     "1 of ", "2 of ", "fullscreen photo", "close the gallery",
-                    "exit the gallery", "close the viewer",
+                    "exit the gallery", "close the viewer", "gallery",
                 ]):
                     parts.append(
-                        "\n\nIMPORTANT: You are trapped in a photo gallery/image viewer. "
-                        "STOP trying to close it. Press Escape ONCE, then Alt+Left to go back "
-                        "to search results. On the next listing, click the TITLE TEXT "
-                        "(the boat name), NOT the photo image."
+                        "\n\nIMPORTANT: You are in a photo gallery. "
+                        "Do key_press(keys='Escape') then key_press(keys='alt+left') to go back. "
+                        "Then done(success=true, summary='SKIPPED | gallery trap'). "
+                        "NEXT listing: click the boat NAME TEXT or PRICE or 'View Details' link, "
+                        "NOT the photo."
                     )
 
             # Soft loop nudge
