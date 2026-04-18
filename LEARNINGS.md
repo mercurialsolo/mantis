@@ -123,11 +123,14 @@ We're building a CUA (Computer Use Agent) that can extract leads from boat listi
 - **This caused ALL recent 0% runs** — model was on 404 pages, not extraction failures
 - **Fix needed**: Opus visual planner discovers correct URL by browsing, or model applies filters visually via s1_search
 
-### 8. Image Gallery Trap
+### 8. Image Gallery Trap — Same-Model Grounding Doesn't Work
 - Model clicks boat photos → enters lightbox/image viewer → spends 40+ steps trying to close
 - Screenshot evidence: step 20 had phone visible, steps 40-80 stuck in gallery
-- Prompt says "IGNORE the photos, scroll DOWN" but model clicks them anyway
-- **Fix needed**: Grounded click model that targets listing cards specifically, not photos
+- Prompt says "click TITLE TEXT, NOT the photo" but model clicks photos anyway — visual saliency overrides text instructions
+- **Tried: LLM grounding with same Gemma4** — FAILED. Same visual bias = same click targets
+- **Fix: Use Claude Sonnet as separate grounding model** — different model, no photo bias
+- **Key learning: same-model grounding is useless for fixing visual biases. Must use a DIFFERENT model.**
+- Cost: ~$0.01 per grounding call, ~$0.25 per listing (vs $5-15 wasted on gallery traps)
 
 ### 9. Holo3-35B-A3B — vLLM Blocked, llama.cpp Works
 - **77.8% OSWorld-Verified** (SOTA open-weight, released Mar 31 2026)

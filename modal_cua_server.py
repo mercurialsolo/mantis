@@ -1111,14 +1111,12 @@ def _run_gemma4_cua_executor(
     brain.load()
 
     # Grounded click targeting — clamp clicks to safe content region
-    from mantis_agent.grounding import LLMGrounding
-    # Use the same llama-server for grounding — second pass per click
-    # The grounding prompt is specifically designed to find TEXT elements,
-    # not photos, avoiding the gallery trap
-    grounding = LLMGrounding(
-        base_url="http://localhost:8080/v1",
-        model="gemma4-cua",
-    )
+    from mantis_agent.grounding import ClaudeGrounding
+    # Use Claude Sonnet as a SEPARATE grounding model — different from
+    # the executor (Gemma4) to avoid same-model visual bias.
+    # Gemma4 clicks photos; Claude accurately finds text elements.
+    # Cost: ~$0.005-0.01 per click (~$0.15-0.25 per listing)
+    grounding = ClaudeGrounding()
 
     # Xvfb + xdotool + real Chrome (zero automation fingerprints)
     proxy = _build_proxy_config(city="miami", session_id=f"mantis{run_id.replace('_','')}")

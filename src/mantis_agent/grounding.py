@@ -125,17 +125,125 @@ class RegionGrounding(GroundingModel):
         )
 
 
+class ClaudeGrounding(GroundingModel):
+    """Claude-based grounding — uses Anthropic API for precise click targeting.
+
+    A DIFFERENT model from the executor (Gemma4/Holo3) to avoid same-model bias.
+    The executor model tends to click photos instead of text — Claude doesn't
+    have this bias and can accurately locate text elements.
+
+    Cost: ~$0.005-0.01 per grounding call (1 screenshot + short prompt).
+    Only called for CLICK actions, not every step.
+    """
+
+    GROUNDING_PROMPT = """\
+Look at this screenshot ({width}x{height} pixels). I need the exact pixel coordinates to click on.
+
+TARGET: {description}
+
+CRITICAL RULES:
+- Find the TEXT or BUTTON element, NOT any image/photo
+- Boat listing cards have a LARGE PHOTO on top and SMALL TEXT below — I need the TEXT coordinates
+- NEVER return coordinates inside a photo/image area
+- If the target is a listing title, find the text showing Year Make Model BELOW the photo
+- Return the CENTER of the clickable text element
+
+Output ONLY two numbers on one line: x y
+Example: 450 520
+Nothing else."""
+
+    def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-20250514"):
+        import os
+        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        self.model = model
+
+    def ground(self, screenshot, description, initial_x=None, initial_y=None):
+        import base64
+        import re
+        from io import BytesIO
+
+        import requests
+
+        if not description or not self.api_key:
+            return GroundingResult(
+                x=initial_x or screenshot.width // 2,
+                y=initial_y or screenshot.height // 2,
+                confidence=0.3,
+                description="no api key or description",
+            )
+
+        buf = BytesIO()
+        screenshot.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        prompt = self.GROUNDING_PROMPT.format(
+            description=description,
+            width=screenshot.width,
+            height=screenshot.height,
+        )
+
+        try:
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "max_tokens": 30,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }],
+                },
+                timeout=15,
+            )
+
+            if resp.status_code != 200:
+                logger.warning(f"Claude grounding API error: {resp.status_code}")
+                return GroundingResult(
+                    x=initial_x or screenshot.width // 2,
+                    y=initial_y or screenshot.height // 2,
+                    confidence=0.2,
+                    description="api error",
+                )
+
+            text = ""
+            for block in resp.json().get("content", []):
+                if block.get("type") == "text":
+                    text = block["text"].strip()
+                    break
+
+            # Parse "x y" or "x=N y=N"
+            nums = re.findall(r'\d+', text)
+            if len(nums) >= 2:
+                gx, gy = int(nums[0]), int(nums[1])
+                gx = max(0, min(gx, screenshot.width - 1))
+                gy = max(0, min(gy, screenshot.height - 1))
+                logger.info(f"ClaudeGrounding: '{description[:40]}' → ({gx},{gy})")
+                return GroundingResult(x=gx, y=gy, confidence=0.9, description=description)
+
+        except Exception as e:
+            logger.warning(f"Claude grounding failed: {e}")
+
+        return GroundingResult(
+            x=initial_x or screenshot.width // 2,
+            y=initial_y or screenshot.height // 2,
+            confidence=0.2,
+            description="grounding failed",
+        )
+
+
 class LLMGrounding(GroundingModel):
-    """LLM-based grounding — ask a vision model to locate a UI element.
+    """LLM-based grounding via OpenAI-compatible API (llama.cpp, vLLM, etc).
 
-    Takes the screenshot + description and asks the model to output
-    precise coordinates of the target element. Works with any
-    OpenAI-compatible vision API (llama.cpp, vLLM, Claude, etc).
-
-    Uses a very specific prompt to avoid common misclicks:
-    - Asks for TEXT elements, not images
-    - Warns about photo/gallery areas explicitly
-    - Requests the exact center of the text element
+    NOTE: Using the same model for grounding as for action selection
+    doesn't fix visual biases. Use ClaudeGrounding for a different model.
     """
 
     GROUNDING_PROMPT = """\
@@ -170,7 +278,6 @@ Nothing else."""
         import requests
 
         if not description:
-            # No description — fall back to initial coords
             return GroundingResult(
                 x=initial_x or screenshot.width // 2,
                 y=initial_y or screenshot.height // 2,
