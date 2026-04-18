@@ -66,12 +66,15 @@ MICRO_STEPS: list[SubPlanStep] = [
     SubPlanStep(
         name="FIND",
         intent_template=(
-            "You are on a search results page. Find listing #{N} — the {ORDINAL} listing card. "
-            "Look for a card with a boat photo, title text, and price.\n"
-            "done(success=true, summary='FOUND: <title text from the card>')\n"
-            "If no more listings: done(success=false, summary='no more listings')"
+            "You are on a search results page with boat listing cards. "
+            "Look at the screen. Find the {ORDINAL} listing card — it shows a boat photo with title text below it.\n"
+            "Do NOT click anything. Just LOOK at the listing cards and read the title text.\n"
+            "If you can see the {ORDINAL} listing card, report its title.\n"
+            "If you need to scroll down to see more listings, scroll(direction='down', amount=3).\n"
+            "done(success=true, summary='FOUND: <Year Make Model from title text>')\n"
+            "If no more listings visible after scrolling: done(success=false, summary='no more listings')"
         ),
-        max_steps=5,
+        max_steps=8,
         success_signal="FOUND",
         failure_action="abort",
         grounding_enabled=False,
@@ -79,12 +82,14 @@ MICRO_STEPS: list[SubPlanStep] = [
     SubPlanStep(
         name="CLICK",
         intent_template=(
-            "Click the listing title text '{TITLE}'. The title is text BELOW the boat photo.\n"
-            "Do NOT click the photo. Click the TEXT showing Year Make Model.\n"
+            "Click the listing title text '{TITLE}'. The title is the text BELOW the large boat photo.\n"
+            "The title shows Year Make Model (e.g. '2024 Grady-White Freedom 235').\n"
+            "Click on this TEXT, NOT on the photo image above it.\n"
+            "After clicking, a detail page should load with more boat info.\n"
             "done(success=true, summary='detail page loaded')\n"
-            "If fullscreen photo gallery ('1 of N'): done(success=false, summary='gallery trap')"
+            "If you see a fullscreen photo ('1 of N'): done(success=false, summary='gallery trap')"
         ),
-        max_steps=3,
+        max_steps=5,
         success_signal="detail page loaded",
         failure_action="retry",
         grounding_enabled=True,
@@ -92,15 +97,22 @@ MICRO_STEPS: list[SubPlanStep] = [
     SubPlanStep(
         name="EXTRACT",
         intent_template=(
-            "You are on a boat listing detail page. Scroll down past photos to description.\n"
-            "Extract: Year, Make, Model, Price, Phone, Seller name.\n"
-            "Phone formats: (305)555-1234, 786-555-1234.\n"
+            "You are on a boat listing detail page. Scroll down past the large photos at the top.\n"
+            "Look for Description, Seller Notes, Full Specs, or Contact sections.\n"
+            "Extract these fields from what you see:\n"
+            "- Year (e.g. 2024)\n"
+            "- Make (e.g. Grady-White)\n"
+            "- Model (e.g. Freedom 235)\n"
+            "- Price (e.g. $145,000)\n"
+            "- Phone number if visible (e.g. 786-321-4567)\n"
+            "- Seller name if visible\n\n"
             "done(success=true, summary='VIABLE | Year: 2024 | Make: Grady-White | Model: Freedom 235 "
             "| Price: $145000 | Phone: 786-321-4567 | Seller: John Smith')\n"
-            "If no phone: done(success=true, summary='VIABLE | Year: 2024 | Make: Grady-White "
+            "If no phone found, still report the data:\n"
+            "done(success=true, summary='VIABLE | Year: 2024 | Make: Grady-White "
             "| Model: Freedom 235 | Price: $145000 | Phone: none')"
         ),
-        max_steps=8,
+        max_steps=12,
         success_signal="VIABLE",
         failure_action="skip",
         grounding_enabled=False,
@@ -108,10 +120,11 @@ MICRO_STEPS: list[SubPlanStep] = [
     SubPlanStep(
         name="RETURN",
         intent_template=(
-            "Press Alt+Left to go back to search results. \n"
+            "Go back to the search results page.\n"
+            "key_press(keys='alt+left') to navigate back.\n"
             "done(success=true, summary='back on results') when you see listing cards."
         ),
-        max_steps=3,
+        max_steps=5,
         success_signal="back on results",
         failure_action="navigate",
         grounding_enabled=False,

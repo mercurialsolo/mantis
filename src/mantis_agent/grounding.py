@@ -178,12 +178,22 @@ Nothing else."""
         screenshot.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
 
+        # Sanitize initial coords — reject browser chrome (y<80) and off-screen (y>700)
+        ix = initial_x or screenshot.width // 2
+        iy = initial_y or screenshot.height // 2
+        if iy < 80 or iy > screenshot.height - 20:
+            # Brain clicked in browser chrome or off-screen — use content center
+            iy = screenshot.height // 2
+            logger.info(f"ClaudeGrounding: bad initial y={initial_y}, using center y={iy}")
+        if ix < 10 or ix > screenshot.width - 10:
+            ix = screenshot.width // 2
+
         prompt = self.GROUNDING_PROMPT.format(
             description=description,
             width=screenshot.width,
             height=screenshot.height,
-            init_x=initial_x or screenshot.width // 2,
-            init_y=initial_y or screenshot.height // 2,
+            init_x=ix,
+            init_y=iy,
         )
 
         try:
