@@ -83,11 +83,18 @@ def _start_background(
 
     def capture_loop() -> None:
         interval = 1.0 / fps
+        _logged_error = False
         while not capture_stop.is_set():
             try:
                 streamer.capture_once()
-            except Exception:
-                pass
+            except Exception as e:
+                if not _logged_error:
+                    import os
+                    logger.error(
+                        f"Screen capture failed (DISPLAY={os.environ.get('DISPLAY', '<unset>')}): {e}"
+                    )
+                    print(f"  [viewer] capture error: {e} (DISPLAY={os.environ.get('DISPLAY', '<unset>')})")
+                    _logged_error = True
             capture_stop.wait(interval)
 
     threading.Thread(target=capture_loop, daemon=True, name="viewer-capture").start()
