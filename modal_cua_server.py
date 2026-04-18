@@ -986,10 +986,29 @@ def _run_holo3_executor(
                 continue
 
             task_max_steps = task_config.get("max_steps", max_steps)
+            min_steps = task_config.get("min_steps", 0)
+            # Setup/filter tasks need at least 5 real interactions
+            if "setup" in task_id or "filter" in task_id:
+                min_steps = max(min_steps, 5)
+
             runner = GymRunner(brain=brain, env=env, max_steps=task_max_steps,
                                frames_per_inference=frames_per_inference)
             result = runner.run(task=intent, task_id=task_id,
                                start_url=task_config.get("start_url", ""))
+
+            # Retry if model skipped interaction (called done() too fast)
+            if result.total_steps <= min_steps and result.success and min_steps > 0:
+                print(f"  SKIP-DETECTED: {result.total_steps} steps (min={min_steps}). Retrying with enforcement...")
+                retry_intent = intent + (
+                    "\n\nCRITICAL: Your previous attempt called done() without interacting with the page. "
+                    "You MUST click input fields, type values, and verify results BEFORE calling done(). "
+                    "Interact with AT LEAST 3 different UI controls (input fields, dropdowns, buttons)."
+                )
+                runner2 = GymRunner(brain=brain, env=env, max_steps=task_max_steps,
+                                    frames_per_inference=frames_per_inference)
+                result = runner2.run(task=retry_intent, task_id=f"{task_id}_retry",
+                                    start_url=task_config.get("start_url", ""))
+                print(f"  Retry: {result.total_steps} steps, success={result.success}")
 
             if task_config.get("save_session"):
                 if result.success or ("login" not in env.current_url.lower()):
@@ -1378,6 +1397,7 @@ def _run_claude_executor(
     claude_model: str = "claude-sonnet-4-20250514",
     thinking_budget: int = 2048,
     viewer: bool = False,
+    **_extra,
 ) -> dict:
     """Execute tasks using Claude CUA via Anthropic API.
 
