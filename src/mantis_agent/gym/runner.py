@@ -356,7 +356,14 @@ class GymRunner:
                 # refine click coordinates before execution
                 if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
                     print(f"  [click] ({action.params.get('x')},{action.params.get('y')}) grounding={'YES' if self.grounding else 'NO'}")
-                if self.grounding and action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+                # Only ground clicks that look like listing-selection, not escape/close/back actions
+                should_ground = (
+                    self.grounding
+                    and action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK)
+                    and not any(kw in (action.reasoning or "").lower() for kw in
+                                ["close", "escape", "back", "dismiss", "x button", "gallery", "exit"])
+                )
+                if should_ground:
                     orig_x, orig_y = action.params.get("x"), action.params.get("y")
                     desc = action.reasoning or thinking[:200]
                     try:
