@@ -974,7 +974,8 @@ def _run_holo3_executor(
                 save_progress()
                 continue
 
-            runner = GymRunner(brain=brain, env=env, max_steps=max_steps,
+            task_max_steps = task_config.get("max_steps", max_steps)
+            runner = GymRunner(brain=brain, env=env, max_steps=task_max_steps,
                                frames_per_inference=frames_per_inference)
             result = runner.run(task=intent, task_id=task_id,
                                start_url=task_config.get("start_url", ""))
