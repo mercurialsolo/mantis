@@ -147,7 +147,8 @@ We're building a CUA (Computer Use Agent) that can extract leads from boat listi
   - **Gallery trap**: model clicks boat PHOTOS instead of title text despite explicit instructions → enters fullscreen gallery ("1 of 85") → gets stuck
   - **No structured done()**: model finds data but doesn't format `VIABLE | Year: ... | Make: ...` — outputs reasoning text instead
   - **Action loops**: repeats same click coordinates without progress until hard loop detector kills it
-- **Key insight**: These are NOT Holo3-specific problems. Every model (Gemma4, EvoCUA, Holo3) hits the same gallery trap and formatting issues. The fix is site-specific training (distillation from Claude) or Opus visual planner, not more prompt engineering.
+- **Opus browse-enhanced plan tested**: generated pixel-level coordinates from cached screenshots ($0.06 one-time). Pixel coords shift between sessions (ads/banners). Updated to visual descriptions instead. Result: model still doesn't reliably click listing titles.
+- **Key insight**: These are NOT Holo3-specific problems. Every model (Gemma4, EvoCUA, Holo3) hits the same gallery trap and formatting issues. Neither prompt engineering NOR Opus visual planning alone can fix this. The fix is **distillation** — showing the model correct click trajectories via fine-tuning.
 
 ---
 
@@ -376,6 +377,7 @@ The model choice affects **speed and cost**, not accuracy on this task. Holo3 at
 | Apr 17 | Holo3 with reasoning-budget=512 | FAILED — overthinks, worse than no budget |
 | Apr 17 | Chrome --test-type flag | SUCCESS — removed warning bar coordinate shift |
 | Apr 18 | Screenshot analysis of Holo3 runs | CONFIRMED — gallery trap is the bottleneck, not parsing |
+| Apr 18 | Opus browse-enhanced plan + Holo3 | FAILED — 0/2 viable, pixel coords shift, visual descriptions not enough |
 
 ---
 
