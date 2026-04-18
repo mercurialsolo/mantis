@@ -175,7 +175,7 @@ class ClaudeBrain:
                 "https://api.anthropic.com/v1/models",
                 headers={
                     "x-api-key": self.api_key,
-                    "anthropic-version": "2025-01-24",
+                    "anthropic-version": "2023-06-01",
                 },
                 timeout=10,
             )
@@ -247,6 +247,8 @@ class ClaudeBrain:
                 json=payload,
                 timeout=120,
             )
+            if resp.status_code != 200:
+                logger.error(f"Claude API {resp.status_code}: {resp.text[:500]}")
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
@@ -262,7 +264,8 @@ class ClaudeBrain:
         """Build Anthropic API headers."""
         return {
             "x-api-key": self.api_key,
-            "anthropic-version": "2025-01-24",
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "computer-use-2025-01-24",
             "content-type": "application/json",
         }
 
