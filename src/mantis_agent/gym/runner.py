@@ -354,6 +354,8 @@ class GymRunner:
 
                 # Grounded click refinement — if grounding model available,
                 # refine click coordinates before execution
+                if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+                    print(f"  [click] ({action.params.get('x')},{action.params.get('y')}) grounding={'YES' if self.grounding else 'NO'}")
                 if self.grounding and action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
                     orig_x, orig_y = action.params.get("x"), action.params.get("y")
                     desc = action.reasoning or thinking[:200]
