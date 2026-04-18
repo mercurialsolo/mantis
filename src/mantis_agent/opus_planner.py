@@ -342,7 +342,7 @@ def browse_and_plan(
     )
 
     if resp.status_code != 200:
-        raise RuntimeError(f"Browse API error: {resp.status_code} {resp.text[:200]}")
+        raise RuntimeError(f"Browse API error: {resp.status_code} {resp.text[:500]}")
 
     site_analysis = ""
     for block in resp.json().get("content", []):
