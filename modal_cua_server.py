@@ -857,6 +857,10 @@ def _run_holo3_executor(
     )
     brain.load()
 
+    # Claude Sonnet grounding for click targeting
+    from mantis_agent.grounding import ClaudeGrounding
+    grounding = ClaudeGrounding()
+
     # Xvfb + xdotool + real Chrome (zero automation fingerprints)
     proxy = _build_proxy_config(city="miami", session_id=f"mantis{run_id.replace('_', '')}")
     proxy_server = ""
