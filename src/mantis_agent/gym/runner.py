@@ -355,24 +355,28 @@ class GymRunner:
                 # Grounded click refinement — if grounding model available,
                 # refine click coordinates before execution
                 if self.grounding and action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+                    orig_x, orig_y = action.params.get("x"), action.params.get("y")
+                    desc = action.reasoning or thinking[:200]
                     try:
                         current_screenshot = frame_history[-1] if frame_history else None
-                        if current_screenshot:
-                            from ..grounding import GroundingResult
+                        if current_screenshot and desc:
                             gr = self.grounding.ground(
                                 screenshot=current_screenshot,
-                                description=action.reasoning or thinking[:200],
-                                initial_x=action.params.get("x"),
-                                initial_y=action.params.get("y"),
+                                description=desc,
+                                initial_x=orig_x,
+                                initial_y=orig_y,
                             )
                             if gr.confidence > 0.3:
+                                print(f"  [grounding] ({orig_x},{orig_y}) → ({gr.x},{gr.y}) conf={gr.confidence:.1f}")
                                 action = Action(
                                     action.action_type,
                                     {**action.params, "x": gr.x, "y": gr.y},
                                     reasoning=action.reasoning,
                                 )
+                            else:
+                                print(f"  [grounding] low confidence ({gr.confidence:.1f}), keeping ({orig_x},{orig_y})")
                     except Exception as e:
-                        logger.debug(f"Grounding failed, using original coords: {e}")
+                        print(f"  [grounding] FAILED: {e}")
 
                 # Execute action in the environment
                 gym_result = self.env.step(action)
