@@ -522,14 +522,13 @@ class SubPlanRunner:
 
     # ── Intent construction ─────────────────────────────────────────────
 
-    # Context preamble — brief task context so the model understands what it's doing.
-    # Without this, micro-step intents are too short and the model loses the big picture.
-    CONTEXT_PREAMBLE = (
-        "TASK: You are extracting data from boat listings on a search results website. "
-        "The page shows listing cards — each card has a large boat PHOTO on top, "
-        "with TITLE TEXT (Year Make Model) and PRICE below the photo. "
-        "You process one listing at a time: find it, click the title, extract data, go back.\n\n"
-    )
+    # Per-step context — only what's relevant for THAT step, not a generic preamble.
+    STEP_CONTEXT = {
+        "FIND": "The screen shows a search results page with boat listing cards. Each card has a boat photo with title text (Year Make Model) and price below it.",
+        "CLICK": "You found a listing. Now click its TITLE TEXT (the text below the photo showing Year Make Model). Do NOT click the photo image.",
+        "EXTRACT": "You are on a boat detail page. Scroll past the photos to find Description, Seller Notes, or Contact sections with the boat data.",
+        "RETURN": "You finished reading the listing. Go back to the search results page.",
+    }
 
     def _build_intent(
         self,
@@ -539,14 +538,17 @@ class SubPlanRunner:
     ) -> str:
         """Build the focused intent prompt for a micro-step.
 
-        Includes a brief context preamble so the model understands
-        the overall task, plus the focused micro-step instruction.
+        Each step gets only the context relevant to it:
+        - FIND: "page shows listing cards"
+        - CLICK: "click TITLE TEXT, listing is: {title}"
+        - EXTRACT: "on detail page, scroll to description"
+        - RETURN: "go back to search results"
         """
         ordinal = ORDINALS.get(page_iteration, f"#{page_iteration}")
 
-        # Context preamble + micro-step intent
-        intent = self.CONTEXT_PREAMBLE
-        intent += f"CURRENT STEP: {step.name}\n"
+        # Step-specific context (1 sentence, not a paragraph)
+        context = self.STEP_CONTEXT.get(step.name, "")
+        intent = f"{context}\n\n"
 
         # Fill template
         step_text = step.intent_template
@@ -555,17 +557,18 @@ class SubPlanRunner:
         step_text = step_text.replace("{TITLE}", checkpoint.listing_title or "the listing")
         intent += step_text
 
-        # Progress context from checkpoint
-        if checkpoint.listing_title and step.name != "FIND":
-            intent += f"\n\nCurrent listing: {checkpoint.listing_title}"
+        # Checkpoint context — only for steps that need it
+        if step.name == "CLICK" and checkpoint.listing_title:
+            intent += f"\n\nTarget listing: '{checkpoint.listing_title}'"
+        elif step.name == "EXTRACT" and checkpoint.listing_title:
+            intent += f"\n\nListing: {checkpoint.listing_title}"
 
-        # Append recent learnings for this step type (last 3).
+        # Step-specific learnings only (last 3)
         learnings = self.step_learnings.get(step.name, [])
         if learnings:
-            recent = learnings[-3:]
-            intent += "\n\nLEARNINGS (apply these):"
-            for learning in recent:
-                intent += f"\n- {learning}"
+            intent += "\n\nLEARNINGS:"
+            for l in learnings[-3:]:
+                intent += f"\n- {l}"
 
         return intent
 
