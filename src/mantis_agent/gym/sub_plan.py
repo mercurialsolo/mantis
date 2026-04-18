@@ -97,19 +97,20 @@ MICRO_STEPS: list[SubPlanStep] = [
     SubPlanStep(
         name="EXTRACT",
         intent_template=(
-            "You are on a boat listing detail page. Do these steps:\n"
-            "1. Read the title at the top — it shows Year, Make, Model and Price.\n"
-            "2. scroll(direction='down', amount=5) to get past photos.\n"
-            "3. scroll(direction='down', amount=5) again to see Description or Seller Notes.\n"
-            "4. Look for a phone number in the text (format: 305-555-1234 or (305) 555-1234).\n"
-            "5. Look for seller name near the phone or in Contact section.\n"
-            "6. Report ALL data you found:\n\n"
-            "done(success=true, summary='VIABLE | Year: 2024 | Make: Grady-White | Model: Freedom 235 "
-            "| Price: $145000 | Phone: 786-321-4567 | Seller: John Smith')\n\n"
-            "If no phone, still report Year/Make/Model/Price:\n"
-            "done(success=true, summary='VIABLE | Year: 2024 | Make: Grady-White "
-            "| Model: Freedom 235 | Price: $145000 | Phone: none')\n\n"
-            "IMPORTANT: You MUST call done() with actual data from the page, not example data."
+            "You are on a boat listing detail page.\n\n"
+            "STEP 1: Look at the title bar — it shows the boat's Year, Make, Model and Price. READ these now.\n"
+            "STEP 2: scroll(direction='down', amount=5) — this gets past the photo gallery.\n"
+            "STEP 3: scroll(direction='down', amount=3) — now you should see Description or Seller Info.\n"
+            "STEP 4: Read the URL from the browser address bar — it contains the listing URL.\n"
+            "STEP 5: Read any phone number visible (format: 305-555-1234). Read seller name if shown.\n"
+            "STEP 6: Call done() with the ACTUAL data you read from the page:\n\n"
+            "Report what you found — replace <...> with ACTUAL values from the page:\n"
+            "done(success=true, summary='VIABLE | Year: <year> | Make: <make> "
+            "| Model: <model> | Price: <price> | Phone: <phone or none> | URL: <from address bar>')\n\n"
+            "Example: if you see a 2018 Everglades 355 at $239,000 with URL boattrader.com/boat/123:\n"
+            "done(success=true, summary='VIABLE | Year: 2018 | Make: Everglades "
+            "| Model: 355 CC | Price: $239000 | Phone: none | URL: boattrader.com/boat/123')\n\n"
+            "CRITICAL: Fill in REAL data from the page. Do NOT write 'Year: Year'."
         ),
         max_steps=15,
         success_signal="VIABLE",
