@@ -137,19 +137,21 @@ class ClaudeGrounding(GroundingModel):
     """
 
     GROUNDING_PROMPT = """\
-Look at this screenshot ({width}x{height} pixels). I need the exact pixel coordinates to click on.
+Look at this screenshot ({width}x{height} pixels).
 
-TARGET: {description}
+The user wants to click near ({init_x}, {init_y}). But that coordinate might be on a PHOTO which would open a gallery trap.
 
-CRITICAL RULES:
-- Find the TEXT or BUTTON element, NOT any image/photo
-- Boat listing cards have a LARGE PHOTO on top and SMALL TEXT below — I need the TEXT coordinates
-- NEVER return coordinates inside a photo/image area
-- If the target is a listing title, find the text showing Year Make Model BELOW the photo
-- Return the CENTER of the clickable text element
+Find the nearest CLICKABLE TEXT near ({init_x}, {init_y}) that matches this intent:
+{description}
 
-Output ONLY two numbers on one line: x y
-Example: 450 520
+RULES:
+- Look NEAR the original coordinates ({init_x}, {init_y}) — within ~200 pixels
+- Find TEXT that is clickable (title, link, button) — NOT a photo/image
+- On boat listing sites, the clickable title text (Year Make Model) is DIRECTLY BELOW each photo
+- The title text is typically at the BOTTOM EDGE of each listing card
+- Do NOT jump to a completely different part of the page (like header, sidebar, or sort buttons)
+
+Output ONLY two numbers: x y
 Nothing else."""
 
     def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-20250514"):
@@ -180,6 +182,8 @@ Nothing else."""
             description=description,
             width=screenshot.width,
             height=screenshot.height,
+            init_x=initial_x or screenshot.width // 2,
+            init_y=initial_y or screenshot.height // 2,
         )
 
         try:
@@ -294,6 +298,8 @@ Nothing else."""
             description=description,
             width=screenshot.width,
             height=screenshot.height,
+            init_x=initial_x or screenshot.width // 2,
+            init_y=initial_y or screenshot.height // 2,
         )
 
         for attempt in range(self.max_retries):
