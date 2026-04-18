@@ -131,17 +131,26 @@ class LLMGrounding(GroundingModel):
     Takes the screenshot + description and asks the model to output
     precise coordinates of the target element. Works with any
     OpenAI-compatible vision API (llama.cpp, vLLM, Claude, etc).
+
+    Uses a very specific prompt to avoid common misclicks:
+    - Asks for TEXT elements, not images
+    - Warns about photo/gallery areas explicitly
+    - Requests the exact center of the text element
     """
 
     GROUNDING_PROMPT = """\
-Look at this screenshot. Find the exact center coordinates of this UI element:
+Look at this screenshot ({width}x{height} pixels). I need to click on a specific TEXT element.
 
-"{description}"
+TARGET: {description}
 
-The screen is {width}x{height} pixels.
+RULES:
+- Find the TEXT/LINK element, NOT any image or photo
+- If the target is near a large photo, find the TEXT that is BELOW or BESIDE the photo
+- NEVER return coordinates inside a large rectangular photo area
+- Return the CENTER of the text element
 
-Output ONLY the coordinates as: x=NUMBER y=NUMBER
-Nothing else. Just the two numbers."""
+Output ONLY: x=NUMBER y=NUMBER
+Nothing else."""
 
     def __init__(
         self,
