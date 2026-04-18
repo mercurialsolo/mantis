@@ -84,19 +84,30 @@ class WorkflowRunner:
                  on_trajectory: Any = None,
                  start_url: str | None = None,
                  grounding: Any = None,
-                 on_step: Any = None):
+                 on_step: Any = None,
+                 use_sub_plan: bool = False):
         self.brain = brain
         self.grounding = grounding
-        self.on_step = on_step  # Passed through to GymRunner for live viewer
+        self.on_step = on_step
+        self.use_sub_plan = use_sub_plan
         # Dedup: track processed phone numbers and listing URLs
         self._seen_phones: set[str] = set()
         self._seen_urls: set[str] = set()
         self.env = env
         self.config = loop_config
         self.session_name = session_name
-        self.on_iteration = on_iteration  # Callback: fn(iteration_num, result, all_results)
-        self.on_trajectory = on_trajectory  # Callback: fn(iteration_num, run_result) — for distillation
+        self.on_iteration = on_iteration
+        self.on_trajectory = on_trajectory
         self.start_url = start_url
+
+        # Sub-plan runner for micro-step decomposition
+        self._sub_plan_runner = None
+        if use_sub_plan:
+            from .sub_plan import SubPlanRunner
+            self._sub_plan_runner = SubPlanRunner(
+                brain=brain, env=env, grounding=grounding,
+                on_step=on_step,
+            )
 
     def run_loop(self) -> list[IterationResult]:
         """Execute the full loop: iterate items on each page, paginate."""
@@ -139,20 +150,56 @@ class WorkflowRunner:
             if global_iteration > 1:
                 time.sleep(0.5)
 
-            # Run bounded iteration
-            result = self._run_iteration(intent, f"iter_{global_iteration}")
+            # Run bounded iteration — sub-plan or monolithic
+            if self._sub_plan_runner:
+                # Sub-plan path: 4 micro-steps with fresh context each
+                sub_result = self._sub_plan_runner.run_listing(
+                    iteration=global_iteration,
+                    page=page,
+                    page_iteration=tentative_ordinal,
+                )
+                # Convert SubPlanResult to RunResult-compatible for downstream
+                extracted = sub_result.data
+                viable = sub_result.success
+                parse_failures = sub_result.parse_failures
 
-            extracted = self._extract_data(result)
+                # Build a minimal RunResult for compatibility
+                from .runner import RunResult
+                result = RunResult(
+                    task=intent, task_id=f"iter_{global_iteration}",
+                    success=sub_result.success,
+                    total_reward=0.0,
+                    total_steps=sub_result.steps,
+                    total_time=sub_result.duration,
+                    trajectory=[],
+                    termination_reason="done" if sub_result.success else "sub_plan_skip",
+                )
 
-            # Extract listing URL for dedup before validation
-            import re as _re
-            _url_match = _re.search(r'boattrader\.com/boats?/[^\s"]+', extracted)
-            _listing_url = _url_match.group() if _url_match else None
+                # Route learnings to the correct micro-step
+                ckpt = sub_result.checkpoint
+                if ckpt.gallery_detected:
+                    self._sub_plan_runner.step_learnings["CLICK"].append(
+                        "PHOTO TRAP: Click the boat NAME TEXT below the photo, not the photo image."
+                    )
+                if not ckpt.back_on_results and ckpt.detail_page_loaded:
+                    self._sub_plan_runner.step_learnings["RETURN"].append(
+                        "Alt+Left didn't work. Press it twice or wait for page to load."
+                    )
 
-            viable = self._validate_viable(extracted, listing_url=_listing_url)
+                logger.info(f"  Sub-plan: {sub_result.steps} steps, viable={viable}, "
+                           f"gallery={ckpt.gallery_detected}, title='{ckpt.listing_title[:40] if ckpt.listing_title else '?'}'")
+            else:
+                # Legacy monolithic path
+                result = self._run_iteration(intent, f"iter_{global_iteration}")
+                extracted = self._extract_data(result)
+                parse_failures = self._count_parse_failures(result)
 
-            # Count parse failures — steps where the brain couldn't produce a valid action
-            parse_failures = self._count_parse_failures(result)
+            # Extract listing URL for dedup before validation (monolithic path)
+            if not self._sub_plan_runner:
+                import re as _re
+                _url_match = _re.search(r'boattrader\.com/boats?/[^\s"]+', extracted)
+                _listing_url = _url_match.group() if _url_match else None
+                viable = self._validate_viable(extracted, listing_url=_listing_url)
 
             iter_result = IterationResult(
                 iteration=global_iteration,
