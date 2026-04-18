@@ -79,29 +79,30 @@ Generate a JSON task suite with this structure:
 
 For the "intent" field, include ALL of these sections:
 
-WHAT TO CLICK — describe the visual appearance of the target element:
-- Size (LARGE rectangle, SMALL icon)
-- Position (CENTER of page, FOOTER, HEADER, SIDEBAR)
-- Content (shows boat photo + Year/Make/Model + Price)
-- Which part to click (TITLE TEXT, not the photo)
+WHAT TO CLICK — describe by VISUAL APPEARANCE, not coordinates:
+- What it LOOKS LIKE (e.g. "blue text link showing Year Make Model below the boat photo")
+- Where it IS (e.g. "in the left sidebar, below the Location heading")
+- NEVER use pixel coordinates like click(95, 510) — the layout shifts between sessions
 
 WHAT TO NEVER CLICK — describe visually:
-- Social media icons (SMALL colored squares 20-40px in footer/sidebar)
-- Navigation menus, dropdown headers
+- Boat PHOTOS (large rectangular images) — clicking opens a fullscreen gallery trap
+- Social media icons (small colored squares in footer)
+- Navigation dropdown menus in the header
 - Ad banners, dealer logos
-- Photo images (open gallery traps)
+- Heart/favorite icons on listing cards
 
-STEPS — use the executor's action syntax:
-- click() for mouse clicks
+STEPS — use the executor's action syntax but describe targets visually:
+- "click() on the text that says 'Year Make Model' BELOW the boat photo" (NOT the photo itself)
 - scroll(direction="down", amount=5) for scrolling
-- key_press(keys="alt+left") for keyboard
+- key_press(keys="alt+left") for going back
 - done(success=true, summary="...") for completion
+- CRITICAL: every click() instruction must say WHAT TEXT OR BUTTON to click, not coordinates
 
 ERROR HANDLERS — what to do for each error state:
 - 404/Page Not Found → key_press(keys="alt+left"), done(summary="SKIPPED | 404")
-- Photo gallery ("1 of N") → key_press(keys="Escape"), key_press(keys="alt+left")
-- Off-site (facebook/instagram) → key_press(keys="alt+left") immediately
-- Cookie popup → click Accept ONCE, max 2 steps
+- Photo gallery (shows "1 of N" with fullscreen image) → key_press(keys="Escape"), key_press(keys="alt+left")
+- Off-site (URL is not boattrader.com) → key_press(keys="alt+left") immediately
+- Cookie popup → click the Accept button ONCE, max 2 steps
 
 OUTPUT FORMAT — exact format for done() calls
 
@@ -211,37 +212,41 @@ def plan_with_opus(
 
 
 BROWSE_PROMPT = """\
-I'm showing you screenshots from a website at 1280x720 resolution. Analyze the layout with PRECISE PIXEL COORDINATES.
+I'm showing you screenshots from a website at 1280x720 resolution. Describe the layout so a VISION MODEL can find and click the right elements.
 
-For EACH interactive element, report its bounding box as (x_start, y_start, x_end, y_end).
+CRITICAL: Do NOT output pixel coordinates. The layout shifts between sessions (ads, banners). \
+Instead, describe elements by their VISUAL APPEARANCE so the executing model can locate them visually.
 
-1. LISTING CARDS — For each card visible:
-   - Overall card bounds: (x1,y1) to (x2,y2)
-   - PHOTO AREA bounds: (x1,y1) to (x2,y_photo_end) — DO NOT CLICK HERE
-   - TITLE TEXT bounds: (x1,y_title_start) to (x2,y_title_end) — CLICK HERE
-   - PRICE TEXT bounds: approximate y range
-   - "Contact Seller" or "View Details" button bounds if visible
+For each element, describe:
+- What it LOOKS LIKE (color, size relative to page, shape)
+- WHERE on the page (left sidebar, center content, top header, bottom footer)
+- What TEXT is visible on or near it
+- What's ABOVE and BELOW it (spatial context)
 
-2. DANGEROUS ZONES — Elements to NEVER click with their pixel bounds:
-   - Social media icons (exact y range in footer)
-   - Ad banners (exact position)
-   - Navigation dropdown menus (exact position)
-   - Dealer logo areas
-   - Any element that opens a photo gallery
+1. LISTING CARDS:
+   - What does a listing card look like? (overall shape, what's inside it)
+   - Where is the PHOTO within the card vs the TITLE TEXT vs the PRICE?
+   - What exactly should the model click to open the listing detail page?
+   - What should the model NEVER click? (the photo opens a gallery trap)
 
-3. FILTERS SIDEBAR:
-   - Zip/location input: approximate (x, y) center
-   - Price filter: approximate (x, y) center
-   - Seller type: approximate (x, y) center
-   - Sort dropdown: approximate (x, y) center
+2. DANGEROUS ELEMENTS — describe visually so model can avoid:
+   - Social media icons: what do they look like, where are they?
+   - Ad banners: what do they look like?
+   - Dealer logos/badges: what do they look like?
+   - Photo gallery: what happens if model clicks a photo?
 
-4. PAGINATION: Where are page navigation controls? Exact y position.
+3. FILTERS (if visible in sidebar):
+   - What does the zip/location input look like?
+   - What does the price filter look like?
+   - What does the seller type filter look like?
+   - What does the sort dropdown look like?
 
-5. DETAIL PAGE (if screenshot shows one):
-   - Where does the photo gallery end and description text begin? Exact y position.
-   - Where is the "Contact Seller" / phone number area?
+4. DETAIL PAGE (if any screenshot shows one):
+   - What does the detail page look like?
+   - Where is the description/seller notes text relative to the photos?
+   - Where is the contact/phone info typically located?
 
-Be EXTREMELY specific with pixel coordinates. The executing model can ONLY click at (x,y) coordinates — it cannot read element IDs or CSS.
+Describe everything VISUALLY. No pixel coordinates. No CSS selectors. Only visual descriptions.
 """
 
 
