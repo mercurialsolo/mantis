@@ -522,6 +522,15 @@ class SubPlanRunner:
 
     # ── Intent construction ─────────────────────────────────────────────
 
+    # Context preamble — brief task context so the model understands what it's doing.
+    # Without this, micro-step intents are too short and the model loses the big picture.
+    CONTEXT_PREAMBLE = (
+        "TASK: You are extracting data from boat listings on a search results website. "
+        "The page shows listing cards — each card has a large boat PHOTO on top, "
+        "with TITLE TEXT (Year Make Model) and PRICE below the photo. "
+        "You process one listing at a time: find it, click the title, extract data, go back.\n\n"
+    )
+
     def _build_intent(
         self,
         step: SubPlanStep,
@@ -530,13 +539,25 @@ class SubPlanRunner:
     ) -> str:
         """Build the focused intent prompt for a micro-step.
 
-        Replaces template variables and appends accumulated learnings.
+        Includes a brief context preamble so the model understands
+        the overall task, plus the focused micro-step instruction.
         """
         ordinal = ORDINALS.get(page_iteration, f"#{page_iteration}")
-        intent = step.intent_template
-        intent = intent.replace("{N}", str(page_iteration))
-        intent = intent.replace("{ORDINAL}", ordinal)
-        intent = intent.replace("{TITLE}", checkpoint.listing_title or "the listing")
+
+        # Context preamble + micro-step intent
+        intent = self.CONTEXT_PREAMBLE
+        intent += f"CURRENT STEP: {step.name}\n"
+
+        # Fill template
+        step_text = step.intent_template
+        step_text = step_text.replace("{N}", str(page_iteration))
+        step_text = step_text.replace("{ORDINAL}", ordinal)
+        step_text = step_text.replace("{TITLE}", checkpoint.listing_title or "the listing")
+        intent += step_text
+
+        # Progress context from checkpoint
+        if checkpoint.listing_title and step.name != "FIND":
+            intent += f"\n\nCurrent listing: {checkpoint.listing_title}"
 
         # Append recent learnings for this step type (last 3).
         learnings = self.step_learnings.get(step.name, [])
