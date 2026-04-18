@@ -556,19 +556,66 @@ class WorkflowRunner:
 
     @staticmethod
     def _extract_data(result) -> str:
-        """Extract data from the model's terminate() summary.
+        """Extract data from the model's output.
 
-        Simple: the model should call terminate('success') with structured data.
-        If it didn't, check the last few steps' thinking for phone numbers.
+        Holo3 often outputs "VIABLE | Year" in done() but puts real data
+        in its thinking text. So we check both:
+        1. done() summary — if it has real values (Year: 2024), use it
+        2. Thinking text — parse boat names, prices, phones from reasoning
         """
-        # Priority 1: done() action summary
+        import re as _re
+
+        # Priority 1: done() summary IF it has real data (not just "VIABLE | Year")
+        for step in reversed(result.trajectory):
+            if step.action.action_type.value == "done":
+                summary = str(step.action.params.get("summary", ""))
+                # Check if summary has actual data (year number, price, etc.)
+                if summary and _re.search(r"Year: (?:19|20)\d{2}", summary):
+                    return summary
+
+        # Priority 2: Build structured data from thinking text
+        # The model says things like "2018 Everglades 355 for $239,000"
+        all_thinking = " ".join(str(s.thinking or "") for s in result.trajectory)
+        if len(all_thinking) > 50:
+            # Extract boat data from thinking
+            parts = []
+
+            # Year + Make + Model pattern
+            boat_match = _re.search(r"(\d{4})\s+([\w\-]+)\s+([\w\-]+(?:\s+[\w\-]+)?(?:\s+[\w\-]+)?)", all_thinking)
+            if boat_match:
+                year, make, model = boat_match.group(1), boat_match.group(2), boat_match.group(3)
+                parts.append(f"Year: {year}")
+                parts.append(f"Make: {make}")
+                parts.append(f"Model: {model}")
+
+            # Price
+            price_match = _re.search(r"\$[\d,]+", all_thinking)
+            if price_match:
+                parts.append(f"Price: {price_match.group()}")
+
+            # Phone
+            phone_match = _re.search(r"\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}", all_thinking)
+            if phone_match:
+                digits = _re.sub(r"\D", "", phone_match.group())
+                if digits[3:6] != "555":
+                    parts.append(f"Phone: {phone_match.group()}")
+
+            # URL
+            url_match = _re.search(r"boattrader\.com/boat[s]?/[\w\-/]+", all_thinking)
+            if url_match:
+                parts.append(f"URL: {url_match.group()}")
+
+            if parts:
+                return "VIABLE | " + " | ".join(parts)
+
+        # Priority 3: Last done() summary even if it's just "VIABLE | Year"
         for step in reversed(result.trajectory):
             if step.action.action_type.value == "done":
                 summary = str(step.action.params.get("summary", ""))
                 if summary and len(summary) > 10:
                     return summary
 
-        # Priority 2: Last 3 steps' thinking (model may embed findings)
+        # Priority 4: Last thinking
         for step in reversed(result.trajectory):
             thinking = str(step.thinking or "")
             if len(thinking) > 30:
