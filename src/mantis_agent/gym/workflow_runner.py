@@ -173,6 +173,34 @@ class WorkflowRunner:
                 except Exception as e:
                     logger.warning(f"  Trajectory save failed: {e}")
 
+            # Gallery retry: if this iteration hit a gallery trap, retry the SAME listing
+            # with explicit instruction to click title text, not photo
+            extracted_lower = extracted.lower() if extracted else ""
+            if not viable and ("gallery" in extracted_lower or "1 of" in extracted_lower):
+                logger.info(f"  Gallery trap detected — retrying same listing")
+                gallery_intent = intent + (
+                    "\n\nCRITICAL: Your previous attempt opened a photo gallery by clicking the boat PHOTO. "
+                    "This time, click the TITLE TEXT (Year Make Model text) which is BELOW the photo. "
+                    "The title text is smaller and appears under the large photo image. "
+                    "Do NOT click anywhere on the photo area."
+                )
+                retry_result = self._run_iteration(gallery_intent, f"iter_{global_iteration}_retry")
+                retry_extracted = self._extract_data(retry_result)
+                retry_viable = self._validate_viable(retry_extracted)
+                if retry_viable:
+                    logger.info(f"  Gallery retry SUCCEEDED")
+                    iter_result = IterationResult(
+                        iteration=global_iteration, page=page,
+                        success=True, data=retry_extracted,
+                        no_more_items=False, steps=retry_result.total_steps,
+                        duration=time.time() - t0, parse_failures=0,
+                    )
+                    results[-1] = iter_result  # Replace the failed iteration
+                    viable = True
+                    extracted = retry_extracted
+                else:
+                    logger.info(f"  Gallery retry also failed")
+
             if result.success and not viable:
                 logger.warning(f"  Model claimed success but data failed validation (Cloudflare/empty)")
                 logger.warning(f"  Extracted data was: {extracted[:300]}")
