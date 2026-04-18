@@ -139,19 +139,14 @@ class ClaudeGrounding(GroundingModel):
     GROUNDING_PROMPT = """\
 Look at this screenshot ({width}x{height} pixels).
 
-The user wants to click near ({init_x}, {init_y}). But that coordinate might be on a PHOTO which would open a gallery trap.
+The user wants to click near ({init_x}, {init_y}) to: {description}
 
-Find the nearest CLICKABLE TEXT near ({init_x}, {init_y}) that matches this intent:
-{description}
+Find the closest CLICKABLE TEXT element to ({init_x}, {init_y}).
 
 RULES:
-- Look NEAR the original coordinates ({init_x}, {init_y}) — stay within ~150 pixels vertically
-- Find TEXT that is clickable (title, link, button) — NOT a photo/image
-- On listing sites, each card has: PHOTO (~200px tall) then TITLE TEXT immediately below
-- The title text is small text (Year Make Model) sitting just below the photo's bottom edge
-- Keep the same X coordinate (horizontally aligned with the original click)
-- Only adjust Y slightly downward (20-80px below the original Y) to shift from photo to text
-- Do NOT return coordinates at the very bottom of the page (y > 650)
+- Return the center coordinates of the nearest TEXT element (not an image)
+- If the coordinates are on an image/photo, find the nearest text ADJACENT to that image
+- Stay close to the original position — find the NEAREST text, not any text on the page
 
 Output ONLY two numbers: x y
 Nothing else."""
@@ -180,15 +175,8 @@ Nothing else."""
         screenshot.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
 
-        # Sanitize initial coords — reject browser chrome (y<80) and off-screen (y>700)
         ix = initial_x or screenshot.width // 2
         iy = initial_y or screenshot.height // 2
-        if iy < 80 or iy > screenshot.height - 20:
-            # Brain clicked in browser chrome or off-screen — use content center
-            iy = screenshot.height // 2
-            logger.info(f"ClaudeGrounding: bad initial y={initial_y}, using center y={iy}")
-        if ix < 10 or ix > screenshot.width - 10:
-            ix = screenshot.width // 2
 
         prompt = self.GROUNDING_PROMPT.format(
             description=description,
