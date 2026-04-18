@@ -145,11 +145,13 @@ Find the nearest CLICKABLE TEXT near ({init_x}, {init_y}) that matches this inte
 {description}
 
 RULES:
-- Look NEAR the original coordinates ({init_x}, {init_y}) — within ~200 pixels
+- Look NEAR the original coordinates ({init_x}, {init_y}) — stay within ~150 pixels vertically
 - Find TEXT that is clickable (title, link, button) — NOT a photo/image
-- On boat listing sites, the clickable title text (Year Make Model) is DIRECTLY BELOW each photo
-- The title text is typically at the BOTTOM EDGE of each listing card
-- Do NOT jump to a completely different part of the page (like header, sidebar, or sort buttons)
+- On listing sites, each card has: PHOTO (~200px tall) then TITLE TEXT immediately below
+- The title text is small text (Year Make Model) sitting just below the photo's bottom edge
+- Keep the same X coordinate (horizontally aligned with the original click)
+- Only adjust Y slightly downward (20-80px below the original Y) to shift from photo to text
+- Do NOT return coordinates at the very bottom of the page (y > 650)
 
 Output ONLY two numbers: x y
 Nothing else."""
