@@ -356,7 +356,11 @@ class XdotoolGymEnv(GymEnvironment):
                     self._xdotool_type(text)
 
             case ActionType.KEY_PRESS:
-                keys = action.params["keys"]
+                keys = action.params.get("keys") or action.params.get("key") or ""
+                if not keys:
+                    logger.warning(f"key_press missing keys: {action.params}")
+                    return
+                keys = str(keys)
                 key_map = {
                     "enter": "Return", "tab": "Tab", "escape": "Escape",
                     "backspace": "BackSpace", "delete": "Delete",
