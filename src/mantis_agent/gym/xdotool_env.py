@@ -343,7 +343,11 @@ class XdotoolGymEnv(GymEnvironment):
                 self._xdotool("click", "--repeat", "2", "1")
 
             case ActionType.TYPE:
-                text = action.params["text"]
+                text = action.params.get("text") or action.params.get("content") or ""
+                if not text:
+                    logger.warning(f"type_text missing text: {action.params}")
+                    return
+                text = str(text)
                 if text.startswith("http://") or text.startswith("https://"):
                     self._xdotool("key", "ctrl+l")
                     time.sleep(0.5)
@@ -376,7 +380,7 @@ class XdotoolGymEnv(GymEnvironment):
                 self._xdotool("key", "+".join(mapped))
 
             case ActionType.SCROLL:
-                direction = action.params["direction"]
+                direction = action.params.get("direction", "down")
                 amount = action.params.get("amount", 3)
                 x = action.params.get("x", self._viewport[0] // 2)
                 y = action.params.get("y", self._viewport[1] // 2)
@@ -389,7 +393,7 @@ class XdotoolGymEnv(GymEnvironment):
                         time.sleep(random.uniform(0.05, 0.15))
 
             case ActionType.DRAG:
-                sx, sy = action.params["start_x"], action.params["start_y"]
+                sx, sy = action.params.get("start_x", 0), action.params.get("start_y", 0)
                 ex, ey = action.params["end_x"], action.params["end_y"]
                 sx, sy = self._clamp(sx, sy)
                 ex, ey = self._clamp(ex, ey)
