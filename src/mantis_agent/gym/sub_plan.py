@@ -716,8 +716,32 @@ class SubPlanRunner:
         return done_idx > current_idx
 
     def _step_succeeded(self, step: SubPlanStep, result: RunResult) -> bool:
-        """Check if the micro-step's done() summary contains the success signal."""
+        """Check if the micro-step completed its objective.
+
+        Uses success_signal for exact match, plus step-specific heuristics:
+        - FIND: any summary with a year (2015, 2024) = found a listing
+        - CLICK: "detail" or "loaded" in summary
+        - EXTRACT: "VIABLE" or year+make in summary
+        - RETURN: "results" or "back" in summary
+        """
         summary = self._extract_done_summary(result)
         if not summary:
-            return False
-        return step.success_signal.lower() in summary.lower()
+            return result.success  # Fall back to model's own success flag
+        sl = summary.lower()
+
+        # Exact signal match
+        if step.success_signal.lower() in sl:
+            return True
+
+        # Step-specific heuristics
+        if step.name == "FIND":
+            # If summary contains a year, the model found a listing
+            return bool(re.search(r'(?:19|20)\d{2}', summary))
+        elif step.name == "CLICK":
+            return "detail" in sl or "loaded" in sl or "listing" in sl
+        elif step.name == "EXTRACT":
+            return "viable" in sl or bool(re.search(r'(?:19|20)\d{2}', summary))
+        elif step.name == "RETURN":
+            return "result" in sl or "back" in sl or "listing" in sl
+
+        return result.success
