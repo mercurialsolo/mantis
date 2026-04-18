@@ -613,7 +613,9 @@ def _run_executor(
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
-                                           start_url=task_config.get("start_url", ""))
+                                           start_url=task_config.get("start_url", ""),
+                                           grounding=grounding if 'grounding' in dir() else None,
+                                           on_step=viewer_event_bus.emit if viewer_event_bus else None)
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -1232,7 +1234,9 @@ def _run_gemma4_cua_executor(
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
-                                           start_url=task_config.get("start_url", ""))
+                                           start_url=task_config.get("start_url", ""),
+                                           grounding=grounding if 'grounding' in dir() else None,
+                                           on_step=viewer_event_bus.emit if viewer_event_bus else None)
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
