@@ -40,6 +40,21 @@ The executing model (Gemma4 or Holo3):
 - Has NO memory between iterations — each listing extraction is independent
 - Gets confused by: social media icons, photo galleries, ad banners, dealer links, popups
 
+KNOWN CUA MODEL LIMITATIONS (your plan MUST work around these):
+1. SKIPS STEPS: The model often calls done() immediately without actually interacting with the page. \
+   For filter/setup tasks, you MUST include explicit verification criteria and tell the model \
+   "Do NOT call done() until you have actually clicked and typed in the filter controls."
+2. PHOTO GALLERY TRAP: Clicking on large images opens fullscreen galleries ("1 of N"). \
+   The model MUST click on text links, not images. Include explicit "NEVER click the photo" warnings.
+3. ADDRESS BAR BLINDNESS: The model rarely reads the browser address bar unless explicitly told. \
+   For data extraction tasks, ALWAYS instruct: "Read the URL from the browser address bar at the top \
+   of the screen BEFORE scrolling. The URL is mandatory in your output."
+4. CONTEXT ROT: After 8-10 iterations, model quality degrades. Each iteration must be self-contained.
+5. OFF-SITE NAVIGATION: The model sometimes clicks social media icons (Facebook, Instagram) or \
+   dealer links that navigate away from the target site. Include off-site recovery instructions.
+6. TEMPLATE ECHOING: The model may output placeholder text like "Year: <from title>" instead of \
+   actual values. Your output format examples must show realistic filled-in data, and WARN against echoing.
+
 Your job: generate a task suite JSON that gives the executing model SPECIFIC, VISUAL instructions \
 so it clicks the right things and avoids traps.
 
@@ -50,6 +65,12 @@ CRITICAL RULES for your output:
 4. Use the executor's ACTION SYNTAX in instructions: click(), scroll(), key_press(), done()
 5. Each looped task must be SELF-CONTAINED — the model has no memory of prior iterations
 6. Be SPECIFIC about coordinates: "center of page" (x~640), "top area" (y<100), "bottom area" (y>600)
+7. For FILTER/SETUP tasks: require verification of results (e.g. "result count should decrease") \
+   and PROHIBIT calling done() without actual UI interaction
+8. For EXTRACTION tasks: URL from the address bar is ALWAYS a required output field
+9. MULTI-TASK CONTINUITY: When a setup/filter task runs before an extraction task, \
+   the extraction task should NOT have a start_url — set it to null so the browser \
+   stays on the filtered results page. Only the first task needs a start_url.
 """
 
 PLANNER_PROMPT = """\
@@ -80,19 +101,19 @@ Generate a JSON task suite with this structure:
 For the "intent" field, include ALL of these sections:
 
 WHAT TO CLICK — describe by VISUAL APPEARANCE, not coordinates:
-- What it LOOKS LIKE (e.g. "blue text link showing Year Make Model below the boat photo")
+- What it LOOKS LIKE (e.g. "blue text link showing Year Make Model below the photo")
 - Where it IS (e.g. "in the left sidebar, below the Location heading")
 - NEVER use pixel coordinates like click(95, 510) — the layout shifts between sessions
 
 WHAT TO NEVER CLICK — describe visually:
-- Boat PHOTOS (large rectangular images) — clicking opens a fullscreen gallery trap
+- Large PHOTOS/IMAGES — clicking opens a fullscreen gallery trap ("1 of N")
 - Social media icons (small colored squares in footer)
 - Navigation dropdown menus in the header
-- Ad banners, dealer logos
-- Heart/favorite icons on listing cards
+- Ad banners, dealer/brand logos
+- Heart/favorite icons on cards
 
 STEPS — use the executor's action syntax but describe targets visually:
-- "click() on the text that says 'Year Make Model' BELOW the boat photo" (NOT the photo itself)
+- "click() on the text that says 'Year Make Model' BELOW the photo" (NOT the photo itself)
 - scroll(direction="down", amount=5) for scrolling
 - key_press(keys="alt+left") for going back
 - done(success=true, summary="...") for completion
@@ -101,10 +122,26 @@ STEPS — use the executor's action syntax but describe targets visually:
 ERROR HANDLERS — what to do for each error state:
 - 404/Page Not Found → key_press(keys="alt+left"), done(summary="SKIPPED | 404")
 - Photo gallery (shows "1 of N" with fullscreen image) → key_press(keys="Escape"), key_press(keys="alt+left")
-- Off-site (URL is not boattrader.com) → key_press(keys="alt+left") immediately
+- Off-site (navigated away from the target site) → key_press(keys="alt+left") immediately
 - Cookie popup → click the Accept button ONCE, max 2 steps
 
-OUTPUT FORMAT — exact format for done() calls
+FILTER/SETUP TASK RULES:
+- The model WILL try to call done() immediately without interacting. You MUST include:
+  1. "Do NOT call done() in your first step. You must click and type first."
+  2. A VERIFICATION step: "Read the result count on the page — it should be LESS than [threshold]"
+  3. FAILURE criteria: "If the result count still shows [unfiltered count], filters were NOT applied"
+- Use start_url that already has the most reliable filter applied in the URL path \
+  (e.g. use /boats/by-owner/ if private sellers is a filter — reduces what the model must do)
+- Keep filter tasks focused: fewer filters = higher success rate
+
+EXTRACTION/DATA TASK RULES:
+- URL from the browser address bar is a MANDATORY output field
+- Include explicit instruction: "IMMEDIATELY after the detail page loads, read the URL \
+  from the browser address bar at the top of the screen. It looks like: site.com/item/name-id/"
+- Output format must show REALISTIC example data, not placeholders like <from title>
+- WARN the model: "Do NOT output template text like 'Year: Year' — output actual values like 'Year: 2018'"
+
+OUTPUT FORMAT — exact format for done() calls with realistic examples
 
 Return ONLY the JSON, no markdown fences, no explanation.
 """
@@ -245,6 +282,11 @@ For each element, describe:
    - What does the detail page look like?
    - Where is the description/seller notes text relative to the photos?
    - Where is the contact/phone info typically located?
+
+5. URL STRUCTURE:
+   - What URL patterns do you see in the address bar or listing links?
+   - What does a filtered URL look like vs an unfiltered one?
+   - What URL path segments correspond to which filters?
 
 Describe everything VISUALLY. No pixel coordinates. No CSS selectors. Only visual descriptions.
 """
@@ -438,12 +480,16 @@ def main():
     plan_path = sys.argv[1]
     output_path = ""
     browse_dir = ""
+    force = False
 
     args = sys.argv[2:]
     while args:
         if args[0] == "--browse" and len(args) > 1:
             browse_dir = args[1]
             args = args[2:]
+        elif args[0] == "--force":
+            force = True
+            args = args[1:]
         elif not output_path:
             output_path = args[0]
             args = args[1:]
@@ -454,9 +500,9 @@ def main():
         output_path = plan_path.replace(".txt", "_opus.json")
 
     if browse_dir:
-        task_suite = browse_and_plan(plan_path, browse_dir, output_path=output_path)
+        task_suite = browse_and_plan(plan_path, browse_dir, output_path=output_path, force=force)
     else:
-        task_suite = plan_with_opus(plan_path, output_path=output_path)
+        task_suite = plan_with_opus(plan_path, output_path=output_path, force=force)
 
     print(json.dumps(task_suite, indent=2))
 

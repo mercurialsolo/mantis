@@ -493,6 +493,7 @@ def _run_executor(
             max_tokens=2048,
             temperature=0.0,
             screen_size=(1280, 720),
+            use_tool_calling=True,
         )
     else:
         brain = OpenCUABrain(
@@ -664,6 +665,10 @@ def _run_executor(
                 "final_url": env.current_url,
             })
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
+
+            # Warn on setup/filter failure but continue — partial filters still useful
+            if not success and ("setup" in task_id or "filter" in task_id):
+                print(f"  WARNING: Setup '{task_id}' failed — continuing with current page state")
 
         except Exception as e:
             import traceback; traceback.print_exc()
@@ -885,6 +890,17 @@ def _run_holo3_executor(
         save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
     )
 
+    # Live viewer tunnel (optional)
+    viewer_ctx = None
+    viewer_event_bus = None
+    if viewer:
+        try:
+            from mantis_agent.viewer_modal import modal_viewer
+            viewer_ctx = modal_viewer()
+            viewer_event_bus, _viewer_url = viewer_ctx.__enter__()
+        except Exception as e:
+            print(f"  Viewer failed to start: {e}")
+
     # Run tasks
     scores = []
     task_details = []
@@ -958,6 +974,7 @@ def _run_holo3_executor(
                                            on_iteration=on_loop_iteration,
                                            start_url=task_config.get("start_url", ""),
                                            grounding=grounding,
+                                           on_step=viewer_event_bus.emit if viewer_event_bus else None,
                                            use_sub_plan=sub_plan)
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
@@ -992,7 +1009,9 @@ def _run_holo3_executor(
                 min_steps = max(min_steps, 5)
 
             runner = GymRunner(brain=brain, env=env, max_steps=task_max_steps,
-                               frames_per_inference=frames_per_inference)
+                               frames_per_inference=frames_per_inference,
+                               grounding=grounding,
+                               on_step=viewer_event_bus.emit if viewer_event_bus else None)
             result = runner.run(task=intent, task_id=task_id,
                                start_url=task_config.get("start_url", ""))
 
@@ -1005,7 +1024,9 @@ def _run_holo3_executor(
                     "Interact with AT LEAST 3 different UI controls (input fields, dropdowns, buttons)."
                 )
                 runner2 = GymRunner(brain=brain, env=env, max_steps=task_max_steps,
-                                    frames_per_inference=frames_per_inference)
+                                    frames_per_inference=frames_per_inference,
+                                    grounding=grounding,
+                                    on_step=viewer_event_bus.emit if viewer_event_bus else None)
                 result = runner2.run(task=retry_intent, task_id=f"{task_id}_retry",
                                     start_url=task_config.get("start_url", ""))
                 print(f"  Retry: {result.total_steps} steps, success={result.success}")
@@ -1024,6 +1045,10 @@ def _run_holo3_executor(
             })
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
 
+            # Warn on setup/filter failure but continue — partial filters still useful
+            if not success and ("setup" in task_id or "filter" in task_id):
+                print(f"  WARNING: Setup '{task_id}' failed — continuing with current page state")
+
         except Exception as e:
             import traceback; traceback.print_exc()
             print(f"  ERROR: {e}")
@@ -1037,6 +1062,13 @@ def _run_holo3_executor(
 
     env.close()
     llama_proc.terminate()
+
+    # Clean up viewer
+    if viewer_ctx:
+        try:
+            viewer_ctx.__exit__(None, None, None)
+        except Exception:
+            pass
 
     passed = sum(1 for s in scores if s > 0)
     avg = sum(scores) / len(scores) * 100 if scores else 0
@@ -1292,7 +1324,7 @@ def _run_gemma4_cua_executor(
                 continue
 
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps, frames_per_inference=2,
-
+                               grounding=grounding,
                                on_step=viewer_event_bus.emit if viewer_event_bus else None)
             result = runner.run(task=intent, task_id=task_id, start_url=task_config.get("start_url", ""))
 
@@ -1309,6 +1341,10 @@ def _run_gemma4_cua_executor(
                 "termination_reason": result.termination_reason,
             })
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
+
+            # Warn on setup/filter failure but continue — partial filters still useful
+            if not success and ("setup" in task_id or "filter" in task_id):
+                print(f"  WARNING: Setup '{task_id}' failed — continuing with current page state")
 
         except Exception as e:
             import traceback; traceback.print_exc()
@@ -1635,6 +1671,10 @@ def _run_claude_executor(
                 "final_url": env.current_url,
             })
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
+
+            # Warn on setup/filter failure but continue — partial filters still useful
+            if not success and ("setup" in task_id or "filter" in task_id):
+                print(f"  WARNING: Setup '{task_id}' failed — continuing with current page state")
 
         except Exception as e:
             import traceback; traceback.print_exc()

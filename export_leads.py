@@ -119,7 +119,12 @@ def export_to_csv(results_files, output_path):
                 info["ai_model"] = model  # AI model, not boat model
                 info["run_id"] = run_id
                 info["session"] = session
-                info["status"] = "VIABLE" if info["year"] else "SKIP"
+                # Tight viability check: year + (make/model/price) + no reasoning preamble
+                reasoning_prefixes = ("Okay", "I ", "The ", "Since ", "Let's")
+                has_year = bool(re.match(r".*(19|20)\d{2}", info["year"]))
+                has_detail = bool(info["make"] or info["model"] or info["price"])
+                is_reasoning = text.lstrip().startswith(reasoning_prefixes)
+                info["status"] = "VIABLE" if (has_year and has_detail and not is_reasoning) else "SKIP"
                 rows.append(info)
 
     # Write CSV

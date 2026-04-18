@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re as _re_module
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -30,6 +31,65 @@ from ..actions import ActionType
 from .runner import GymRunner
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_url_latest(trajectory: list, year: str = "") -> str | None:
+    """Extract the most recent listing URL from a trajectory.
+
+    Searches steps in REVERSE order (latest first) to get the URL
+    for the current listing, not a previous one. If `year` is provided,
+    validates the URL slug contains the same year to avoid cross-listing
+    contamination (e.g., thinking about "2008 Intrepid" while on a
+    "2026 Tracker" detail page).
+    """
+    best_url = None
+    for step in reversed(trajectory):
+        for text in [str(step.thinking or ""),
+                     str(step.action.params.get("summary", "")) if step.action.action_type.value == "done" else ""]:
+            url = _extract_url_from_text(text)
+            if not url:
+                continue
+            # If we have the boat's year, check the URL slug starts with it
+            if year and len(year) == 4:
+                slug = url.split("/boat/")[-1] if "/boat/" in url else ""
+                if slug.startswith(year):
+                    return url  # Year-matched URL — high confidence
+                # URL year mismatch — keep looking but save as fallback
+                if best_url is None:
+                    best_url = url
+                continue
+            return url  # No year to validate against — take first found
+    return best_url
+
+
+def _extract_url_from_text(text: str) -> str | None:
+    """Extract a BoatTrader listing URL from text.
+
+    Matches patterns like:
+    - boattrader.com/boat/2018-everglades-355-cc-1234567/
+    - boattrader.com/boats/2018-everglades-355/
+    - www.boattrader.com/boat/...
+    - https://www.boattrader.com/boat/...
+
+    Returns the URL without protocol prefix, or None if not found.
+    """
+    # Try full URL first (with or without protocol)
+    match = _re_module.search(
+        r"(?:https?://)?(?:www\.)?boattrader\.com/boats?/[\w\-]+(?:/[\w\-]*)*/?",
+        text,
+    )
+    if match:
+        url = match.group()
+        # Strip protocol and www prefix for consistency
+        url = _re_module.sub(r"^https?://(?:www\.)?", "", url)
+        # Don't return the base listings URL (that's not a specific listing)
+        if url.rstrip("/") in ("boattrader.com/boats", "boattrader.com/boat"):
+            return None
+        # Must have at least a slug after /boat(s)/
+        slug = _re_module.search(r"/boats?/([\w\-]+)", url)
+        if slug and len(slug.group(1)) > 5:
+            return url
+    return None
 
 ORDINALS = {
     1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth",
@@ -196,9 +256,7 @@ class WorkflowRunner:
 
             # Extract listing URL for dedup before validation (monolithic path)
             if not self._sub_plan_runner:
-                import re as _re
-                _url_match = _re.search(r'boattrader\.com/boats?/[^\s"]+', extracted)
-                _listing_url = _url_match.group() if _url_match else None
+                _listing_url = _extract_url_from_text(extracted)
                 viable = self._validate_viable(extracted, listing_url=_listing_url)
 
             iter_result = IterationResult(
@@ -562,6 +620,10 @@ class WorkflowRunner:
         in its thinking text. So we check both:
         1. done() summary — if it has real values (Year: 2024), use it
         2. Thinking text — parse boat names, prices, phones from reasoning
+        3. Merge: if done() has real data but is missing URL, backfill from thinking
+
+        IMPORTANT: URLs are searched in REVERSE step order (latest first) to avoid
+        grabbing URLs from previous listings that bleed into the thinking context.
         """
         import re as _re
 
@@ -571,17 +633,33 @@ class WorkflowRunner:
                 summary = str(step.action.params.get("summary", ""))
                 # Check if summary has actual data (year number, price, etc.)
                 if summary and _re.search(r"Year: (?:19|20)\d{2}", summary):
+                    # Backfill missing URL from thinking — search LATEST steps first
+                    if "URL:" not in summary or "URL: none" in summary.lower():
+                        year_m = _re.search(r"Year: ((?:19|20)\d{2})", summary)
+                        extracted_year = year_m.group(1) if year_m else ""
+                        url = _extract_url_latest(result.trajectory, year=extracted_year)
+                        if url:
+                            if "URL:" in summary:
+                                summary = _re.sub(r"URL:\s*\S*", f"URL: {url}", summary)
+                            else:
+                                summary += f" | URL: {url}"
                     return summary
 
         # Priority 2: Build structured data from thinking text
-        # The model says things like "2018 Everglades 355 for $239,000"
-        all_thinking = " ".join(str(s.thinking or "") for s in result.trajectory)
-        if len(all_thinking) > 50:
+        # Use only the LAST HALF of steps to avoid cross-listing contamination
+        trajectory = result.trajectory
+        half = max(len(trajectory) // 2, 1)
+        recent_thinking = " ".join(str(s.thinking or "") for s in trajectory[half:])
+        all_thinking = " ".join(str(s.thinking or "") for s in trajectory)
+        # Use recent_thinking for boat data (avoids previous listing bleed)
+        search_text = recent_thinking if len(recent_thinking) > 50 else all_thinking
+
+        if len(search_text) > 50:
             # Extract boat data from thinking
             parts = []
 
             # Year + Make + Model pattern
-            boat_match = _re.search(r"(\d{4})\s+([\w\-]+)\s+([\w\-]+(?:\s+[\w\-]+)?(?:\s+[\w\-]+)?)", all_thinking)
+            boat_match = _re.search(r"(\d{4})\s+([\w\-]+)\s+([\w\-]+(?:\s+[\w\-]+)?(?:\s+[\w\-]+)?)", search_text)
             if boat_match:
                 year, make, model = boat_match.group(1), boat_match.group(2), boat_match.group(3)
                 parts.append(f"Year: {year}")
@@ -589,21 +667,22 @@ class WorkflowRunner:
                 parts.append(f"Model: {model}")
 
             # Price
-            price_match = _re.search(r"\$[\d,]+", all_thinking)
+            price_match = _re.search(r"\$[\d,]+", search_text)
             if price_match:
                 parts.append(f"Price: {price_match.group()}")
 
             # Phone
-            phone_match = _re.search(r"\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}", all_thinking)
+            phone_match = _re.search(r"\(?\d{3}\)?[\s\-\.]\d{3}[\s\-\.]\d{4}", search_text)
             if phone_match:
                 digits = _re.sub(r"\D", "", phone_match.group())
                 if digits[3:6] != "555":
                     parts.append(f"Phone: {phone_match.group()}")
 
-            # URL
-            url_match = _re.search(r"boattrader\.com/boat[s]?/[\w\-/]+", all_thinking)
-            if url_match:
-                parts.append(f"URL: {url_match.group()}")
+            # URL — search latest steps first, validate year matches
+            extracted_year = boat_match.group(1) if boat_match else ""
+            url = _extract_url_latest(trajectory, year=extracted_year)
+            if url:
+                parts.append(f"URL: {url}")
 
             if parts:
                 return "VIABLE | " + " | ".join(parts)
