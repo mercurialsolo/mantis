@@ -947,7 +947,8 @@ def _run_holo3_executor(
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
-                                           start_url=task_config.get("start_url", ""))
+                                           start_url=task_config.get("start_url", ""),
+                                           grounding=grounding)
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
