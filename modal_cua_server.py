@@ -764,8 +764,9 @@ def _run_holo3_executor(
     plan_inputs: dict[str, str] | None = None,
     max_steps: int = 30,
     max_retries: int = 2,
-    frames_per_inference: int = 1,  # Holo3: single frame is sufficient, reduces context
+    frames_per_inference: int = 1,
     viewer: bool = False,
+    sub_plan: bool = True,
     **_extra,
 ) -> dict:
     """Execute tasks using Holo3-35B-A3B via llama.cpp (GGUF on 1x A100).
@@ -956,7 +957,7 @@ def _run_holo3_executor(
                                            on_iteration=on_loop_iteration,
                                            start_url=task_config.get("start_url", ""),
                                            grounding=grounding,
-                                           use_sub_plan=True)
+                                           use_sub_plan=sub_plan)
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
@@ -1817,6 +1818,7 @@ def main(
     thinking_budget: int = 2048,
     workers: int = 1,
     viewer: bool = False,
+    sub_plan: bool = True,
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
 
@@ -2053,6 +2055,7 @@ def main(
         "max_steps": max_steps,
         "max_retries": max_retries,
         "viewer": viewer,
+        "sub_plan": sub_plan,
     }
     if model == "claude":
         kwargs["claude_model"] = claude_model
