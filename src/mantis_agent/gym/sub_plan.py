@@ -702,7 +702,7 @@ class SubPlanRunner:
             if m:
                 key = m.group(1).strip().lower()
                 value = m.group(2).strip()
-                if key in ("year", "make", "model", "price", "phone", "seller"):
+                if key in ("year", "make", "model", "price", "phone", "seller", "url", "type"):
                     result[key] = value
 
         return result
@@ -718,9 +718,10 @@ class SubPlanRunner:
             return ""
 
         parts = ["VIABLE"]
-        for key in ("year", "make", "model", "price", "phone", "seller"):
+        for key in ("year", "make", "model", "price", "phone", "seller", "url", "type"):
             if key in d:
-                parts.append(f"{key.capitalize()}: {d[key]}")
+                label = key.upper() if key == "url" else key.capitalize()
+                parts.append(f"{label}: {d[key]}")
         return " | ".join(parts)
 
     # ── Step ordering and success checks ────────────────────────────────

@@ -852,10 +852,11 @@ def _run_holo3_executor(
     brain = Holo3Brain(
         base_url="http://localhost:8080/v1",
         model="holo3",
-        api_key="",  # No auth needed for local server
+        api_key="",
         max_tokens=2048,
         temperature=0.0,
         screen_size=(1280, 720),
+        use_tool_calling=True,
     )
     brain.load()
 

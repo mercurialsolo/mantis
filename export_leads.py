@@ -116,14 +116,14 @@ def export_to_csv(results_files, output_path):
                     continue
 
                 info = extract_boat_info(text)
-                info["model"] = model
+                info["ai_model"] = model  # AI model, not boat model
                 info["run_id"] = run_id
                 info["session"] = session
                 info["status"] = "VIABLE" if info["year"] else "SKIP"
                 rows.append(info)
 
     # Write CSV
-    fieldnames = ["status", "year", "make", "model", "price", "phone", "seller", "url", "run_id", "session", "raw"]
+    fieldnames = ["status", "year", "make", "model", "price", "phone", "seller", "url", "ai_model", "run_id", "session", "raw"]
     with open(output_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

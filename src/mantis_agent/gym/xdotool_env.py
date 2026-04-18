@@ -210,12 +210,13 @@ class XdotoolGymEnv(GymEnvironment):
 
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
         """Start Xvfb + browser, navigate to URL."""
-        url = kwargs.get("start_url", self._start_url)
+        url = kwargs.get("start_url", "")  # Only navigate if explicitly passed
 
-        # Browser already running — navigate via address bar
+        # Browser already running
         if self._browser_proc and self._browser_proc.poll() is None:
-            logger.info("Reusing existing browser (xdotool navigate)")
             if url and url != "about:blank":
+                # Navigate to the specified URL
+                logger.info(f"Navigating to {url[:60]}")
                 self._xdotool("key", "ctrl+l")
                 time.sleep(0.3)
                 self._xdotool("key", "ctrl+a")
@@ -224,6 +225,9 @@ class XdotoolGymEnv(GymEnvironment):
                 time.sleep(0.3)
                 self._xdotool("key", "Return")
                 time.sleep(self._settle_time + 2)
+            else:
+                # No URL — just capture current page state (for sub-plan micro-steps)
+                logger.info("Reusing browser (no navigation)")
             return self._capture()
 
         # Fresh start
@@ -233,7 +237,7 @@ class XdotoolGymEnv(GymEnvironment):
         display = self._start_xvfb()
         self._env = {**os.environ, "DISPLAY": display}
 
-        self._start_browser(url)
+        self._start_browser(url or self._start_url)
         time.sleep(self._settle_time + 2)
 
         return self._capture()
