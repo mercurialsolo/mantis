@@ -211,16 +211,37 @@ def plan_with_opus(
 
 
 BROWSE_PROMPT = """\
-I'm showing you screenshots from a website. Based on what you see, describe:
+I'm showing you screenshots from a website at 1280x720 resolution. Analyze the layout with PRECISE PIXEL COORDINATES.
 
-1. LAYOUT: Where are the main content areas, navigation, sidebar, footer?
-2. LISTING CARDS: What do they look like? Size, position, content visible?
-3. CLICKABLE ELEMENTS: What text/buttons can be clicked to open a listing detail page?
-4. TRAPS TO AVOID: Social icons, ad banners, dealer logos, photo galleries — where are they?
-5. FILTERS: Where are search filters (zip, price, seller type, sort)?
-6. PAGINATION: Where are next/previous page controls?
+For EACH interactive element, report its bounding box as (x_start, y_start, x_end, y_end).
 
-Be specific about pixel positions (top/center/bottom, left/right) and visual appearance.
+1. LISTING CARDS — For each card visible:
+   - Overall card bounds: (x1,y1) to (x2,y2)
+   - PHOTO AREA bounds: (x1,y1) to (x2,y_photo_end) — DO NOT CLICK HERE
+   - TITLE TEXT bounds: (x1,y_title_start) to (x2,y_title_end) — CLICK HERE
+   - PRICE TEXT bounds: approximate y range
+   - "Contact Seller" or "View Details" button bounds if visible
+
+2. DANGEROUS ZONES — Elements to NEVER click with their pixel bounds:
+   - Social media icons (exact y range in footer)
+   - Ad banners (exact position)
+   - Navigation dropdown menus (exact position)
+   - Dealer logo areas
+   - Any element that opens a photo gallery
+
+3. FILTERS SIDEBAR:
+   - Zip/location input: approximate (x, y) center
+   - Price filter: approximate (x, y) center
+   - Seller type: approximate (x, y) center
+   - Sort dropdown: approximate (x, y) center
+
+4. PAGINATION: Where are page navigation controls? Exact y position.
+
+5. DETAIL PAGE (if screenshot shows one):
+   - Where does the photo gallery end and description text begin? Exact y position.
+   - Where is the "Contact Seller" / phone number area?
+
+Be EXTREMELY specific with pixel coordinates. The executing model can ONLY click at (x,y) coordinates — it cannot read element IDs or CSS.
 """
 
 
@@ -374,12 +395,6 @@ def browse_and_plan(
 
     task_suite = json.loads(text)
 
-    # Tag with plan hash for cache invalidation
-    plan_hash = hashlib.md5(open(plan_path, "rb").read()).hexdigest()[:8]
-    task_suite["_plan_hash"] = plan_hash
-    task_suite["_generated_by"] = f"opus_planner:browse_and_plan:{model}"
-    task_suite["_cost_usd"] = round(cost1 + cost2, 4)
-
     tokens2 = resp2.json().get("usage", {})
     cost2 = (tokens2.get("input_tokens", 0) * 3 + tokens2.get("output_tokens", 0) * 15) / 1_000_000
     total_cost = cost1 + cost2
@@ -389,6 +404,12 @@ def browse_and_plan(
     tasks = task_suite.get("tasks", [])
     loop_tasks = sum(1 for t in tasks if t.get("loop"))
     logger.info(f"Generated {len(tasks)} tasks ({loop_tasks} with loops)")
+
+    # Tag with plan hash for cache invalidation
+    plan_hash = hashlib.md5(open(plan_path, "rb").read()).hexdigest()[:8]
+    task_suite["_plan_hash"] = plan_hash
+    task_suite["_generated_by"] = f"opus_planner:browse_and_plan:{model}"
+    task_suite["_cost_usd"] = round(total_cost, 4)
 
     if output_path:
         with open(output_path, "w") as f:
