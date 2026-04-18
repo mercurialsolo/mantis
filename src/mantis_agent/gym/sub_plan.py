@@ -97,22 +97,21 @@ MICRO_STEPS: list[SubPlanStep] = [
     SubPlanStep(
         name="EXTRACT",
         intent_template=(
-            "You are on a boat listing detail page. Scroll down past the large photos at the top.\n"
-            "Look for Description, Seller Notes, Full Specs, or Contact sections.\n"
-            "Extract these fields from what you see:\n"
-            "- Year (e.g. 2024)\n"
-            "- Make (e.g. Grady-White)\n"
-            "- Model (e.g. Freedom 235)\n"
-            "- Price (e.g. $145,000)\n"
-            "- Phone number if visible (e.g. 786-321-4567)\n"
-            "- Seller name if visible\n\n"
+            "You are on a boat listing detail page. Do these steps:\n"
+            "1. Read the title at the top — it shows Year, Make, Model and Price.\n"
+            "2. scroll(direction='down', amount=5) to get past photos.\n"
+            "3. scroll(direction='down', amount=5) again to see Description or Seller Notes.\n"
+            "4. Look for a phone number in the text (format: 305-555-1234 or (305) 555-1234).\n"
+            "5. Look for seller name near the phone or in Contact section.\n"
+            "6. Report ALL data you found:\n\n"
             "done(success=true, summary='VIABLE | Year: 2024 | Make: Grady-White | Model: Freedom 235 "
-            "| Price: $145000 | Phone: 786-321-4567 | Seller: John Smith')\n"
-            "If no phone found, still report the data:\n"
+            "| Price: $145000 | Phone: 786-321-4567 | Seller: John Smith')\n\n"
+            "If no phone, still report Year/Make/Model/Price:\n"
             "done(success=true, summary='VIABLE | Year: 2024 | Make: Grady-White "
-            "| Model: Freedom 235 | Price: $145000 | Phone: none')"
+            "| Model: Freedom 235 | Price: $145000 | Phone: none')\n\n"
+            "IMPORTANT: You MUST call done() with actual data from the page, not example data."
         ),
-        max_steps=12,
+        max_steps=15,
         success_signal="VIABLE",
         failure_action="skip",
         grounding_enabled=False,
@@ -526,7 +525,7 @@ class SubPlanRunner:
     STEP_CONTEXT = {
         "FIND": "The screen shows a search results page with boat listing cards. Each card has a boat photo with title text (Year Make Model) and price below it.",
         "CLICK": "You found a listing. Now click its TITLE TEXT (the text below the photo showing Year Make Model). Do NOT click the photo image.",
-        "EXTRACT": "You are on a boat detail page. Scroll past the photos to find Description, Seller Notes, or Contact sections with the boat data.",
+        "EXTRACT": "You are on a boat listing detail page. The title at the top shows Year Make Model and Price. Scroll down past the photos to read Description and Seller Notes for phone numbers.",
         "RETURN": "You finished reading the listing. Go back to the search results page.",
     }
 
