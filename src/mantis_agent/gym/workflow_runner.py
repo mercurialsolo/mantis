@@ -81,6 +81,7 @@ class WorkflowRunner:
     def __init__(self, brain: Any, env: Any, loop_config: LoopConfig,
                  session_name: str = "workflow",
                  on_iteration: Any = None,
+                 on_trajectory: Any = None,
                  start_url: str | None = None,
                  grounding: Any = None,
                  on_step: Any = None):
@@ -94,6 +95,7 @@ class WorkflowRunner:
         self.config = loop_config
         self.session_name = session_name
         self.on_iteration = on_iteration  # Callback: fn(iteration_num, result, all_results)
+        self.on_trajectory = on_trajectory  # Callback: fn(iteration_num, run_result) — for distillation
         self.start_url = start_url
 
     def run_loop(self) -> list[IterationResult]:
@@ -163,6 +165,13 @@ class WorkflowRunner:
                 parse_failures=parse_failures,
             )
             results.append(iter_result)
+
+            # Save trajectory for distillation (if callback provided)
+            if self.on_trajectory:
+                try:
+                    self.on_trajectory(global_iteration, result)
+                except Exception as e:
+                    logger.warning(f"  Trajectory save failed: {e}")
 
             if result.success and not viable:
                 logger.warning(f"  Model claimed success but data failed validation (Cloudflare/empty)")

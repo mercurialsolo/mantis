@@ -1538,8 +1538,14 @@ def _run_claude_executor(
                     max_pages=task_config["loop"].get("max_pages", 10),
                     max_steps_per_iteration=task_config["loop"].get("max_steps_per_iteration", max_steps),
                 )
+
+                def on_loop_trajectory(iter_num, run_result):
+                    """Save each loop iteration trajectory for distillation."""  
+                    save_trajectory(f"{task_id}_iter{iter_num}", intent, run_result)
+
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
+                                           on_trajectory=on_loop_trajectory,
                                            start_url=task_config.get("start_url", ""))
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
