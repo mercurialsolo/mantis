@@ -72,7 +72,7 @@ MICRO_STEPS: list[SubPlanStep] = [
             "If no more listings: done(success=false, summary='no more listings')"
         ),
         max_steps=5,
-        success_signal="FOUND:",
+        success_signal="FOUND",
         failure_action="abort",
         grounding_enabled=False,
     ),
@@ -247,9 +247,10 @@ class SubPlanResult:
     success: bool
     data: str  # formatted extraction string or empty
     no_more_items: bool
-    steps_total: int
+    steps: int  # total steps across all micro-steps
     duration: float
     checkpoint: Checkpoint
+    parse_failures: int = 0
     micro_results: dict[str, RunResult | None] = field(default_factory=dict)
 
 
@@ -314,7 +315,7 @@ class SubPlanRunner:
             SubPlanResult with extraction data and updated checkpoint.
         """
         t0 = time.time()
-        steps_total = 0
+        steps = 0
 
         if checkpoint is None:
             checkpoint = Checkpoint(
@@ -358,7 +359,7 @@ class SubPlanRunner:
                 # No start_url — browser stays on the current page.
             )
             micro_results[step.name] = result
-            steps_total += result.total_steps
+            steps += result.total_steps
 
             # Update checkpoint from the result.
             checkpoint = self._update_checkpoint(checkpoint, step, result)
@@ -396,7 +397,7 @@ class SubPlanRunner:
                     success=False,
                     data="",
                     no_more_items=True,
-                    steps_total=steps_total,
+                    steps=steps,
                     duration=duration,
                     checkpoint=checkpoint,
                     micro_results=micro_results,
@@ -423,7 +424,7 @@ class SubPlanRunner:
                     task_id=f"iter{iteration}_{step.name}_retry",
                 )
                 micro_results[f"{step.name}_retry"] = retry_result
-                steps_total += retry_result.total_steps
+                steps += retry_result.total_steps
 
                 checkpoint = self._update_checkpoint(checkpoint, step, retry_result)
                 checkpoint.timestamp = time.time()
@@ -475,7 +476,7 @@ class SubPlanRunner:
                     task_id=f"iter{iteration}_RETURN_cleanup",
                 )
                 micro_results["RETURN_cleanup"] = return_result
-                steps_total += return_result.total_steps
+                steps += return_result.total_steps
                 checkpoint.back_on_results = self._step_succeeded(
                     return_step, return_result
                 )
@@ -491,7 +492,7 @@ class SubPlanRunner:
 
         logger.info(
             f"  Sub-plan complete: success={success}, "
-            f"steps={steps_total}, duration={duration:.1f}s"
+            f"steps={steps}, duration={duration:.1f}s"
         )
 
         return SubPlanResult(
@@ -500,7 +501,7 @@ class SubPlanRunner:
             success=success,
             data=data,
             no_more_items=False,
-            steps_total=steps_total,
+            steps=steps,
             duration=duration,
             checkpoint=checkpoint,
             micro_results=micro_results,
