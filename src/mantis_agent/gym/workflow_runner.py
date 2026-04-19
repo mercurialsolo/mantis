@@ -200,6 +200,22 @@ class WorkflowRunner:
             if page_iteration > 0:
                 intent += f"\n\nYou are on page {page}. You have already processed {page_iteration} listings on this page. Scroll past them to find the {ordinal} one."
 
+            # Dynamic hints based on consecutive failures
+            if consecutive_failures >= 3:
+                intent += (
+                    f"\n\nURGENT: You have FAILED {consecutive_failures} times in a row on this page. "
+                    f"You are clicking the WRONG element — likely an ad, dealer link, or broken external link. "
+                    f"CHANGE YOUR APPROACH: scroll DOWN past the elements you've been clicking "
+                    f"and find a DIFFERENT listing card further down the page. "
+                    f"If you cannot find any more listings, scroll to the bottom and click the 'Next' page button."
+                )
+            elif consecutive_failures >= 2:
+                intent += (
+                    f"\n\nWARNING: Your last {consecutive_failures} attempts failed (404 or off-site). "
+                    f"You may be clicking the same broken link repeatedly. "
+                    f"Try a DIFFERENT listing — scroll down to find one you haven't tried yet."
+                )
+
             # Agentic learning: inject what worked/failed in prior iterations
             if learnings:
                 intent += "\n\nLEARNINGS FROM PRIOR LISTINGS (apply these):"
@@ -557,12 +573,26 @@ class WorkflowRunner:
                 "These open the detail page WITHOUT the gallery trap."
             )
 
-        # ── 404 / Page Not Found ──
+        # ── 404 / Page Not Found / external site ──
+        external_domain = ""
+        for domain in ["elitemarine", "eliteboat", "survey.com", "boats-group"]:
+            if domain in all_thinking or domain in data:
+                external_domain = domain
+                break
         if "page not found" in all_thinking or "404" in all_thinking:
-            return (
-                "The listing returned a 404 Page Not Found. This listing was removed. "
-                "Press Alt+Left to go back and try the next listing. Don't waste steps on dead links."
+            msg = (
+                "You clicked a BROKEN LINK that returned 404. "
+                "Press Alt+Left to go back to search results. "
+                "Then SCROLL DOWN past this broken listing to find the NEXT one. "
+                "Do NOT click the same element again."
             )
+            if external_domain:
+                msg += (
+                    f" The broken link was to an EXTERNAL site ({external_domain}) — "
+                    f"not a real boat listing. It might be an ad, dealer badge, or sponsored link. "
+                    f"Look for listing cards with a boat PHOTO + Year Make Model TEXT + PRICE."
+                )
+            return msg
 
         # ── Cloudflare / verification ──
         if "cloudflare" in data or "verify you are human" in data:
