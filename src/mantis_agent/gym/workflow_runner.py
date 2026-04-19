@@ -225,9 +225,26 @@ class WorkflowRunner:
             logger.info(f"Iteration {global_iteration} (page {page}, item {tentative_ordinal})")
             t0 = time.time()
 
-            # Brief settle delay between iterations (proxy handles bot evasion)
+            # ── Pre-iteration recovery protocol ──
+            # Dismiss any popup/modal before starting (Escape is harmless if none)
             if global_iteration > 1:
                 time.sleep(0.5)
+                try:
+                    from ..actions import Action
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+                    time.sleep(0.3)
+                except Exception:
+                    pass
+
+            # Escalating recovery: hard-reset to start_url after 3 consecutive failures
+            if consecutive_failures >= 3 and self.start_url:
+                logger.warning(f"  Recovery: {consecutive_failures} failures — navigating back to {self.start_url}")
+                try:
+                    self.env.reset(start_url=self.start_url)
+                    time.sleep(2.0)
+                    page_iteration = 0  # Reset page position after hard navigation
+                except Exception as e:
+                    logger.warning(f"  Recovery navigation failed: {e}")
 
             # Run bounded iteration — sub-plan or monolithic
             if self._sub_plan_runner:
