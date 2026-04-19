@@ -123,6 +123,113 @@ class LoopConfig:
     max_steps_pagination: int = 20
 
 
+class FailureCategory:
+    """Structured failure categories for analysis and learning."""
+    VIABLE = "viable"
+    POPUP_TRAP = "popup_trap"           # Modal/popup blocked interaction
+    OFF_SITE = "off_site"               # Navigated to external domain
+    DEAD_LINK = "dead_link_404"         # Listing removed / 404
+    GALLERY_TRAP = "gallery_trap"       # Clicked photo → fullscreen gallery
+    PAGE_EXHAUSTED = "page_exhausted"   # No more listings on page
+    CONTEXT_ROT = "context_rot"         # Model lost track (blank page, wrong page)
+    CLOUDFLARE = "cloudflare"           # Bot detection blocked
+    PARSE_FAILURE = "parse_failure"     # Model output unparseable
+    UNKNOWN = "unknown"
+
+
+def _classify_failure(data: str, result=None) -> tuple[str, str]:
+    """Classify a failed iteration into category + reason.
+
+    Returns (category, reason) tuple for structured logging.
+    """
+    text = (data or "").lower()
+
+    if "popup" in text or "modal" in text or "contact seller" in text or "request info" in text:
+        return FailureCategory.POPUP_TRAP, "Modal/popup blocked interaction"
+
+    if "facebook" in text or "instagram" in text or "off-site" in text or "dealer website" in text:
+        domain = ""
+        for d in ["facebook.com", "instagram.com", "elitemarine", "dealer"]:
+            if d in text:
+                domain = d
+                break
+        return FailureCategory.OFF_SITE, f"Navigated to external site ({domain})"
+
+    if "404" in text or "page not found" in text or "page error" in text or "listing was removed" in text:
+        return FailureCategory.DEAD_LINK, "Listing returned 404 or was removed"
+
+    if "gallery" in text or "1 of" in text or "fullscreen" in text or "lightbox" in text:
+        return FailureCategory.GALLERY_TRAP, "Clicked photo, entered image gallery"
+
+    for sig in PAGE_EXHAUSTED_SIGNALS:
+        if sig in text:
+            return FailureCategory.PAGE_EXHAUSTED, "Scrolled to footer, no more listings"
+
+    if "cloudflare" in text or "verify you are human" in text:
+        return FailureCategory.CLOUDFLARE, "Bot detection blocked access"
+
+    if "blank" in text or "about:blank" in text or "navigation menu" in text or "homepage" in text:
+        return FailureCategory.CONTEXT_ROT, "Model lost track of page state"
+
+    if result and hasattr(result, 'total_steps'):
+        pf = getattr(result, 'parse_failures', 0) or 0
+        if pf > result.total_steps * 0.5:
+            return FailureCategory.PARSE_FAILURE, f"{pf}/{result.total_steps} steps unparseable"
+
+    return FailureCategory.UNKNOWN, "Unclassified failure"
+
+
+class LearningStore:
+    """Persist and load site-specific learnings across runs.
+
+    Saves learnings to /data/learnings/<domain>.json on Modal volume.
+    Each learning has: rule, category, count (how many times observed).
+    """
+
+    def __init__(self, domain: str = "", base_path: str = "/data/learnings"):
+        self.domain = domain
+        self.path = f"{base_path}/{domain.replace('.', '_')}.json" if domain else ""
+        self.learnings: list[dict] = []
+        self._load()
+
+    def _load(self):
+        """Load existing learnings from disk."""
+        if not self.path:
+            return
+        try:
+            import json
+            with open(self.path) as f:
+                self.learnings = json.load(f)
+            logger.info(f"Loaded {len(self.learnings)} learnings for {self.domain}")
+        except (FileNotFoundError, Exception):
+            self.learnings = []
+
+    def save(self):
+        """Persist learnings to disk."""
+        if not self.path:
+            return
+        try:
+            import json, os
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, "w") as f:
+                json.dump(self.learnings, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save learnings: {e}")
+
+    def add(self, rule: str, category: str):
+        """Add or reinforce a learning. Deduplicates by rule text."""
+        for existing in self.learnings:
+            if existing["rule"] == rule:
+                existing["count"] += 1
+                return
+        self.learnings.append({"rule": rule, "category": category, "count": 1})
+
+    def get_top(self, n: int = 5) -> list[str]:
+        """Get top N learnings by frequency, for prompt injection."""
+        sorted_l = sorted(self.learnings, key=lambda x: x["count"], reverse=True)
+        return [l["rule"] for l in sorted_l[:n]]
+
+
 @dataclass
 class IterationResult:
     """Result of a single loop iteration."""
@@ -134,6 +241,8 @@ class IterationResult:
     steps: int
     duration: float
     parse_failures: int = 0  # Steps where action couldn't be parsed (WAIT fallback)
+    failure_category: str = ""   # Structured failure category
+    failure_reason: str = ""     # Human-readable failure reason
 
 
 class WorkflowRunner:
@@ -167,6 +276,15 @@ class WorkflowRunner:
         self.on_iteration = on_iteration
         self.on_trajectory = on_trajectory
         self.start_url = start_url
+
+        # Cross-run learning store (persists to /data/learnings/)
+        domain = ""
+        if start_url:
+            import re as _r
+            m = _r.search(r"(?:https?://)?(?:www\.)?([\w\-]+\.[\w]+)", start_url)
+            if m:
+                domain = m.group(1)
+        self._learning_store = LearningStore(domain=domain)
 
         # Sub-plan runner for micro-step decomposition
         self._sub_plan_runner = None
@@ -230,10 +348,15 @@ class WorkflowRunner:
                 )
 
             # Agentic learning: inject what worked/failed in prior iterations
-            if learnings:
-                intent += "\n\nLEARNINGS FROM PRIOR LISTINGS (apply these):"
-                for learning in learnings[-5:]:  # Last 5 learnings
-                    intent += f"\n- {learning}"
+            all_tips = []
+            # Persistent cross-run learnings (site-specific)
+            all_tips.extend(self._learning_store.get_top(3))
+            # In-session learnings (this run)
+            all_tips.extend(learnings[-5:])
+            if all_tips:
+                intent += "\n\nLEARNINGS (apply these):"
+                for tip in all_tips:
+                    intent += f"\n- {tip}"
 
             logger.info(f"Iteration {global_iteration} (page {page}, item {tentative_ordinal})")
             t0 = time.time()
@@ -308,6 +431,15 @@ class WorkflowRunner:
                 _listing_url = _extract_url_from_text(extracted)
                 viable = self._validate_viable(extracted, listing_url=_listing_url)
 
+            # Classify failure for structured logging
+            fail_cat, fail_reason = "", ""
+            if not viable:
+                fail_cat, fail_reason = _classify_failure(extracted, result)
+                # Persist learning from failure
+                learning = self._distill_learning(result, None, viable)
+                if learning and fail_cat != FailureCategory.UNKNOWN:
+                    self._learning_store.add(learning, fail_cat)
+
             iter_result = IterationResult(
                 iteration=global_iteration,
                 page=page,
@@ -317,6 +449,8 @@ class WorkflowRunner:
                 steps=result.total_steps,
                 duration=time.time() - t0,
                 parse_failures=parse_failures,
+                failure_category=fail_cat,
+                failure_reason=fail_reason,
             )
             results.append(iter_result)
 
@@ -380,8 +514,11 @@ class WorkflowRunner:
                 logger.info(f"  Ordinal stays at {page_iteration} (no progress this iteration)")
 
             status = "VIABLE" if viable else ("END_OF_PAGE" if iter_result.no_more_items else "SKIP")
-            logger.info(f"  → {status} ({result.total_steps} steps, {parse_failures} parse failures, {iter_result.duration:.0f}s)")
-            if iter_result.data:
+            fail_info = f" [{fail_cat}]" if fail_cat else ""
+            logger.info(f"  → {status}{fail_info} ({result.total_steps} steps, {parse_failures} parse failures, {iter_result.duration:.0f}s)")
+            if fail_reason:
+                logger.info(f"  Reason: {fail_reason}")
+            if iter_result.data and viable:
                 logger.info(f"  Data: {iter_result.data[:100]}")
 
             # Progress callback — allows caller to write intermediate results
@@ -454,7 +591,21 @@ class WorkflowRunner:
                     logger.info("  No more pages after force-pagination. Loop complete.")
                     break
 
-        logger.info(f"Loop complete: {len(results)} iterations, {page} pages")
+        # ── End of loop: save learnings and log failure summary ──
+        self._learning_store.save()
+
+        # Failure breakdown
+        from collections import Counter
+        fail_counts = Counter(r.failure_category for r in results if r.failure_category)
+        viable_count = sum(1 for r in results if r.success)
+        logger.info(f"Loop complete: {len(results)} iterations, {page} pages, {viable_count} viable")
+        if fail_counts:
+            logger.info(f"  Failure breakdown:")
+            for cat, count in fail_counts.most_common():
+                logger.info(f"    {cat}: {count}")
+        if self._learning_store.learnings:
+            logger.info(f"  Persisted {len(self._learning_store.learnings)} learnings for {self._learning_store.domain}")
+
         return results
 
     def _run_iteration(self, intent: str, task_id: str):
