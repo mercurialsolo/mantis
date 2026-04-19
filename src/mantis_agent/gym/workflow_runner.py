@@ -102,6 +102,14 @@ NO_MORE_SIGNALS = [
     "all processed", "none found", "none left",
 ]
 
+# Signals that the model has scrolled past all listings (page exhaustion)
+PAGE_EXHAUSTED_SIGNALS = [
+    "footer", "bottom of the page", "scrolled past all",
+    "no more listings", "can't find", "cannot find",
+    "powered by", "boat loan calculator", "become a member",
+    "haven't found", "still haven't found",
+]
+
 
 @dataclass
 class LoopConfig:
@@ -198,7 +206,12 @@ class WorkflowRunner:
 
             # Add context about position
             if page_iteration > 0:
-                intent += f"\n\nYou are on page {page}. You have already processed {page_iteration} listings on this page. Scroll past them to find the {ordinal} one."
+                intent += (
+                    f"\n\nYou are on page {page}. You have already processed {page_iteration} listings on this page. "
+                    f"Find the NEXT unprocessed listing below the ones you already handled. "
+                    f"If you reach the page footer (copyright, 'Become a Member', etc.) without finding another listing, "
+                    f"call done(success=false, summary='no more listings on this page') so we can go to the next page."
+                )
 
             # Dynamic hints based on consecutive failures
             if consecutive_failures >= 3:
@@ -396,6 +409,24 @@ class WorkflowRunner:
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1
+
+            # Detect page exhaustion: model says "footer", "bottom of page", etc.
+            if not viable and extracted:
+                extracted_lower = extracted.lower()
+                page_exhausted = sum(1 for sig in PAGE_EXHAUSTED_SIGNALS if sig in extracted_lower)
+                if page_exhausted >= 1:
+                    logger.info(f"  Page exhaustion detected ({page_exhausted} signals) — paginating")
+                    time.sleep(random.uniform(2.0, 4.0))
+                    paginated = self._run_pagination()
+                    if paginated:
+                        page += 1
+                        page_iteration = 0
+                        consecutive_failures = 0
+                        logger.info(f"  Advanced to page {page}")
+                    else:
+                        logger.info("  No more pages. Loop complete.")
+                        break
+                    continue  # Skip remaining checks, start fresh on new page
 
             # Check for hard failure (loop/max_steps without useful output)
             if result.termination_reason == "loop" and not result.success and not iter_result.data:
