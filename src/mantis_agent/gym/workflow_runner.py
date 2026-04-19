@@ -177,6 +177,9 @@ class WorkflowRunner:
         page_iteration = 0
         learnings: list[str] = []  # Agentic: accumulate learnings from prior iterations
 
+        consecutive_failures = 0
+        MAX_CONSECUTIVE_FAILURES = 5  # Force-paginate after this many failures in a row
+
         logger.info(f"Starting dynamic loop (max {self.config.max_iterations} items, {self.config.max_pages} pages)")
 
         while page <= self.config.max_pages and global_iteration < self.config.max_iterations:
@@ -355,6 +358,12 @@ class WorkflowRunner:
                     logger.info("No more pages. Loop complete.")
                     break
 
+            # Track consecutive failures for force-pagination
+            if viable:
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+
             # Check for hard failure (loop/max_steps without useful output)
             if result.termination_reason == "loop" and not result.success and not iter_result.data:
                 logger.warning(f"Iteration stuck (loop). Moving to pagination.")
@@ -362,7 +371,23 @@ class WorkflowRunner:
                 if paginated:
                     page += 1
                     page_iteration = 0
+                    consecutive_failures = 0
                 else:
+                    break
+
+            # Force-paginate after too many consecutive failures
+            # (model is stuck clicking the same broken link or off-site element)
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                logger.warning(f"  {consecutive_failures} consecutive failures — force-paginating to next page")
+                time.sleep(random.uniform(2.0, 4.0))
+                paginated = self._run_pagination()
+                if paginated:
+                    page += 1
+                    page_iteration = 0
+                    consecutive_failures = 0
+                    logger.info(f"  Force-paginated to page {page}")
+                else:
+                    logger.info("  No more pages after force-pagination. Loop complete.")
                     break
 
         logger.info(f"Loop complete: {len(results)} iterations, {page} pages")
