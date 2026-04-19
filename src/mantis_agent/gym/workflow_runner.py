@@ -435,10 +435,6 @@ class WorkflowRunner:
             fail_cat, fail_reason = "", ""
             if not viable:
                 fail_cat, fail_reason = _classify_failure(extracted, result)
-                # Persist learning from failure
-                learning = self._distill_learning(result, None, viable)
-                if learning and fail_cat != FailureCategory.UNKNOWN:
-                    self._learning_store.add(learning, fail_cat)
 
             iter_result = IterationResult(
                 iteration=global_iteration,
@@ -504,6 +500,9 @@ class WorkflowRunner:
             if learning:
                 learnings.append(learning)
                 logger.info(f"  Learning: {learning}")
+                # Persist to cross-run store for non-trivial failures
+                if fail_cat and fail_cat != FailureCategory.UNKNOWN:
+                    self._learning_store.add(learning, fail_cat)
 
             # Advance ordinal only when the iteration produced real progress:
             # viable data extracted, or explicit skip with actual listing data
