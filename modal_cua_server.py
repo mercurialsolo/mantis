@@ -982,6 +982,12 @@ def _run_holo3_executor(
                 success = viable > 0
                 total_parse_failures = sum(getattr(r, 'parse_failures', 0) for r in results)
                 real_iterations = sum(1 for r in results if getattr(r, 'parse_failures', 0) < max(r.steps // 2, 1))
+                # Failure breakdown for analysis
+                from collections import Counter as _Counter
+                fail_counts = dict(_Counter(
+                    getattr(r, 'failure_category', '') for r in results
+                    if getattr(r, 'failure_category', '')
+                ))
                 final = {
                     "task_id": task_id, "success": success,
                     "steps": sum(r.steps for r in results),
@@ -990,6 +996,7 @@ def _run_holo3_executor(
                     "iterations": total, "viable": viable,
                     "real_iterations": real_iterations,
                     "parse_failures": total_parse_failures,
+                    "failure_breakdown": fail_counts,
                     "data": [r.data[:200] for r in results if r.data],
                 }
                 if task_details and task_details[-1].get("task_id") == task_id:
@@ -999,7 +1006,11 @@ def _run_holo3_executor(
                     scores.append(1.0 if success else 0.0)
                     task_details.append(final)
                 print(f"  Loop: {viable}/{total} viable ({real_iterations} real, {total_parse_failures} parse failures)")
+                if fail_counts:
+                    print(f"  Failures: {fail_counts}")
                 save_progress()
+                # Commit learnings to volume (LearningStore writes to /data/learnings/)
+                vol.commit()
                 continue
 
             task_max_steps = task_config.get("max_steps", max_steps)
