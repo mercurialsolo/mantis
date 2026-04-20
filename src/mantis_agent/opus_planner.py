@@ -135,9 +135,12 @@ FILTER/SETUP TASK RULES:
   1. "Do NOT call done() in your first step. You must click and type first."
   2. A VERIFICATION step: "Read the result count on the page — it should be LESS than [threshold]"
   3. FAILURE criteria: "If the result count still shows [unfiltered count], filters were NOT applied"
-- Use start_url that already has the most reliable filter applied in the URL path \
-  (e.g. use /boats/by-owner/ if private sellers is a filter — reduces what the model must do)
 - Keep filter tasks focused: fewer filters = higher success rate
+- CRITICAL: Warn the model about TRAP BUTTONS in the sidebar that navigate away from \
+  the page (e.g. "Calculate", "Get Pre-Qualified", "Get Started", "Apply Now"). \
+  The model MUST be told: "Do NOT click any buttons — ONLY click filter options/checkboxes"
+- If a filter is deep in the sidebar, tell the model exactly which sections to scroll PAST \
+  before clicking, so it doesn't click intermediate interactive elements
 
 EXTRACTION/DATA TASK RULES:
 - URL from the browser address bar is a MANDATORY output field
