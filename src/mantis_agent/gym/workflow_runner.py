@@ -334,7 +334,7 @@ class WorkflowRunner:
             intent = intent.replace("{PAGE_N}", str(tentative_ordinal))
             intent = intent.replace("{PAGE}", str(page))
 
-            # Add context about position
+            # Add context about position + already-seen URLs for dedup
             if page_iteration > 0:
                 intent += (
                     f"\n\nYou are on page {page}. You have already processed {page_iteration} listings on this page. "
@@ -342,6 +342,11 @@ class WorkflowRunner:
                     f"If you reach the page footer (copyright, 'Become a Member', etc.) without finding another listing, "
                     f"call done(success=false, summary='no more listings on this page') so we can go to the next page."
                 )
+            if self._seen_urls:
+                # Tell the model which listings to skip (last 5 URLs for context)
+                recent = list(self._seen_urls)[-5:]
+                slugs = [u.split("/boat/")[-1][:30] if "/boat/" in u else u[:30] for u in recent]
+                intent += f"\n\nALREADY EXTRACTED (skip these): {', '.join(slugs)}"
 
             # Dynamic hints based on consecutive failures
             if consecutive_failures >= 3:
@@ -394,21 +399,27 @@ class WorkflowRunner:
                     from ..actions import Action
                     self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+w"}))
                     time.sleep(1.0)
-                    # Press Escape in case a dialog asks "close tab?"
                     self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
                     time.sleep(0.5)
                 except Exception:
                     pass
 
-                # Hard-reset to start_url or base_url
-                recovery_url = self.start_url or getattr(self.env, '_start_url', '')
+                # Navigate back — use checkpointed page URL if available
+                base_url = self.start_url or getattr(self.env, '_start_url', '')
+                # Build page-specific recovery URL (append page param if past page 1)
+                recovery_url = base_url
+                if base_url and page > 1:
+                    sep = "&" if "?" in base_url else "?"
+                    recovery_url = f"{base_url}{sep}page={page}"
+
                 if recovery_url:
-                    logger.warning(f"  Recovery: {consecutive_failures} failures — navigating to {recovery_url}")
+                    logger.warning(f"  Recovery: {consecutive_failures} failures — navigating to {recovery_url} (page {page})")
                     try:
                         self.env.reset(task="recovery", start_url=recovery_url)
                         time.sleep(3.0)
-                        page_iteration = 0
-                        # Scroll to top
+                        # Keep page_iteration — we're resuming on the same page
+                        # The dedup will skip already-extracted URLs instantly
+                        logger.info(f"  Resumed on page {page}, {len(self._seen_urls)} URLs already seen (will dedup)")
                         self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
                         time.sleep(0.5)
                     except Exception as e:
