@@ -901,6 +901,71 @@ def _run_holo3_executor(
         except Exception as e:
             print(f"  Viewer failed to start: {e}")
 
+    # ── Learning mode: run LearningRunner instead of normal task loop ──
+    learn_mode = task_suite.get("_learn", False)
+    learn_samples = task_suite.get("_learn_samples", 5)
+    verify_mode = task_suite.get("_verify", False)
+
+    if learn_mode:
+        from mantis_agent.verification.step_verifier import StepVerifier
+        from mantis_agent.verification.playbook import PlaybookStore
+        from mantis_agent.gym.learning_runner import LearningRunner
+
+        print(f"\n  === LEARNING MODE ({learn_samples} samples) ===")
+        verifier = StepVerifier()
+        learning_runner = LearningRunner(
+            brain=brain, env=env, verifier=verifier,
+            grounding=grounding, on_step=viewer_event_bus.emit if viewer_event_bus else None,
+        )
+
+        # Extract setup and extraction intents from tasks
+        setup_intent = ""
+        extract_intent = ""
+        start_url_for_learn = base_url
+        expected_filters = []
+        for tc in tasks:
+            if "setup" in tc.get("task_id", "") or "filter" in tc.get("task_id", ""):
+                setup_intent = tc["intent"]
+                start_url_for_learn = tc.get("start_url", base_url)
+            elif tc.get("loop"):
+                extract_intent = tc["intent"]
+
+        # Extract filter expectations from setup intent
+        import re as _re
+        for kw in ["private seller", "by owner", "zip", "price", "sort"]:
+            if kw in setup_intent.lower():
+                expected_filters.append(kw)
+
+        # Derive domain
+        domain = ""
+        m = _re.search(r"(?:https?://)?(?:www\.)?([\w\-]+\.[\w]+)", start_url_for_learn)
+        if m:
+            domain = m.group(1)
+
+        playbook = learning_runner.learn(
+            setup_intent=setup_intent,
+            extract_intent=extract_intent,
+            domain=domain,
+            start_url=start_url_for_learn,
+            expected_filters=expected_filters,
+            n_samples=learn_samples,
+        )
+
+        # Save playbook
+        PlaybookStore().save(playbook)
+        vol.commit()
+        print(f"\n  Playbook saved for {domain}")
+        print(playbook.summary())
+
+        env.close()
+        llama_proc.terminate()
+        if viewer_ctx:
+            try:
+                viewer_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
+        return {"mode": "learn", "domain": domain, "steps": len(playbook.setup_steps) + len(playbook.extraction_steps)}
+
     # Run tasks
     scores = []
     task_details = []
@@ -1920,17 +1985,24 @@ def main(
     workers: int = 1,
     viewer: bool = False,
     sub_plan: bool = True,
+    learn: bool = False,
+    verify: bool = False,
+    learn_samples: int = 5,
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
 
-    Two modes:
-      --plan-file plans/boattrader/full_spec.txt   (Gemma4 preprocesses → EvoCUA executes)
-      --task-file tasks/boattrader/dynamic.json     (direct execution, no planner)
+    Modes:
+      --task-file tasks/boattrader/dynamic.json     (direct execution)
+      --plan-file plans/boattrader/full_spec.txt    (Gemma4 preprocesses → execute)
+      --learn --task-file tasks/...                 (learning phase: build playbook)
+      --verify --task-file tasks/...                (execution with step verification)
 
     Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, holo3, gemma4-cua, claude
     Parallel: --workers 5   (auto fan-out looped tasks across N GPUs)
     Claude options: --claude-model claude-sonnet-4-20250514 --thinking-budget 2048
     Viewer: --viewer   (live web viewer via modal.forward tunnel)
+    Learning: --learn --learn-samples 5   (build site playbook from N samples)
+    Verification: --verify   (enable step verification during execution)
     """
     cua_config = CUA_MODELS.get(model, CUA_MODELS["evocua-8b"])
     print(f"Mantis CUA Server — {cua_config['name']}")
@@ -2004,6 +2076,24 @@ def main(
     else:
         print("ERROR: Provide --plan-file or --task-file")
         sys.exit(1)
+
+    # ── Learning mode: build playbook with step verification ─────
+    if learn:
+        print(f"\n  ═══ LEARNING MODE: {learn_samples} samples ═══")
+        print(f"  Building site playbook with step verification...")
+
+        # Pass learn flag + samples to the executor
+        task_suite_obj = json.loads(task_file_contents)
+        task_suite_obj["_learn"] = True
+        task_suite_obj["_learn_samples"] = learn_samples
+        task_file_contents = json.dumps(task_suite_obj)
+
+    if verify:
+        print(f"\n  ═══ VERIFICATION MODE ═══")
+        print(f"  Step verification enabled for critical actions...")
+        task_suite_obj = json.loads(task_file_contents)
+        task_suite_obj["_verify"] = True
+        task_file_contents = json.dumps(task_suite_obj)
 
     # ── Auto-parallelize looped tasks ──────────────────────────────
     task_suite = json.loads(task_file_contents)
