@@ -1,0 +1,19 @@
+{
+  "session_name": "bt_filter_test",
+  "base_url": "https://www.boattrader.com/boats/",
+  "tasks": [
+    {
+      "task_id": "approach1_simple_holo3",
+      "intent": "Scroll down in the left sidebar. Find text 'By Owner' and click it.\ndone(success=true, summary='clicked By Owner').",
+      "start_url": "https://www.boattrader.com/boats/",
+      "max_steps": 15
+    },
+    {
+      "task_id": "approach3_direct_url",
+      "intent": "Extract the first boat listing on this page.\nClick the listing TITLE TEXT below the photo.\nRead the URL from the address bar.\ndone(success=true, summary='Year: <year> | Make: <make> | Model: <model> | Price: <price> | URL: <url>').",
+      "start_url": "https://www.boattrader.com/boats/by-owner/",
+      "max_steps": 20
+    }
+  ],
+  "_note": "Tests approach 1 (simple Holo3 filter) and approach 3 (direct URL). Approach 2 (Claude setup) tested via --verify flag."
+}

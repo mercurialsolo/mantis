@@ -1084,9 +1084,23 @@ def _run_holo3_executor(
             if "setup" in task_id or "filter" in task_id:
                 min_steps = max(min_steps, 5)
 
-            runner = GymRunner(brain=brain, env=env, max_steps=task_max_steps,
+            # Hybrid mode: use Claude for setup tasks (better at finding UI elements)
+            task_brain = brain
+            if ("setup" in task_id or "filter" in task_id) and verify_mode:
+                try:
+                    from mantis_agent.brain_claude import ClaudeBrain
+                    task_brain = ClaudeBrain(
+                        model="claude-sonnet-4-20250514",
+                        thinking_budget=1024,
+                    )
+                    print(f"  Using Claude Sonnet for setup (hybrid mode)")
+                except Exception as e:
+                    print(f"  Claude brain failed, using Holo3: {e}")
+                    task_brain = brain
+
+            runner = GymRunner(brain=task_brain, env=env, max_steps=task_max_steps,
                                frames_per_inference=frames_per_inference,
-                               grounding=grounding,
+                               grounding=grounding if task_brain is brain else None,
                                on_step=viewer_event_bus.emit if viewer_event_bus else None)
             result = runner.run(task=intent, task_id=task_id,
                                start_url=task_config.get("start_url", ""))

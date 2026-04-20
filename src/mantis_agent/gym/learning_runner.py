@@ -141,39 +141,23 @@ class LearningRunner:
             self.env.reset(task="navigate", start_url=start_url)
             time.sleep(4)
 
-        # Define atomic filter steps in priority order
-        # Each step is: (name, intent, verification_check)
-        # NOTE: Based on screenshot analysis, the BoatTrader sidebar order is:
-        #   Location → Condition → Length → Hull → Engines → Engine Type →
-        #   Price → Monthly Payment (with "Calculate"/"Get Pre-Qualified" buttons) →
-        #   "For Sale By" (with "By Owner" option)
-        # The model must scroll PAST the loan calculator section to reach "For Sale By"
+        # Define atomic filter steps — positive, small instructions
         atomic_filters = [
             (
                 "apply_seller_filter",
-                "Scroll the LEFT SIDEBAR DOWN to find the 'For Sale By' section. "
-                "It is BELOW these sections (in order): Location, Condition, Length, Hull, "
-                "Engines, Engine Type, Price, Monthly Payment. "
-                "You MUST scroll past ALL of these to find 'For Sale By'. "
-                "CRITICAL: Do NOT click any of these buttons: 'Calculate', 'Get Pre-Qualified', "
-                "'Get Started', 'Monthly Payment'. These open a loan calculator page. "
-                "ONLY scroll down until you see text that says 'For Sale By' with options. "
-                "When you find it, click on 'By Owner'. "
-                "done(success=true, summary='clicked By Owner in For Sale By section').",
+                "Scroll down in the left sidebar. Find text 'By Owner' and click it. "
+                "done(success=true, summary='clicked By Owner').",
                 ["by owner", "private seller", "by-owner"],
             ),
             (
                 "apply_location_filter",
-                "Scroll UP to the top of the left sidebar. "
-                "Find the ZIP CODE input field in the Location section (near the top). "
-                "Click on it and type_text('33101'). Press Enter. "
-                "Do NOT click any other filters or buttons. "
+                "Find the zip code input field. Type 33101 and press Enter. "
                 "done(success=true, summary='entered zip 33101').",
                 ["33101", "miami"],
             ),
             (
                 "apply_price_filter",
-                "Find the MINIMUM PRICE input field in the left sidebar Price section. "
+                "Find the minimum price input field. Type 35000 and press Enter. "
                 "Click on it and type_text('35000'). Press Enter. "
                 "done(success=true, summary='set min price 35000').",
                 ["35000", "35,000"],
