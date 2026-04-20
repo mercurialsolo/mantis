@@ -442,20 +442,39 @@ class WorkflowRunner:
                 # Claude extraction: use screenshot instead of thinking text
                 if self.extractor and hasattr(self.env, 'screenshot'):
                     try:
-                        # Take screenshot of current page (should be detail page or back on results)
-                        # Check trajectory for the last screenshot before done()
-                        screenshots = [s.screenshot for s in result.trajectory if hasattr(s, 'screenshot') and s.screenshot]
-                        if screenshots:
-                            top_shot = screenshots[-1]
-                        else:
-                            top_shot = self.env.screenshot()
-
+                        top_shot = self.env.screenshot()
                         ext_result = self.extractor.extract(top_shot)
+
                         if ext_result.is_viable():
+                            # Early dedup: check URL before full extraction
+                            ext_url = ext_result.url
+                            if ext_url and ext_url in self._seen_urls:
+                                logger.info(f"  [dedup] URL already seen: {ext_url[:60]} — skipping")
+                                extracted = f"DUPLICATE | URL: {ext_url}"
+                                parse_failures = self._count_parse_failures(result)
+                                # Skip to next iteration
+                                iter_result = IterationResult(
+                                    iteration=global_iteration, page=page,
+                                    success=False, data=extracted,
+                                    no_more_items=False, steps=result.total_steps,
+                                    duration=time.time() - t0, parse_failures=0,
+                                )
+                                results.append(iter_result)
+                                # Count as progress (we did find a listing, just a dup)
+                                page_iteration = tentative_ordinal
+                                consecutive_failures = 0
+                                if self.on_iteration:
+                                    try: self.on_iteration(global_iteration, iter_result, results)
+                                    except Exception: pass
+                                continue
+
                             extracted = ext_result.to_summary()
                             logger.info(f"  [claude-extract] {extracted[:100]}")
+
+                            # Track URL for future dedup
+                            if ext_url:
+                                self._seen_urls.add(ext_url)
                         else:
-                            # Fall back to thinking-based extraction
                             extracted = self._extract_data(result)
                     except Exception as e:
                         logger.warning(f"  Claude extraction failed: {e}")
@@ -677,27 +696,77 @@ class WorkflowRunner:
 
     def _run_pagination(self) -> bool:
         """Run a pagination step. Returns True if next page loaded."""
+        # First scroll to top so the model can see the full page
+        try:
+            from ..actions import Action
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+            time.sleep(1)
+        except Exception:
+            pass
+
+        # Enhanced pagination intent — specific and positive
+        pagination_task = (
+            self.config.pagination_intent + "\n\n"
+            "Scroll to the BOTTOM of the page. Look for page numbers (1, 2, 3...) "
+            "or a 'Next' link. Click the next page number or 'Next'. "
+            "If the page changes and shows new listings, call done(success=true). "
+            "If there is no Next button or no more pages, call done(success=false, summary='no more pages')."
+        )
+
         runner = GymRunner(
             brain=self.brain,
             env=self.env,
             max_steps=self.config.max_steps_pagination,
             frames_per_inference=2,
+            grounding=self.grounding,
+            on_step=self.on_step,
         )
 
         result = runner.run(
-            task=self.config.pagination_intent,
+            task=pagination_task,
             task_id="pagination",
         )
 
         # If model signaled success, pagination worked
         if result.success:
+            # Scroll back to top of new page so listings are visible
+            try:
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                time.sleep(1.5)
+            except Exception:
+                pass
             return True
 
         # Check if model signaled "no more pages"
         if self._check_no_more(result, check_pages=True):
             return False
 
-        # Ambiguous — assume no more pages
+        # Ambiguous — try ONE more time with explicit scroll-to-bottom
+        logger.info("  Pagination ambiguous — retrying with scroll to bottom")
+        retry_runner = GymRunner(
+            brain=self.brain,
+            env=self.env,
+            max_steps=15,
+            frames_per_inference=2,
+            grounding=self.grounding,
+            on_step=self.on_step,
+        )
+        retry_result = retry_runner.run(
+            task=(
+                "Scroll to the very bottom of this page. "
+                "Find and click the 'Next' button or the next page number. "
+                "done(success=true) if you clicked it."
+            ),
+            task_id="pagination_retry",
+        )
+        if retry_result.success:
+            try:
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                time.sleep(1.5)
+            except Exception:
+                pass
+            return True
+
         return False
 
     def _check_no_more(self, result, check_pages: bool = False) -> bool:
