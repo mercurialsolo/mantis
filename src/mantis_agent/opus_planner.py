@@ -141,6 +141,17 @@ EXTRACTION/DATA TASK RULES:
 - Output format must show REALISTIC example data, not placeholders like <from title>
 - WARN the model: "Do NOT output template text like 'Year: Year' — output actual values like 'Year: 2018'"
 
+PHONE NUMBER EXTRACTION RULES:
+- Phone numbers are the HIGHEST VALUE field — they enable direct seller contact
+- Phones are typically buried DEEP in listing pages: 5-6 scrolls below photos/gallery
+- Include explicit scrolling instructions: "scroll(direction='down', amount=5) AGGRESSIVELY \
+  past the photo gallery to reach Description/Seller Notes where phone numbers appear"
+- Phone formats to look for: (305)555-1234, 786-555-1234, 305.555.5678, 10+ digit numbers
+- NOT phone numbers: prices ($45,000), years (2020), zip codes (33101), model numbers
+- Do NOT click "Contact Seller" or "Request Info" buttons — they open popup forms, not phone numbers
+- If the listing shows "Contact Seller" instead of a phone, the seller chose to hide their number — move on
+- ALWAYS report phone: "Phone: 305-555-1234" or "Phone: none" — never omit the field
+
 OUTPUT FORMAT — exact format for done() calls with realistic examples
 
 Return ONLY the JSON, no markdown fences, no explanation.
