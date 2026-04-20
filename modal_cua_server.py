@@ -1135,7 +1135,7 @@ def _run_holo3_executor(
                     setup_url = task_config.get("start_url", "")
                     print(f"  FILTERS LOST — recovering to {setup_url or 'current page'}")
                     if setup_url:
-                        env.reset(start_url=setup_url)
+                        env.reset(task="filter_recovery", start_url=setup_url)
                         time.sleep(3)
                 else:
                     print(f"  Filters validated OK")

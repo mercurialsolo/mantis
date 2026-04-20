@@ -127,7 +127,7 @@ class LearningRunner:
         """Learn how to apply filters by executing setup with verification."""
         # Navigate to start
         if start_url:
-            self.env.reset(start_url=start_url)
+            self.env.reset(task="navigate", start_url=start_url)
             time.sleep(3)
 
         # Take before screenshot
@@ -180,7 +180,7 @@ class LearningRunner:
             # Recovery: try navigating to start_url
             if start_url:
                 logger.info(f"  Recovery: navigating to {start_url}")
-                self.env.reset(start_url=start_url)
+                self.env.reset(task="navigate", start_url=start_url)
                 time.sleep(3)
 
     def _learn_extraction(

@@ -386,7 +386,7 @@ class WorkflowRunner:
             if consecutive_failures >= 3 and self.start_url:
                 logger.warning(f"  Recovery: {consecutive_failures} failures — navigating back to {self.start_url}")
                 try:
-                    self.env.reset(start_url=self.start_url)
+                    self.env.reset(task="recovery", start_url=self.start_url)
                     time.sleep(2.0)
                     page_iteration = 0  # Reset page position after hard navigation
                 except Exception as e:
