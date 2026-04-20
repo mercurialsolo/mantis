@@ -387,15 +387,44 @@ class WorkflowRunner:
                 except Exception:
                     pass
 
-            # Escalating recovery: hard-reset to start_url after 3 consecutive failures
-            if consecutive_failures >= 3 and self.start_url:
-                logger.warning(f"  Recovery: {consecutive_failures} failures — navigating back to {self.start_url}")
+            # Escalating recovery after consecutive failures
+            if consecutive_failures >= 3:
+                # Try closing any rogue tabs first (Ctrl+W closes current tab)
                 try:
-                    self.env.reset(task="recovery", start_url=self.start_url)
-                    time.sleep(2.0)
-                    page_iteration = 0  # Reset page position after hard navigation
-                except Exception as e:
-                    logger.warning(f"  Recovery navigation failed: {e}")
+                    from ..actions import Action
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+w"}))
+                    time.sleep(1.0)
+                    # Press Escape in case a dialog asks "close tab?"
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+
+                # Hard-reset to start_url or base_url
+                recovery_url = self.start_url or getattr(self.env, '_start_url', '')
+                if recovery_url:
+                    logger.warning(f"  Recovery: {consecutive_failures} failures — navigating to {recovery_url}")
+                    try:
+                        self.env.reset(task="recovery", start_url=recovery_url)
+                        time.sleep(3.0)
+                        page_iteration = 0
+                        # Scroll to top
+                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                        time.sleep(0.5)
+                    except Exception as e:
+                        logger.warning(f"  Recovery navigation failed: {e}")
+                else:
+                    # No URL to recover to — try Alt+Left repeatedly
+                    logger.warning(f"  Recovery: {consecutive_failures} failures — pressing Alt+Left 3x")
+                    try:
+                        from ..actions import Action
+                        for _ in range(3):
+                            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
+                            time.sleep(1.0)
+                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                        time.sleep(0.5)
+                    except Exception:
+                        pass
 
             # Run bounded iteration — sub-plan or monolithic
             if self._sub_plan_runner:
