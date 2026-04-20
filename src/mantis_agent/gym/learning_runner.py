@@ -145,9 +145,9 @@ class LearningRunner:
         atomic_filters = [
             (
                 "apply_seller_filter",
-                "Scroll down in the left sidebar. Find text 'By Owner' and click it. "
-                "done(success=true, summary='clicked By Owner').",
-                ["by owner", "private seller", "by-owner"],
+                "Scroll down in the left sidebar. Find text 'Private Seller' and click it. "
+                "done(success=true, summary='clicked Private Seller').",
+                ["private seller", "by owner", "by-owner"],
             ),
             (
                 "apply_location_filter",
