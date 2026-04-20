@@ -269,11 +269,13 @@ class WorkflowRunner:
                  start_url: str | None = None,
                  grounding: Any = None,
                  on_step: Any = None,
-                 use_sub_plan: bool = False):
+                 use_sub_plan: bool = False,
+                 extractor: Any = None):
         self.brain = brain
         self.grounding = grounding
         self.on_step = on_step
         self.use_sub_plan = use_sub_plan
+        self.extractor = extractor  # ClaudeExtractor for screenshot-based extraction
         # Dedup: track processed phone numbers and listing URLs
         self._seen_phones: set[str] = set()
         self._seen_urls: set[str] = set()
@@ -436,7 +438,31 @@ class WorkflowRunner:
             else:
                 # Legacy monolithic path
                 result = self._run_iteration(intent, f"iter_{global_iteration}")
-                extracted = self._extract_data(result)
+
+                # Claude extraction: use screenshot instead of thinking text
+                if self.extractor and hasattr(self.env, 'screenshot'):
+                    try:
+                        # Take screenshot of current page (should be detail page or back on results)
+                        # Check trajectory for the last screenshot before done()
+                        screenshots = [s.screenshot for s in result.trajectory if hasattr(s, 'screenshot') and s.screenshot]
+                        if screenshots:
+                            top_shot = screenshots[-1]
+                        else:
+                            top_shot = self.env.screenshot()
+
+                        ext_result = self.extractor.extract(top_shot)
+                        if ext_result.is_viable():
+                            extracted = ext_result.to_summary()
+                            logger.info(f"  [claude-extract] {extracted[:100]}")
+                        else:
+                            # Fall back to thinking-based extraction
+                            extracted = self._extract_data(result)
+                    except Exception as e:
+                        logger.warning(f"  Claude extraction failed: {e}")
+                        extracted = self._extract_data(result)
+                else:
+                    extracted = self._extract_data(result)
+
                 parse_failures = self._count_parse_failures(result)
 
             # Extract listing URL for dedup before validation (monolithic path)

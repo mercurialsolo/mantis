@@ -890,6 +890,10 @@ def _run_holo3_executor(
         save_screenshots=f"/data/screenshots/{session_name}_{run_id}",
     )
 
+    # Claude extractor for screenshot-based data extraction
+    from mantis_agent.extraction import ClaudeExtractor
+    extractor = ClaudeExtractor()
+
     # Live viewer tunnel (optional)
     viewer_ctx = None
     viewer_event_bus = None
@@ -1040,7 +1044,8 @@ def _run_holo3_executor(
                                            start_url=task_config.get("start_url", ""),
                                            grounding=grounding,
                                            on_step=viewer_event_bus.emit if viewer_event_bus else None,
-                                           use_sub_plan=sub_plan)
+                                           use_sub_plan=sub_plan,
+                                           extractor=extractor)
                 results = wf_runner.run_loop()
                 viable = sum(1 for r in results if r.success)
                 total = len(results)
