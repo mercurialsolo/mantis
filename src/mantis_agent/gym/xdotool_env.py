@@ -161,6 +161,10 @@ class XdotoolGymEnv(GymEnvironment):
 
     # ── Screenshot ──────────────────────────────────────────────────
 
+    def screenshot(self) -> Image.Image:
+        """Public: capture current screenshot as PIL Image."""
+        return self._screenshot()
+
     def _screenshot(self) -> Image.Image:
         """Capture screenshot via mss (fast) or scrot (fallback)."""
         try:
