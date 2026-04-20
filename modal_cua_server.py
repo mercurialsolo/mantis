@@ -1046,6 +1046,35 @@ def _run_holo3_executor(
                 if result.success or ("login" not in env.current_url.lower()):
                     env.save_session(session_name)
 
+            # Post-setup validation: verify filters didn't break the page
+            if ("setup" in task_id or "filter" in task_id):
+                print(f"  Validating filters...")
+                validate_runner = GymRunner(brain=brain, env=env, max_steps=10,
+                                           frames_per_inference=1,
+                                           grounding=grounding,
+                                           on_step=viewer_event_bus.emit if viewer_event_bus else None)
+                validate_result = validate_runner.run(
+                    task=(
+                        "Look at the current page and READ what you see. Do NOT click anything.\n"
+                        "Check: Does the page show filtered results? Look for:\n"
+                        "- Heading mentioning 'by owner' or 'private seller'\n"
+                        "- Result count less than 50,000 boats\n"
+                        "- Active filter tags/pills showing applied filters\n\n"
+                        "If filters are applied: done(success=true, summary='Verified: [heading] [count] results')\n"
+                        "If NO filters (shows 125,000+ boats or generic 'Boats for sale'): "
+                        "done(success=false, summary='Filters lost: [what you see]')"
+                    ),
+                    task_id=f"{task_id}_validate",
+                )
+                if not validate_result.success:
+                    setup_url = task_config.get("start_url", "")
+                    print(f"  FILTERS LOST — recovering to {setup_url or 'current page'}")
+                    if setup_url:
+                        env.reset(start_url=setup_url)
+                        time.sleep(3)
+                else:
+                    print(f"  Filters validated OK")
+
             success = result.success
             scores.append(1.0 if success else 0.0)
             task_details.append({
