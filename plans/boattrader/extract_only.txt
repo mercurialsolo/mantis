@@ -3,7 +3,7 @@ BoatTrader Private Seller Lead Extraction
 Search BoatTrader for private seller boats near Miami:
 - Go to https://www.boattrader.com/boats/
 - Apply filters in this order (MOST IMPORTANT FIRST):
-  1. Select "Private Seller" or "By Owner" in seller type filter
+  1. Select "Private Seller" in seller type filter
   2. Enter zip code 33101 in location field
   3. Set radius to 25 miles
   4. Set minimum price to $35,000

@@ -1091,8 +1091,10 @@ def _run_holo3_executor(
                     from mantis_agent.brain_claude import ClaudeBrain
                     task_brain = ClaudeBrain(
                         model="claude-sonnet-4-20250514",
-                        thinking_budget=1024,
+                        thinking_budget=2048,
+                        screen_size=(1280, 720),
                     )
+                    task_brain.load()
                     print(f"  Using Claude Sonnet for setup (hybrid mode)")
                 except Exception as e:
                     print(f"  Claude brain failed, using Holo3: {e}")
