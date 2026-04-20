@@ -133,6 +133,7 @@ class FailureCategory:
     PAGE_EXHAUSTED = "page_exhausted"   # No more listings on page
     CONTEXT_ROT = "context_rot"         # Model lost track (blank page, wrong page)
     CLOUDFLARE = "cloudflare"           # Bot detection blocked
+    DEALER_LISTING = "dealer_listing"   # Clicked dealer listing, not private seller
     PARSE_FAILURE = "parse_failure"     # Model output unparseable
     UNKNOWN = "unknown"
 
@@ -143,6 +144,12 @@ def _classify_failure(data: str, result=None) -> tuple[str, str]:
     Returns (category, reason) tuple for structured logging.
     """
     text = (data or "").lower()
+
+    # Dealer listing detection (highest priority — wrong listing type entirely)
+    dealer_signals = ["more from this dealer", "view dealer website", "dealer listing",
+                      "visit seller website", "more boats from this dealer"]
+    if any(sig in text for sig in dealer_signals):
+        return FailureCategory.DEALER_LISTING, "Clicked dealer listing instead of private seller"
 
     if "popup" in text or "modal" in text or "contact seller" in text or "request info" in text:
         return FailureCategory.POPUP_TRAP, "Modal/popup blocked interaction"
@@ -279,11 +286,14 @@ class WorkflowRunner:
 
         # Cross-run learning store (persists to /data/learnings/)
         domain = ""
-        if start_url:
-            import re as _r
-            m = _r.search(r"(?:https?://)?(?:www\.)?([\w\-]+\.[\w]+)", start_url)
-            if m:
-                domain = m.group(1)
+        # Try start_url first, fall back to iteration_intent for domain hints
+        for url_source in [start_url, loop_config.iteration_intent]:
+            if url_source:
+                import re as _r
+                m = _r.search(r"(?:https?://)?(?:www\.)?([\w\-]+\.[\w]+)", url_source)
+                if m:
+                    domain = m.group(1)
+                    break
         self._learning_store = LearningStore(domain=domain)
 
         # Sub-plan runner for micro-step decomposition
@@ -971,6 +981,14 @@ class WorkflowRunner:
         import re
         data = str(data)
         text = data.lower()
+
+        # Reject dealer listings (not private sellers — no phone numbers)
+        dealer_signals = [
+            "more from this dealer", "view dealer website",
+            "more boats from this dealer", "visit seller website",
+        ]
+        if any(sig in text for sig in dealer_signals):
+            return False
 
         # Reject error/blocked pages
         reject_signals = [

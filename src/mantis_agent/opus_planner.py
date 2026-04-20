@@ -68,9 +68,10 @@ CRITICAL RULES for your output:
 7. For FILTER/SETUP tasks: require verification of results (e.g. "result count should decrease") \
    and PROHIBIT calling done() without actual UI interaction
 8. For EXTRACTION tasks: URL from the address bar is ALWAYS a required output field
-9. MULTI-TASK CONTINUITY: When a setup/filter task runs before an extraction task, \
-   the extraction task should NOT have a start_url — set it to null so the browser \
-   stays on the filtered results page. Only the first task needs a start_url.
+9. MULTI-TASK CONTINUITY: The extraction task MUST have the same start_url as the \
+   setup task (e.g. /boats/by-owner/) to guarantee the critical filter is preserved. \
+   Setup tasks often navigate away from the intended page. The extraction task's start_url \
+   acts as a safety net — it re-navigates to the correct filtered page before extracting.
 """
 
 PLANNER_PROMPT = """\
