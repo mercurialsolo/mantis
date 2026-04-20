@@ -1111,34 +1111,47 @@ def _run_holo3_executor(
                 if result.success or ("login" not in env.current_url.lower()):
                     env.save_session(session_name)
 
-            # Post-setup validation: verify filters didn't break the page
+            # Post-setup validation: verify filters applied correctly
             if ("setup" in task_id or "filter" in task_id):
                 print(f"  Validating filters...")
-                validate_runner = GymRunner(brain=brain, env=env, max_steps=10,
+                validate_runner = GymRunner(brain=brain, env=env, max_steps=8,
                                            frames_per_inference=1,
                                            grounding=grounding,
                                            on_step=viewer_event_bus.emit if viewer_event_bus else None)
                 validate_result = validate_runner.run(
                     task=(
-                        "Look at the current page and READ what you see. Do NOT click anything.\n"
-                        "Check: Does the page show filtered results? Look for:\n"
-                        "- Heading mentioning 'by owner' or 'private seller'\n"
-                        "- Result count less than 50,000 boats\n"
-                        "- Active filter tags/pills showing applied filters\n\n"
-                        "If filters are applied: done(success=true, summary='Verified: [heading] [count] results')\n"
-                        "If NO filters (shows 125,000+ boats or generic 'Boats for sale'): "
-                        "done(success=false, summary='Filters lost: [what you see]')"
+                        "READ the current page. Do NOT click anything.\n\n"
+                        "Check these THREE things:\n"
+                        "1. Read the URL in the address bar — does it contain 'by-owner'?\n"
+                        "2. Read the page heading — does it say 'by owner' or 'private seller'?\n"
+                        "3. Read the result count — is it LESS than 20,000?\n\n"
+                        "If the URL contains 'by-owner' OR the heading mentions 'owner'/'private': "
+                        "done(success=true, summary='Private seller filter active: [URL] [heading] [count]')\n\n"
+                        "If the URL is just '/boats/' and heading says 'Boats for sale' with 100,000+ results: "
+                        "done(success=false, summary='NO private seller filter — URL: [url] Count: [count]')"
                     ),
                     task_id=f"{task_id}_validate",
                 )
                 if not validate_result.success:
-                    setup_url = task_config.get("start_url", "")
-                    print(f"  FILTERS LOST — recovering to {setup_url or 'current page'}")
-                    if setup_url:
-                        env.reset(task="filter_recovery", start_url=setup_url)
-                        time.sleep(3)
+                    # Filter not applied — critical failure
+                    # Try direct recovery: navigate to by-owner URL
+                    print(f"  PRIVATE SELLER FILTER NOT APPLIED — attempting direct navigation")
+                    try:
+                        # Use address bar to navigate to by-owner page
+                        from mantis_agent.actions import Action, ActionType
+                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+l"}))
+                        time.sleep(0.3)
+                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+a"}))
+                        time.sleep(0.2)
+                        env.step(Action(action_type=ActionType.TYPE, params={"text": "https://www.boattrader.com/boats/by-owner/"}))
+                        time.sleep(0.3)
+                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Return"}))
+                        time.sleep(5)
+                        print(f"  Navigated to /boats/by-owner/ via address bar")
+                    except Exception as e:
+                        print(f"  Recovery navigation failed: {e}")
                 else:
-                    print(f"  Filters validated OK")
+                    print(f"  Private seller filter VERIFIED")
 
             success = result.success
             scores.append(1.0 if success else 0.0)

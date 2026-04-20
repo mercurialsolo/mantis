@@ -124,64 +124,132 @@ class LearningRunner:
         start_url: str,
         expected_filters: list[str],
     ):
-        """Learn how to apply filters by executing setup with verification."""
+        """Learn how to apply filters as ATOMIC verified steps.
+
+        Instead of running the entire setup as one blob, break it into
+        individual filter actions. Each action gets:
+        1. Screenshot BEFORE
+        2. One focused GymRunner call (max 15 steps per filter)
+        3. Screenshot AFTER
+        4. StepVerifier checks if the filter was applied
+
+        This prevents the model from spending 35 steps clicking random
+        sidebar elements without ever applying the target filter.
+        """
         # Navigate to start
         if start_url:
             self.env.reset(task="navigate", start_url=start_url)
-            time.sleep(3)
+            time.sleep(4)
 
-        # Take before screenshot
-        before = self.env.screenshot()
+        # Define atomic filter steps in priority order
+        # Each step is: (name, intent, verification_check)
+        atomic_filters = [
+            (
+                "apply_seller_filter",
+                "Look at the left sidebar. Find a filter for SELLER TYPE or 'For Sale By'. "
+                "Click on 'By Owner' or 'Private Seller' option. "
+                "Do NOT click condition pills (All/New/Used). "
+                "Do NOT click anything else — ONLY the seller type filter. "
+                "After clicking, call done(success=true, summary='clicked by-owner filter').",
+                ["by owner", "private seller", "by-owner"],
+            ),
+            (
+                "apply_location_filter",
+                "Find the ZIP CODE input field in the left sidebar Location section. "
+                "Click on it and type_text('33101'). Press Enter. "
+                "Do NOT click any other filters. "
+                "done(success=true, summary='entered zip 33101').",
+                ["33101", "miami"],
+            ),
+            (
+                "apply_price_filter",
+                "Find the MINIMUM PRICE input field in the left sidebar. "
+                "Click on it and type_text('35000'). Press Enter. "
+                "done(success=true, summary='set min price 35000').",
+                ["35000", "35,000"],
+            ),
+        ]
 
-        # Run setup task
-        runner = GymRunner(
-            brain=self.brain, env=self.env,
-            max_steps=60, frames_per_inference=1,
-            grounding=self.grounding,
-            on_step=self.on_step,
-        )
-        t0 = time.time()
-        result = runner.run(task=setup_intent, task_id="learn_setup", start_url=start_url)
-        duration = time.time() - t0
+        for filter_name, filter_intent, verify_signals in atomic_filters:
+            logger.info(f"\n  Atomic filter: {filter_name}")
 
-        # Take after screenshot
-        after = self.env.screenshot()
+            before = self.env.screenshot()
 
-        # Verify: did setup work?
-        step_verify = self.verifier.verify_step(
-            before, after,
-            intent="Apply search filters",
-            action=f"Setup task ({result.total_steps} steps)",
-        )
+            # Run focused task — small step budget per filter
+            runner = GymRunner(
+                brain=self.brain, env=self.env,
+                max_steps=15, frames_per_inference=1,
+                grounding=self.grounding,
+                on_step=self.on_step,
+            )
+            t0 = time.time()
+            result = runner.run(task=filter_intent, task_id=f"learn_{filter_name}")
+            duration = time.time() - t0
 
-        # Also verify specific filters
-        filter_verify = self.verifier.verify_filter(
-            after, expected_filters, max_results=50000,
-        )
+            after = self.env.screenshot()
 
-        setup_step = PlaybookStep(
-            name="setup_filters",
-            intent=setup_intent[:200],
-            expected_outcome=f"Filters applied: {', '.join(expected_filters)}",
-            recovery_action=f"Navigate to {start_url}" if start_url else "Refresh page",
-        )
-        setup_step.update_confidence(filter_verify.verified)
+            # Verify this specific filter was applied
+            verify = self.verifier.verify_step(
+                before, after,
+                intent=f"Apply filter: {filter_name}",
+                action=f"{result.total_steps} steps",
+            )
 
-        playbook.setup_steps.append(setup_step)
+            # Also check page for the expected signals
+            filter_check = self.verifier.verify_filter(
+                after, verify_signals, max_results=50000,
+            )
 
-        if filter_verify.verified:
-            logger.info(f"  Setup VERIFIED in {result.total_steps} steps ({duration:.0f}s)")
-            logger.info(f"  Filters confirmed: {filter_verify.details[:100]}")
-        else:
-            logger.warning(f"  Setup FAILED verification: {filter_verify.issue}")
-            logger.warning(f"  Suggestion: {filter_verify.suggestion}")
-            playbook.known_traps.append(f"Setup filter failed: {filter_verify.issue}")
+            step = PlaybookStep(
+                name=filter_name,
+                intent=filter_intent[:200],
+                expected_outcome=f"Page shows: {', '.join(verify_signals)}",
+                failure_signal="URL lost by-owner segment" if filter_name == "apply_seller_filter" else "",
+                recovery_action=f"Navigate to {start_url}" if start_url else "Retry filter",
+            )
 
-            # Recovery: try navigating to start_url
-            if start_url:
-                logger.info(f"  Recovery: navigating to {start_url}")
-                self.env.reset(task="navigate", start_url=start_url)
-                time.sleep(3)
+            verified = verify.verified and filter_check.verified
+            step.update_confidence(verified)
+            playbook.setup_steps.append(step)
+
+            if verified:
+                logger.info(f"    VERIFIED ({result.total_steps} steps, {duration:.0f}s)")
+            else:
+                logger.warning(f"    FAILED: {verify.issue or filter_check.issue}")
+                playbook.known_traps.append(f"{filter_name} failed: {verify.issue or filter_check.issue}")
+
+                # For the critical seller filter: retry with more explicit instruction
+                if filter_name == "apply_seller_filter" and not verified:
+                    logger.info(f"    Retrying seller filter with explicit instruction...")
+                    retry_runner = GymRunner(
+                        brain=self.brain, env=self.env,
+                        max_steps=20, frames_per_inference=1,
+                        grounding=self.grounding,
+                        on_step=self.on_step,
+                    )
+                    retry_result = retry_runner.run(
+                        task=(
+                            "CRITICAL: You must click the 'By Owner' filter. "
+                            "Scroll down in the LEFT SIDEBAR until you see 'For Sale By' section. "
+                            "It has options like 'All', 'Dealer', 'By Owner'. "
+                            "Click on 'By Owner' text. "
+                            "If you cannot find it, scroll the sidebar more. "
+                            "done(success=true) only after clicking By Owner."
+                        ),
+                        task_id=f"learn_{filter_name}_retry",
+                    )
+                    after_retry = self.env.screenshot()
+                    retry_check = self.verifier.verify_filter(
+                        after_retry, verify_signals, max_results=50000,
+                    )
+                    step.update_confidence(retry_check.verified)
+                    if retry_check.verified:
+                        logger.info(f"    Retry VERIFIED")
+                    else:
+                        logger.warning(f"    Retry also FAILED — seller filter cannot be applied")
+                        playbook.known_traps.append("Seller filter: model cannot find/click 'By Owner'")
+
+            time.sleep(1.0)
 
     def _learn_extraction(
         self,
