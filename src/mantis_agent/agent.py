@@ -30,7 +30,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
+from typing import Any
 
 from .actions import Action, ActionType
 from .brain import Gemma4Brain, InferenceResult
@@ -86,6 +88,7 @@ class StreamingCUA:
         max_steps: int = 50,
         frames_per_inference: int = 5,
         settle_time: float = 0.5,
+        on_event: Callable[[dict[str, Any]], Coroutine[Any, Any, None]] | None = None,
     ):
         self.brain = brain
         self.streamer = streamer or ScreenStreamer()
@@ -93,8 +96,17 @@ class StreamingCUA:
         self.max_steps = max_steps
         self.frames_per_inference = frames_per_inference
         self.settle_time = settle_time
+        self.on_event = on_event
         self._action_history: list[Action] = []
         self._steps: list[StepResult] = []
+
+    async def _emit(self, event_type: str, **data: Any) -> None:
+        """Emit an event to the viewer (if connected). Never crashes the agent."""
+        if self.on_event:
+            try:
+                await self.on_event({"type": event_type, "ts": time.time(), **data})
+            except Exception:
+                pass
 
     async def run(self, task: str) -> AgentResult:
         """Execute a task using the streaming perception-action loop.
@@ -120,12 +132,26 @@ class StreamingCUA:
         if self.streamer.screen_size != (0, 0):
             self.executor.screen_bounds = self.streamer.screen_size
 
+        await self._emit(
+            "task_start",
+            task=task,
+            max_steps=self.max_steps,
+            screen_size=list(self.streamer.screen_size),
+        )
+
         try:
             result = await self._run_loop(task)
         finally:
             await self.streamer.stop()
 
         total_time = time.time() - t0
+        await self._emit(
+            "done",
+            success=result.success,
+            summary=result.summary,
+            total_steps=result.total_steps,
+            total_time=round(total_time, 1),
+        )
         logger.info(
             f"Task {'completed' if result.success else 'failed'} "
             f"in {result.total_steps} steps ({total_time:.1f}s)"
@@ -136,6 +162,7 @@ class StreamingCUA:
         """The core perception-action loop."""
         for step_num in range(1, self.max_steps + 1):
             logger.info(f"─── Step {step_num}/{self.max_steps} ───")
+            await self._emit("step", step=step_num, max_steps=self.max_steps)
 
             # 1. PERCEIVE — grab recent frames from the rolling buffer
             frames = self.streamer.get_recent_frames(self.frames_per_inference)
@@ -160,6 +187,15 @@ class StreamingCUA:
             logger.info(f"Action: {action}")
             if inference.thinking:
                 logger.debug(f"Thinking: {inference.thinking[:200]}...")
+                await self._emit("thinking", step=step_num, text=inference.thinking[:500])
+
+            await self._emit(
+                "action",
+                step=step_num,
+                action_type=action.action_type.value,
+                params=action.params,
+                reasoning=action.reasoning,
+            )
 
             # 3. Check for task completion
             if action.action_type == ActionType.DONE:
@@ -187,6 +223,14 @@ class StreamingCUA:
 
             self._steps.append(
                 StepResult(step=step_num, inference=inference, execution=execution)
+            )
+
+            await self._emit(
+                "execution",
+                step=step_num,
+                success=execution.success,
+                error=execution.error,
+                duration=round(execution.duration, 3),
             )
 
             if not execution.success:

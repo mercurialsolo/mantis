@@ -1,22 +1,18 @@
 """XdotoolGymEnv — pure screen-level CUA environment using Xvfb + xdotool.
 
-No automation framework. Just:
-- Screenshots via scrot/mss (pixel capture)
-- Clicks via xdotool (mouse events)
-- Typing via xdotool (keyboard events)
-- Browser launched as a regular process
-
-The CUA model sees only screenshots. Actions are physical input events
-injected at the X11 level — identical to a human using a mouse/keyboard.
+Strictly screenshot + input events. No CDP, no DOM, no JS injection.
 
 Architecture:
     Xvfb (virtual display :99)
-      └── Chrome/Firefox (regular process, not automated)
+      └── Chrome (regular process, zero automation hooks)
             ↕ X11 events
-    xdotool → mouse_move, click, type
-    scrot/mss → screenshot.png
+    xdotool → mousemove, click, type, key
+    mss/scrot → screenshot.png
 
-    CUA Brain sees screenshot → outputs (x, y, text) → xdotool executes
+    Brain sees screenshot → outputs action → xdotool executes
+
+The model handles everything visually: cookies, popups, navigation.
+The env just executes actions and returns screenshots.
 
 Requirements:
     apt-get install xvfb xdotool scrot chromium-browser
@@ -25,7 +21,6 @@ Requirements:
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import random
@@ -42,17 +37,20 @@ logger = logging.getLogger(__name__)
 
 
 class XdotoolGymEnv(GymEnvironment):
-    """Pure screen-level environment — Xvfb + xdotool + scrot.
+    """Pure screen-level environment — Xvfb + xdotool + mss.
 
     No Playwright, no CDP, no DOM access. Just pixels and input events.
+    Identical to a human using a mouse and keyboard.
 
     Args:
         start_url: URL to open in the browser on reset.
         viewport: Screen size as (width, height).
         browser: Browser command ("chromium-browser", "firefox", "google-chrome").
         display: X11 display number (e.g., ":99"). If None, starts Xvfb.
-        settle_time: Seconds to wait after actions.
+        settle_time: Seconds to wait after actions for page to update.
         human_speed: Add realistic delays between actions.
+        proxy_server: HTTP proxy URL (e.g. "http://127.0.0.1:3128").
+        profile_dir: Chrome user-data-dir for cookie/session persistence.
     """
 
     def __init__(
@@ -64,6 +62,8 @@ class XdotoolGymEnv(GymEnvironment):
         settle_time: float = 1.5,
         human_speed: bool = False,
         proxy_server: str = "",
+        profile_dir: str = "/data/chrome-profile",
+        save_screenshots: str = "",
     ):
         self._start_url = start_url
         self._viewport = viewport
@@ -71,11 +71,16 @@ class XdotoolGymEnv(GymEnvironment):
         self._display = display
         self._settle_time = settle_time
         self._human_speed = human_speed
-        self._proxy_server = proxy_server  # e.g. "http://127.0.0.1:3128"
+        self._proxy_server = proxy_server
+        self._profile_dir = profile_dir
+        self._save_screenshots = save_screenshots  # Dir to save screenshots for replay
+        self._step_counter = 0
 
         self._xvfb_proc = None
         self._browser_proc = None
         self._env = {}
+
+    # ── Xvfb + Browser ──────────��───────────────────────────────────
 
     def _start_xvfb(self) -> str:
         """Start Xvfb virtual display if not already running."""
@@ -96,18 +101,53 @@ class XdotoolGymEnv(GymEnvironment):
         return display
 
     def _start_browser(self, url: str) -> None:
-        """Launch browser as a regular process on the virtual display."""
+        """Launch browser with persistent profile, no CDP."""
+        os.makedirs(self._profile_dir, exist_ok=True)
+
+        # Clean session recovery files to prevent "Restore pages?" dialog.
+        # Preserves: Cookies, Local Storage, Login Data, Preferences.
+        default_dir = os.path.join(self._profile_dir, "Default")
+        if os.path.isdir(default_dir):
+            for stale in ["Current Session", "Current Tabs",
+                          "Last Session", "Last Tabs", "Session Storage"]:
+                path = os.path.join(default_dir, stale)
+                if os.path.exists(path):
+                    try:
+                        if os.path.isdir(path):
+                            import shutil
+                            shutil.rmtree(path, ignore_errors=True)
+                        else:
+                            os.remove(path)
+                    except OSError:
+                        pass
+
+        # Remove lock files from prior unclean shutdown
+        for lock in ["SingletonLock", "SingletonSocket", "SingletonCookie"]:
+            path = os.path.join(self._profile_dir, lock)
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+
         cmd = [
             self._browser_cmd,
             "--no-sandbox",
+            "--test-type",  # Suppress --no-sandbox warning bar
             "--disable-gpu",
             "--no-first-run",
             "--disable-default-apps",
             "--disable-infobars",
+            "--disable-notifications",
+            "--disable-popup-blocking",
+            "--disable-session-crashed-bubble",
+            "--hide-crash-restore-bubble",
+            "--noerrdialogs",
+            "--disable-features=InfiniteSessionRestore",
             f"--window-size={self._viewport[0]},{self._viewport[1]}",
             "--start-maximized",
+            f"--user-data-dir={self._profile_dir}",
         ]
-        # Proxy support
         if self._proxy_server:
             cmd.append(f"--proxy-server={self._proxy_server}")
         cmd.append(url)
@@ -116,21 +156,22 @@ class XdotoolGymEnv(GymEnvironment):
             cmd, env=self._env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        time.sleep(3)  # Wait for browser to open
+        time.sleep(3)
         logger.info(f"Browser started: {self._browser_cmd} → {url}")
+
+    # ── Screenshot ──────────────────────────────────────────────────
 
     def _screenshot(self) -> Image.Image:
         """Capture screenshot via mss (fast) or scrot (fallback)."""
         try:
             import mss
             with mss.mss(display=self._env.get("DISPLAY", ":99")) as sct:
-                monitor = sct.monitors[0]  # Full screen
+                monitor = sct.monitors[0]
                 img = sct.grab(monitor)
                 return Image.frombytes("RGB", img.size, img.bgra, "raw", "BGRX")
         except Exception:
             pass
 
-        # Fallback: scrot
         try:
             tmp = "/tmp/mantis_screenshot.png"
             subprocess.run(
@@ -142,6 +183,8 @@ class XdotoolGymEnv(GymEnvironment):
             logger.warning(f"Screenshot failed: {e}")
             return Image.new("RGB", self._viewport, "gray")
 
+    # ── xdotool ───��─────────────────────────────────────────────��───
+
     def _xdotool(self, *args: str) -> None:
         """Run xdotool command."""
         subprocess.run(
@@ -150,7 +193,7 @@ class XdotoolGymEnv(GymEnvironment):
         )
 
     def _xdotool_type(self, text: str) -> None:
-        """Type text via xdotool with optional human-like delays."""
+        """Type text via xdotool."""
         if self._human_speed:
             for char in text:
                 subprocess.run(
@@ -167,13 +210,13 @@ class XdotoolGymEnv(GymEnvironment):
 
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
         """Start Xvfb + browser, navigate to URL."""
-        url = kwargs.get("start_url", self._start_url)
+        url = kwargs.get("start_url", "")  # Only navigate if explicitly passed
 
-        # Browser already running — navigate via address bar (no restart)
+        # Browser already running
         if self._browser_proc and self._browser_proc.poll() is None:
-            logger.info("Reusing existing browser (xdotool navigate)")
             if url and url != "about:blank":
-                # Navigate: Ctrl+L → select all → type URL → Enter
+                # Navigate to the specified URL
+                logger.info(f"Navigating to {url[:60]}")
                 self._xdotool("key", "ctrl+l")
                 time.sleep(0.3)
                 self._xdotool("key", "ctrl+a")
@@ -182,6 +225,9 @@ class XdotoolGymEnv(GymEnvironment):
                 time.sleep(0.3)
                 self._xdotool("key", "Return")
                 time.sleep(self._settle_time + 2)
+            else:
+                # No URL — just capture current page state (for sub-plan micro-steps)
+                logger.info("Reusing browser (no navigation)")
             return self._capture()
 
         # Fresh start
@@ -191,14 +237,13 @@ class XdotoolGymEnv(GymEnvironment):
         display = self._start_xvfb()
         self._env = {**os.environ, "DISPLAY": display}
 
-        self._start_browser(url)
+        self._start_browser(url or self._start_url)
         time.sleep(self._settle_time + 2)
 
         return self._capture()
 
     def step(self, action: Action) -> GymResult:
         """Execute action via xdotool and return screenshot."""
-        # Human-like pre-action delay
         if self._human_speed:
             if action.action_type == ActionType.CLICK:
                 time.sleep(random.uniform(0.3, 1.0))
@@ -237,16 +282,48 @@ class XdotoolGymEnv(GymEnvironment):
 
     @property
     def current_url(self) -> str:
-        # Can't read URL without DOM — return empty
-        # The model reads it from the address bar in the screenshot
+        # No CDP — model reads URL from the address bar in the screenshot
         return ""
 
-    # ── Internal ─────────────────────────────────────────────────────
+    def has_session(self, name: str) -> bool:
+        return self._browser_proc is not None and self._browser_proc.poll() is None
+
+    def save_session(self, name: str) -> None:
+        pass
+
+    def load_session(self, name: str) -> None:
+        pass
+
+    # ��─ Internal ──���──────────────────────��───────────────────────────
 
     def _capture(self) -> GymObservation:
-        """Take screenshot and return as observation."""
+        """Take screenshot and return as observation.
+
+        If save_screenshots is set, saves each screenshot for replay testing.
+        """
         screenshot = self._screenshot()
+
+        if self._save_screenshots:
+            from .replay_env import save_screenshot
+            save_screenshot(screenshot, self._save_screenshots, self._step_counter)
+            self._step_counter += 1
+
         return GymObservation(screenshot=screenshot, extras={})
+
+    @staticmethod
+    def _to_int(val) -> int:
+        """Safely extract an integer from a possibly malformed value."""
+        if isinstance(val, (int, float)):
+            return int(val)
+        s = str(val).strip()
+        # Extract first number from strings like "143, 417]" or "0, y>\n0..."
+        m = __import__("re").match(r'-?\d+', s)
+        return int(m.group(0)) if m else 0
+
+    def _clamp(self, x: int, y: int) -> tuple[int, int]:
+        """Clamp coordinates to viewport bounds."""
+        x, y = self._to_int(x), self._to_int(y)
+        return max(0, min(x, self._viewport[0] - 1)), max(0, min(y, self._viewport[1] - 1))
 
     def _execute_action(self, action: Action) -> None:
         """Translate Mantis Action to xdotool commands."""
@@ -254,26 +331,28 @@ class XdotoolGymEnv(GymEnvironment):
             case ActionType.CLICK:
                 x = action.params.get("x", self._viewport[0] // 2)
                 y = action.params.get("y", self._viewport[1] // 2)
+                x, y = self._clamp(x, y)
                 button = action.params.get("button", "left")
                 btn_num = {"left": "1", "middle": "2", "right": "3"}.get(button, "1")
-                # Move mouse smoothly, then click
+                self._xdotool("mousemove", str(x), str(y))
                 if self._human_speed:
-                    self._xdotool("mousemove", "--sync", str(x), str(y))
                     time.sleep(random.uniform(0.05, 0.15))
-                else:
-                    self._xdotool("mousemove", str(x), str(y))
                 self._xdotool("click", btn_num)
 
             case ActionType.DOUBLE_CLICK:
                 x = action.params.get("x", self._viewport[0] // 2)
                 y = action.params.get("y", self._viewport[1] // 2)
+                x, y = self._clamp(x, y)
                 self._xdotool("mousemove", str(x), str(y))
                 self._xdotool("click", "--repeat", "2", "1")
 
             case ActionType.TYPE:
-                text = action.params["text"]
+                text = action.params.get("text") or action.params.get("content") or ""
+                if not text:
+                    logger.warning(f"type_text missing text: {action.params}")
+                    return
+                text = str(text)
                 if text.startswith("http://") or text.startswith("https://"):
-                    # URL: focus address bar first, then type
                     self._xdotool("key", "ctrl+l")
                     time.sleep(0.5)
                     self._xdotool("key", "ctrl+a")
@@ -285,9 +364,11 @@ class XdotoolGymEnv(GymEnvironment):
                     self._xdotool_type(text)
 
             case ActionType.KEY_PRESS:
-                keys = action.params["keys"]
-                # Normalize to xdotool format: ctrl+c → ctrl+c (same)
-                # But xdotool uses "Return" not "enter"
+                keys = action.params.get("keys") or action.params.get("key") or ""
+                if not keys:
+                    logger.warning(f"key_press missing keys: {action.params}")
+                    return
+                keys = str(keys)
                 key_map = {
                     "enter": "Return", "tab": "Tab", "escape": "Escape",
                     "backspace": "BackSpace", "delete": "Delete",
@@ -299,19 +380,16 @@ class XdotoolGymEnv(GymEnvironment):
                     "space": "space",
                 }
                 parts = keys.split("+")
-                mapped = []
-                for p in parts:
-                    p_lower = p.strip().lower()
-                    mapped.append(key_map.get(p_lower, p.strip()))
+                mapped = [key_map.get(p.strip().lower(), p.strip()) for p in parts]
                 self._xdotool("key", "+".join(mapped))
 
             case ActionType.SCROLL:
-                direction = action.params["direction"]
+                direction = action.params.get("direction", "down")
                 amount = action.params.get("amount", 3)
                 x = action.params.get("x", self._viewport[0] // 2)
                 y = action.params.get("y", self._viewport[1] // 2)
+                x, y = self._clamp(x, y)
                 self._xdotool("mousemove", str(x), str(y))
-                # xdotool: button 4=scroll up, 5=scroll down
                 btn = "4" if direction == "up" else "5"
                 for _ in range(amount):
                     self._xdotool("click", btn)
@@ -319,12 +397,14 @@ class XdotoolGymEnv(GymEnvironment):
                         time.sleep(random.uniform(0.05, 0.15))
 
             case ActionType.DRAG:
-                sx, sy = action.params["start_x"], action.params["start_y"]
+                sx, sy = action.params.get("start_x", 0), action.params.get("start_y", 0)
                 ex, ey = action.params["end_x"], action.params["end_y"]
+                sx, sy = self._clamp(sx, sy)
+                ex, ey = self._clamp(ex, ey)
                 self._xdotool("mousemove", str(sx), str(sy))
                 self._xdotool("mousedown", "1")
                 time.sleep(0.1)
-                self._xdotool("mousemove", "--sync", str(ex), str(ey))
+                self._xdotool("mousemove", str(ex), str(ey))
                 self._xdotool("mouseup", "1")
 
             case ActionType.WAIT:

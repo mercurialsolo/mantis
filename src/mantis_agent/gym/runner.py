@@ -100,15 +100,27 @@ class GymRunner:
         hard_loop_window: int = 8,
         plan_executor: Any = None,
         page_discovery: Any = None,
+        grounding: Any = None,
+        on_step: Any = None,
     ):
         self.brain = brain
         self.env = env
         self.max_steps = max_steps
+        self.grounding = grounding  # Optional: refine click coordinates
         self.frames_per_inference = frames_per_inference
         self.soft_loop_window = soft_loop_window
         self.hard_loop_window = hard_loop_window
         self.plan_executor = plan_executor
         self.page_discovery = page_discovery
+        self.on_step = on_step  # Optional: fn(dict) -> None for live viewer
+
+    def _emit(self, event_type: str, **data: Any) -> None:
+        """Emit an event to the viewer (if connected). Never crashes the runner."""
+        if self.on_step:
+            try:
+                self.on_step({"type": event_type, "ts": time.time(), **data})
+            except Exception:
+                pass
 
     def run(
         self,
@@ -118,6 +130,7 @@ class GymRunner:
         plan_steps: str | None = None,
         plan: Any = None,
         plan_inputs: dict[str, str] | None = None,
+        start_url: str | None = None,
     ) -> RunResult:
         """Execute a task with plan persistence, feedback, and context.
 
@@ -165,6 +178,8 @@ class GymRunner:
 
         # Reset environment
         reset_kwargs: dict[str, Any] = {"task_id": task_id}
+        if start_url:
+            reset_kwargs["start_url"] = start_url
         if seed is not None:
             reset_kwargs["seed"] = seed
 
@@ -173,6 +188,11 @@ class GymRunner:
         last_url = obs.extras.get("url", "")
         last_title = obs.extras.get("title", "")
         latest_obs = obs  # Track latest obs for SoM/DOM state injection
+
+        self._emit(
+            "task_start", task=task, max_steps=self.max_steps,
+            screen_size=list(self.env.screen_size),
+        )
 
         termination_reason = "max_steps"
 
@@ -307,6 +327,16 @@ class GymRunner:
                 last_thinking = thinking  # Persist for next step's prompt
                 logger.info(f"Action: {action} ({inference_time:.2f}s)")
 
+                self._emit("step", step=step_num, max_steps=self.max_steps)
+                if thinking:
+                    self._emit("thinking", step=step_num, text=thinking[:500])
+                self._emit(
+                    "action", step=step_num,
+                    action_type=action.action_type.value,
+                    params=action.params,
+                    reasoning=action.reasoning,
+                )
+
                 # Step 0: extract plan from model's thinking
                 if step_num == 1 and thinking and not agent_plan:
                     agent_plan = self._extract_plan(thinking)
@@ -321,6 +351,41 @@ class GymRunner:
                     ))
                     termination_reason = "done"
                     break
+
+                # Grounded click refinement — if grounding model available,
+                # refine click coordinates before execution
+                if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+                    print(f"  [click] ({action.params.get('x')},{action.params.get('y')}) grounding={'YES' if self.grounding else 'NO'}")
+                # Only ground clicks that look like listing-selection, not escape/close/back actions
+                should_ground = (
+                    self.grounding
+                    and action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK)
+                    and not any(kw in (action.reasoning or "").lower() for kw in
+                                ["close", "escape", "back", "dismiss", "x button", "gallery", "exit"])
+                )
+                if should_ground:
+                    orig_x, orig_y = action.params.get("x"), action.params.get("y")
+                    desc = action.reasoning or thinking[:200]
+                    try:
+                        current_screenshot = frame_history[-1] if frame_history else None
+                        if current_screenshot and desc:
+                            gr = self.grounding.ground(
+                                screenshot=current_screenshot,
+                                description=desc,
+                                initial_x=orig_x,
+                                initial_y=orig_y,
+                            )
+                            if gr.confidence > 0.3:
+                                print(f"  [grounding] ({orig_x},{orig_y}) → ({gr.x},{gr.y}) conf={gr.confidence:.1f}")
+                                action = Action(
+                                    action.action_type,
+                                    {**action.params, "x": gr.x, "y": gr.y},
+                                    reasoning=action.reasoning,
+                                )
+                            else:
+                                print(f"  [grounding] low confidence ({gr.confidence:.1f}), keeping ({orig_x},{orig_y})")
+                    except Exception as e:
+                        print(f"  [grounding] FAILED: {e}")
 
                 # Execute action in the environment
                 gym_result = self.env.step(action)
@@ -370,6 +435,11 @@ class GymRunner:
         success = termination_reason == "done" or (termination_reason == "env_done" and total_reward > 0)
         logger.info(f"Task finished: {termination_reason}, {len(trajectory)} steps, {total_time:.1f}s")
 
+        self._emit(
+            "done", success=success, summary=termination_reason,
+            total_steps=len(trajectory), total_time=round(total_time, 1),
+        )
+
         return RunResult(
             task=task, task_id=task_id, success=success,
             total_reward=total_reward, total_steps=len(trajectory),
@@ -409,13 +479,8 @@ class GymRunner:
                 )
             else:
                 parts.append(
-                    "\n\nThe page is already loaded in the browser — you can see it in the screenshot. "
-                    "Do NOT navigate to any URL. Start interacting with what is on screen.\n\n"
-                    "FIRST, write a brief numbered plan:\n"
-                    "1. <what to do first>\n"
-                    "2. <what to do next>\n"
-                    "...\n"
-                    "Then execute the first action."
+                    "\n\nThe browser is open with the page loaded. Look at the screenshot and "
+                    "execute your first action. Write a brief numbered plan, then execute step 1."
                 )
         else:
             # Inject persistent plan
@@ -442,6 +507,35 @@ class GymRunner:
                 # Truncate to avoid context overflow
                 think_snippet = last_thinking[:300]
                 parts.append(f"\n\nYour previous reasoning:\n{think_snippet}")
+
+            # Fast-fail nudges: detect dead-end states and push model to escape immediately
+            if last_thinking:
+                think_lower = last_thinking.lower()
+
+                # Error pages (404, connection failed)
+                if step_num <= 5 and any(sig in think_lower for sig in [
+                    "page not found", "404", "this site can't be reached",
+                    "err_tunnel", "err_connection", "this page has been removed",
+                ]):
+                    parts.append(
+                        "\n\nIMPORTANT: The page shows an error (404 / can't be reached). "
+                        "Do NOT keep trying. Press Alt+Left to go back and call "
+                        "terminate('success') with: SKIPPED | page error or 404."
+                    )
+
+                # Image gallery trap — model clicked a photo instead of title
+                if any(sig in think_lower for sig in [
+                    "image gallery", "image viewer", "lightbox", "photo viewer",
+                    "1 of ", "2 of ", "fullscreen photo", "close the gallery",
+                    "exit the gallery", "close the viewer", "gallery",
+                ]):
+                    parts.append(
+                        "\n\nIMPORTANT: You are in a photo gallery. "
+                        "Do key_press(keys='Escape') then key_press(keys='alt+left') to go back. "
+                        "Then done(success=true, summary='SKIPPED | gallery trap'). "
+                        "NEXT listing: click the boat NAME TEXT or PRICE or 'View Details' link, "
+                        "NOT the photo."
+                    )
 
             # Soft loop nudge
             if self._detect_repeat(action_history, self.soft_loop_window):
@@ -594,12 +688,21 @@ class GymRunner:
         last_url: str,
         last_title: str,
     ) -> str:
-        """Describe what happened after executing an action."""
+        """Describe what happened after executing an action.
+
+        Includes URL changes and off-site backtrack warnings so the model
+        gets immediate feedback about navigation errors.
+        """
         parts: list[str] = []
 
         new_url = gym_result.info.get("url", "")
         new_title = gym_result.info.get("title", "")
         focused = gym_result.info.get("focused_input")
+
+        # Off-site backtrack warning — highest priority feedback
+        if gym_result.info.get("backtracked"):
+            warning = gym_result.info.get("warning", "Off-site navigation detected")
+            parts.append(f"WARNING: {warning}. Do NOT click social media icons or external links.")
 
         # URL change
         if new_url and new_url != last_url:
@@ -620,7 +723,7 @@ class GymRunner:
             else:
                 parts.append(f"'{field_name}' field focused, contains: \"{focused.get('value', '')}\"")
 
-        # Type verification — did the text actually land?
+        # Type verification
         type_verify = gym_result.info.get("type_verified")
         if action.action_type == ActionType.TYPE:
             typed = action.params.get("text", "")

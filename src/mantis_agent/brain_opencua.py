@@ -251,30 +251,64 @@ class OpenCUABrain:
         return messages
 
     def _parse_response(self, data: dict, screen_size: tuple[int, int]) -> InferenceResult:
-        """Parse OpenCUA's text response into an Action."""
+        """Parse OpenCUA's text response into an Action.
+
+        EvoCUA sometimes outputs JSON actions instead of pyautogui format,
+        and may wrap them in markdown fences. We try multiple parse strategies:
+        1. pyautogui.foo() format (native OpenCUA)
+        2. JSON {"action": "click", "x": N, "y": N} format (EvoCUA variant)
+        3. terminate() signals
+        4. DONE/FAIL keywords
+        """
         choice = data["choices"][0]
         message = choice["message"]
         text = message.get("content", "")
         raw_output = text
 
+        # Strip markdown code fences before parsing
+        cleaned = self._strip_code_fences(text)
+
         # Extract thinking (everything before the action)
         thinking = ""
-        action_text = text
+        action_text = cleaned
+        action = None
 
-        # OpenCUA often outputs reasoning then a pyautogui command
-        pyautogui_match = re.search(r'pyautogui\.\w+\(.*?\)', text, re.DOTALL)
+        # Strategy 1: pyautogui format
+        pyautogui_match = re.search(r'pyautogui\.\w+\(.*?\)', cleaned, re.DOTALL)
         if pyautogui_match:
-            thinking = text[:pyautogui_match.start()].strip()
+            thinking = cleaned[:pyautogui_match.start()].strip()
             action_text = pyautogui_match.group(0)
+            action = self._parse_pyautogui(action_text, screen_size)
 
-        # Parse the action
-        action = self._parse_pyautogui(action_text, screen_size)
+        # Strategy 2: JSON action format (EvoCUA variant)
+        if action is None or action.action_type == ActionType.WAIT:
+            json_action = self._parse_json_action(cleaned, screen_size)
+            if json_action is not None:
+                # Extract thinking as everything before the JSON block
+                json_match = re.search(r'\{[^{}]*"action"[^{}]*\}', cleaned)
+                if json_match:
+                    thinking = cleaned[:json_match.start()].strip()
+                action = json_action
 
-        # Check for DONE/FAIL
-        if "DONE" in text.upper() and not pyautogui_match:
-            action = Action(ActionType.DONE, {"success": True, "summary": thinking[:200]})
-        elif "FAIL" in text.upper() and not pyautogui_match:
-            action = Action(ActionType.DONE, {"success": False, "summary": thinking[:200]})
+        # Strategy 3: terminate() signals
+        if action is None or action.action_type == ActionType.WAIT:
+            term_match = re.search(r"terminate\(['\"](\w+)['\"]\)", cleaned)
+            if term_match:
+                success = term_match.group(1).lower() == "success"
+                thinking = cleaned[:term_match.start()].strip()
+                action = Action(ActionType.DONE, {"success": success, "summary": thinking[:200]})
+
+        # Strategy 4: DONE/FAIL keywords (last resort)
+        if action is None or action.action_type == ActionType.WAIT:
+            if not pyautogui_match:
+                if "DONE" in text.upper():
+                    action = Action(ActionType.DONE, {"success": True, "summary": thinking[:200]})
+                elif "FAIL" in text.upper():
+                    action = Action(ActionType.DONE, {"success": False, "summary": thinking[:200]})
+
+        # Final fallback
+        if action is None:
+            action = Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=f"Could not parse: {text[:100]}")
 
         return InferenceResult(
             action=action,
@@ -283,8 +317,68 @@ class OpenCUABrain:
             tokens_used=data.get("usage", {}).get("total_tokens", 0),
         )
 
-    def _parse_pyautogui(self, text: str, screen_size: tuple[int, int]) -> Action:
-        """Parse a pyautogui command into a Mantis Action."""
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        """Strip markdown code fences (```json ... ```) from model output."""
+        # Remove ```json ... ``` or ``` ... ``` blocks, keeping inner content
+        stripped = re.sub(r'```(?:json|python|)\s*\n?', '', text)
+        stripped = re.sub(r'\n?```', '', stripped)
+        return stripped
+
+    def _parse_json_action(self, text: str, screen_size: tuple[int, int]) -> Action | None:
+        """Parse JSON-formatted actions: {"action": "click", "x": N, "y": N}.
+
+        EvoCUA sometimes outputs actions in this format instead of pyautogui.
+        """
+        # Find JSON object containing "action" key
+        match = re.search(r'\{[^{}]*"action"\s*:\s*"[^"]*"[^{}]*\}', text)
+        if not match:
+            return None
+
+        try:
+            obj = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+
+        action_type = obj.get("action", "").lower()
+
+        if action_type == "click":
+            x, y = int(obj.get("x", 0)), int(obj.get("y", 0))
+            sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
+            button = obj.get("button", "left")
+            return Action(ActionType.CLICK, {"x": sx, "y": sy, "button": button})
+
+        if action_type in ("double_click", "doubleclick", "doubleClick"):
+            x, y = int(obj.get("x", 0)), int(obj.get("y", 0))
+            sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
+            return Action(ActionType.DOUBLE_CLICK, {"x": sx, "y": sy})
+
+        if action_type in ("type", "typewrite", "write"):
+            return Action(ActionType.TYPE, {"text": obj.get("text", "")})
+
+        if action_type in ("key", "press", "hotkey"):
+            keys = obj.get("keys", obj.get("key", ""))
+            if isinstance(keys, list):
+                keys = "+".join(keys)
+            return Action(ActionType.KEY_PRESS, {"keys": keys})
+
+        if action_type == "scroll":
+            direction = obj.get("direction", "down")
+            amount = int(obj.get("amount", 3))
+            return Action(ActionType.SCROLL, {"direction": direction, "amount": amount})
+
+        if action_type in ("done", "terminate"):
+            success = obj.get("success", obj.get("status") == "success")
+            summary = obj.get("summary", obj.get("message", ""))
+            return Action(ActionType.DONE, {"success": bool(success), "summary": str(summary)[:200]})
+
+        return None
+
+    def _parse_pyautogui(self, text: str, screen_size: tuple[int, int]) -> Action | None:
+        """Parse a pyautogui command into a Mantis Action.
+
+        Returns None instead of WAIT fallback so callers can try other strategies.
+        """
 
         # click(x=N, y=N) or click(N, N)
         click_match = re.search(r'click\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', text)
@@ -332,5 +426,5 @@ class OpenCUABrain:
             direction = "up" if amount > 0 else "down"
             return Action(ActionType.SCROLL, {"direction": direction, "amount": abs(amount)})
 
-        # Fallback
-        return Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=f"Could not parse: {text[:100]}")
+        # No pyautogui match — return None so caller can try other strategies
+        return None

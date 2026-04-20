@@ -298,13 +298,17 @@ class LlamaCppBrain:
           pyautogui.click(500, 300)
           type_text({"text": "hello"})
           done({"success": true})
+          {"action": "click", "x": 500, "y": 300}       (raw JSON)
+          ```json\n{"action": "click", ...}\n```          (fenced JSON)
         """
         import re
 
-        text = text.strip()
+        # Strip markdown code fences
+        cleaned = re.sub(r'```(?:json|python|)\s*\n?', '', text)
+        cleaned = re.sub(r'\n?```', '', cleaned).strip()
 
         # Try Gemma4 tool-call format: Action: name({"key": value})
-        tool_match = re.search(r'(?:Action:\s*)?(\w+)\(\s*(\{.*?\})\s*\)', text, re.DOTALL)
+        tool_match = re.search(r'(?:Action:\s*)?(\w+)\(\s*(\{.*?\})\s*\)', cleaned, re.DOTALL)
         if tool_match:
             name = tool_match.group(1)
             try:
@@ -313,28 +317,56 @@ class LlamaCppBrain:
             except json.JSONDecodeError:
                 pass
 
+        # Try raw JSON: {"action": "click", "x": N, "y": N}
+        # Also handles nested: {"action": "key_press", "parameters": {"keys": "alt+left"}}
+        json_match = re.search(r'\{.*"action"\s*:\s*"(\w+)".*\}', cleaned, re.DOTALL)
+        if json_match:
+            try:
+                obj = json.loads(json_match.group(0))
+                action_name = obj.pop("action", "wait")
+                # Flatten nested "parameters"/"arguments" into top-level
+                for nested_key in ("parameters", "arguments", "params"):
+                    if nested_key in obj and isinstance(obj[nested_key], dict):
+                        nested = obj.pop(nested_key)
+                        obj.update(nested)
+                # Map JSON action names to our tool names
+                name_map = {
+                    "click": "click", "left_click": "click",
+                    "type": "type_text", "type_text": "type_text",
+                    "scroll": "scroll", "key": "key_press", "key_press": "key_press",
+                    "done": "done", "terminate": "done",
+                    "double_click": "double_click", "wait": "wait",
+                }
+                mapped = name_map.get(action_name, action_name)
+                # Normalize key variants
+                if "key" in obj and "keys" not in obj:
+                    obj["keys"] = obj.pop("key")
+                return parse_tool_call(mapped, obj)
+            except (json.JSONDecodeError, KeyError):
+                pass
+
         # Try pyautogui format: pyautogui.click(x=500, y=300)
-        click_match = re.search(r'click\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', text)
+        click_match = re.search(r'click\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', cleaned)
         if click_match:
             return Action(ActionType.CLICK, {"x": int(click_match.group(1)), "y": int(click_match.group(2))})
 
-        type_match = re.search(r'(?:type_text|typewrite|write)\([\'"](.+?)[\'"]\)', text)
+        type_match = re.search(r'(?:type_text|typewrite|write)\([\'"](.+?)[\'"]\)', cleaned)
         if type_match:
             return Action(ActionType.TYPE, {"text": type_match.group(1)})
 
-        key_match = re.search(r'(?:key_press|press|hotkey)\([\'"](.+?)[\'"]\)', text)
+        key_match = re.search(r'(?:key_press|press|hotkey)\([\'"](.+?)[\'"]\)', cleaned)
         if key_match:
             return Action(ActionType.KEY_PRESS, {"keys": key_match.group(1)})
 
-        scroll_match = re.search(r'scroll\(.*?[\'"](\w+)[\'"]', text)
+        scroll_match = re.search(r'scroll\(.*?[\'"](\w+)[\'"]', cleaned)
         if scroll_match:
             return Action(ActionType.SCROLL, {"direction": scroll_match.group(1), "amount": 3})
 
-        if re.search(r'done|DONE|terminate.*success', text, re.IGNORECASE):
-            return Action(ActionType.DONE, {"success": True, "summary": text[:200]})
+        if re.search(r'done|DONE|terminate.*success', cleaned, re.IGNORECASE):
+            return Action(ActionType.DONE, {"success": True, "summary": cleaned[:200]})
 
-        if re.search(r'fail|FAIL|terminate.*fail', text, re.IGNORECASE):
-            return Action(ActionType.DONE, {"success": False, "summary": text[:200]})
+        if re.search(r'fail|FAIL|terminate.*fail', cleaned, re.IGNORECASE):
+            return Action(ActionType.DONE, {"success": False, "summary": cleaned[:200]})
 
-        logger.warning(f"No action parsed from text: {text[:100]}")
-        return Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=text[:100])
+        logger.warning(f"No action parsed from text: {cleaned[:100]}")
+        return Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=cleaned[:100])

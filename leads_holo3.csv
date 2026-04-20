@@ -1,0 +1,80 @@
+status,year,make,model,price,phone,seller,url,run_id,session,raw
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_081050,bt_worker_3_page_4,"I've been scrolling repeatedly without finding the phone number. The current view shows the Propulsion and Location sections, but no contact information. I need to continue scrolling down to find the "
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_081050,bt_worker_3_page_4,"Okay, let's see. I'm currently on the Boat Trader research page, which shows articles about boating, not the search results with boat listings. The task requires extracting data from filtered search r"
+VIABLE,2023,Sea,Holo3-35B-A3B (API),,,,,20260418_081050,bt_worker_3_page_4,"Okay, let's see. I've already processed two listings on this page, and the current view shows the first two boat listings. The third listing is the 2023 Sea Fox 248 Commander, which is visible in the "
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_081050,bt_worker_3_page_4,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_081039,bt_worker_1_page_2,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_081039,bt_worker_1_page_2,VIABLE | Year
+VIABLE,2021,Yamaha,Holo3-35B-A3B (API),,,,,20260418_081039,bt_worker_1_page_2,"Okay, let's see. I'm currently in a photo gallery trap after clicking the boat photo instead of the title text. The screen shows the 2021 Yamaha Boats 255 FSH image with a '1 of N' indicator, which me"
+VIABLE,2006,Grand,Holo3-35B-A3B (API),,,,,20260418_081039,bt_worker_1_page_2,"Okay, let's see. I need to find the fourth boat listing on this page. The current view shows three listings: 2006 Grand Banks 47 Heritage, 2005 Custom Sail-Assisted Trawler, and 2019 Maverick 18 HPX-V"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_081039,bt_worker_1_page_2,"Okay, let's see. I've already processed four listings on this page, and the current view shows the first four boat listings. The fifth listing isn't visible yet, so I need to scroll down to reveal mor"
+VIABLE,2026,Sea,Holo3-35B-A3B (API),,,,,20260418_081047,bt_worker_2_page_3,"Okay, let's see. I'm currently on the detailed listing page for the 2026 Sea Hunt Ultra 234, and I need to find the phone number as part of the data extraction process. The visible section shows the b"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_081047,bt_worker_2_page_3,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,SKIPPED | gallery trap
+VIABLE,2018,May-Craft,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,"Okay, let's see. I need to extract the boat listing data from the filtered search results. The current view shows the 2018 May-Craft 2700 Pilot XL listing with its price and seller info, but I don't s"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+VIABLE,2014,Canyon,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,"Okay, let's see. I'm currently stuck in a photo gallery view showing '1 of 38' for the 2014 Canyon Bay 24H, which means I accidentally clicked the boat photo instead of the title text. The task instru"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,SKIPPED | gallery trap
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,SKIPPED | gallery trap
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+VIABLE,2014,Canyon,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,"Okay, let's see. I need to find the #11 listing card in the search results, but the current view only shows the 10th listing (2014 Canyon Bay 24H). Since the task requires scrolling past the first 10 "
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+VIABLE,2018,Everglades,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,"Okay, let's see. I've already processed 12 listings on this page, and the current view shows the 13th listing (2018 Everglades 355 Center Console) with its details. However, the task requires me to sc"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,SKIPPED | gallery trap
+VIABLE,2010,Regal,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,"Okay, let's see. I'm currently stuck in a photo gallery view of the 2010 Regal 2300 RX Bowrider, which is the 14th listing I was supposed to process. The screen shows the '1 of N' indicator, confirmin"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,SKIPPED | gallery trap
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,SKIPPED | gallery trap
+VIABLE,2026,Freeman,Holo3-35B-A3B (API),,,,,20260418_072824,boattrader_private_seller_extraction,"Okay, let's see. I'm currently on the 2026 Freeman 37VH detail page, which means I must have clicked on a listing title from the search results. The task requires me to extract data from the 16th list"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_081038,bt_worker_0_page_1,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_012436,boattrader_private_seller_leads,"Okay, let's see. I've been trying to find the seller's contact information on this boat listing page, but the phone number isn't visible yet. The current view shows the 'Boat Details' section with a '"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260418_012436,boattrader_private_seller_leads,"Okay, let's see. I've been trying to scroll down to find the second listing, but the previous scroll attempts didn't reveal any new content. The current view still shows the same section with the 'Sti"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_191927,bt_extract,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_191927,bt_extract,SKIPPED | gallery trap
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_191927,bt_extract,"Okay, let's see. I need to process the second listing on the BoatTrader search results page. The current view shows the first listing, but the second one is partially visible below it. To properly acc"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_191927,bt_extract,"Okay, let's see. I've been trying to find the third listing on the BoatTrader page, but the previous scroll actions didn't reveal it yet. The current view still shows the first two listings, so I need"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_191927,bt_extract,VIABLE | Year
+VIABLE,2023,Grady-White,Holo3-35B-A3B (API),,,,,20260417_191927,bt_extract,"Okay, let's see. I've been trying to find the fifth listing on the BoatTrader page, but after multiple scrolls, I still only see three listings. The current view shows the 2023 Grady-White Adventure 2"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_191927,bt_extract,"Okay, let's see. I need to process the sixth listing on the BoatTrader page. The current view shows a login popup blocking the listings, which means I can't see the sixth listing yet. The previous ste"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_192428,bt_extract,SKIPPED | gallery trap
+VIABLE,2005,Sea,Holo3-35B-A3B (API),,,,,20260417_192428,bt_extract,"Okay, let's see. I'm currently on the detail page for the 2005 Sea Ray 48 Sundancer, and I need to find the full description, seller notes, or complete specifications. The visible section shows the be"
+VIABLE,2005,Sea,Holo3-35B-A3B (API),,,,,20260417_192428,bt_extract,"Okay, let's see. I'm currently on a boat detail page for a 2005 Sea Ray 48 Sundancer, which means I've already processed the first listing. The task requires me to find and process the second listing,"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_192428,bt_extract,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_192428,bt_extract,SKIPPED | gallery trap
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_191202,bt_extract,"Okay, let's see. The current page shows a warning about an unsupported command-line flag, but the main content area is blank, which suggests the page might still be loading or the listings aren't visi"
+VIABLE,2018,Prestige,Holo3-35B-A3B (API),,,,,20260417_191202,bt_extract,"Okay, let's see. I'm currently on the detail page of the 2018 Prestige 560, which means I've already clicked on a listing. The task requires me to process the second listing, so I need to go back to t"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_185854,bt_extract,"Okay, let's see. The current screen is completely black, which suggests the page hasn't loaded properly or there's a loading issue. Since the task requires processing the first listing on BoatTrader, "
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_185854,bt_extract,"Okay, let's see. I need to process the second listing on the BoatTrader search results page. The current view shows three listings, but the second one might not be fully visible or correctly positione"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_185854,bt_extract,SKIPPED | gallery trap
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_185854,bt_extract,"Okay, let's see. I'm currently viewing a photo gallery of a boat listing, which means I accidentally clicked on the photo instead of the title text as instructed. The task requires me to process the t"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_184857,bt_extract,"Okay, let's see. I need to click the title text of the first boat listing, not the photo. The first listing is the leftmost card with the 'Featured' tag. The title text should be the boat name, which "
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_184857,bt_extract,"Okay, let's see. I've been trying to click on the second listing's title text, but previous attempts at various coordinates didn't work. The current screenshot shows the first listing's photo and deta"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_184857,bt_extract,"Okay, let's see. I've been trying to find the third listing by scrolling, but the previous scroll didn't reveal it yet. The current view still shows the first two listings, so I need to scroll further"
+VIABLE,2023,Grady-White,Holo3-35B-A3B (API),,,,,20260417_184857,bt_extract,"I need to find the fourth listing on this page. I can see three listings clearly (2023 Grady-White Adventure 218, 2011 Bryant 210, and 2026 Godfrey Sweetwater 22'), but the fourth one is partially vis"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_182954,bt_extract,The page is still loading and has not rendered the boat listings yet. Cannot proceed with clicking the first listing
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_182954,bt_extract,VIABLE | Year
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_182954,bt_extract,"I need to process the third listing on the BoatTrader search results page. Looking at the current screenshot, I can see three boat listings displayed. The first two are partially visible at the top, a"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_182954,bt_extract,no more listings
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_182710,bt_extract,No listings found - page appears blank or not loaded
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_181234,bt_dynamic,"I'm still trapped in the photo gallery view showing ""1 of 11"" images. I've tried multiple approaches to exit this gallery - clicking the close button, pressing escape multiple times, and even trying A"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_181234,bt_dynamic,"I need to process the second boat listing on this page. Looking at the current screenshot, I can see three boat listings displayed. The first listing is on the left (a dark-colored boat), the second l"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_172556,bt_dynamic,"Looking at the current screen, I can see I'm still in the photo gallery view showing ""1 of 37"" images of a boat. The previous scroll actions and the click on the ""Close"" button haven't worked to exit "
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_172556,bt_dynamic,"Looking at the current screen, I can see I'm on the BoatTrader search results page. The previous actions indicate I've been trying to close an image gallery/lightbox that was blocking access to the se"
+VIABLE,2026,,Holo3-35B-A3B (API),,,,,20260417_170102,bt_dynamic,"Looking at the current screen, I can see that I'm still on the BoatTrader search results page. The URL shows ""boatrader.com/boat/2026-tracker-grizzly-14-jon-10150585/"" which suggests I may have alread"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_170102,bt_dynamic,"Looking at the current screenshot, I can see that I'm now on a page showing boat listings. The page displays multiple boat cards with their details. I can see:
+
+1. A red boat on the left (first listin"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_170102,bt_dynamic,"Looking at the current screenshot, I can see three boat listings displayed. The first two are partially visible at the bottom of the screen, and I need to scroll down to see the third listing more cle"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_170102,bt_dynamic,"Looking at the current screen, I can see that I'm on the BoatTrader search results page. The previous scrolling actions didn't seem to reveal new listings, which is strange. Let me analyze what I can "
+VIABLE,2018,,Holo3-35B-A3B (API),,,,,20260417_170102,bt_dynamic,"Looking at the current screen, I can see several boat listings. I need to identify the fifth listing in the sequence. Let me count the listings visible:
+
+From the current view, I can see:
+1. 2018 May-"
+SKIP,,,Holo3-35B-A3B (API),,,,,20260417_170102,bt_dynamic,"I've been stuck in a loop for many steps, repeatedly waiting and scrolling without making progress. The current screen shows I'm on the boat search results page, but I need to find the sixth listing.
+"
