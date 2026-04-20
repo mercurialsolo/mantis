@@ -372,13 +372,16 @@ class WorkflowRunner:
             t0 = time.time()
 
             # ── Pre-iteration recovery protocol ──
-            # Dismiss any popup/modal before starting (Escape is harmless if none)
             if global_iteration > 1:
                 time.sleep(0.5)
                 try:
                     from ..actions import Action
+                    # Dismiss any popup/modal (Escape is harmless if none)
                     self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
                     time.sleep(0.3)
+                    # Scroll to top — prevents "stuck on footer" after page navigation
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                    time.sleep(0.5)
                 except Exception:
                     pass
 

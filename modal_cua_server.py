@@ -1133,23 +1133,34 @@ def _run_holo3_executor(
                     task_id=f"{task_id}_validate",
                 )
                 if not validate_result.success:
-                    # Filter not applied — critical failure
-                    # Try direct recovery: navigate to by-owner URL
-                    print(f"  PRIVATE SELLER FILTER NOT APPLIED — attempting direct navigation")
+                    # Filter not applied — use CUA to navigate to the correct page
+                    print(f"  PRIVATE SELLER FILTER NOT APPLIED — CUA recovery navigation")
+                    recovery_runner = GymRunner(brain=brain, env=env, max_steps=15,
+                                               frames_per_inference=1,
+                                               grounding=grounding,
+                                               on_step=viewer_event_bus.emit if viewer_event_bus else None)
+                    recovery_runner.run(
+                        task=(
+                            "Navigate to the private seller boats page. Steps:\n"
+                            "1. Click the browser address bar at the top of the screen\n"
+                            "2. Select all text in the address bar (Ctrl+A)\n"
+                            "3. Type: https://www.boattrader.com/boats/by-owner/\n"
+                            "4. Press Enter to navigate\n"
+                            "5. Wait for the page to load\n"
+                            "6. Press Home key to scroll to the top of the page\n"
+                            "7. done(success=true, summary='Navigated to by-owner page')"
+                        ),
+                        task_id="filter_recovery_navigate",
+                    )
+                    time.sleep(3)
+                    # Scroll to top to ensure listings are visible
                     try:
-                        # Use address bar to navigate to by-owner page
                         from mantis_agent.actions import Action, ActionType
-                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+l"}))
-                        time.sleep(0.3)
-                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+a"}))
-                        time.sleep(0.2)
-                        env.step(Action(action_type=ActionType.TYPE, params={"text": "https://www.boattrader.com/boats/by-owner/"}))
-                        time.sleep(0.3)
-                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Return"}))
-                        time.sleep(5)
-                        print(f"  Navigated to /boats/by-owner/ via address bar")
-                    except Exception as e:
-                        print(f"  Recovery navigation failed: {e}")
+                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                        time.sleep(1)
+                    except Exception:
+                        pass
+                    print(f"  CUA navigated to /boats/by-owner/")
                 else:
                     print(f"  Private seller filter VERIFIED")
 
