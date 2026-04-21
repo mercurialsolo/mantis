@@ -1,167 +1,117 @@
 [
   {
-    "intent": "Navigate to BoatTrader boats search page",
-    "type": "navigate",
-    "verify": "BoatTrader boats page loads with search filters visible",
+    "step_id": 0,
+    "action": "navigate",
+    "intent": "Go to BoatTrader homepage https://www.boattrader.com/boats/",
     "budget": 3,
-    "reverse": "Go back to previous page",
-    "grounding": false,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "navigate back to previous page"
   },
   {
-    "intent": "Click Private Seller filter option in sidebar",
-    "type": "filter",
-    "verify": "Private Seller filter becomes selected/highlighted",
+    "step_id": 1,
+    "action": "filter",
+    "intent": "Click Private Seller filter option in seller type section",
     "budget": 8,
-    "reverse": "Click All Sellers to remove filter",
     "grounding": true,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "click All Sellers to reset filter"
   },
   {
-    "intent": "Click location search field and enter zip code 33101",
-    "type": "filter",
-    "verify": "Location field shows 33101 Miami area",
+    "step_id": 2,
+    "action": "filter",
+    "intent": "Enter zip code 33101 in location search field",
     "budget": 8,
-    "reverse": "Clear location field",
     "grounding": true,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "clear location field"
   },
   {
-    "intent": "Set search radius to 25 miles in dropdown",
-    "type": "filter",
-    "verify": "Radius dropdown shows 25 miles selected",
+    "step_id": 3,
+    "action": "filter",
+    "intent": "Set radius to 25 miles in distance dropdown",
     "budget": 8,
-    "reverse": "Reset radius to default",
     "grounding": true,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "reset radius to default"
   },
   {
-    "intent": "Set minimum price filter to $35,000",
-    "type": "filter",
-    "verify": "Price minimum field shows $35,000",
+    "step_id": 4,
+    "action": "filter",
+    "intent": "Enter minimum price $35000 in price filter field",
     "budget": 8,
-    "reverse": "Clear minimum price filter",
     "grounding": true,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "clear minimum price field"
   },
   {
-    "intent": "Click sort dropdown and select Recently Updated",
-    "type": "filter",
-    "verify": "Sort shows Recently Updated selected",
+    "step_id": 5,
+    "action": "filter",
+    "intent": "Click Recently Updated sort option in sort dropdown",
     "budget": 8,
-    "reverse": "Reset to default sort",
     "grounding": true,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "reset to default sort"
   },
   {
-    "intent": "Read search results page to verify filters applied correctly",
-    "type": "extract_data",
-    "verify": "Results show private seller boats under 5000 total",
-    "budget": 0,
-    "reverse": "N/A",
-    "grounding": false,
+    "step_id": 6,
+    "action": "extract_data",
+    "intent": "Read page title and result count to verify private seller filters applied",
     "claude_only": true,
-    "loop_target": -1,
-    "loop_count": 0
+    "budget": 0,
+    "reverse_action": "no action needed"
   },
   {
-    "intent": "Click the blue title text of first boat listing",
-    "type": "click",
-    "verify": "Boat detail page opens with photos and description",
-    "budget": 5,
-    "reverse": "Go back to search results",
+    "step_id": 7,
+    "action": "click",
+    "intent": "Click a boat listing title text below a photo",
+    "budget": 8,
     "grounding": true,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "navigate back to search results"
   },
   {
-    "intent": "Read the URL from browser address bar",
-    "type": "extract_url",
-    "verify": "URL captured for this boat listing",
-    "budget": 0,
-    "reverse": "N/A",
-    "grounding": false,
+    "step_id": 8,
+    "action": "extract_url",
+    "intent": "Read URL from address bar",
     "claude_only": true,
-    "loop_target": -1,
-    "loop_count": 0
-  },
-  {
-    "intent": "Scroll down past photo gallery to description section",
-    "type": "scroll",
-    "verify": "Description or seller notes section becomes visible",
-    "budget": 5,
-    "reverse": "Scroll up to top of page",
-    "grounding": false,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
-  },
-  {
-    "intent": "Continue scrolling down to find phone numbers",
-    "type": "scroll",
-    "verify": "More description text and seller contact info visible",
-    "budget": 5,
-    "reverse": "Scroll up",
-    "grounding": false,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
-  },
-  {
-    "intent": "Extract boat data from current page view",
-    "type": "extract_data",
-    "verify": "Year, make, model, price, phone and seller captured",
     "budget": 0,
-    "reverse": "N/A",
-    "grounding": false,
-    "claude_only": true,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "no action needed"
   },
   {
-    "intent": "Go back to search results page",
-    "type": "navigate_back",
-    "verify": "Search results page with boat listings visible",
+    "step_id": 9,
+    "action": "scroll",
+    "intent": "Scroll down 5 times past the photos",
+    "budget": 5,
+    "reverse_action": "scroll back to top"
+  },
+  {
+    "step_id": 10,
+    "action": "extract_data",
+    "intent": "Read boat data from page including year make model price phone seller name",
+    "claude_only": true,
+    "budget": 0,
+    "reverse_action": "no action needed"
+  },
+  {
+    "step_id": 11,
+    "action": "navigate_back",
+    "intent": "Press Alt+Left to go back",
     "budget": 3,
-    "reverse": "Go forward to detail page",
-    "grounding": false,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "press Alt+Right to go forward"
   },
   {
-    "intent": "Click the blue title text of next boat listing",
-    "type": "click",
-    "verify": "Next boat detail page opens",
-    "budget": 5,
-    "reverse": "Go back to search results",
+    "step_id": 12,
+    "action": "loop",
+    "loop_target": 7,
+    "loop_count": 200,
+    "reverse_action": "break loop"
+  },
+  {
+    "step_id": 13,
+    "action": "paginate",
+    "intent": "Scroll to bottom and click Next page button",
+    "budget": 10,
     "grounding": true,
-    "claude_only": false,
-    "loop_target": -1,
-    "loop_count": 0
+    "reverse_action": "click Previous page button"
   },
   {
-    "intent": "Loop back to extract URL step for next listing",
-    "type": "loop",
-    "verify": "Processing continues with next boat",
-    "budget": 0,
-    "reverse": "Exit loop",
-    "grounding": false,
-    "claude_only": false,
-    "loop_target": 8,
-    "loop_count": 200
+    "step_id": 14,
+    "action": "loop",
+    "loop_target": 7,
+    "loop_count": 50,
+    "reverse_action": "break pagination loop"
   }
 ]

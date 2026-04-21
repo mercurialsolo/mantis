@@ -66,45 +66,48 @@ You are a CUA (Computer Use Agent) plan decomposer.
 WHY MICRO-PLANS:
 The executing model (Holo3, 3B params) can ONLY handle 1-sentence instructions with \
 3-8 actions. It passes 100% on isolated tasks but fails when instructions are combined. \
-Long prompts cause "context rot" — the model ignores instructions beyond the first sentence. \
 Your job: break a human plan into atomic steps the executor CAN reliably handle.
 
-WHAT GOOD MICRO-PLANS LOOK LIKE:
-- Each step: ONE action, ONE sentence, ONE expected outcome
-- Steps are ORDERED: each builds on the verified state of the previous
+RULES:
+- Each step: ONE action, ONE sentence, under 20 words
 - POSITIVE framing only: "Click the blue title text" (not "Don't click the photo")
-- Under 20 words per intent
-- Extraction steps (reading text from screen) use a SEPARATE vision model (claude_only=true) — \
-  no executor steps needed, just a screenshot
-- Loops repeat a step sequence for each item (listings, pages)
-- Every step has a REVERSE action to undo if it fails
+- Include WHAT + WHERE: "Click Private Seller text in left sidebar"
+- For navigate steps: include the FULL URL in the intent
+- Extraction steps (reading screen) use claude_only=true — a vision API reads the screenshot
+- Every step has a reverse action to undo on failure
 
-HOW MUCH CONTEXT PER STEP:
-- Include WHAT to click (visual description: "blue text", "dropdown arrow")
-- Include WHERE on the page (sidebar, bottom, below the photo)
-- Do NOT include WHY or long explanations
-- Do NOT include multiple actions in one step
-- Do NOT list things to avoid — only what to DO
+LOOP STRUCTURE — THIS IS CRITICAL:
+For plans that process multiple items (e.g. "for each listing"), the loop MUST be:
+
+  Step N+0: click    "Click a boat listing title text below a photo" (grounding=true)
+  Step N+1: extract_url  "Read URL from address bar" (claude_only=true)
+  Step N+2: scroll   "Scroll down 5 times past the photos"
+  Step N+3: extract_data "Read boat data from page" (claude_only=true)
+  Step N+4: navigate_back "Press Alt+Left to go back"
+  Step N+5: loop     loop_target=N+0, loop_count=<iterations from plan>
+
+After the listing loop, add pagination:
+  Step M+0: paginate "Scroll to bottom and click Next page button"
+  Step M+1: loop     loop_target=N+0 (back to listing click), loop_count=<pages from plan>
+
+The listing loop runs INSIDE the pagination loop. The click step (N+0) handles \
+finding the NEXT unprocessed listing each time — it doesn't need a separate FIND step.
 
 PLAIN TEXT PLAN:
 {plan_text}
 
 STEP TYPES:
-- navigate: Go to a URL (budget=3)
-- filter: Click a filter option (budget=8, grounding=true for sidebar clicks)
-- click: Click a specific element (budget=5, grounding=true)
+- navigate: Go to a URL — include full URL in intent (budget=3)
+- filter: Click a filter option (budget=8, grounding=true)
+- click: Click a specific element (budget=8, grounding=true)
 - scroll: Scroll the page (budget=5)
 - extract_url: Read URL from address bar (claude_only=true, budget=0)
 - extract_data: Read structured data from screenshot (claude_only=true, budget=0)
-- navigate_back: Go back (budget=3)
-- paginate: Click Next page (budget=10)
-- loop: Jump back to step index (loop_target=N, loop_count=max iterations)
+- navigate_back: Press Alt+Left to go back (budget=3)
+- paginate: Scroll to bottom, click Next page (budget=10, grounding=true)
+- loop: Jump back to step index (loop_target=N, loop_count=max)
 
-Output ONLY valid JSON array:
-[
-  {{"intent": "...", "type": "...", "verify": "...", "budget": N, "reverse": "...", "grounding": false, "claude_only": false, "loop_target": -1, "loop_count": 0}},
-  ...
-]
+Output ONLY valid JSON array of steps.
 """
 
 
@@ -146,7 +149,20 @@ class PlanDecomposer:
             try:
                 cached = json.loads(open(cache_path).read())
                 plan = MicroPlan(source_plan=plan_text, domain=domain)
-                plan.steps = [MicroIntent(**s) for s in cached]
+                for s in cached:
+                    step_type = s.get("type") or s.get("action") or "click"
+                    reverse = s.get("reverse") or s.get("reverse_action") or ""
+                    plan.steps.append(MicroIntent(
+                        intent=s.get("intent", ""),
+                        type=step_type,
+                        verify=s.get("verify", s.get("expected_outcome", "")),
+                        budget=s.get("budget", 5),
+                        reverse=reverse,
+                        grounding=s.get("grounding", step_type in ("click", "filter", "paginate")),
+                        claude_only=s.get("claude_only", step_type in ("extract_url", "extract_data")),
+                        loop_target=s.get("loop_target", -1),
+                        loop_count=s.get("loop_count", 0),
+                    ))
                 logger.info(f"Loaded cached micro-plan: {cache_path} ({len(plan.steps)} steps)")
                 return plan
             except Exception:
@@ -190,14 +206,17 @@ class PlanDecomposer:
         steps_raw = json.loads(text)
         plan = MicroPlan(source_plan=plan_text, domain=domain)
         for s in steps_raw:
+            # Handle field name variations from Claude's output
+            step_type = s.get("type") or s.get("action") or "click"
+            reverse = s.get("reverse") or s.get("reverse_action") or ""
             plan.steps.append(MicroIntent(
                 intent=s.get("intent", ""),
-                type=s.get("type", "click"),
-                verify=s.get("verify", ""),
+                type=step_type,
+                verify=s.get("verify", s.get("expected_outcome", "")),
                 budget=s.get("budget", 5),
-                reverse=s.get("reverse", ""),
-                grounding=s.get("grounding", False),
-                claude_only=s.get("claude_only", False),
+                reverse=reverse,
+                grounding=s.get("grounding", step_type in ("click", "filter", "paginate")),
+                claude_only=s.get("claude_only", step_type in ("extract_url", "extract_data")),
                 loop_target=s.get("loop_target", -1),
                 loop_count=s.get("loop_count", 0),
             ))
