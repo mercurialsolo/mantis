@@ -229,8 +229,15 @@ Nothing else."""
                 gx, gy = int(nums[0]), int(nums[1])
                 gx = max(0, min(gx, screenshot.width - 1))
                 gy = max(0, min(gy, screenshot.height - 1))
-                logger.info(f"ClaudeGrounding: '{description[:40]}' → ({gx},{gy})")
-                return GroundingResult(x=gx, y=gy, confidence=0.9, description=description)
+                # Confidence scales with proximity to initial coords
+                # Near refinements (< 100px) = high confidence
+                # Far jumps (> 300px) = low confidence
+                dx = abs(gx - (initial_x or screenshot.width // 2))
+                dy = abs(gy - (initial_y or screenshot.height // 2))
+                dist = (dx**2 + dy**2) ** 0.5
+                conf = max(0.3, min(0.95, 1.0 - dist / 500))
+                logger.info(f"ClaudeGrounding: '{description[:40]}' → ({gx},{gy}) conf={conf:.2f} dist={dist:.0f}")
+                return GroundingResult(x=gx, y=gy, confidence=conf, description=description)
 
         except Exception as e:
             logger.warning(f"Claude grounding failed: {e}")

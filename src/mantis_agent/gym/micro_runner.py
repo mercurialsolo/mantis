@@ -430,11 +430,11 @@ class MicroPlanRunner:
             except Exception:
                 pass
 
-        # Claude finds the target (with retry on error)
+        # Claude finds the first visible listing in current viewport (with retry)
         target = None
         for attempt in range(max_find_retries):
             screenshot = self.env.screenshot()
-            target = self.extractor.find_click_target(screenshot, skip_count=self._listings_on_page)
+            target = self.extractor.find_click_target(screenshot, skip_count=0)
             self.costs["claude_extract"] += 1
 
             if isinstance(target, tuple) and len(target) == 3:
@@ -505,48 +505,68 @@ class MicroPlanRunner:
     def _execute_claude_guided_paginate(self, step: MicroIntent, index: int) -> StepResult:
         """Claude finds Next button → Holo3 clicks it.
 
-        1. Scroll to bottom (End key)
-        2. Claude reads screenshot → finds Next button coordinates
-        3. Grounding refines → Holo3 clicks
+        Scrolls to bottom, Claude finds Next, retry on error, bounded grounding.
         """
-        # Scroll to bottom first
+        # Scroll to bottom
         try:
             self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
-            time.sleep(2)
+            time.sleep(3)
         except Exception:
             pass
 
-        screenshot = self.env.screenshot()
-        target = self.extractor.find_paginate_target(screenshot)
-        self.costs["claude_extract"] += 1
+        # Find Next button with retry
+        target = None
+        for attempt in range(2):
+            screenshot = self.env.screenshot()
+            target = self.extractor.find_paginate_target(screenshot)
+            self.costs["claude_extract"] += 1
+            if target is not None:
+                break
+            logger.warning(f"  [claude-paginate] attempt {attempt+1} failed — retrying")
+            # Try scrolling up slightly then back down (different viewport)
+            try:
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Up"}))
+                time.sleep(1)
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
+                time.sleep(2)
+            except Exception:
+                pass
 
         if target is None:
-            logger.info(f"  [claude-paginate] No Next button found")
+            logger.info(f"  [claude-paginate] No Next button found after retries")
             return StepResult(step_index=index, intent=step.intent, success=False)
 
         x, y = target
 
-        # Grounding refines
+        # Grounding with delta bound
         if self.grounding:
             grounding_result = self.grounding.ground(screenshot, "Next page button", x, y)
             self.costs["claude_grounding"] += 1
-            if grounding_result.confidence > 0.5:
+            dx = abs(grounding_result.x - x)
+            dy = abs(grounding_result.y - y)
+            if grounding_result.confidence > 0.5 and dx < 150 and dy < 150:
                 x, y = grounding_result.x, grounding_result.y
+                logger.info(f"  [grounding] paginate refined to ({x}, {y})")
+            else:
+                logger.info(f"  [grounding] paginate rejected: delta=({dx},{dy})")
 
         # Click
         try:
             self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
-            time.sleep(4)  # Wait for new page to load
             self.costs["gpu_steps"] += 1
             self.costs["gpu_seconds"] += 4
             self.costs["proxy_mb"] += 5.0
-
-            # Scroll to top of new page
-            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(1)
         except Exception as e:
             logger.warning(f"  [claude-paginate] Click failed: {e}")
             return StepResult(step_index=index, intent=step.intent, success=False)
+
+        # Wait for page load, then scroll to top
+        time.sleep(8)
+        try:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+            time.sleep(2)
+        except Exception:
+            pass
 
         logger.info(f"  [claude-paginate] Clicked Next at ({x}, {y})")
         self._listings_on_page = 0  # Reset for new page

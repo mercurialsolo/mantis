@@ -254,19 +254,13 @@ class ClaudeExtractor:
             ("error",) — API/parse failure (should retry, not treat as exhausted)
             None — empty API response (should retry)
         """
-        ordinal = {0: "first", 1: "second", 2: "third", 3: "fourth",
-                   4: "fifth", 5: "sixth", 6: "seventh", 7: "eighth"}.get(
-            skip_count, f"#{skip_count + 1}"
-        )
-
         prompt = (
-            f"Look at this search results page ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"Find the {ordinal} boat listing card. Listings are rectangular cards with "
-            f"a boat photo and text below showing year, make, model, and price.\n\n"
-            f"Return the CENTER coordinates of the listing's TEXT area (below the photo). "
-            f"Even if you can't read the exact text, return approximate coordinates.\n\n"
-            f"Output ONLY: {{\"x\": N, \"y\": N, \"title\": \"best guess or unknown\"}}\n"
-            f"If no listing exists: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
+            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"Find the first VISIBLE boat listing card in the current view. "
+            f"A listing card has a boat photo with text below it showing a year and boat name.\n\n"
+            f"Return the CENTER coordinates of that listing's TEXT area (below the photo, not the photo itself).\n\n"
+            f"Output ONLY: {{\"x\": N, \"y\": N, \"title\": \"text you can see or unknown\"}}\n"
+            f"If no listing card is visible in the current view: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
         )
 
         debug_stem = f"claude_click_skip{skip_count}"
