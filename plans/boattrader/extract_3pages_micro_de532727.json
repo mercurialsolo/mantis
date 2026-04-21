@@ -25,8 +25,8 @@
   {
     "step": 4,
     "type": "scroll",
-    "intent": "Scroll down 5 times past the photos",
-    "budget": 5,
+    "intent": "Scroll down until you see a Description or Seller Notes section. Call done when you find it.",
+    "budget": 10,
     "reverse": "Scroll up 5 times"
   },
   {

@@ -100,7 +100,7 @@ STEP TYPES:
 - navigate: Go to a URL — include full URL in intent (budget=3)
 - filter: Click a filter option (budget=8, grounding=true)
 - click: Click a specific element (budget=8, grounding=true)
-- scroll: Scroll the page (budget=5)
+- scroll: Scroll until target content visible — "Scroll down until you see Description section" (budget=10). Do NOT hardcode scroll count.
 - extract_url: Read URL from address bar (claude_only=true, budget=0)
 - extract_data: Read structured data from screenshot (claude_only=true, budget=0)
 - navigate_back: Press Alt+Left to go back (budget=3)
