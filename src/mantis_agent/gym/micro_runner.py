@@ -370,13 +370,21 @@ class MicroPlanRunner:
 
         # Click steps: Claude finds target → Holo3 clicks coordinates
         if step.type == "click" and self.extractor:
+            # Brief settle — page may still be loading after navigate/paginate
+            time.sleep(2)
             return self._execute_claude_guided_click(step, index)
 
         # Claude-only steps (extract_url, extract_data)
         if step.claude_only:
+            # Brief settle — page may still be rendering after scroll
+            time.sleep(1)
             return self._execute_claude_step(step, index)
 
-        # Holo3 steps (scroll, filter, navigate_back, paginate)
+        # Paginate steps: Claude finds Next button → Holo3 clicks
+        if step.type == "paginate" and self.extractor:
+            return self._execute_claude_guided_paginate(step, index)
+
+        # Holo3 steps (scroll, filter, navigate_back)
         return self._execute_holo3_step(step, index)
 
     def _execute_navigate(self, step: MicroIntent, index: int) -> StepResult:
@@ -392,7 +400,7 @@ class MicroPlanRunner:
         logger.info(f"  [navigate] Loading {url}")
         try:
             self.env.reset(task="navigate", start_url=url)
-            time.sleep(4)
+            time.sleep(6)  # BoatTrader needs 6s+ to fully load
             # Scroll to top
             self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
             time.sleep(1)
@@ -462,6 +470,56 @@ class MicroPlanRunner:
         else:
             logger.warning(f"  [claude-click] Not on detail page after click (url={url[:40]})")
             return StepResult(step_index=index, intent=step.intent, success=False)
+
+    def _execute_claude_guided_paginate(self, step: MicroIntent, index: int) -> StepResult:
+        """Claude finds Next button → Holo3 clicks it.
+
+        1. Scroll to bottom (End key)
+        2. Claude reads screenshot → finds Next button coordinates
+        3. Grounding refines → Holo3 clicks
+        """
+        # Scroll to bottom first
+        try:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
+            time.sleep(2)
+        except Exception:
+            pass
+
+        screenshot = self.env.screenshot()
+        target = self.extractor.find_paginate_target(screenshot)
+        self.costs["claude_extract"] += 1
+
+        if target is None:
+            logger.info(f"  [claude-paginate] No Next button found")
+            return StepResult(step_index=index, intent=step.intent, success=False)
+
+        x, y = target
+
+        # Grounding refines
+        if self.grounding:
+            grounding_result = self.grounding.ground(screenshot, "Next page button", x, y)
+            self.costs["claude_grounding"] += 1
+            if grounding_result.confidence > 0.5:
+                x, y = grounding_result.x, grounding_result.y
+
+        # Click
+        try:
+            self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+            time.sleep(4)  # Wait for new page to load
+            self.costs["gpu_steps"] += 1
+            self.costs["gpu_seconds"] += 4
+            self.costs["proxy_mb"] += 5.0
+
+            # Scroll to top of new page
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+            time.sleep(1)
+        except Exception as e:
+            logger.warning(f"  [claude-paginate] Click failed: {e}")
+            return StepResult(step_index=index, intent=step.intent, success=False)
+
+        logger.info(f"  [claude-paginate] Clicked Next at ({x}, {y})")
+        self._listings_on_page = 0  # Reset for new page
+        return StepResult(step_index=index, intent=step.intent, success=True, steps_used=1)
 
     @property
     def _listings_on_page(self):

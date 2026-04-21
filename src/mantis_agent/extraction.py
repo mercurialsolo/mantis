@@ -277,3 +277,31 @@ class ClaudeExtractor:
 
         logger.info(f"  [claude-target] '{title[:40]}' at ({x}, {y})")
         return (x, y, title)
+
+    def find_paginate_target(self, screenshot: Image.Image) -> tuple[int, int] | None:
+        """Find the Next page button or next page number on a search results page.
+
+        Returns (x, y) coordinates of the Next button, or None if not found.
+        """
+        prompt = (
+            f"Look at this page ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"Find the NEXT PAGE button or the next page number link. "
+            f"It is usually at the bottom of the page. Look for:\n"
+            f"- Text that says 'Next' or '>' or '>>'\n"
+            f"- Page numbers like 1, 2, 3 where the next number is clickable\n\n"
+            f"Return the CENTER coordinates of the Next button.\n"
+            f"Output ONLY: {{\"x\": N, \"y\": N}}\n"
+            f"If no Next button exists: {{\"x\": 0, \"y\": 0}}"
+        )
+
+        text = self._call(screenshot, prompt)
+        parsed = self._parse_json(text)
+
+        x = int(parsed.get("x", 0))
+        y = int(parsed.get("y", 0))
+
+        if x == 0 and y == 0:
+            return None
+
+        logger.info(f"  [claude-paginate] Next button at ({x}, {y})")
+        return (x, y)
