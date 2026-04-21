@@ -29,9 +29,10 @@ from typing import Any, TYPE_CHECKING
 from ..actions import Action, ActionType
 from .runner import GymRunner
 
+from ..plan_decomposer import MicroIntent, MicroPlan
+
 if TYPE_CHECKING:
     from ..extraction import ClaudeExtractor, ExtractionResult
-    from ..plan_decomposer import MicroIntent, MicroPlan
 
 logger = logging.getLogger(__name__)
 
