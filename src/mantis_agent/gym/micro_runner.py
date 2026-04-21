@@ -219,24 +219,35 @@ class MicroPlanRunner:
                 if step.type == "paginate":
                     listings_on_page = 0
                     self._listings_on_page = 0
+                    # Scroll to top of new page + wait for load
+                    try:
+                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                        time.sleep(8)
+                    except Exception:
+                        pass
+                    logger.info(f"  [paginate] Success — reset to top of new page")
 
                 # Verify navigate_back actually went back to results
                 if step.type == "navigate_back" and self.extractor:
-                    time.sleep(1)
+                    time.sleep(2)
                     screenshot = self.env.screenshot()
                     check = self.extractor.extract(screenshot)
                     self.costs["claude_extract"] += 1
                     url = check.url if check else ""
                     if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
-                        # Still on detail page — force back
-                        logger.warning(f"  [back-verify] Still on detail page — forcing Alt+Left")
-                        try:
-                            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
-                            time.sleep(3)
-                            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-                            time.sleep(1)
-                        except Exception:
-                            pass
+                        # Still on detail page — let the CUA figure out how to go back
+                        logger.warning(f"  [back-verify] Still on detail page — giving CUA a recovery task")
+                        recovery = self._execute_holo3_step(
+                            MicroIntent(
+                                intent="You are on a boat detail page. Go back to the search results. "
+                                       "Click the back arrow, or click '< Search' link at the top.",
+                                type="navigate_back",
+                                budget=8,
+                                grounding=True,
+                            ),
+                            index,
+                        )
+                        self.costs["gpu_steps"] += recovery.steps_used
 
                 # Checkpoint on success
                 checkpoint.step_index = step_index + 1
@@ -407,11 +418,18 @@ class MicroPlanRunner:
             time.sleep(1)
             return self._execute_claude_step(step, index)
 
-        # Paginate steps: Claude finds Next button → Holo3 clicks
+        # Paginate: try Holo3 first. If it fails without taking any actions,
+        # fall back to Claude-guided pagination on the unchanged page state.
         if step.type == "paginate" and self.extractor:
-            return self._execute_claude_guided_paginate(step, index)
+            holo_result = self._execute_holo3_step(step, index)
+            if holo_result.success:
+                return holo_result
+            if holo_result.steps_used == 0:
+                logger.info("  [paginate] Holo3 failed with 0 steps — falling back to Claude-guided paginate")
+                return self._execute_claude_guided_paginate(step, index)
+            return holo_result
 
-        # Holo3 steps (scroll, filter, navigate_back)
+        # Holo3 steps (scroll, filter, navigate_back, paginate)
         return self._execute_holo3_step(step, index)
 
     def _execute_navigate(self, step: MicroIntent, index: int) -> StepResult:
@@ -532,50 +550,67 @@ class MicroPlanRunner:
     def _execute_claude_guided_paginate(self, step: MicroIntent, index: int) -> StepResult:
         """Claude finds Next button → Holo3 clicks it.
 
-        Scrolls to bottom, Claude finds Next, retry on error, bounded grounding.
+        Scrolls near the bottom, Claude finds pagination, retry on error, bounded grounding.
         """
-        # Scroll to bottom
+        # Go to bottom first so the pagination bar is likely on screen.
         try:
             self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
             time.sleep(3)
         except Exception:
             pass
 
-        # Find Next button with retry
+        # Find pagination target with retry. On retry, move slightly up so the
+        # pagination bar is not flush with the screen edge or hidden by footer UI.
         target = None
-        for attempt in range(2):
+        screenshot = None
+        for attempt in range(3):
+            if attempt == 1:
+                try:
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Up"}))
+                    time.sleep(1.5)
+                except Exception:
+                    pass
+            elif attempt == 2:
+                try:
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
+                    time.sleep(2)
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Up"}))
+                    time.sleep(1.5)
+                except Exception:
+                    pass
+
             screenshot = self.env.screenshot()
             target = self.extractor.find_paginate_target(screenshot)
             self.costs["claude_extract"] += 1
-            if target is not None:
-                break
-            logger.warning(f"  [claude-paginate] attempt {attempt+1} failed — retrying")
-            # Try scrolling up slightly then back down (different viewport)
-            try:
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Up"}))
-                time.sleep(1)
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
-                time.sleep(2)
-            except Exception:
-                pass
 
-        if target is None:
-            logger.info(f"  [claude-paginate] No Next button found after retries")
+            if isinstance(target, tuple) and len(target) == 3:
+                break
+            if isinstance(target, tuple) and target[0] == "not_found":
+                logger.warning(f"  [claude-paginate] no control visible on attempt {attempt+1}/3")
+                continue
+            if isinstance(target, tuple) and target[0] == "error":
+                logger.warning(f"  [claude-paginate] parse/error on attempt {attempt+1}/3")
+                continue
+
+            logger.warning(f"  [claude-paginate] empty response on attempt {attempt+1}/3")
+
+        if not isinstance(target, tuple) or len(target) != 3:
+            logger.info(f"  [claude-paginate] No Next control found after retries")
             return StepResult(step_index=index, intent=step.intent, success=False)
 
-        x, y = target
+        x, y, label = target
 
         # Grounding with delta bound
         if self.grounding:
-            grounding_result = self.grounding.ground(screenshot, "Next page button", x, y)
+            grounding_result = self.grounding.ground(screenshot, f"pagination control {label or 'Next'}", x, y)
             self.costs["claude_grounding"] += 1
             dx = abs(grounding_result.x - x)
             dy = abs(grounding_result.y - y)
             if grounding_result.confidence > 0.5 and dx < 150 and dy < 150:
                 x, y = grounding_result.x, grounding_result.y
-                logger.info(f"  [grounding] paginate refined to ({x}, {y})")
+                logger.info(f"  [grounding] paginate refined to ({x}, {y}) delta=({dx},{dy})")
             else:
-                logger.info(f"  [grounding] paginate rejected: delta=({dx},{dy})")
+                logger.info(f"  [grounding] paginate rejected: delta=({dx},{dy}) conf={grounding_result.confidence}")
 
         # Click
         try:
@@ -595,7 +630,7 @@ class MicroPlanRunner:
         except Exception:
             pass
 
-        logger.info(f"  [claude-paginate] Clicked Next at ({x}, {y})")
+        logger.info(f"  [claude-paginate] Clicked '{label[:20]}' at ({x}, {y})")
         self._listings_on_page = 0  # Reset for new page
         return StepResult(step_index=index, intent=step.intent, success=True, steps_used=1)
 

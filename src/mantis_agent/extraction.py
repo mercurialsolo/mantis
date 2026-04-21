@@ -321,30 +321,67 @@ class ClaudeExtractor:
         logger.info(f"  [claude-target] '{title[:40]}' at ({x}, {y})")
         return (x, y, title)
 
-    def find_paginate_target(self, screenshot: Image.Image) -> tuple[int, int] | None:
+    def find_paginate_target(self, screenshot: Image.Image) -> tuple[int, int, str] | tuple[str] | None:
         """Find the Next page button or next page number on a search results page.
 
-        Returns (x, y) coordinates of the Next button, or None if not found.
+        Returns:
+            (x, y, label) — pagination target found
+            ("not_found",) — Claude confirmed no next-page control is visible
+            ("error",) — API/parse failure or unusable coordinates
+            None — empty response
         """
         prompt = (
-            f"Look at this page ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"Find the NEXT PAGE button or the next page number link. "
-            f"It is usually at the bottom of the page. Look for:\n"
-            f"- Text that says 'Next' or '>' or '>>'\n"
-            f"- Page numbers like 1, 2, 3 where the next number is clickable\n\n"
-            f"Return the CENTER coordinates of the Next button.\n"
-            f"Output ONLY: {{\"x\": N, \"y\": N}}\n"
-            f"If no Next button exists: {{\"x\": 0, \"y\": 0}}"
+            f"Look at this BoatTrader results-page screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"You are near the bottom of the results. The pagination bar is usually BELOW the last listing cards "
+            f"and ABOVE the footer/social icons. Find the control that goes to the NEXT results page.\n\n"
+            f"Valid targets:\n"
+            f"- A link that says 'Next'\n"
+            f"- A right-arrow or chevron like '>'\n"
+            f"- The next page number to the right of the current page number\n\n"
+            f"Do NOT return footer links, social icons, newsletter/signup buttons, or ad links.\n\n"
+            f"Return the CENTER coordinates of the next-page control.\n"
+            f"Output ONLY valid JSON: {{\"x\": N, \"y\": N, \"label\": \"Next or 2 or >\"}}\n"
+            f"If no next-page control is visible anywhere in the screenshot: {{\"x\": 0, \"y\": 0, \"label\": \"none\"}}"
         )
 
+        debug_stem = "claude_paginate"
+
+        try:
+            screenshot.save(self._debug_path(debug_stem, ".png"))
+        except Exception as e:
+            logger.debug(f"[claude-paginate] failed to save screenshot: {e}")
+
+        try:
+            with open(self._debug_path(debug_stem, "_prompt.txt"), "w") as f:
+                f.write(prompt)
+        except Exception as e:
+            logger.debug(f"[claude-paginate] failed to save prompt: {e}")
+
         text = self._call(screenshot, prompt)
+
+        try:
+            with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
+                f.write(text)
+        except Exception as e:
+            logger.debug(f"[claude-paginate] failed to save response: {e}")
+
         parsed = self._parse_json(text)
+
+        if not parsed:
+            logger.warning(f"  [claude-paginate] parse failed raw={text[:300]!r}")
+            return ("error",)
+
+        if parsed.get("label") == "none":
+            logger.info("  [claude-paginate] Claude reported no next-page control visible")
+            return ("not_found",)
 
         x = int(parsed.get("x", 0))
         y = int(parsed.get("y", 0))
+        label = str(parsed.get("label", ""))
 
         if x == 0 and y == 0:
-            return None
+            logger.warning(f"  [claude-paginate] zero coordinates raw={text[:300]!r}")
+            return ("error",)
 
-        logger.info(f"  [claude-paginate] Next button at ({x}, {y})")
-        return (x, y)
+        logger.info(f"  [claude-paginate] '{label[:20]}' at ({x}, {y})")
+        return (x, y, label)
