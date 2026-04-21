@@ -1,0 +1,167 @@
+[
+  {
+    "intent": "Navigate to BoatTrader homepage",
+    "type": "navigate",
+    "verify": "BoatTrader.com homepage loads with search filters visible",
+    "budget": 3,
+    "reverse": "Refresh the page",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Click the Private Seller filter option",
+    "type": "filter",
+    "verify": "Private Seller filter is selected and highlighted",
+    "budget": 5,
+    "reverse": "Click All Sellers or deselect Private Seller",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Enter zip code 33101 in the location field",
+    "type": "filter",
+    "verify": "Location field shows 33101 and suggests Miami area",
+    "budget": 4,
+    "reverse": "Clear the location field",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Set search radius to 25 miles",
+    "type": "filter",
+    "verify": "Radius dropdown shows 25 miles selected",
+    "budget": 3,
+    "reverse": "Change radius back to default",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Set minimum price filter to $35,000",
+    "type": "filter",
+    "verify": "Price minimum field shows $35,000",
+    "budget": 4,
+    "reverse": "Clear the minimum price field",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Sort results by Recently Updated newest first",
+    "type": "filter",
+    "verify": "Sort dropdown shows Recently Updated selected",
+    "budget": 4,
+    "reverse": "Change sort back to default relevance",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Verify search results show private seller boats with reasonable count",
+    "type": "extract_data",
+    "verify": "Results page shows fewer than 5000 boats with private seller indicators",
+    "budget": 2,
+    "reverse": "Go back and reapply filters starting with Private Seller",
+    "grounding": false,
+    "claude_only": true,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Click the title text of the first boat listing",
+    "type": "click",
+    "verify": "Boat detail page opens showing photos and description",
+    "budget": 3,
+    "reverse": "Use browser back button",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Extract the URL from browser address bar",
+    "type": "extract_url",
+    "verify": "URL captured showing specific boat listing page",
+    "budget": 1,
+    "reverse": "Not applicable",
+    "grounding": false,
+    "claude_only": true,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Scroll down past photo gallery to description section",
+    "type": "scroll",
+    "verify": "Description or seller notes section visible below photos",
+    "budget": 6,
+    "reverse": "Scroll back up to top",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Extract boat details and phone from description section",
+    "type": "extract_data",
+    "verify": "Year, make, model, price, seller name, and phone number identified",
+    "budget": 3,
+    "reverse": "Not applicable",
+    "grounding": false,
+    "claude_only": true,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Navigate back to search results page",
+    "type": "navigate_back",
+    "verify": "Search results page shows with same filters applied",
+    "budget": 2,
+    "reverse": "Click forward in browser",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Process next boat listing by clicking its title",
+    "type": "loop",
+    "verify": "Continue processing listings until page is complete",
+    "budget": 40,
+    "reverse": "Stop loop and move to next page",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": 7,
+    "loop_count": 200
+  },
+  {
+    "intent": "Click Next page button to continue to more listings",
+    "type": "paginate",
+    "verify": "New page of search results loads",
+    "budget": 3,
+    "reverse": "Click Previous page",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": -1,
+    "loop_count": 0
+  },
+  {
+    "intent": "Continue processing all pages up to 50 pages total",
+    "type": "loop",
+    "verify": "All available listings processed or 50 page limit reached",
+    "budget": 200,
+    "reverse": "Stop processing",
+    "grounding": false,
+    "claude_only": false,
+    "loop_target": 12,
+    "loop_count": 50
+  }
+]
