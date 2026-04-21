@@ -905,6 +905,62 @@ def _run_holo3_executor(
         except Exception as e:
             print(f"  Viewer failed to start: {e}")
 
+    # ── Micro-intent mode: run MicroPlanRunner ──
+    micro_plan_data = task_suite.get("_micro_plan")
+    if micro_plan_data:
+        from mantis_agent.plan_decomposer import MicroPlan, MicroIntent
+        from mantis_agent.gym.micro_runner import MicroPlanRunner
+
+        micro_plan = MicroPlan(domain=session_name)
+        for s in micro_plan_data:
+            micro_plan.steps.append(MicroIntent(**s))
+
+        print(f"\n  === MICRO-INTENT MODE ({len(micro_plan.steps)} steps) ===")
+        print(micro_plan.summary())
+
+        micro_runner = MicroPlanRunner(
+            brain=brain, env=env,
+            grounding=grounding, extractor=extractor,
+            on_step=viewer_event_bus.emit if viewer_event_bus else None,
+            checkpoint_path=f"/data/checkpoints/micro_{session_name}_{run_id}.json",
+        )
+        step_results = micro_runner.run(micro_plan)
+
+        # Summarize
+        viable = sum(1 for r in step_results if r.success and "VIABLE" in (r.data or ""))
+        total = len(step_results)
+        leads = [r.data for r in step_results if r.success and "VIABLE" in (r.data or "")]
+
+        results_path = f"/data/results/holo3_results_{session_name}_{run_id}.json"
+        os.makedirs("/data/results", exist_ok=True)
+        summary = {
+            "run_id": run_id, "session_name": session_name,
+            "model": "Holo3-35B-A3B (micro)", "mode": "micro_intent",
+            "total_time_s": round(time.time() - t0),
+            "steps_executed": total, "viable": viable,
+            "leads": leads,
+            "step_details": [
+                {"step": r.step_index, "intent": r.intent[:80],
+                 "success": r.success, "steps": r.steps_used,
+                 "data": r.data[:200] if r.data else ""}
+                for r in step_results
+            ],
+        }
+        with open(results_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        vol.commit()
+
+        print(f"\n  Micro-intent complete: {viable} viable leads from {total} steps")
+        for i, lead in enumerate(leads, 1):
+            print(f"    [{i}] {lead[:150]}")
+
+        env.close()
+        llama_proc.terminate()
+        if viewer_ctx:
+            try: viewer_ctx.__exit__(None, None, None)
+            except Exception: pass
+        return {"mode": "micro", "viable": viable, "steps": total}
+
     # ── Learning mode: run LearningRunner instead of normal task loop ──
     learn_mode = task_suite.get("_learn", False)
     learn_samples = task_suite.get("_learn_samples", 5)
@@ -2033,6 +2089,7 @@ def main(
     learn: bool = False,
     verify: bool = False,
     learn_samples: int = 5,
+    micro: str = "",
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
 
@@ -2041,6 +2098,7 @@ def main(
       --plan-file plans/boattrader/full_spec.txt    (Gemma4 preprocesses → execute)
       --learn --task-file tasks/...                 (learning phase: build playbook)
       --verify --task-file tasks/...                (execution with step verification)
+      --micro plans/boattrader/extract_only.txt     (micro-intent decompose + execute)
 
     Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, holo3, gemma4-cua, claude
     Parallel: --workers 5   (auto fan-out looped tasks across N GPUs)
@@ -2048,6 +2106,7 @@ def main(
     Viewer: --viewer   (live web viewer via modal.forward tunnel)
     Learning: --learn --learn-samples 5   (build site playbook from N samples)
     Verification: --verify   (enable step verification during execution)
+    Micro: --micro plan.txt   (decompose → micro-intents → execute with checkpoint/reverse)
     """
     cua_config = CUA_MODELS.get(model, CUA_MODELS["evocua-8b"])
     print(f"Mantis CUA Server — {cua_config['name']}")
@@ -2118,8 +2177,38 @@ def main(
         with open(task_file) as f:
             task_file_contents = f.read()
 
+    # Mode 3: Micro-intent decompose + execute
+    elif micro:
+        print(f"  Plan:    {micro}")
+        print(f"  Mode:    Micro-Intent → {cua_config['name']}")
+
+        # Decompose plan into micro-intents (Claude Sonnet, cached)
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+        from mantis_agent.plan_decomposer import PlanDecomposer
+
+        decomposer = PlanDecomposer()
+        micro_plan = decomposer.decompose(micro)
+        print(f"  Steps:   {len(micro_plan.steps)} micro-intents")
+        print(micro_plan.summary())
+
+        # Pack micro-plan into task_file_contents for the executor
+        task_suite = {
+            "session_name": f"micro_{micro_plan.domain.replace('.', '_')}",
+            "base_url": "",
+            "_micro_plan": [
+                {
+                    "intent": s.intent, "type": s.type, "verify": s.verify,
+                    "budget": s.budget, "reverse": s.reverse,
+                    "grounding": s.grounding, "claude_only": s.claude_only,
+                    "loop_target": s.loop_target, "loop_count": s.loop_count,
+                } for s in micro_plan.steps
+            ],
+            "tasks": [],  # No traditional tasks — micro-runner handles execution
+        }
+        task_file_contents = json.dumps(task_suite)
+
     else:
-        print("ERROR: Provide --plan-file or --task-file")
+        print("ERROR: Provide --plan-file, --task-file, or --micro")
         sys.exit(1)
 
     # ── Learning mode: build playbook with step verification ─────
