@@ -74,6 +74,9 @@ RULES:
 - Include WHAT + WHERE: "Click Private Seller text in left sidebar"
 - For navigate steps: include the FULL URL in the intent
 - Extraction steps (reading screen) use claude_only=true — a vision API reads the screenshot
+- The "reverse" field must be a CUA-executable instruction (same format as intent). \
+  It is given to the executor when a step needs to be undone. Example: \
+  reverse="Click the back arrow or Search link at the top of the page"
 - Every step has a reverse action to undo on failure
 
 LOOP STRUCTURE — THIS IS CRITICAL:

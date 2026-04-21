@@ -1,69 +1,69 @@
 [
   {
-    "step": 1,
+    "step": 0,
     "type": "navigate",
-    "intent": "Go to BoatTrader private seller listings page at https://www.boattrader.com/boats/by-owner/",
+    "intent": "Navigate to https://www.boattrader.com/boats/by-owner/ to see private seller listings",
     "budget": 3,
-    "reverse": "Press Alt+Left to go back"
+    "reverse": "Navigate back to previous page"
   },
   {
-    "step": 2,
+    "step": 1,
     "type": "click",
     "intent": "Click a boat listing title text below a photo",
     "budget": 8,
     "grounding": true,
-    "reverse": "Press Alt+Left to go back"
+    "reverse": "Press Alt+Left to go back to results page"
   },
   {
-    "step": 3,
+    "step": 2,
     "type": "extract_url",
     "intent": "Read URL from address bar",
     "claude_only": true,
     "budget": 0,
-    "reverse": "Continue to next step"
+    "reverse": "Continue without URL extraction"
+  },
+  {
+    "step": 3,
+    "type": "scroll",
+    "intent": "Scroll down until you see Description section",
+    "budget": 10,
+    "reverse": "Scroll back up to top of page"
   },
   {
     "step": 4,
-    "type": "scroll",
-    "intent": "Scroll down until you see a Description or Seller Notes section. Call done when you find it.",
-    "budget": 10,
-    "reverse": "Scroll up 5 times"
+    "type": "extract_data",
+    "intent": "Read Year, Make, Model, Price, Phone, Seller from the page",
+    "claude_only": true,
+    "budget": 0,
+    "reverse": "Continue without data extraction"
   },
   {
     "step": 5,
-    "type": "extract_data",
-    "intent": "Read boat data from page",
-    "claude_only": true,
-    "budget": 0,
-    "reverse": "Continue to next step"
-  },
-  {
-    "step": 6,
     "type": "navigate_back",
     "intent": "Press Alt+Left to go back",
     "budget": 3,
     "reverse": "Press Alt+Right to go forward"
   },
   {
-    "step": 7,
+    "step": 6,
     "type": "loop",
     "loop_target": 1,
     "loop_count": 20,
-    "reverse": "Continue to next step"
+    "reverse": "Break out of listing loop"
   },
   {
-    "step": 8,
+    "step": 7,
     "type": "paginate",
     "intent": "Scroll to bottom and click Next page button",
     "budget": 10,
     "grounding": true,
-    "reverse": "Click Previous page button"
+    "reverse": "Click Previous page button to go back"
   },
   {
-    "step": 9,
+    "step": 8,
     "type": "loop",
     "loop_target": 1,
     "loop_count": 3,
-    "reverse": "Continue to next step"
+    "reverse": "Stop processing pages"
   }
 ]

@@ -227,7 +227,7 @@ class MicroPlanRunner:
                         pass
                     logger.info(f"  [paginate] Success — reset to top of new page")
 
-                # Verify navigate_back actually went back to results
+                # Verify navigate_back: check if we left the detail page
                 if step.type == "navigate_back" and self.extractor:
                     time.sleep(2)
                     screenshot = self.env.screenshot()
@@ -235,17 +235,18 @@ class MicroPlanRunner:
                     self.costs["claude_extract"] += 1
                     url = check.url if check else ""
                     if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
-                        # Still on detail page — let the CUA figure out how to go back
-                        logger.warning(f"  [back-verify] Still on detail page — giving CUA a recovery task")
+                        # Still on detail page — give the CUA a recovery task
+                        # Use the plan's reverse intent, not hardcoded site knowledge
+                        recovery_intent = step.reverse or "Go back to the previous page."
+                        logger.warning(f"  [back-verify] Still on detail page — CUA recovery: {recovery_intent[:50]}")
                         recovery = self._execute_holo3_step(
                             MicroIntent(
-                                intent="You are on a boat detail page. Go back to the search results. "
-                                       "Click the back arrow, or click '< Search' link at the top.",
+                                intent=recovery_intent,
                                 type="navigate_back",
                                 budget=8,
                                 grounding=True,
                             ),
-                            index,
+                            step_index,
                         )
                         self.costs["gpu_steps"] += recovery.steps_used
 
