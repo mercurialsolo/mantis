@@ -229,12 +229,38 @@ class MicroPlanRunner:
     def _execute_step(self, step: MicroIntent, index: int) -> StepResult:
         """Execute a single micro-intent."""
 
+        # Navigate steps: use env.reset() with URL instead of Holo3
+        if step.type == "navigate":
+            return self._execute_navigate(step, index)
+
         # Claude-only steps (extract_url, extract_data)
         if step.claude_only:
             return self._execute_claude_step(step, index)
 
         # Holo3 steps
         return self._execute_holo3_step(step, index)
+
+    def _execute_navigate(self, step: MicroIntent, index: int) -> StepResult:
+        """Navigate to a URL using env.reset() — no Holo3 steps needed."""
+        import re
+        url_match = re.search(r'https?://[^\s"]+', step.intent)
+        url = url_match.group() if url_match else ""
+
+        if not url:
+            logger.warning(f"  [navigate] No URL found in intent: {step.intent[:60]}")
+            return StepResult(step_index=index, intent=step.intent, success=False)
+
+        logger.info(f"  [navigate] Loading {url}")
+        try:
+            self.env.reset(task="navigate", start_url=url)
+            time.sleep(4)
+            # Scroll to top
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+            time.sleep(1)
+            return StepResult(step_index=index, intent=step.intent, success=True)
+        except Exception as e:
+            logger.error(f"  [navigate] Failed: {e}")
+            return StepResult(step_index=index, intent=step.intent, success=False)
 
     def _execute_holo3_step(self, step: MicroIntent, index: int) -> StepResult:
         """Execute a Holo3 micro-intent with fresh GymRunner."""

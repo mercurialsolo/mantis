@@ -1,0 +1,117 @@
+[
+  {
+    "step": 1,
+    "type": "navigate",
+    "intent": "Go to https://www.boattrader.com/boats/",
+    "budget": 3,
+    "reverse_action": "Press Alt+Left to go back"
+  },
+  {
+    "step": 2,
+    "type": "filter",
+    "intent": "Click Private Seller option in seller type filter",
+    "budget": 8,
+    "grounding": true,
+    "reverse_action": "Click All Sellers to reset filter"
+  },
+  {
+    "step": 3,
+    "type": "filter",
+    "intent": "Enter zip code 33101 in location field",
+    "budget": 8,
+    "grounding": true,
+    "reverse_action": "Clear location field"
+  },
+  {
+    "step": 4,
+    "type": "filter",
+    "intent": "Set radius to 25 miles in distance dropdown",
+    "budget": 8,
+    "grounding": true,
+    "reverse_action": "Reset radius to default"
+  },
+  {
+    "step": 5,
+    "type": "filter",
+    "intent": "Set minimum price to 35000 in price filter",
+    "budget": 8,
+    "grounding": true,
+    "reverse_action": "Clear minimum price field"
+  },
+  {
+    "step": 6,
+    "type": "filter",
+    "intent": "Click Recently Updated sort option",
+    "budget": 8,
+    "grounding": true,
+    "reverse_action": "Reset to default sort"
+  },
+  {
+    "step": 7,
+    "type": "extract_data",
+    "intent": "Read page title and result count to verify private seller filter",
+    "claude_only": true,
+    "budget": 0,
+    "reverse_action": "No action needed"
+  },
+  {
+    "step": 8,
+    "type": "click",
+    "intent": "Click a boat listing title text below a photo",
+    "budget": 8,
+    "grounding": true,
+    "reverse_action": "Press Alt+Left to go back"
+  },
+  {
+    "step": 9,
+    "type": "extract_url",
+    "intent": "Read URL from address bar",
+    "claude_only": true,
+    "budget": 0,
+    "reverse_action": "No action needed"
+  },
+  {
+    "step": 10,
+    "type": "scroll",
+    "intent": "Scroll down 5 times past the photos",
+    "budget": 5,
+    "reverse_action": "Scroll up to top of page"
+  },
+  {
+    "step": 11,
+    "type": "extract_data",
+    "intent": "Read Year Make Model Price Phone and Seller Name from listing page",
+    "claude_only": true,
+    "budget": 0,
+    "reverse_action": "No action needed"
+  },
+  {
+    "step": 12,
+    "type": "navigate_back",
+    "intent": "Press Alt+Left to go back to search results",
+    "budget": 3,
+    "reverse_action": "Press Alt+Right to go forward"
+  },
+  {
+    "step": 13,
+    "type": "loop",
+    "loop_target": 8,
+    "loop_count": 200,
+    "reverse_action": "Break loop"
+  },
+  {
+    "step": 14,
+    "type": "paginate",
+    "intent": "Scroll to bottom and click Next page button",
+    "budget": 10,
+    "grounding": true,
+    "reverse_action": "Click Previous page button"
+  },
+  {
+    "step": 15,
+    "type": "loop",
+    "loop_target": 8,
+    "loop_count": 50,
+    "reverse_action": "Break pagination loop"
+  }
+]
