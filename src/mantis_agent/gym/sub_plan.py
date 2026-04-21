@@ -237,62 +237,45 @@ class SubPlanRunner:
                 iteration=iteration, page=page, step_name=""
             )
 
-        # ── FIND: locate the next listing card ──────────────────────────
-        logger.info(f"  [FIND] starting (max_steps=5)")
-        find_result = self._holo3_step(
-            "Find the next listing card on the page.",
-            max_steps=5,
-        )
-        micro_results["FIND"] = find_result
-        total_steps += find_result.total_steps
-        checkpoint.step_name = "FIND"
-        self._save_checkpoint(session_name, checkpoint)
-
-        if not find_result.success:
-            logger.info("  [FIND] failed -- page exhausted")
-            return SubPlanResult(
-                iteration=iteration,
-                page=page,
-                success=False,
-                data="",
-                no_more_items=True,
-                steps=total_steps,
-                duration=time.time() - t0,
-                checkpoint=checkpoint,
-                page_exhausted=True,
-                micro_results=micro_results,
-            )
-
-        # ── CLICK: click the listing title (with grounding) ─────────────
-        logger.info("  [CLICK] starting (max_steps=3, grounding=ON)")
+        # ── FIND + CLICK combined: click a listing title ────────────────
+        # Combined because FIND alone ("look at the page") produces no action.
+        # The model needs to actually CLICK something to advance.
+        logger.info(f"  [FIND+CLICK] starting (max_steps=8, grounding=ON)")
         click_result = self._holo3_step(
-            "Click the title text below the boat photo.",
-            max_steps=3,
+            "Click a boat listing title. The title is blue text below a boat photo showing Year Make Model. "
+            "done(success=true) after clicking.",
+            max_steps=8,
             grounding=True,
         )
-        micro_results["CLICK"] = click_result
+        micro_results["FIND_CLICK"] = click_result
         total_steps += click_result.total_steps
-        checkpoint.step_name = "CLICK"
+        checkpoint.step_name = "FIND_CLICK"
         self._save_checkpoint(session_name, checkpoint)
 
         if not click_result.success:
-            # Gallery trap recovery: Escape + Alt+Left
-            logger.warning("  [CLICK] failed -- attempting gallery recovery")
-            recovery = self._holo3_step(
-                "Press Escape then Alt+Left.",
-                max_steps=3,
-            )
-            micro_results["CLICK_recovery"] = recovery
+            # Could be: page exhausted OR gallery trap
+            # Check if model mentioned no listings
+            summary = ""
+            for step in click_result.trajectory:
+                if step.action.action_type.value == "done":
+                    summary = str(step.action.params.get("summary", "")).lower()
+            if "no more" in summary or "no listing" in summary or "footer" in summary:
+                logger.info("  [FIND_CLICK] page exhausted")
+                return SubPlanResult(
+                    iteration=iteration, page=page, success=False, data="",
+                    no_more_items=True, steps=total_steps,
+                    duration=time.time() - t0, checkpoint=checkpoint,
+                    page_exhausted=True, micro_results=micro_results,
+                )
+            # Gallery trap or other failure — recovery
+            logger.warning("  [FIND_CLICK] failed — recovery")
+            recovery = self._holo3_step("Press Escape then Alt+Left.", max_steps=3)
+            micro_results["recovery"] = recovery
             total_steps += recovery.total_steps
             return SubPlanResult(
-                iteration=iteration,
-                page=page,
-                success=False,
-                data="",
-                no_more_items=False,
-                steps=total_steps,
-                duration=time.time() - t0,
-                checkpoint=checkpoint,
+                iteration=iteration, page=page, success=False, data="",
+                no_more_items=False, steps=total_steps,
+                duration=time.time() - t0, checkpoint=checkpoint,
                 micro_results=micro_results,
             )
 
