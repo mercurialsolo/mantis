@@ -115,12 +115,18 @@ class ClaudeExtractor:
     def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-20250514"):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
-        self.debug_dir = os.environ.get("MANTIS_DEBUG_DIR", "/tmp/mantis_debug")
+        self.debug_dir = os.environ.get("MANTIS_DEBUG_DIR", "/data/screenshots/claude_debug")
 
     def _debug_path(self, stem: str, suffix: str) -> str:
         """Build a writable debug artifact path."""
-        os.makedirs(self.debug_dir, exist_ok=True)
-        return os.path.join(self.debug_dir, f"{stem}_{int(time.time())}{suffix}")
+        candidates = [self.debug_dir, "/tmp/mantis_debug"]
+        for base_dir in candidates:
+            try:
+                os.makedirs(base_dir, exist_ok=True)
+                return os.path.join(base_dir, f"{stem}_{int(time.time())}{suffix}")
+            except OSError:
+                continue
+        return os.path.join("/tmp", f"{stem}_{int(time.time())}{suffix}")
 
     def _call(self, screenshot: Image.Image, prompt: str) -> str:
         """Call Claude API with screenshot + prompt."""
@@ -254,13 +260,21 @@ class ClaudeExtractor:
             ("error",) — API/parse failure (should retry, not treat as exhausted)
             None — empty API response (should retry)
         """
+        ordinal = {0: "first", 1: "second", 2: "third", 3: "fourth",
+                   4: "fifth", 5: "sixth", 6: "seventh", 7: "eighth"}.get(
+            skip_count, f"#{skip_count + 1}"
+        )
+
         prompt = (
-            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"Find the first VISIBLE boat listing card in the current view. "
-            f"A listing card has a boat photo with text below it showing a year and boat name.\n\n"
-            f"Return the CENTER coordinates of that listing's TEXT area (below the photo, not the photo itself).\n\n"
-            f"Output ONLY: {{\"x\": N, \"y\": N, \"title\": \"text you can see or unknown\"}}\n"
-            f"If no listing card is visible in the current view: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
+            f"Look at this full BoatTrader search-results screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"The top of the screenshot may show the page header, search controls, and filters. "
+            f"Boat listing cards may start only in the LOWER part of the screenshot, and the bottom-most card may be only partially visible.\n\n"
+            f"Find the {ordinal} boat listing card visible in this screenshot, counting from top to bottom among the cards you can see. "
+            f"Each listing card has a large boat photo and clickable title text below it showing Year Make Model, plus a price.\n\n"
+            f"Return the CENTER coordinates of the clickable TITLE TEXT below the photo, NOT the photo.\n"
+            f"If the exact title text is hard to read, return approximate coordinates for the title-text region and use \"unknown\" for the title.\n\n"
+            f"Output ONLY valid JSON: {{\"x\": N, \"y\": N, \"title\": \"the title text or unknown\"}}\n"
+            f"If no listing card is visible anywhere in the screenshot, output: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
         )
 
         debug_stem = f"claude_click_skip{skip_count}"

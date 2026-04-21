@@ -218,7 +218,25 @@ class MicroPlanRunner:
                 # Track listing progress
                 if step.type == "paginate":
                     listings_on_page = 0
-                    self._listings_on_page = 0  # Reset for claude-guided click
+                    self._listings_on_page = 0
+
+                # Verify navigate_back actually went back to results
+                if step.type == "navigate_back" and self.extractor:
+                    time.sleep(1)
+                    screenshot = self.env.screenshot()
+                    check = self.extractor.extract(screenshot)
+                    self.costs["claude_extract"] += 1
+                    url = check.url if check else ""
+                    if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+                        # Still on detail page — force back
+                        logger.warning(f"  [back-verify] Still on detail page — forcing Alt+Left")
+                        try:
+                            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
+                            time.sleep(3)
+                            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                            time.sleep(1)
+                        except Exception:
+                            pass
 
                 # Checkpoint on success
                 checkpoint.step_index = step_index + 1
@@ -278,13 +296,22 @@ class MicroPlanRunner:
                     checkpoint.save(self.checkpoint_path)
                     step_index += 1
                 elif step.type in ("navigate_back",):
-                    # Back failure — try harder with direct keypress
-                    logger.warning(f"  [{step_index}] BACK FAILED — pressing Alt+Left directly")
-                    try:
-                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
-                        time.sleep(2)
-                    except Exception:
-                        pass
+                    # Back failure — try multiple times and verify
+                    logger.warning(f"  [{step_index}] BACK FAILED — retrying Alt+Left")
+                    for back_attempt in range(3):
+                        try:
+                            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
+                            time.sleep(3)
+                        except Exception:
+                            pass
+                        # Verify: check if URL is back on search results
+                        if self.extractor:
+                            screenshot = self.env.screenshot()
+                            check = self.extractor.extract(screenshot)
+                            url = check.url if check else ""
+                            if url and "/boats/" in url and "/boat/" not in url:
+                                logger.info(f"  [back] Verified on results page after {back_attempt+1} attempts")
+                                break
                     step_index += 1
                 elif step.type in ("extract_url", "extract_data"):
                     # Claude-only step failed — skip
