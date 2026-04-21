@@ -304,7 +304,7 @@ class WorkflowRunner:
             from .sub_plan import SubPlanRunner
             self._sub_plan_runner = SubPlanRunner(
                 brain=brain, env=env, grounding=grounding,
-                on_step=on_step,
+                extractor=extractor, on_step=on_step,
             )
 
     def run_loop(self) -> list[IterationResult]:
@@ -439,18 +439,49 @@ class WorkflowRunner:
 
             # Run bounded iteration — sub-plan or monolithic
             if self._sub_plan_runner:
-                # Sub-plan path: 4 micro-steps with fresh context each
+                # Micro-step path: FIND→CLICK→READ_URL→SCROLL→EXTRACT→RETURN
                 sub_result = self._sub_plan_runner.run_listing(
                     iteration=global_iteration,
                     page=page,
                     page_iteration=tentative_ordinal,
                 )
-                # Convert SubPlanResult to RunResult-compatible for downstream
                 extracted = sub_result.data
                 viable = sub_result.success
-                parse_failures = sub_result.parse_failures
+                parse_failures = 0
 
-                # Build a minimal RunResult for compatibility
+                # Handle dedup — URL already seen
+                if sub_result.dedup:
+                    logger.info(f"  [dedup] Skipped: {sub_result.url[:60]}")
+                    # Count as progress (listing exists, just already extracted)
+                    page_iteration = tentative_ordinal
+                    consecutive_failures = 0
+                    iter_result = IterationResult(
+                        iteration=global_iteration, page=page,
+                        success=False, data=f"DUPLICATE | URL: {sub_result.url}",
+                        no_more_items=False, steps=sub_result.steps,
+                        duration=time.time() - t0,
+                    )
+                    results.append(iter_result)
+                    if self.on_iteration:
+                        try: self.on_iteration(global_iteration, iter_result, results)
+                        except Exception: pass
+                    continue
+
+                # Handle page exhaustion
+                if sub_result.page_exhausted:
+                    logger.info(f"  Page exhausted — paginating")
+                    paginated = self._sub_plan_runner.run_pagination()
+                    if paginated:
+                        page += 1
+                        page_iteration = 0
+                        consecutive_failures = 0
+                        logger.info(f"  Paginated to page {page}")
+                    else:
+                        logger.info(f"  No more pages")
+                        break
+                    continue
+
+                # Build minimal RunResult for compatibility
                 from .runner import RunResult
                 result = RunResult(
                     task=intent, task_id=f"iter_{global_iteration}",
@@ -462,19 +493,7 @@ class WorkflowRunner:
                     termination_reason="done" if sub_result.success else "sub_plan_skip",
                 )
 
-                # Route learnings to the correct micro-step
-                ckpt = sub_result.checkpoint
-                if ckpt.gallery_detected:
-                    self._sub_plan_runner.step_learnings["CLICK"].append(
-                        "PHOTO TRAP: Click the boat NAME TEXT below the photo, not the photo image."
-                    )
-                if not ckpt.back_on_results and ckpt.detail_page_loaded:
-                    self._sub_plan_runner.step_learnings["RETURN"].append(
-                        "Alt+Left didn't work. Press it twice or wait for page to load."
-                    )
-
-                logger.info(f"  Sub-plan: {sub_result.steps} steps, viable={viable}, "
-                           f"gallery={ckpt.gallery_detected}, title='{ckpt.listing_title[:40] if ckpt.listing_title else '?'}'")
+                logger.info(f"  Sub-plan: {sub_result.steps} steps, viable={viable}, url={sub_result.url[:40] if sub_result.url else '?'}")
             else:
                 # Legacy monolithic path
                 result = self._run_iteration(intent, f"iter_{global_iteration}")
