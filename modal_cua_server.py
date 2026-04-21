@@ -933,11 +933,13 @@ def _run_holo3_executor(
 
         results_path = f"/data/results/holo3_results_{session_name}_{run_id}.json"
         os.makedirs("/data/results", exist_ok=True)
+        costs = getattr(micro_runner, '_final_costs', {})
         summary = {
             "run_id": run_id, "session_name": session_name,
             "model": "Holo3-35B-A3B (micro)", "mode": "micro_intent",
             "total_time_s": round(time.time() - t0),
             "steps_executed": total, "viable": viable,
+            "costs": costs,
             "leads": leads,
             "step_details": [
                 {"step": r.step_index, "intent": r.intent[:80],

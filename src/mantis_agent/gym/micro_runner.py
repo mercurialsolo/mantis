@@ -124,6 +124,16 @@ class MicroPlanRunner:
         self.checkpoint_path = checkpoint_path
         self._seen_urls: set[str] = set()
 
+        # Cost tracking
+        self.costs = {
+            "gpu_steps": 0,        # Total Holo3 steps
+            "gpu_seconds": 0.0,    # Approx GPU time
+            "claude_extract": 0,   # Claude extraction calls
+            "claude_grounding": 0, # Claude grounding calls
+            "proxy_mb": 0.0,       # Estimated proxy bandwidth
+        }
+        self._run_start = time.time()
+
     def run(self, plan: MicroPlan, resume: bool = False) -> list[StepResult]:
         """Execute the full micro-plan.
 
@@ -270,15 +280,69 @@ class MicroPlanRunner:
                     logger.warning(f"  [{step_index}] FAILED + reversed — skipping")
                     step_index += 1
 
-            # Progress logging
+            # Track costs
+            if step_result.steps_used > 0:
+                self.costs["gpu_steps"] += step_result.steps_used
+                self.costs["gpu_seconds"] += step_result.steps_used * 3  # ~3s per step
+            if effective_step.claude_only:
+                self.costs["claude_extract"] += 1
+            if effective_step.grounding:
+                self.costs["claude_grounding"] += step_result.steps_used  # ~1 grounding per click
+            if effective_step.type in ("click", "navigate", "paginate"):
+                self.costs["proxy_mb"] += 5.0  # ~5MB per page load
+            elif effective_step.type == "scroll":
+                self.costs["proxy_mb"] += 0.5  # minimal for scroll
+
+            # Cost calculation
+            gpu_cost = (self.costs["gpu_seconds"] / 3600) * 3.25
+            claude_cost = (self.costs["claude_extract"] * 0.003) + (self.costs["claude_grounding"] * 0.003)
+            proxy_cost = (self.costs["proxy_mb"] / 1024) * 5.0
+            total_cost = gpu_cost + claude_cost + proxy_cost
+
+            # Progress logging with costs
             viable_count = sum(1 for r in results if r.success and "VIABLE" in (r.data or ""))
-            total_steps = sum(r.steps_used for r in results)
-            elapsed = time.time() - t0
-            logger.info(f"  [{step_index-1}] {'OK' if step_result.success else 'FAIL'} "
-                       f"({step_result.steps_used} steps, {elapsed:.0f}s) "
-                       f"[{viable_count} viable, {total_steps} total steps]")
+            unique_leads = len(set(
+                r.data[:100] for r in results if r.success and "VIABLE" in (r.data or "")
+            ))
+            elapsed = time.time() - self._run_start
+            cost_per_lead = total_cost / max(unique_leads, 1)
+
+            # Print progress (visible in Modal logs + viewer)
+            print(f"  [{step_index-1:2d}] {'OK' if step_result.success else 'FAIL'} "
+                  f"| {unique_leads} leads | ${total_cost:.2f} total "
+                  f"(${cost_per_lead:.2f}/lead) | "
+                  f"GPU ${gpu_cost:.2f} Claude ${claude_cost:.2f} Proxy ${proxy_cost:.2f} | "
+                  f"{elapsed/60:.0f}m")
 
         logger.info(f"MicroPlan complete: {len(results)} steps executed")
+        # Final cost summary
+        gpu_cost = (self.costs["gpu_seconds"] / 3600) * 3.25
+        claude_cost = (self.costs["claude_extract"] * 0.003) + (self.costs["claude_grounding"] * 0.003)
+        proxy_cost = (self.costs["proxy_mb"] / 1024) * 5.0
+        total_cost = gpu_cost + claude_cost + proxy_cost
+        viable_count = sum(1 for r in results if r.success and "VIABLE" in (r.data or ""))
+        elapsed = time.time() - self._run_start
+
+        print(f"\n{'='*60}")
+        print(f"MICRO-PLAN COMPLETE")
+        print(f"  Time:     {elapsed/60:.0f}m")
+        print(f"  Steps:    {len(results)}")
+        print(f"  Leads:    {viable_count}")
+        print(f"  Cost:     ${total_cost:.2f} total (${total_cost/max(viable_count,1):.2f}/lead)")
+        print(f"    GPU:    ${gpu_cost:.2f} ({self.costs['gpu_steps']} steps)")
+        print(f"    Claude: ${claude_cost:.2f} ({self.costs['claude_extract']} extract + {self.costs['claude_grounding']} grounding)")
+        print(f"    Proxy:  ${proxy_cost:.2f} ({self.costs['proxy_mb']:.0f} MB)")
+        print(f"{'='*60}")
+
+        # Attach costs to results for saving
+        self._final_costs = {
+            "total": round(total_cost, 3),
+            "gpu": round(gpu_cost, 3),
+            "claude": round(claude_cost, 3),
+            "proxy": round(proxy_cost, 3),
+            "per_lead": round(total_cost / max(viable_count, 1), 3),
+        }
+
         return results
 
     def _execute_step(self, step: MicroIntent, index: int) -> StepResult:
