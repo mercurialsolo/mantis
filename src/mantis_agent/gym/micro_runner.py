@@ -184,6 +184,23 @@ class MicroPlanRunner:
                     logger.error(f"  [{step_index}] NAVIGATE FAILED — cannot proceed")
                     self._reverse_step(step)
                     break
+                elif step.type in ("click",):
+                    # Click failed verification — retry once with Escape first
+                    logger.warning(f"  [{step_index}] CLICK FAILED verification — retrying")
+                    try:
+                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+                        time.sleep(0.5)
+                    except Exception:
+                        pass
+                    # Skip to next loop iteration (advance step_index past the extraction steps)
+                    # Find the next loop step and jump there
+                    for j in range(step_index + 1, len(plan.steps)):
+                        if plan.steps[j].type == "loop":
+                            step_index = j
+                            break
+                    else:
+                        step_index += 1
+                    continue
                 elif step.type in ("filter",):
                     # Filter failure is non-fatal — skip and try next filter
                     logger.warning(f"  [{step_index}] FILTER FAILED — skipping")
@@ -275,13 +292,57 @@ class MicroPlanRunner:
 
         result = runner.run(task=step.intent, task_id=f"step_{index}_{step.type}")
 
+        success = result.success
+
+        # Post-step verification using Claude (if extractor available)
+        if success and step.verify and self.extractor:
+            screenshot = self.env.screenshot()
+            verify_data = self.extractor.extract(screenshot)
+            verified = self._check_verify(step.verify, verify_data, screenshot)
+            if not verified:
+                logger.warning(f"  [verify] Step {index} claimed success but verification FAILED: {step.verify[:60]}")
+                success = False
+
         return StepResult(
             step_index=index,
             intent=step.intent,
-            success=result.success,
+            success=success,
             steps_used=result.total_steps,
             duration=result.total_time,
         )
+
+    def _check_verify(self, verify_condition: str, extract_data, screenshot) -> bool:
+        """Check if a step's verify condition is met using Claude extraction data.
+
+        Simple heuristic checks based on the verify string and extracted data.
+        Falls back to True if check is ambiguous (don't over-block).
+        """
+        v = verify_condition.lower()
+        url = extract_data.url if extract_data else ""
+
+        # Click verification: should be on a detail page, not search results
+        if "detail page" in v or "page opens" in v:
+            # URL should contain /boat/ (single listing) not just /boats/ (search)
+            if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0][-1:]:
+                return True
+            if url and url.endswith("/boats/by-owner/"):
+                logger.info(f"  [verify] Still on search page, not detail page")
+                return False
+            # If no URL extracted, check if page looks different
+            if not url:
+                return True  # Can't verify, assume OK
+
+        # Filter verification: check heading/URL for filter signals
+        if "selected" in v or "highlighted" in v or "filter" in v:
+            # Can't easily verify filter state from extraction — pass through
+            return True
+
+        # Pagination verification: check for new listings
+        if "new listings" in v:
+            return True  # Pagination success already checked by runner
+
+        # Default: trust the runner's success signal
+        return True
 
     def _execute_claude_step(self, step: MicroIntent, index: int) -> StepResult:
         """Execute a Claude-only step (screenshot → API → data)."""
