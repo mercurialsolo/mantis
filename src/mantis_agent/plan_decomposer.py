@@ -61,34 +61,44 @@ class MicroPlan:
 
 
 DECOMPOSE_PROMPT = """\
-You are a CUA (Computer Use Agent) plan decomposer. Break this plain text plan into \
-an ordered list of atomic micro-intents.
+You are a CUA (Computer Use Agent) plan decomposer.
+
+WHY MICRO-PLANS:
+The executing model (Holo3, 3B params) can ONLY handle 1-sentence instructions with \
+3-8 actions. It passes 100% on isolated tasks but fails when instructions are combined. \
+Long prompts cause "context rot" — the model ignores instructions beyond the first sentence. \
+Your job: break a human plan into atomic steps the executor CAN reliably handle.
+
+WHAT GOOD MICRO-PLANS LOOK LIKE:
+- Each step: ONE action, ONE sentence, ONE expected outcome
+- Steps are ORDERED: each builds on the verified state of the previous
+- POSITIVE framing only: "Click the blue title text" (not "Don't click the photo")
+- Under 20 words per intent
+- Extraction steps (reading text from screen) use a SEPARATE vision model (claude_only=true) — \
+  no executor steps needed, just a screenshot
+- Loops repeat a step sequence for each item (listings, pages)
+- Every step has a REVERSE action to undo if it fails
+
+HOW MUCH CONTEXT PER STEP:
+- Include WHAT to click (visual description: "blue text", "dropdown arrow")
+- Include WHERE on the page (sidebar, bottom, below the photo)
+- Do NOT include WHY or long explanations
+- Do NOT include multiple actions in one step
+- Do NOT list things to avoid — only what to DO
 
 PLAIN TEXT PLAN:
 {plan_text}
 
-RULES:
-1. Each micro-intent is ONE sentence that a vision model can execute in 3-8 actions
-2. Use POSITIVE instructions only ("Click the blue text" not "Don't click the photo")
-3. Keep intents SHORT — under 20 words each
-4. Include a "verify" field: what the screen should look like after this step
-5. Include a "reverse" field: how to undo if this step fails
-6. For data extraction (reading text from screen), set claude_only=true — a separate \
-   vision model reads the screenshot, no executor steps needed
-7. For repeated actions (process each listing), use type="loop" with loop_target \
-   pointing to the step index to jump back to
-8. Order matters — each step builds on the previous one's verified state
-
 STEP TYPES:
-- navigate: Go to a URL or page
-- filter: Click a filter/dropdown option
-- click: Click a specific element on the page
-- scroll: Scroll the page
-- extract_url: Read URL from address bar (claude_only=true)
-- extract_data: Read data from page content (claude_only=true)
-- navigate_back: Go back to previous page
-- paginate: Click Next/page number to advance
-- loop: Repeat a sequence of steps
+- navigate: Go to a URL (budget=3)
+- filter: Click a filter option (budget=8, grounding=true for sidebar clicks)
+- click: Click a specific element (budget=5, grounding=true)
+- scroll: Scroll the page (budget=5)
+- extract_url: Read URL from address bar (claude_only=true, budget=0)
+- extract_data: Read structured data from screenshot (claude_only=true, budget=0)
+- navigate_back: Go back (budget=3)
+- paginate: Click Next page (budget=10)
+- loop: Jump back to step index (loop_target=N, loop_count=max iterations)
 
 Output ONLY valid JSON array:
 [
