@@ -1,0 +1,14 @@
+BoatTrader Private Seller Extraction — 3 Page Test
+
+Go to https://www.boattrader.com/boats/by-owner/ to see private seller listings.
+
+For each listing on the page:
+- Click the boat listing title text (blue text below a photo)
+- Read the URL from the browser address bar
+- Scroll down 5 times past photos to Description
+- Read Year, Make, Model, Price, Phone, Seller from the page
+- Press Alt+Left to go back to results
+- Process next listing
+
+After all listings on a page, click Next to go to next page.
+Process 3 pages total.
