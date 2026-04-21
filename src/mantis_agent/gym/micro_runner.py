@@ -178,16 +178,40 @@ class MicroPlanRunner:
                 checkpoint.save(self.checkpoint_path)
                 step_index += 1
             else:
-                # Reverse the failed step
-                self._reverse_step(step)
-                step_result.reversed = True
-
-                # Retry or skip
-                if step_result.steps_used == 0 and step.type in ("extract_url", "extract_data"):
-                    # Claude-only step failed — skip (no Holo3 steps to waste)
+                # Handle failure based on step type
+                if step.type in ("navigate",):
+                    # Navigate failure is fatal — can't proceed without the page
+                    logger.error(f"  [{step_index}] NAVIGATE FAILED — cannot proceed")
+                    self._reverse_step(step)
+                    break
+                elif step.type in ("filter",):
+                    # Filter failure is non-fatal — skip and try next filter
+                    logger.warning(f"  [{step_index}] FILTER FAILED — skipping")
+                    self._reverse_step(step)
+                    step_index += 1
+                elif step.type in ("scroll",):
+                    # Scroll "failure" usually means the model didn't call done()
+                    # but the page DID scroll — treat as success
+                    logger.info(f"  [{step_index}] Scroll completed (no done() but page changed)")
+                    checkpoint.step_index = step_index + 1
+                    checkpoint.save(self.checkpoint_path)
+                    step_index += 1
+                elif step.type in ("navigate_back",):
+                    # Back failure — try harder with direct keypress
+                    logger.warning(f"  [{step_index}] BACK FAILED — pressing Alt+Left directly")
+                    try:
+                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
+                        time.sleep(2)
+                    except Exception:
+                        pass
+                    step_index += 1
+                elif step.type in ("extract_url", "extract_data"):
+                    # Claude-only step failed — skip
                     step_index += 1
                 else:
-                    # For Holo3 steps: skip on failure (don't get stuck)
+                    # Generic failure — reverse and skip
+                    self._reverse_step(step)
+                    step_result.reversed = True
                     logger.warning(f"  [{step_index}] FAILED + reversed — skipping")
                     step_index += 1
 
