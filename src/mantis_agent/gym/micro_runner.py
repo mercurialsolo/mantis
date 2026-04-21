@@ -400,8 +400,7 @@ class MicroPlanRunner:
         logger.info(f"  [navigate] Loading {url}")
         try:
             self.env.reset(task="navigate", start_url=url)
-            time.sleep(6)  # BoatTrader needs 6s+ to fully load
-            # Scroll to top
+            time.sleep(12)  # BoatTrader needs 8-12s to fully render
             self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
             time.sleep(1)
             return StepResult(step_index=index, intent=step.intent, success=True)
@@ -412,64 +411,96 @@ class MicroPlanRunner:
     def _execute_claude_guided_click(self, step: MicroIntent, index: int) -> StepResult:
         """Claude identifies click target → Holo3 clicks coordinates.
 
-        1. Claude reads screenshot → finds Nth listing title → returns (x, y)
-        2. Grounding refines coordinates to nearest text element
-        3. Holo3 clicks the refined coordinates
-        4. Claude verifies: are we on a detail page now?
+        Handles three return types from find_click_target:
+          (x, y, title) — target found → click → verify
+          ("not_found",) — genuine page exhaustion
+          ("error",) — API/parse failure → retry up to 2 times
+
+        Post-click verification retries once (page may still be loading).
         """
-        from ..actions import Action, ActionType
+        max_find_retries = 2
 
-        screenshot = self.env.screenshot()
+        # If we need to scroll past previous listings, do that first
+        if self._listings_on_page > 0:
+            try:
+                for _ in range(min(self._listings_on_page, 5)):
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
+                    time.sleep(0.5)
+                self.costs["gpu_steps"] += self._listings_on_page
+            except Exception:
+                pass
 
-        # Claude finds the target
-        target = self.extractor.find_click_target(screenshot, skip_count=self._listings_on_page)
-        self.costs["claude_extract"] += 1  # Track Claude call
+        # Claude finds the target (with retry on error)
+        target = None
+        for attempt in range(max_find_retries):
+            screenshot = self.env.screenshot()
+            target = self.extractor.find_click_target(screenshot, skip_count=self._listings_on_page)
+            self.costs["claude_extract"] += 1
 
-        if target is None:
-            logger.info(f"  [claude-click] No more listings found (page exhausted)")
-            return StepResult(step_index=index, intent=step.intent, success=False,
-                            data="page_exhausted")
+            if isinstance(target, tuple) and len(target) == 3:
+                break  # Got coordinates
+            elif isinstance(target, tuple) and target[0] == "not_found":
+                logger.info(f"  [claude-click] No more listings (confirmed)")
+                return StepResult(step_index=index, intent=step.intent, success=False,
+                                data="page_exhausted")
+            elif isinstance(target, tuple) and target[0] == "error":
+                logger.warning(f"  [claude-click] Error on attempt {attempt+1}/{max_find_retries} — retrying")
+                time.sleep(2)
+                continue
+            else:
+                # None — empty response
+                logger.warning(f"  [claude-click] Empty response attempt {attempt+1}")
+                time.sleep(2)
+                continue
+
+        if not isinstance(target, tuple) or len(target) != 3:
+            logger.warning(f"  [claude-click] All attempts failed — treating as skip (not exhausted)")
+            return StepResult(step_index=index, intent=step.intent, success=False)
 
         x, y, title = target
         logger.info(f"  [claude-click] Target: '{title[:40]}' at ({x}, {y})")
 
-        # Grounding refines coordinates
+        # Grounding refines — but only accept if the delta is small
         if self.grounding:
-            from PIL import Image
             grounding_result = self.grounding.ground(screenshot, title, x, y)
             self.costs["claude_grounding"] += 1
-            if grounding_result.confidence > 0.5:
+            dx = abs(grounding_result.x - x)
+            dy = abs(grounding_result.y - y)
+            if grounding_result.confidence > 0.5 and dx < 200 and dy < 200:
                 x, y = grounding_result.x, grounding_result.y
-                logger.info(f"  [grounding] refined to ({x}, {y})")
+                logger.info(f"  [grounding] refined to ({x}, {y}) delta=({dx},{dy})")
+            else:
+                logger.info(f"  [grounding] rejected: delta=({dx},{dy}) conf={grounding_result.confidence}")
 
-        # Holo3 clicks the coordinates
+        # Click
         try:
-            self.env.step(Action(
-                action_type=ActionType.CLICK,
-                params={"x": x, "y": y},
-            ))
-            time.sleep(3)  # Wait for page to load
+            self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
             self.costs["gpu_steps"] += 1
             self.costs["gpu_seconds"] += 3
-            self.costs["proxy_mb"] += 5.0  # Page load
+            self.costs["proxy_mb"] += 5.0
         except Exception as e:
             logger.warning(f"  [claude-click] Click failed: {e}")
             return StepResult(step_index=index, intent=step.intent, success=False)
 
-        # Verify: are we on a detail page?
-        after = self.env.screenshot()
-        verify_data = self.extractor.extract(after)
-        self.costs["claude_extract"] += 1
-        url = verify_data.url if verify_data else ""
+        # Verify: are we on a detail page? Retry once (page may still load)
+        for verify_attempt in range(2):
+            time.sleep(3 + verify_attempt * 3)  # 3s first, 6s retry
+            after = self.env.screenshot()
+            verify_data = self.extractor.extract(after)
+            self.costs["claude_extract"] += 1
+            url = verify_data.url if verify_data else ""
 
-        if url and "/boat/" in url:
-            logger.info(f"  [claude-click] Verified on detail page: {url[:60]}")
-            self._listings_on_page += 1
-            return StepResult(step_index=index, intent=step.intent, success=True,
-                            steps_used=1, duration=3.0)
-        else:
-            logger.warning(f"  [claude-click] Not on detail page after click (url={url[:40]})")
-            return StepResult(step_index=index, intent=step.intent, success=False)
+            if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+                logger.info(f"  [claude-click] Verified on detail page: {url[:60]}")
+                self._listings_on_page += 1
+                return StepResult(step_index=index, intent=step.intent, success=True,
+                                steps_used=1, duration=3.0 + verify_attempt * 3)
+
+            if verify_attempt == 0:
+                logger.info(f"  [claude-click] Not on detail page yet (url={url[:40]}) — retrying verify")
+
+        logger.warning(f"  [claude-click] Failed verification after retries (url={url[:40]})")
+        return StepResult(step_index=index, intent=step.intent, success=False)
 
     def _execute_claude_guided_paginate(self, step: MicroIntent, index: int) -> StepResult:
         """Claude finds Next button → Holo3 clicks it.

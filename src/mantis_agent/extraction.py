@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from io import BytesIO
 
@@ -114,6 +115,12 @@ class ClaudeExtractor:
     def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-20250514"):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
+        self.debug_dir = os.environ.get("MANTIS_DEBUG_DIR", "/tmp/mantis_debug")
+
+    def _debug_path(self, stem: str, suffix: str) -> str:
+        """Build a writable debug artifact path."""
+        os.makedirs(self.debug_dir, exist_ok=True)
+        return os.path.join(self.debug_dir, f"{stem}_{int(time.time())}{suffix}")
 
     def _call(self, screenshot: Image.Image, prompt: str) -> str:
         """Call Claude API with screenshot + prompt."""
@@ -149,7 +156,11 @@ class ClaudeExtractor:
                 timeout=20,
             )
             if resp.status_code != 200:
-                logger.warning(f"ClaudeExtractor API error: {resp.status_code}")
+                logger.warning(
+                    "ClaudeExtractor API error %s: %s",
+                    resp.status_code,
+                    resp.text[:500],
+                )
                 return ""
             for block in resp.json().get("content", []):
                 if block.get("type") == "text":
@@ -234,18 +245,14 @@ class ClaudeExtractor:
         self,
         screenshot: Image.Image,
         skip_count: int = 0,
-    ) -> tuple[int, int, str] | None:
+    ) -> tuple[int, int, str] | tuple[str] | None:
         """Find the next listing to click on a search results page.
 
-        Claude identifies the Nth unprocessed listing and returns its
-        title text coordinates for Holo3 to click.
-
-        Args:
-            screenshot: Current search results page.
-            skip_count: Number of listings to skip (already processed).
-
         Returns:
-            (x, y, title_text) or None if no more listings found.
+            (x, y, title) — target found
+            ("not_found",) — Claude confirmed no more listings
+            ("error",) — API/parse failure (should retry, not treat as exhausted)
+            None — empty API response (should retry)
         """
         ordinal = {0: "first", 1: "second", 2: "third", 3: "fourth",
                    4: "fifth", 5: "sixth", 6: "seventh", 7: "eighth"}.get(
@@ -254,26 +261,54 @@ class ClaudeExtractor:
 
         prompt = (
             f"Look at this search results page ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"Find the {ordinal} boat listing card on this page. "
-            f"Each listing has a large photo on top and title text below it.\n\n"
-            f"Return the CENTER coordinates of the listing TITLE TEXT "
-            f"(the blue/clickable text showing Year Make Model, NOT the photo).\n\n"
-            f"Output ONLY valid JSON: {{\"x\": N, \"y\": N, \"title\": \"the title text\"}}\n"
-            f"If no {ordinal} listing exists, output: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
+            f"Find the {ordinal} boat listing card. Listings are rectangular cards with "
+            f"a boat photo and text below showing year, make, model, and price.\n\n"
+            f"Return the CENTER coordinates of the listing's TEXT area (below the photo). "
+            f"Even if you can't read the exact text, return approximate coordinates.\n\n"
+            f"Output ONLY: {{\"x\": N, \"y\": N, \"title\": \"best guess or unknown\"}}\n"
+            f"If no listing exists: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
         )
 
+        debug_stem = f"claude_click_skip{skip_count}"
+
+        # Save screenshot Claude will see (for debugging)
+        try:
+            screenshot.save(self._debug_path(debug_stem, ".png"))
+        except Exception as e:
+            logger.debug(f"[claude-target] failed to save screenshot: {e}")
+
+        try:
+            with open(self._debug_path(debug_stem, "_prompt.txt"), "w") as f:
+                f.write(prompt)
+        except Exception as e:
+            logger.debug(f"[claude-target] failed to save prompt: {e}")
+
         text = self._call(screenshot, prompt)
+
+        # Save Claude's response
+        try:
+            with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
+                f.write(text)
+        except Exception as e:
+            logger.debug(f"[claude-target] failed to save response: {e}")
+
         parsed = self._parse_json(text)
 
-        if not parsed or parsed.get("title") == "none":
-            return None
+        if not parsed:
+            logger.warning(f"  [claude-target] parse failed raw={text[:300]!r}")
+            return ("error",)  # Parse failure — retry, don't treat as exhausted
+
+        if parsed.get("title") == "none":
+            logger.info(f"  [claude-target] Claude reported no listing for skip={skip_count}")
+            return ("not_found",)  # Genuine exhaustion
 
         x = int(parsed.get("x", 0))
         y = int(parsed.get("y", 0))
         title = str(parsed.get("title", ""))
 
         if x == 0 and y == 0:
-            return None
+            logger.warning(f"  [claude-target] zero coordinates raw={text[:300]!r}")
+            return ("error",)  # Bad coordinates — retry
 
         logger.info(f"  [claude-target] '{title[:40]}' at ({x}, {y})")
         return (x, y, title)
