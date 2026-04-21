@@ -146,12 +146,27 @@ class MicroPlanRunner:
 
         step_index = checkpoint.step_index
         max_loop_iterations = 200  # Safety cap
+        listings_on_page = 0  # Track how many listings processed on current page
 
         while step_index < len(plan.steps):
             step = plan.steps[step_index]
             t0 = time.time()
 
-            logger.info(f"  [{step_index:2d}] {step.type:15s} {step.intent[:60]}")
+            # Dynamic intent: inject listing position for click steps
+            dynamic_intent = step.intent
+            if step.type == "click" and listings_on_page > 0:
+                dynamic_intent = (
+                    f"Scroll down past the first {listings_on_page} listings. "
+                    f"Then click the next listing title text below a photo."
+                )
+            effective_step = MicroIntent(
+                intent=dynamic_intent, type=step.type, verify=step.verify,
+                budget=step.budget, reverse=step.reverse, grounding=step.grounding,
+                claude_only=step.claude_only, loop_target=step.loop_target,
+                loop_count=step.loop_count,
+            )
+
+            logger.info(f"  [{step_index:2d}] {step.type:15s} {dynamic_intent[:60]}")
 
             # Handle loop steps
             if step.type == "loop":
@@ -166,10 +181,35 @@ class MicroPlanRunner:
                     continue
 
             # Execute step
-            step_result = self._execute_step(step, step_index)
+            step_result = self._execute_step(effective_step, step_index)
             results.append(step_result)
 
+            # Handle dedup: extract_url returned DUPLICATE → skip to loop
+            if step_result.data and "DUPLICATE" in step_result.data:
+                logger.info(f"  [{step_index}] DEDUP — skipping to next listing")
+                # Go back to results page first
+                try:
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
+                    time.sleep(2)
+                except Exception:
+                    pass
+                # Jump to loop step
+                for j in range(step_index + 1, len(plan.steps)):
+                    if plan.steps[j].type == "loop":
+                        step_index = j
+                        break
+                else:
+                    step_index += 1
+                listings_on_page += 1  # Count it as "processed" for scroll-past
+                continue
+
             if step_result.success:
+                # Track listing progress
+                if step.type == "click":
+                    listings_on_page += 1
+                if step.type == "paginate":
+                    listings_on_page = 0  # Reset on new page
+
                 # Checkpoint on success
                 checkpoint.step_index = step_index + 1
                 checkpoint.seen_urls = list(self._seen_urls)
@@ -180,20 +220,17 @@ class MicroPlanRunner:
             else:
                 # Handle failure based on step type
                 if step.type in ("navigate",):
-                    # Navigate failure is fatal — can't proceed without the page
                     logger.error(f"  [{step_index}] NAVIGATE FAILED — cannot proceed")
                     self._reverse_step(step)
                     break
                 elif step.type in ("click",):
-                    # Click failed verification — retry once with Escape first
-                    logger.warning(f"  [{step_index}] CLICK FAILED verification — retrying")
+                    # Click failed — skip entire extraction cycle to loop
+                    logger.warning(f"  [{step_index}] CLICK FAILED — skipping to next")
                     try:
                         self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
                         time.sleep(0.5)
                     except Exception:
                         pass
-                    # Skip to next loop iteration (advance step_index past the extraction steps)
-                    # Find the next loop step and jump there
                     for j in range(step_index + 1, len(plan.steps)):
                         if plan.steps[j].type == "loop":
                             step_index = j
