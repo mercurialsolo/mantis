@@ -229,3 +229,51 @@ class ClaudeExtractor:
                 result.seller = extra["seller"]
 
         return result
+
+    def find_click_target(
+        self,
+        screenshot: Image.Image,
+        skip_count: int = 0,
+    ) -> tuple[int, int, str] | None:
+        """Find the next listing to click on a search results page.
+
+        Claude identifies the Nth unprocessed listing and returns its
+        title text coordinates for Holo3 to click.
+
+        Args:
+            screenshot: Current search results page.
+            skip_count: Number of listings to skip (already processed).
+
+        Returns:
+            (x, y, title_text) or None if no more listings found.
+        """
+        ordinal = {0: "first", 1: "second", 2: "third", 3: "fourth",
+                   4: "fifth", 5: "sixth", 6: "seventh", 7: "eighth"}.get(
+            skip_count, f"#{skip_count + 1}"
+        )
+
+        prompt = (
+            f"Look at this search results page ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"Find the {ordinal} boat listing card on this page. "
+            f"Each listing has a large photo on top and title text below it.\n\n"
+            f"Return the CENTER coordinates of the listing TITLE TEXT "
+            f"(the blue/clickable text showing Year Make Model, NOT the photo).\n\n"
+            f"Output ONLY valid JSON: {{\"x\": N, \"y\": N, \"title\": \"the title text\"}}\n"
+            f"If no {ordinal} listing exists, output: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
+        )
+
+        text = self._call(screenshot, prompt)
+        parsed = self._parse_json(text)
+
+        if not parsed or parsed.get("title") == "none":
+            return None
+
+        x = int(parsed.get("x", 0))
+        y = int(parsed.get("y", 0))
+        title = str(parsed.get("title", ""))
+
+        if x == 0 and y == 0:
+            return None
+
+        logger.info(f"  [claude-target] '{title[:40]}' at ({x}, {y})")
+        return (x, y, title)

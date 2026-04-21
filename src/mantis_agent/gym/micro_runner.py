@@ -216,10 +216,9 @@ class MicroPlanRunner:
 
             if step_result.success:
                 # Track listing progress
-                if step.type == "click":
-                    listings_on_page += 1
                 if step.type == "paginate":
-                    listings_on_page = 0  # Reset on new page
+                    listings_on_page = 0
+                    self._listings_on_page = 0  # Reset for claude-guided click
 
                 # Checkpoint on success
                 checkpoint.step_index = step_index + 1
@@ -235,7 +234,24 @@ class MicroPlanRunner:
                     self._reverse_step(step)
                     break
                 elif step.type in ("click",):
-                    # Click failed — skip entire extraction cycle to loop
+                    # Check if page exhausted (no more listings)
+                    if step_result.data == "page_exhausted":
+                        logger.info(f"  [{step_index}] PAGE EXHAUSTED — jumping to paginate")
+                        # Find paginate step and jump there
+                        for j in range(step_index + 1, len(plan.steps)):
+                            if plan.steps[j].type == "paginate":
+                                step_index = j
+                                break
+                        else:
+                            # No paginate step — find next loop
+                            for j in range(step_index + 1, len(plan.steps)):
+                                if plan.steps[j].type == "loop":
+                                    step_index = j
+                                    break
+                            else:
+                                step_index += 1
+                        continue
+                    # Click failed — skip extraction cycle to loop
                     logger.warning(f"  [{step_index}] CLICK FAILED — skipping to next")
                     try:
                         self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
@@ -352,11 +368,15 @@ class MicroPlanRunner:
         if step.type == "navigate":
             return self._execute_navigate(step, index)
 
+        # Click steps: Claude finds target → Holo3 clicks coordinates
+        if step.type == "click" and self.extractor:
+            return self._execute_claude_guided_click(step, index)
+
         # Claude-only steps (extract_url, extract_data)
         if step.claude_only:
             return self._execute_claude_step(step, index)
 
-        # Holo3 steps
+        # Holo3 steps (scroll, filter, navigate_back, paginate)
         return self._execute_holo3_step(step, index)
 
     def _execute_navigate(self, step: MicroIntent, index: int) -> StepResult:
@@ -380,6 +400,79 @@ class MicroPlanRunner:
         except Exception as e:
             logger.error(f"  [navigate] Failed: {e}")
             return StepResult(step_index=index, intent=step.intent, success=False)
+
+    def _execute_claude_guided_click(self, step: MicroIntent, index: int) -> StepResult:
+        """Claude identifies click target → Holo3 clicks coordinates.
+
+        1. Claude reads screenshot → finds Nth listing title → returns (x, y)
+        2. Grounding refines coordinates to nearest text element
+        3. Holo3 clicks the refined coordinates
+        4. Claude verifies: are we on a detail page now?
+        """
+        from ..actions import Action, ActionType
+
+        screenshot = self.env.screenshot()
+
+        # Claude finds the target
+        target = self.extractor.find_click_target(screenshot, skip_count=self._listings_on_page)
+        self.costs["claude_extract"] += 1  # Track Claude call
+
+        if target is None:
+            logger.info(f"  [claude-click] No more listings found (page exhausted)")
+            return StepResult(step_index=index, intent=step.intent, success=False,
+                            data="page_exhausted")
+
+        x, y, title = target
+        logger.info(f"  [claude-click] Target: '{title[:40]}' at ({x}, {y})")
+
+        # Grounding refines coordinates
+        if self.grounding:
+            from PIL import Image
+            grounding_result = self.grounding.ground(screenshot, title, x, y)
+            self.costs["claude_grounding"] += 1
+            if grounding_result.confidence > 0.5:
+                x, y = grounding_result.x, grounding_result.y
+                logger.info(f"  [grounding] refined to ({x}, {y})")
+
+        # Holo3 clicks the coordinates
+        try:
+            self.env.step(Action(
+                action_type=ActionType.CLICK,
+                params={"x": x, "y": y},
+            ))
+            time.sleep(3)  # Wait for page to load
+            self.costs["gpu_steps"] += 1
+            self.costs["gpu_seconds"] += 3
+            self.costs["proxy_mb"] += 5.0  # Page load
+        except Exception as e:
+            logger.warning(f"  [claude-click] Click failed: {e}")
+            return StepResult(step_index=index, intent=step.intent, success=False)
+
+        # Verify: are we on a detail page?
+        after = self.env.screenshot()
+        verify_data = self.extractor.extract(after)
+        self.costs["claude_extract"] += 1
+        url = verify_data.url if verify_data else ""
+
+        if url and "/boat/" in url:
+            logger.info(f"  [claude-click] Verified on detail page: {url[:60]}")
+            self._listings_on_page += 1
+            return StepResult(step_index=index, intent=step.intent, success=True,
+                            steps_used=1, duration=3.0)
+        else:
+            logger.warning(f"  [claude-click] Not on detail page after click (url={url[:40]})")
+            return StepResult(step_index=index, intent=step.intent, success=False)
+
+    @property
+    def _listings_on_page(self):
+        """Track listings processed on current page."""
+        if not hasattr(self, '_page_listings'):
+            self._page_listings = 0
+        return self._page_listings
+
+    @_listings_on_page.setter
+    def _listings_on_page(self, value):
+        self._page_listings = value
 
     def _execute_holo3_step(self, step: MicroIntent, index: int) -> StepResult:
         """Execute a Holo3 micro-intent with fresh GymRunner."""
