@@ -475,29 +475,13 @@ class MicroPlanRunner:
             time.sleep(1)
             return self._execute_claude_step(step, index)
 
-        # Paginate: try Holo3 first. If it fails, re-anchor the page and let
-        # Claude find the explicit Next control. Unlike click steps, the
-        # Claude paginator starts by rebuilding the viewport near the bottom,
-        # so it is still useful even after Holo3 has spent actions.
-        if step.type == "paginate" and self.extractor:
-            holo_result = self._execute_holo3_step(step, index)
-            if holo_result.success:
-                return holo_result
-            logger.info(
-                "  [paginate] Holo3 failed after %d steps — falling back to Claude-guided paginate",
-                holo_result.steps_used,
-            )
-            claude_result = self._execute_claude_guided_paginate(step, index)
-            if claude_result.success:
-                return claude_result
-            return StepResult(
-                step_index=index,
-                intent=step.intent,
-                success=False,
-                data=claude_result.data or holo_result.data,
-                steps_used=holo_result.steps_used + claude_result.steps_used,
-                duration=holo_result.duration + claude_result.duration,
-            )
+        # Paginate: layered strategy
+        # 1. URL-based (fastest, most reliable if URL pattern known)
+        # 2. Claude-guided with End→Page_Up viewport
+        # 3. Holo3 with calculated scroll (fallback)
+        if step.type == "paginate":
+            result = self._execute_paginate_layered(step, index)
+            return result
 
         # Holo3 steps (scroll, filter, navigate_back, paginate)
         return self._execute_holo3_step(step, index)
@@ -661,6 +645,90 @@ class MicroPlanRunner:
 
         logger.warning(f"  [claude-click] Failed verification after retries (url={url[:40]})")
         return StepResult(step_index=index, intent=step.intent, success=False)
+
+    def _execute_paginate_layered(self, step: MicroIntent, index: int) -> StepResult:
+        """Layered pagination: URL-based → Claude-guided → Holo3 fallback.
+
+        Layer 1: URL-based — if we can detect the current page URL pattern,
+                 construct page N+1 URL and navigate directly. Fastest, no
+                 risk of clicking sidebar filters.
+        Layer 2: Claude-guided — End key then Page_Up to get pagination bar
+                 in view. Claude finds Next button coordinates.
+        Layer 3: Holo3 — simple 1-sentence task as last resort.
+        """
+        import re as _re
+
+        # Track current page number
+        if not hasattr(self, '_current_page'):
+            self._current_page = 1
+
+        # ── Layer 1: URL-based pagination ──
+        # Read current URL to detect pattern
+        if self.extractor:
+            screenshot = self.env.screenshot()
+            url_data = self.extractor.extract(screenshot)
+            self.costs["claude_extract"] += 1
+            current_url = url_data.url if url_data else ""
+
+            if current_url:
+                next_page = self._current_page + 1
+                # Try common URL pagination patterns
+                # Pattern: ?page=N or &page=N
+                if "page=" in current_url:
+                    next_url = _re.sub(r'page=\d+', f'page={next_page}', current_url)
+                else:
+                    # Append ?page=N
+                    sep = "&" if "?" in current_url else "?"
+                    next_url = f"{current_url}{sep}page={next_page}"
+
+                # Ensure full URL
+                if not next_url.startswith("http"):
+                    next_url = f"https://www.{next_url}"
+
+                logger.info(f"  [paginate] Layer 1: URL-based → {next_url[:60]}")
+                try:
+                    self.env.reset(task="paginate_url", start_url=next_url)
+                    time.sleep(10)
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                    time.sleep(2)
+                    self._current_page = next_page
+                    return StepResult(step_index=index, intent=step.intent, success=True,
+                                    steps_used=0, data=f"url_paginate_page{next_page}")
+                except Exception as e:
+                    logger.warning(f"  [paginate] Layer 1 failed: {e}")
+
+        # ── Layer 2: Claude-guided ──
+        logger.info(f"  [paginate] Layer 2: Claude-guided (End → Page_Up)")
+        claude_result = self._execute_claude_guided_paginate(step, index)
+        if claude_result.success:
+            self._current_page += 1
+            return claude_result
+
+        # ── Layer 3: Holo3 fallback ──
+        logger.info(f"  [paginate] Layer 3: Holo3 fallback")
+        # Scroll to a calculated position: End then 2x Page_Up to avoid sidebar
+        try:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+            time.sleep(0.5)
+            # Scroll down ~80% of the page (past listings, before footer/sidebar bottom)
+            for _ in range(6):
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
+                time.sleep(0.5)
+        except Exception:
+            pass
+
+        holo_result = self._execute_holo3_step(
+            MicroIntent(
+                intent="Click the Next page button or the next page number.",
+                type="paginate",
+                budget=8,
+                grounding=True,
+            ),
+            index,
+        )
+        if holo_result.success:
+            self._current_page += 1
+        return holo_result
 
     def _execute_claude_guided_paginate(self, step: MicroIntent, index: int) -> StepResult:
         """Claude finds Next button → Holo3 clicks it.
