@@ -251,8 +251,14 @@ class ClaudeExtractor:
         self,
         screenshot: Image.Image,
         skip_count: int = 0,
+        skip_urls: list[str] | None = None,
     ) -> tuple[int, int, str] | tuple[str] | None:
         """Find the next listing to click on a search results page.
+
+        Args:
+            screenshot: Current page screenshot.
+            skip_count: Unused (kept for compatibility).
+            skip_urls: Human-readable titles/slugs of already-extracted listings to skip.
 
         Returns:
             (x, y, title) — target found
@@ -260,17 +266,22 @@ class ClaudeExtractor:
             ("error",) — API/parse failure (should retry, not treat as exhausted)
             None — empty API response (should retry)
         """
-        ordinal = {0: "first", 1: "second", 2: "third", 3: "fourth",
-                   4: "fifth", 5: "sixth", 6: "seventh", 7: "eighth"}.get(
-            skip_count, f"#{skip_count + 1}"
-        )
+        skip_section = ""
+        if skip_urls:
+            skip_section = (
+                f"\n\nSKIP these listings (already extracted): "
+                + ", ".join(skip_urls[:6])
+                + "\nFind a DIFFERENT listing that is NOT in the skip list."
+            )
 
         prompt = (
             f"Look at this full BoatTrader search-results screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
             f"The top of the screenshot may show the page header, search controls, and filters. "
             f"Boat listing cards may start only in the LOWER part of the screenshot, and the bottom-most card may be only partially visible.\n\n"
-            f"Find the {ordinal} boat listing card visible in this screenshot, counting from top to bottom among the cards you can see. "
-            f"Each listing card has a large boat photo and clickable title text below it showing Year Make Model, plus a price.\n\n"
+            f"Find the first unprocessed boat listing card visible in this screenshot. "
+            f"Ignore the page header, filters, sort controls, ads, and footer links. "
+            f"Each listing card has a large boat photo and clickable title text below it showing Year Make Model, plus a price."
+            f"{skip_section}\n\n"
             f"Return the CENTER coordinates of the clickable TITLE TEXT below the photo, NOT the photo.\n"
             f"If the exact title text is hard to read, return approximate coordinates for the title-text region and use \"unknown\" for the title.\n\n"
             f"Output ONLY valid JSON: {{\"x\": N, \"y\": N, \"title\": \"the title text or unknown\"}}\n"

@@ -466,21 +466,31 @@ class MicroPlanRunner:
         """
         max_find_retries = 2
 
-        # If we need to scroll past previous listings, do that first
-        if self._listings_on_page > 0:
-            try:
-                for _ in range(min(self._listings_on_page, 5)):
-                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
-                    time.sleep(0.5)
-                self.costs["gpu_steps"] += self._listings_on_page
-            except Exception:
-                pass
+        # Scroll to top first — Claude sees the full page and picks the right listing
+        try:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+            time.sleep(1)
+        except Exception:
+            pass
 
-        # Claude finds the first visible listing in current viewport (with retry)
+        # Build skip list from already-extracted URLs for Claude
+        skip_titles = []
+        for url in list(self._seen_urls)[-8:]:
+            # Convert URL slug into human-readable title text that Claude can match visually.
+            if "/boat/" in url:
+                slug = url.split("/boat/")[-1].rstrip("/")
+                slug = __import__("re").sub(r"-\d+$", "", slug)
+                title = slug.replace("-", " ").strip()
+                if title:
+                    skip_titles.append(title)
+
+        # Claude finds a listing NOT in the skip list (with retry)
         target = None
         for attempt in range(max_find_retries):
             screenshot = self.env.screenshot()
-            target = self.extractor.find_click_target(screenshot, skip_count=0)
+            target = self.extractor.find_click_target(
+                screenshot, skip_count=0, skip_urls=skip_titles,
+            )
             self.costs["claude_extract"] += 1
 
             if isinstance(target, tuple) and len(target) == 3:
