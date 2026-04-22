@@ -114,6 +114,8 @@ class MicroPlanRunner:
         on_step: Any = None,
         max_retries: int = 2,
         checkpoint_path: str = "/data/checkpoints/micro_run.json",
+        max_cost: float = 2.0,      # Stop if total cost exceeds this
+        max_time_minutes: int = 30,  # Stop if runtime exceeds this
     ):
         self.brain = brain
         self.env = env
@@ -123,6 +125,9 @@ class MicroPlanRunner:
         self.max_retries = max_retries
         self.checkpoint_path = checkpoint_path
         self._seen_urls: set[str] = set()
+        self._extracted_titles: list[str] = []  # Exact titles Claude returned, for skip list
+        self.max_cost = max_cost
+        self.max_time = max_time_minutes * 60
 
         # Cost tracking
         self.costs = {
@@ -160,6 +165,20 @@ class MicroPlanRunner:
         listings_on_page = 0  # Track how many listings processed on current page
 
         while step_index < len(plan.steps):
+            # Budget + time checks
+            elapsed = time.time() - self._run_start
+            gpu_cost = (self.costs["gpu_seconds"] / 3600) * 3.25
+            claude_cost = (self.costs["claude_extract"] * 0.003) + (self.costs["claude_grounding"] * 0.003)
+            proxy_cost = (self.costs["proxy_mb"] / 1024) * 5.0
+            total_cost = gpu_cost + claude_cost + proxy_cost
+
+            if total_cost >= self.max_cost:
+                print(f"  BUDGET CAP: ${total_cost:.2f} >= ${self.max_cost:.2f} — stopping")
+                break
+            if elapsed >= self.max_time:
+                print(f"  TIME CAP: {elapsed/60:.0f}m >= {self.max_time/60:.0f}m — stopping")
+                break
+
             step = plan.steps[step_index]
             t0 = time.time()
 
@@ -219,6 +238,7 @@ class MicroPlanRunner:
                 if step.type == "paginate":
                     listings_on_page = 0
                     self._listings_on_page = 0
+                    self._extracted_titles = []  # New page = new listings
                     # Scroll to top of new page + wait for load
                     try:
                         self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
@@ -473,16 +493,8 @@ class MicroPlanRunner:
         except Exception:
             pass
 
-        # Build skip list from already-extracted URLs for Claude
-        skip_titles = []
-        for url in list(self._seen_urls)[-8:]:
-            # Convert URL slug into human-readable title text that Claude can match visually.
-            if "/boat/" in url:
-                slug = url.split("/boat/")[-1].rstrip("/")
-                slug = __import__("re").sub(r"-\d+$", "", slug)
-                title = slug.replace("-", " ").strip()
-                if title:
-                    skip_titles.append(title)
+        # Build skip list from exact titles Claude returned on previous clicks
+        skip_titles = list(self._extracted_titles)[-8:]
 
         # Claude finds a listing NOT in the skip list (with retry)
         target = None
@@ -514,6 +526,7 @@ class MicroPlanRunner:
             return StepResult(step_index=index, intent=step.intent, success=False)
 
         x, y, title = target
+        self._last_click_title = title  # Store for skip list
         logger.info(f"  [claude-click] Target: '{title[:40]}' at ({x}, {y})")
 
         # Grounding refines — but only accept if the delta is small
@@ -549,6 +562,9 @@ class MicroPlanRunner:
             if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
                 logger.info(f"  [claude-click] Verified on detail page: {url[:60]}")
                 self._listings_on_page += 1
+                # Store the exact title Claude found for skip list
+                if hasattr(self, '_last_click_title') and self._last_click_title:
+                    self._extracted_titles.append(self._last_click_title)
                 return StepResult(step_index=index, intent=step.intent, success=True,
                                 steps_used=1, duration=3.0 + verify_attempt * 3)
 
