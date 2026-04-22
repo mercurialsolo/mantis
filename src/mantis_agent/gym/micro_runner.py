@@ -494,14 +494,14 @@ class MicroPlanRunner:
             # When cache empties, advance to next viewport (Page_Down).
             # Only page_exhausted after all viewport stages return empty.
             while self._viewport_stage < self._max_viewport_stages:
-                # Scroll to the current viewport position
-                if self._viewport_stage == 0:
-                    scroll_key = "Home"
-                else:
-                    scroll_key = "Page_Down"
+                # Reconstruct the current viewport deterministically:
+                # always start from Home, then Page_Down N times.
                 try:
-                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": scroll_key}))
-                    time.sleep(1.5 if scroll_key == "Home" else 1)
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                    time.sleep(0.5)
+                    for _ in range(self._viewport_stage):
+                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
+                        time.sleep(0.5)
                 except Exception:
                     pass
 
