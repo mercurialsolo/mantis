@@ -487,6 +487,17 @@ class MicroPlanRunner:
             time.sleep(2)
             return self._execute_claude_guided_click(step, index)
 
+        # Gate steps: dedicated verifier (not extract_data)
+        if step.gate and self.extractor:
+            time.sleep(2)
+            screenshot = self.env.screenshot()
+            passed, reason = self.extractor.verify_gate(screenshot, step.verify or step.intent)
+            self.costs["claude_extract"] += 1
+            return StepResult(
+                step_index=index, intent=step.intent,
+                success=passed, data=f"gate:{'PASS' if passed else 'FAIL'}:{reason[:100]}",
+            )
+
         # Claude-only steps (extract_url, extract_data)
         if step.claude_only:
             # Brief settle — page may still be rendering after scroll

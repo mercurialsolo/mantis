@@ -1,0 +1,134 @@
+[
+  {
+    "step": 1,
+    "intent": "Navigate to BoatTrader search page at https://www.boattrader.com/boats/",
+    "type": "navigate",
+    "budget": 3,
+    "section": "setup",
+    "required": true
+  },
+  {
+    "step": 2,
+    "intent": "Click Private Seller option in seller type filter",
+    "type": "filter",
+    "budget": 8,
+    "grounding": true,
+    "section": "setup",
+    "required": true
+  },
+  {
+    "step": 3,
+    "intent": "Enter zip code 33101 in location search field",
+    "type": "filter",
+    "budget": 8,
+    "grounding": true,
+    "section": "setup",
+    "required": true
+  },
+  {
+    "step": 4,
+    "intent": "Set radius to 25 miles in distance filter",
+    "type": "filter",
+    "budget": 8,
+    "grounding": true,
+    "section": "setup",
+    "required": true
+  },
+  {
+    "step": 5,
+    "intent": "Set minimum price to $35,000 in price filter",
+    "type": "filter",
+    "budget": 8,
+    "grounding": true,
+    "section": "setup",
+    "required": true
+  },
+  {
+    "step": 6,
+    "intent": "Sort by Recently Updated newest first in sort dropdown",
+    "type": "filter",
+    "budget": 8,
+    "grounding": true,
+    "section": "setup",
+    "required": true
+  },
+  {
+    "step": 7,
+    "intent": "Verify page shows private seller results with count under 5000",
+    "type": "extract_data",
+    "claude_only": true,
+    "budget": 0,
+    "section": "setup",
+    "gate": true,
+    "reverse": "Re-apply Private Seller filter if verification fails"
+  },
+  {
+    "step": 8,
+    "intent": "Click the listing title text to open detail page",
+    "type": "click",
+    "budget": 8,
+    "grounding": true,
+    "section": "extraction"
+  },
+  {
+    "step": 9,
+    "intent": "Read the URL from browser address bar",
+    "type": "extract_url",
+    "claude_only": true,
+    "budget": 0,
+    "section": "extraction"
+  },
+  {
+    "step": 10,
+    "intent": "Scroll down past photo gallery to description section",
+    "type": "scroll",
+    "budget": 10,
+    "section": "extraction"
+  },
+  {
+    "step": 11,
+    "intent": "Scroll down more to find seller notes section",
+    "type": "scroll",
+    "budget": 10,
+    "section": "extraction"
+  },
+  {
+    "step": 12,
+    "intent": "Extract Year Make Model Price Phone and Seller Name",
+    "type": "extract_data",
+    "claude_only": true,
+    "budget": 0,
+    "section": "extraction"
+  },
+  {
+    "step": 13,
+    "intent": "Go back to search results page",
+    "type": "navigate_back",
+    "budget": 3,
+    "section": "extraction"
+  },
+  {
+    "step": 14,
+    "intent": "Loop back to click next listing title",
+    "type": "loop",
+    "loop_target": 8,
+    "loop_count": 50,
+    "section": "extraction"
+  },
+  {
+    "step": 15,
+    "intent": "Click Next page button to continue to next results page",
+    "type": "paginate",
+    "budget": 10,
+    "grounding": true,
+    "section": "pagination"
+  },
+  {
+    "step": 16,
+    "intent": "Loop back to process listings on new page",
+    "type": "loop",
+    "loop_target": 8,
+    "loop_count": 50,
+    "section": "pagination"
+  }
+]

@@ -247,6 +247,31 @@ class ClaudeExtractor:
 
         return result
 
+    def verify_gate(self, screenshot: Image.Image, expected: str) -> tuple[bool, str]:
+        """Verify a gate condition from a screenshot.
+
+        Used after setup to check if filters were actually applied.
+        Returns (passed, reason).
+        """
+        prompt = (
+            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"Check this condition: {expected}\n\n"
+            f"Look at the page heading, URL bar, result count, and any active filter tags.\n\n"
+            f"Output ONLY valid JSON:\n"
+            f"{{\"passed\": true/false, \"reason\": \"what you see that confirms or denies the condition\"}}"
+        )
+
+        text = self._call(screenshot, prompt)
+        parsed = self._parse_json(text)
+
+        if not parsed:
+            return False, f"Could not parse verifier response: {text[:100]}"
+
+        passed = bool(parsed.get("passed", False))
+        reason = str(parsed.get("reason", ""))
+        logger.info(f"  [gate] {'PASS' if passed else 'FAIL'}: {reason[:80]}")
+        return passed, reason
+
     def find_click_target(
         self,
         screenshot: Image.Image,

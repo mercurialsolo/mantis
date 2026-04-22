@@ -153,27 +153,17 @@ class PlanDecomposer:
         if m:
             domain = m.group(1)
 
-        # Check cache
-        plan_hash = hashlib.md5(plan_text.encode()).hexdigest()[:8]
+        # Check cache — include prompt version in hash to invalidate on schema changes
+        prompt_version = "v3_sections_gates"  # Bump this when DECOMPOSE_PROMPT changes
+        plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = plan_path.replace(".txt", f"_micro_{plan_hash}.json")
         if os.path.exists(cache_path):
             try:
                 cached = json.loads(open(cache_path).read())
                 plan = MicroPlan(source_plan=plan_text, domain=domain)
                 for s in cached:
-                    step_type = s.get("type") or s.get("action") or "click"
-                    reverse = s.get("reverse") or s.get("reverse_action") or ""
-                    plan.steps.append(MicroIntent(
-                        intent=s.get("intent", ""),
-                        type=step_type,
-                        verify=s.get("verify", s.get("expected_outcome", "")),
-                        budget=s.get("budget", 5),
-                        reverse=reverse,
-                        grounding=s.get("grounding", step_type in ("click", "filter", "paginate")),
-                        claude_only=s.get("claude_only", step_type in ("extract_url", "extract_data")),
-                        loop_target=s.get("loop_target", -1),
-                        loop_count=s.get("loop_count", 0),
-                    ))
+                    plan.steps.append(self._build_intent(s))
+
                 logger.info(f"Loaded cached micro-plan: {cache_path} ({len(plan.steps)} steps)")
                 return plan
             except Exception:
@@ -217,33 +207,10 @@ class PlanDecomposer:
         steps_raw = json.loads(text)
         plan = MicroPlan(source_plan=plan_text, domain=domain)
         for s in steps_raw:
-            # Handle field name variations from Claude's output
-            step_type = s.get("type") or s.get("action") or "click"
-            reverse = s.get("reverse") or s.get("reverse_action") or ""
-            # Infer section from step type if not provided
-            section = s.get("section", "")
-            if not section:
-                if step_type in ("navigate", "filter"):
-                    section = "setup"
-                elif step_type in ("paginate",):
-                    section = "pagination"
-                elif step_type in ("click", "scroll", "extract_url", "extract_data", "navigate_back"):
-                    section = "extraction"
+            plan.steps.append(self._build_intent(s))
 
-            plan.steps.append(MicroIntent(
-                intent=s.get("intent", ""),
-                type=step_type,
-                verify=s.get("verify", s.get("expected_outcome", "")),
-                budget=s.get("budget", 5),
-                reverse=reverse,
-                grounding=s.get("grounding", step_type in ("click", "filter", "paginate")),
-                claude_only=s.get("claude_only", step_type in ("extract_url", "extract_data")),
-                loop_target=s.get("loop_target", -1),
-                loop_count=s.get("loop_count", 0),
-                section=section,
-                required=s.get("required", step_type == "filter"),
-                gate=s.get("gate", False),
-            ))
+        # Fix 3: Validate and fix loop targets — must point to the click step
+        self._fix_loop_targets(plan)
 
         # Cache
         try:
@@ -259,3 +226,57 @@ class PlanDecomposer:
         logger.info(plan.summary())
 
         return plan
+
+    @staticmethod
+    def _build_intent(s: dict) -> MicroIntent:
+        """Build a MicroIntent from a raw dict — used by both cache and fresh paths."""
+        step_type = s.get("type") or s.get("action") or "click"
+        reverse = s.get("reverse") or s.get("reverse_action") or ""
+
+        # Infer section from step type if not provided
+        section = s.get("section", "")
+        if not section:
+            if step_type in ("navigate", "filter"):
+                section = "setup"
+            elif step_type in ("paginate",):
+                section = "pagination"
+            elif step_type in ("click", "scroll", "extract_url", "extract_data", "navigate_back"):
+                section = "extraction"
+
+        return MicroIntent(
+            intent=s.get("intent", ""),
+            type=step_type,
+            verify=s.get("verify", s.get("expected_outcome", "")),
+            budget=s.get("budget", 5),
+            reverse=reverse,
+            grounding=s.get("grounding", step_type in ("click", "filter", "paginate")),
+            claude_only=s.get("claude_only", step_type in ("extract_url", "extract_data")),
+            loop_target=s.get("loop_target", -1),
+            loop_count=s.get("loop_count", 0),
+            section=section,
+            required=s.get("required", step_type == "filter"),
+            gate=s.get("gate", False),
+        )
+
+    @staticmethod
+    def _fix_loop_targets(plan: MicroPlan):
+        """Fix 3: Ensure loop targets point to the click step, not extract_url.
+
+        The decomposer often generates loop→extract_url instead of loop→click.
+        Find the first extraction click step and retarget all loops to it.
+        """
+        click_idx = None
+        for i, s in enumerate(plan.steps):
+            if s.type == "click" and s.section == "extraction":
+                click_idx = i
+                break
+
+        if click_idx is None:
+            return
+
+        for s in plan.steps:
+            if s.loop_target >= 0 and s.loop_target != click_idx:
+                # Only fix if the target is close (off by 1-2, typical decomposer error)
+                if abs(s.loop_target - click_idx) <= 2:
+                    logger.info(f"  [fix] Loop target {s.loop_target} → {click_idx} (click step)")
+                    s.loop_target = click_idx
