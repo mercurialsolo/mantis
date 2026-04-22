@@ -40,6 +40,9 @@ class MicroIntent:
     budget: int = 5         # Max Holo3 steps
     reverse: str = ""       # How to undo: "Press Alt+Left"
     grounding: bool = False # Enable ClaudeGrounding for this step
+    section: str = ""       # Section name: "setup", "extraction", "pagination"
+    required: bool = False  # If True and step fails after retries, halt pipeline
+    gate: bool = False      # If True, this is a verification gate — must pass before next section
     claude_only: bool = False  # No Holo3 steps — Claude reads screenshot
     loop_target: int = -1   # For loop type: jump back to this step index
     loop_count: int = 0     # For loop type: how many times to repeat
@@ -66,48 +69,53 @@ You are a CUA (Computer Use Agent) plan decomposer.
 WHY MICRO-PLANS:
 The executing model (Holo3, 3B params) can ONLY handle 1-sentence instructions with \
 3-8 actions. It passes 100% on isolated tasks but fails when instructions are combined. \
-Your job: break a human plan into atomic steps the executor CAN reliably handle.
+Your job: break a human plan into SECTIONS of atomic steps with DEPENDENCIES between sections.
+
+SECTIONS AND DEPENDENCIES — THIS IS CRITICAL:
+Plans MUST be organized into sections. Each section has a purpose and a gate:
+
+1. SETUP section (required=true): Navigate + apply filters + VERIFY
+   - Every filter step has required=true
+   - The LAST step in setup is a GATE (gate=true): Claude verifies filters applied
+   - If the gate FAILS, the entire pipeline HALTS — do not extract from wrong page
+   - Example gate: "Verify page heading shows private seller and result count < 5000"
+
+2. EXTRACTION section (depends on setup gate passing):
+   - Click → URL → scroll → extract → back → loop
+   - Only runs if setup gate passed
+
+3. PAGINATION section (depends on extraction):
+   - Paginate → loop back to extraction
+   - Only runs after extraction exhausts current page
 
 RULES:
 - Each step: ONE action, ONE sentence, under 20 words
 - POSITIVE framing only: "Click the blue title text" (not "Don't click the photo")
 - Include WHAT + WHERE: "Click Private Seller text in left sidebar"
 - For navigate steps: include the FULL URL in the intent
-- Extraction steps (reading screen) use claude_only=true — a vision API reads the screenshot
-- The "reverse" field must be a CUA-executable instruction (same format as intent). \
-  It is given to the executor when a step needs to be undone. Example: \
-  reverse="Click the back arrow or Search link at the top of the page"
-- Every step has a reverse action to undo on failure
+- Extraction steps (reading screen) use claude_only=true
+- The "reverse" field must be a CUA-executable instruction
+- Set section="setup", section="extraction", or section="pagination"
+- Set required=true for all setup/filter steps
+- Set gate=true for the verification step at the end of setup
 
-LOOP STRUCTURE — THIS IS CRITICAL:
-For plans that process multiple items (e.g. "for each listing"), the loop MUST be:
-
-  Step N+0: click    "Click a boat listing title text below a photo" (grounding=true)
-  Step N+1: extract_url  "Read URL from address bar" (claude_only=true)
-  Step N+2: scroll   "Scroll down 5 times past the photos"
-  Step N+3: extract_data "Read boat data from page" (claude_only=true)
-  Step N+4: navigate_back "Press Alt+Left to go back"
-  Step N+5: loop     loop_target=N+0, loop_count=<iterations from plan>
-
-After the listing loop, add pagination:
-  Step M+0: paginate "Scroll to bottom and click Next page button"
-  Step M+1: loop     loop_target=N+0 (back to listing click), loop_count=<pages from plan>
-
-The listing loop runs INSIDE the pagination loop. The click step (N+0) handles \
-finding the NEXT unprocessed listing each time — it doesn't need a separate FIND step.
+LOOP STRUCTURE:
+  Extraction loop: click → URL → scroll → extract → back → loop(target=click, count=N)
+  Pagination loop: paginate → loop(target=click, count=pages)
+  The listing loop runs INSIDE the pagination loop.
 
 PLAIN TEXT PLAN:
 {plan_text}
 
 STEP TYPES:
 - navigate: Go to a URL — include full URL in intent (budget=3)
-- filter: Click a filter option (budget=8, grounding=true)
-- click: Click a specific element (budget=8, grounding=true)
-- scroll: Scroll until target content visible — "Scroll down until you see Description section" (budget=10). Do NOT hardcode scroll count.
-- extract_url: Read URL from address bar (claude_only=true, budget=0)
+- filter: Click a filter option (budget=8, grounding=true, required=true, section="setup")
+- click: Click a specific element (budget=8, grounding=true, section="extraction")
+- scroll: Scroll until target content visible (budget=10, section="extraction")
+- extract_url: Read URL from address bar (claude_only=true, budget=0, section="extraction")
 - extract_data: Read structured data from screenshot (claude_only=true, budget=0)
-- navigate_back: Press Alt+Left to go back (budget=3)
-- paginate: Scroll to bottom, click Next page (budget=10, grounding=true)
+- navigate_back: Go back (budget=3, section="extraction")
+- paginate: Click Next page (budget=10, grounding=true, section="pagination")
 - loop: Jump back to step index (loop_target=N, loop_count=max)
 
 Output ONLY valid JSON array of steps.
@@ -212,6 +220,16 @@ class PlanDecomposer:
             # Handle field name variations from Claude's output
             step_type = s.get("type") or s.get("action") or "click"
             reverse = s.get("reverse") or s.get("reverse_action") or ""
+            # Infer section from step type if not provided
+            section = s.get("section", "")
+            if not section:
+                if step_type in ("navigate", "filter"):
+                    section = "setup"
+                elif step_type in ("paginate",):
+                    section = "pagination"
+                elif step_type in ("click", "scroll", "extract_url", "extract_data", "navigate_back"):
+                    section = "extraction"
+
             plan.steps.append(MicroIntent(
                 intent=s.get("intent", ""),
                 type=step_type,
@@ -222,6 +240,9 @@ class PlanDecomposer:
                 claude_only=s.get("claude_only", step_type in ("extract_url", "extract_data")),
                 loop_target=s.get("loop_target", -1),
                 loop_count=s.get("loop_count", 0),
+                section=section,
+                required=s.get("required", step_type == "filter"),
+                gate=s.get("gate", False),
             ))
 
         # Cache

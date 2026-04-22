@@ -295,6 +295,24 @@ class MicroPlanRunner:
                 checkpoint.save(self.checkpoint_path)
                 step_index += 1
             else:
+                # Check required/gate constraints FIRST
+                if step.required:
+                    attempt = step_retry_counts.get(step_index, 0) + 1
+                    if attempt <= self.max_retries:
+                        step_retry_counts[step_index] = attempt
+                        logger.warning(f"  [{step_index}] REQUIRED step failed — retry {attempt}/{self.max_retries}")
+                        time.sleep(3)
+                        continue  # Retry the same step
+                    else:
+                        logger.error(f"  [{step_index}] REQUIRED step failed after {self.max_retries} retries — HALTING")
+                        print(f"  HALT: Required step '{step.intent[:50]}' failed. Cannot proceed.")
+                        break
+
+                if step.gate:
+                    logger.error(f"  [{step_index}] GATE FAILED: {step.verify[:60]} — HALTING")
+                    print(f"  HALT: Gate verification '{step.verify[:50]}' failed. Setup incomplete.")
+                    break
+
                 # Handle failure based on step type
                 if step.type in ("navigate",):
                     logger.error(f"  [{step_index}] NAVIGATE FAILED — cannot proceed")
