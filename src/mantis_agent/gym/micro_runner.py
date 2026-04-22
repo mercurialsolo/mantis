@@ -484,46 +484,51 @@ class MicroPlanRunner:
 
         Post-click verification retries once (page may still be loading).
         """
-        max_find_retries = 2
-
-        # Scroll to top first — Claude sees the full page and picks the right listing
-        try:
-            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(1)
-        except Exception:
-            pass
-
         # Build skip list from exact titles Claude returned on previous clicks
         skip_titles = list(self._extracted_titles)[-8:]
 
-        # Claude finds a listing NOT in the skip list (with retry)
+        # Probe multiple viewports: Home, then Page_Down × 2
+        # Cards may be below the fold — don't declare exhausted from one viewport
+        viewports = ["Home", "Page_Down", "Page_Down"]
         target = None
-        for attempt in range(max_find_retries):
-            screenshot = self.env.screenshot()
-            target = self.extractor.find_click_target(
-                screenshot, skip_count=0, skip_urls=skip_titles,
-            )
-            self.costs["claude_extract"] += 1
+
+        for vp_index, scroll_key in enumerate(viewports):
+            # Scroll to viewport position
+            try:
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": scroll_key}))
+                time.sleep(1.5 if scroll_key == "Home" else 1)
+            except Exception:
+                pass
+
+            # Ask Claude (with 1 retry on error per viewport)
+            for attempt in range(2):
+                screenshot = self.env.screenshot()
+                target = self.extractor.find_click_target(
+                    screenshot, skip_count=0, skip_urls=skip_titles,
+                )
+                self.costs["claude_extract"] += 1
+
+                if isinstance(target, tuple) and len(target) == 3:
+                    break  # Got coordinates
+                elif isinstance(target, tuple) and target[0] == "not_found":
+                    logger.info(f"  [claude-click] No card in viewport {vp_index+1}/{len(viewports)}")
+                    break  # Try next viewport
+                elif isinstance(target, tuple) and target[0] == "error":
+                    logger.warning(f"  [claude-click] Error in viewport {vp_index+1} — retrying")
+                    time.sleep(2)
+                    continue
+                else:
+                    time.sleep(2)
+                    continue
 
             if isinstance(target, tuple) and len(target) == 3:
-                break  # Got coordinates
-            elif isinstance(target, tuple) and target[0] == "not_found":
-                logger.info(f"  [claude-click] No more listings (confirmed)")
-                return StepResult(step_index=index, intent=step.intent, success=False,
-                                data="page_exhausted")
-            elif isinstance(target, tuple) and target[0] == "error":
-                logger.warning(f"  [claude-click] Error on attempt {attempt+1}/{max_find_retries} — retrying")
-                time.sleep(2)
-                continue
-            else:
-                # None — empty response
-                logger.warning(f"  [claude-click] Empty response attempt {attempt+1}")
-                time.sleep(2)
-                continue
+                break  # Found a card — stop probing viewports
 
+        # If no card found in any viewport, page is truly exhausted
         if not isinstance(target, tuple) or len(target) != 3:
-            logger.warning(f"  [claude-click] All attempts failed — treating as skip (not exhausted)")
-            return StepResult(step_index=index, intent=step.intent, success=False)
+            logger.info(f"  [claude-click] No cards found in {len(viewports)} viewports — page exhausted")
+            return StepResult(step_index=index, intent=step.intent, success=False,
+                            data="page_exhausted")
 
         x, y, title = target
         self._last_click_title = title  # Store for skip list
