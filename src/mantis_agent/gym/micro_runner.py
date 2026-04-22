@@ -374,6 +374,13 @@ class MicroPlanRunner:
                                 logger.info(f"  [back] Verified on results page after {back_attempt+1} attempts")
                                 break
                     step_index += 1
+                elif step.type in ("paginate",):
+                    # Paginate failed — no new page loaded, stop the pipeline
+                    logger.warning(f"  [{step_index}] PAGINATE FAILED — no more pages, ending")
+                    # Exhaust the outer loop so it doesn't restart on the same page
+                    for k in list(loop_counters.keys()):
+                        loop_counters[k] = 999999
+                    step_index += 1
                 elif step.type in ("extract_url", "extract_data"):
                     # Claude-only step failed — skip
                     step_index += 1
