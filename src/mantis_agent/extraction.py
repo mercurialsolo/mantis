@@ -343,12 +343,16 @@ class ClaudeExtractor:
         The caller clicks each sequentially without calling Claude again.
         """
         prompt = (
-            f"Look at this search results page ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"Find ALL boat listing cards visible on this page. "
-            f"Each listing card has a boat photo and title text below it.\n\n"
+            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"Find ALL boat listing cards visible anywhere in this screenshot. "
+            f"Listing cards may start in the LOWER part of the screenshot. "
+            f"The bottom-most card may be only partially visible — include it.\n\n"
+            f"Each listing card has a boat photo and clickable title text below it "
+            f"showing Year Make Model, plus a price.\n\n"
             f"Return the CENTER coordinates of each listing's TITLE TEXT area "
-            f"(below the photo, not the photo itself).\n\n"
-            f"Output ONLY a JSON array of ALL listings you can see:\n"
+            f"(below the photo, not the photo itself). "
+            f"If a title is hard to read, use \"unknown\".\n\n"
+            f"Output ONLY a JSON array:\n"
             f"[{{\"x\": N, \"y\": N, \"title\": \"text or unknown\"}}, ...]\n"
             f"If no listings visible: []"
         )

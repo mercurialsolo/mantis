@@ -126,8 +126,10 @@ class MicroPlanRunner:
         self.checkpoint_path = checkpoint_path
         self._seen_urls: set[str] = set()
         self._extracted_titles: list[str] = []  # Exact titles Claude returned, for skip list
-        self._page_listings: list[tuple[int, int, str]] = []  # Cached card coords from find_all_listings
+        self._page_listings: list[tuple[int, int, str]] = []  # Cached card coords for current viewport
         self._page_listing_index: int = 0  # Next card to click from cache
+        self._viewport_stage: int = 0  # 0=Home, 1=Page_Down, 2=Page_Down×2
+        self._max_viewport_stages: int = 3
         self.max_cost = max_cost
         self.max_time = max_time_minutes * 60
 
@@ -243,6 +245,7 @@ class MicroPlanRunner:
                     self._extracted_titles = []  # New page = new listings
                     self._page_listings = []   # Reset card cache
                     self._page_listing_index = 0
+                    self._viewport_stage = 0  # Start from Home on new page
                     # Scroll to top of new page + wait for load
                     try:
                         self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
@@ -487,41 +490,67 @@ class MicroPlanRunner:
         """
         # If no cached listings, scan the page (one Claude call for ALL cards)
         if self._page_listing_index >= len(self._page_listings):
-            try:
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-                time.sleep(1.5)
-            except Exception:
-                pass
+            # Staged per-viewport scan: scan ONE viewport, cache its cards.
+            # When cache empties, advance to next viewport (Page_Down).
+            # Only page_exhausted after all viewport stages return empty.
+            while self._viewport_stage < self._max_viewport_stages:
+                # Scroll to the current viewport position
+                if self._viewport_stage == 0:
+                    scroll_key = "Home"
+                else:
+                    scroll_key = "Page_Down"
+                try:
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": scroll_key}))
+                    time.sleep(1.5 if scroll_key == "Home" else 1)
+                except Exception:
+                    pass
 
-            screenshot = self.env.screenshot()
-            all_cards = self.extractor.find_all_listings(screenshot)
-            self.costs["claude_extract"] += 1
+                screenshot = self.env.screenshot()
+                cards = self.extractor.find_all_listings(screenshot)
+                self.costs["claude_extract"] += 1
 
-            # Filter out already-extracted titles
-            skip = set(t.lower() for t in self._extracted_titles)
-            filtered = [(x, y, t) for x, y, t in all_cards
-                       if t.lower() not in skip and t != "unknown"]
-            # Also keep "unknown" cards that we haven't tried yet
-            unknown_cards = [(x, y, t) for x, y, t in all_cards if t == "unknown"]
-            filtered.extend(unknown_cards)
+                # Filter out already-extracted titles
+                skip = set(t.lower() for t in self._extracted_titles)
+                filtered = [(x, y, t) for x, y, t in cards
+                           if t.lower() not in skip and t != "unknown"]
+                unknown_cards = [(x, y, t) for x, y, t in cards if t == "unknown"]
+                filtered.extend(unknown_cards)
+                filtered.sort(key=lambda c: c[1])
 
-            self._page_listings = filtered
-            self._page_listing_index = 0
-            logger.info(f"  [claude-click] Scanned page: {len(all_cards)} cards, {len(filtered)} after skip filter")
+                logger.info(f"  [claude-click] Viewport {self._viewport_stage}: {len(cards)} cards, {len(filtered)} new")
 
-            if not filtered:
-                logger.info(f"  [claude-click] No unextracted cards — page exhausted")
+                if filtered:
+                    self._page_listings = filtered
+                    self._page_listing_index = 0
+                    break  # Found cards in this viewport — click them
+                else:
+                    self._viewport_stage += 1  # Try next viewport
+
+            if not self._page_listings or self._page_listing_index >= len(self._page_listings):
+                logger.info(f"  [claude-click] All {self._max_viewport_stages} viewports exhausted")
                 return StepResult(step_index=index, intent=step.intent, success=False,
                                 data="page_exhausted")
 
-        # Pop next card from cache
+        # Pop next card from cache — scroll to the viewport where it was found
         x, y, title = self._page_listings[self._page_listing_index]
         self._page_listing_index += 1
         self._last_click_title = title
-        logger.info(f"  [claude-click] Card {self._page_listing_index}/{len(self._page_listings)}: '{title[:40]}' at ({x}, {y})")
+
+        # Scroll to the correct viewport (Home + N Page_Downs)
+        try:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+            time.sleep(0.5)
+            for _ in range(self._viewport_stage):
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
+                time.sleep(0.5)
+        except Exception:
+            pass
+
+        logger.info(f"  [claude-click] Card {self._page_listing_index}/{len(self._page_listings)}: '{title[:40]}' at ({x}, {y}) viewport={self._viewport_stage}")
 
         # Grounding refines — but only accept if the delta is small
         if self.grounding:
+            screenshot = self.env.screenshot()
             grounding_result = self.grounding.ground(screenshot, title, x, y)
             self.costs["claude_grounding"] += 1
             dx = abs(grounding_result.x - x)
@@ -655,13 +684,13 @@ class MicroPlanRunner:
     @property
     def _listings_on_page(self):
         """Track listings processed on current page."""
-        if not hasattr(self, '_page_listings'):
-            self._page_listings = 0
-        return self._page_listings
+        if not hasattr(self, '_page_listing_count'):
+            self._page_listing_count = 0
+        return self._page_listing_count
 
     @_listings_on_page.setter
     def _listings_on_page(self, value):
-        self._page_listings = value
+        self._page_listing_count = value
 
     def _execute_holo3_step(self, step: MicroIntent, index: int) -> StepResult:
         """Execute a Holo3 micro-intent with fresh GymRunner."""
