@@ -700,11 +700,12 @@ class MicroPlanRunner:
         if base_url:
             next_page = self._current_page + 1
             # Append ?page=N to the results base URL
-            if "page=" in base_url:
-                next_url = _re.sub(r'page=\d+', f'page={next_page}', base_url)
-            else:
-                sep = "&" if "?" in base_url else "?"
-                next_url = f"{base_url}{sep}page={next_page}"
+            # BoatTrader uses path-based pagination: /page-N/ appended to URL path
+            # E.g., /boats/by-owner/ → /boats/by-owner/page-2/
+            base_clean = base_url.rstrip("/")
+            # Remove existing page segment if present
+            base_clean = _re.sub(r'/page-\d+$', '', base_clean)
+            next_url = f"{base_clean}/page-{next_page}/"
 
             # Ensure full URL
             if not next_url.startswith("http"):
