@@ -211,10 +211,6 @@ class MicroPlanRunner:
                 max_count = step.loop_count or max_loop_iterations
                 if count < max_count:
                     target = step.loop_target if step.loop_target >= 0 else step_index
-                    # Reset any inner loop counters that are between target and this step
-                    for k in list(loop_counters.keys()):
-                        if target <= k < step_index:
-                            loop_counters[k] = 0
                     step_index = target
                     logger.info(f"  [loop@{step_index}] iteration {count}/{max_count} → step {step_index}")
                     continue
@@ -256,6 +252,10 @@ class MicroPlanRunner:
                     self._page_listings = []   # Reset card cache
                     self._page_listing_index = 0
                     self._viewport_stage = 0  # Start from Home on new page
+                    # Reset inner loop counters — new page means fresh listing loop
+                    for k in list(loop_counters.keys()):
+                        if k != step_index:  # Don't reset the outer loop's own counter
+                            loop_counters[k] = 0
                     # Scroll to top of new page + wait for load
                     try:
                         self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
