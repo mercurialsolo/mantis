@@ -335,13 +335,19 @@ class ClaudeExtractor:
     def find_all_listings(
         self,
         screenshot: Image.Image,
-    ) -> list[tuple[int, int, str]]:
+    ) -> list[tuple[int, int, str]] | tuple[str]:
         """Find ALL listing cards on the page in ONE Claude call.
 
-        Returns list of (x, y, title) for every visible listing card.
+        Returns:
+            list[(x, y, title)] — visible listings found
+            ("empty",) — screenshot looks like a normal page but no listings visible
+            ("blocked",) — screenshot appears to be an error/block/rate-limit page
+            ("error",) — API/parse failure
+
         Cost: ~$0.003-0.005 (one call regardless of how many cards).
         The caller clicks each sequentially without calling Claude again.
         """
+        debug_stem = "claude_find_all"
         prompt = (
             f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
             f"Find ALL boat listing cards visible anywhere in this screenshot. "
@@ -349,17 +355,39 @@ class ClaudeExtractor:
             f"The bottom-most card may be only partially visible — include it.\n\n"
             f"Each listing card has a boat photo and clickable title text below it "
             f"showing Year Make Model, plus a price.\n\n"
+            f"If the screenshot shows an error page, rate limit, bot check, CAPTCHA, sign-in wall, "
+            f"or a message like 'Something went wrong' or 'Error 418', mark it as blocked.\n\n"
             f"Return the CENTER coordinates of each listing's TITLE TEXT area "
             f"(below the photo, not the photo itself). "
             f"If a title is hard to read, use \"unknown\".\n\n"
-            f"Output ONLY a JSON array:\n"
-            f"[{{\"x\": N, \"y\": N, \"title\": \"text or unknown\"}}, ...]\n"
-            f"If no listings visible: []"
+            f"Output ONLY valid JSON:\n"
+            f"{{\"status\": \"ok\", \"listings\": [{{\"x\": N, \"y\": N, \"title\": \"text or unknown\"}}, ...]}}\n"
+            f"If this looks like a normal page but no listings are visible in this screenshot, output:\n"
+            f"{{\"status\": \"empty\", \"listings\": []}}\n"
+            f"If the screenshot appears blocked or errored, output:\n"
+            f"{{\"status\": \"blocked\", \"listings\": []}}"
         )
+
+        try:
+            screenshot.save(self._debug_path(debug_stem, ".png"))
+        except Exception as e:
+            logger.debug(f"[find_all] failed to save screenshot: {e}")
+
+        try:
+            with open(self._debug_path(debug_stem, "_prompt.txt"), "w") as f:
+                f.write(prompt)
+        except Exception as e:
+            logger.debug(f"[find_all] failed to save prompt: {e}")
 
         text = self._call(screenshot, prompt)
 
-        # Parse JSON array
+        try:
+            with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
+                f.write(text)
+        except Exception as e:
+            logger.debug(f"[find_all] failed to save response: {e}")
+
+        # Parse JSON payload
         text = text.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1]
@@ -367,18 +395,52 @@ class ClaudeExtractor:
             text = text.rsplit("```", 1)[0]
         text = text.strip()
 
-        # Find the JSON array in the response
-        import re as _re
-        match = _re.search(r'\[.*\]', text, _re.DOTALL)
-        if not match:
-            logger.warning(f"  [find_all] No JSON array in response: {text[:200]}")
-            return []
-
+        parsed: dict | list | None = None
         try:
-            items = json.loads(match.group())
+            parsed = json.loads(text)
         except json.JSONDecodeError:
-            logger.warning(f"  [find_all] JSON parse failed: {text[:200]}")
-            return []
+            pass
+
+        if parsed is None:
+            import re as _re
+            match = _re.search(r'\{.*\}', text, _re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group())
+                except json.JSONDecodeError:
+                    parsed = None
+            else:
+                match = _re.search(r'\[.*\]', text, _re.DOTALL)
+                if match:
+                    try:
+                        parsed = json.loads(match.group())
+                    except json.JSONDecodeError:
+                        parsed = None
+
+        if parsed is None:
+            logger.warning(f"  [find_all] No parseable JSON in response: {text[:200]}")
+            return ("error",)
+
+        status = "ok"
+        items: list = []
+        if isinstance(parsed, dict):
+            status = str(parsed.get("status", "ok")).lower()
+            raw_items = parsed.get("listings", [])
+            if isinstance(raw_items, list):
+                items = raw_items
+        elif isinstance(parsed, list):
+            # Backward compatibility with the old prompt.
+            items = parsed
+        else:
+            logger.warning(f"  [find_all] Unexpected payload type: {type(parsed).__name__}")
+            return ("error",)
+
+        if status == "blocked":
+            logger.warning("  [find_all] Claude classified screenshot as blocked/error page")
+            return ("blocked",)
+        if status == "empty":
+            logger.info("  [find_all] Claude reported no listings in this viewport")
+            return ("empty",)
 
         results = []
         for item in items:

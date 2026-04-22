@@ -165,6 +165,7 @@ class MicroPlanRunner:
                            f"page {checkpoint.page}, {len(self._seen_urls)} URLs seen")
 
         step_index = checkpoint.step_index
+        step_retry_counts: dict[int, int] = {}
         max_loop_iterations = 200  # Safety cap
         listings_on_page = 0  # Track how many listings processed on current page
 
@@ -238,6 +239,7 @@ class MicroPlanRunner:
                 continue
 
             if step_result.success:
+                step_retry_counts.pop(step_index, None)
                 # Track listing progress
                 if step.type == "paginate":
                     listings_on_page = 0
@@ -308,6 +310,18 @@ class MicroPlanRunner:
                             else:
                                 step_index += 1
                         continue
+                    if step_result.data in ("scan_error", "page_blocked"):
+                        attempt = step_retry_counts.get(step_index, 0) + 1
+                        if attempt <= self.max_retries:
+                            step_retry_counts[step_index] = attempt
+                            wait_s = 12 if step_result.data == "page_blocked" else 4
+                            logger.warning(
+                                f"  [{step_index}] {step_result.data.upper()} — "
+                                f"waiting {wait_s}s and retrying ({attempt}/{self.max_retries})"
+                            )
+                            time.sleep(wait_s)
+                            continue
+                        logger.warning(f"  [{step_index}] {step_result.data.upper()} — retry budget exhausted")
                     # Click failed — skip extraction cycle to loop
                     logger.warning(f"  [{step_index}] CLICK FAILED — skipping to next")
                     try:
@@ -506,8 +520,30 @@ class MicroPlanRunner:
                     pass
 
                 screenshot = self.env.screenshot()
-                cards = self.extractor.find_all_listings(screenshot)
+                scan_result = self.extractor.find_all_listings(screenshot)
                 self.costs["claude_extract"] += 1
+
+                if isinstance(scan_result, tuple):
+                    status = scan_result[0]
+                    if status == "blocked":
+                        logger.warning(f"  [claude-click] Viewport {self._viewport_stage}: blocked/error page")
+                        return StepResult(
+                            step_index=index,
+                            intent=step.intent,
+                            success=False,
+                            data="page_blocked",
+                        )
+                    if status == "error":
+                        logger.warning(f"  [claude-click] Viewport {self._viewport_stage}: parse/API failure")
+                        return StepResult(
+                            step_index=index,
+                            intent=step.intent,
+                            success=False,
+                            data="scan_error",
+                        )
+                    cards = []
+                else:
+                    cards = scan_result
 
                 # Filter out already-extracted titles
                 skip = set(t.lower() for t in self._extracted_titles)
@@ -547,6 +583,10 @@ class MicroPlanRunner:
             pass
 
         logger.info(f"  [claude-click] Card {self._page_listing_index}/{len(self._page_listings)}: '{title[:40]}' at ({x}, {y}) viewport={self._viewport_stage}")
+
+        # Delay before the final screenshot so grounding sees the frame we will actually click.
+        import random
+        time.sleep(random.uniform(1.5, 3.5))
 
         # Grounding refines — but only accept if the delta is small
         if self.grounding:

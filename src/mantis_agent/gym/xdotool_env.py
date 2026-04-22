@@ -144,6 +144,8 @@ class XdotoolGymEnv(GymEnvironment):
             "--hide-crash-restore-bubble",
             "--noerrdialogs",
             "--disable-features=InfiniteSessionRestore",
+            "--disable-blink-features=AutomationControlled",  # Hide navigator.webdriver
+            "--disable-dev-shm-usage",
             f"--window-size={self._viewport[0]},{self._viewport[1]}",
             "--start-maximized",
             f"--user-data-dir={self._profile_dir}",
