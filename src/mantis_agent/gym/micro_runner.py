@@ -531,6 +531,8 @@ class MicroPlanRunner:
             time.sleep(12)  # BoatTrader needs 8-12s to fully render
             self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
             time.sleep(1)
+            # Store as base URL for pagination (results page, not detail page)
+            self._results_base_url = url
             return StepResult(step_index=index, intent=step.intent, success=True)
         except Exception as e:
             logger.error(f"  [navigate] Failed: {e}")
@@ -692,39 +694,33 @@ class MicroPlanRunner:
             self._current_page = 1
 
         # ── Layer 1: URL-based pagination ──
-        # Read current URL to detect pattern
-        if self.extractor:
-            screenshot = self.env.screenshot()
-            url_data = self.extractor.extract(screenshot)
-            self.costs["claude_extract"] += 1
-            current_url = url_data.url if url_data else ""
+        # Use the stored results base URL (from initial navigate), NOT the current page URL
+        # (which might be a detail page after extraction)
+        base_url = getattr(self, '_results_base_url', '')
+        if base_url:
+            next_page = self._current_page + 1
+            # Append ?page=N to the results base URL
+            if "page=" in base_url:
+                next_url = _re.sub(r'page=\d+', f'page={next_page}', base_url)
+            else:
+                sep = "&" if "?" in base_url else "?"
+                next_url = f"{base_url}{sep}page={next_page}"
 
-            if current_url:
-                next_page = self._current_page + 1
-                # Try common URL pagination patterns
-                # Pattern: ?page=N or &page=N
-                if "page=" in current_url:
-                    next_url = _re.sub(r'page=\d+', f'page={next_page}', current_url)
-                else:
-                    # Append ?page=N
-                    sep = "&" if "?" in current_url else "?"
-                    next_url = f"{current_url}{sep}page={next_page}"
+            # Ensure full URL
+            if not next_url.startswith("http"):
+                next_url = f"https://www.{next_url}"
 
-                # Ensure full URL
-                if not next_url.startswith("http"):
-                    next_url = f"https://www.{next_url}"
-
-                logger.info(f"  [paginate] Layer 1: URL-based → {next_url[:60]}")
-                try:
-                    self.env.reset(task="paginate_url", start_url=next_url)
-                    time.sleep(10)
-                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-                    time.sleep(2)
-                    self._current_page = next_page
-                    return StepResult(step_index=index, intent=step.intent, success=True,
-                                    steps_used=0, data=f"url_paginate_page{next_page}")
-                except Exception as e:
-                    logger.warning(f"  [paginate] Layer 1 failed: {e}")
+            logger.info(f"  [paginate] Layer 1: URL-based → {next_url[:80]}")
+            try:
+                self.env.reset(task="paginate_url", start_url=next_url)
+                time.sleep(10)
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                time.sleep(2)
+                self._current_page = next_page
+                return StepResult(step_index=index, intent=step.intent, success=True,
+                                steps_used=0, data=f"url_paginate_page{next_page}")
+            except Exception as e:
+                logger.warning(f"  [paginate] Layer 1 failed: {e}")
 
         # ── Layer 2: Claude-guided ──
         logger.info(f"  [paginate] Layer 2: Claude-guided (End → Page_Up)")
