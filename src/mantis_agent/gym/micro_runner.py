@@ -166,6 +166,7 @@ class MicroPlanRunner:
 
         step_index = checkpoint.step_index
         step_retry_counts: dict[int, int] = {}
+        loop_counters: dict[int, int] = {}  # Per-step loop iteration counts
         max_loop_iterations = 200  # Safety cap
         listings_on_page = 0  # Track how many listings processed on current page
 
@@ -203,12 +204,19 @@ class MicroPlanRunner:
 
             logger.info(f"  [{step_index:2d}] {step.type:15s} {dynamic_intent[:60]}")
 
-            # Handle loop steps
+            # Handle loop steps — each loop step has its own counter
             if step.type == "loop":
-                checkpoint.loop_iterations += 1
-                if checkpoint.loop_iterations < (step.loop_count or max_loop_iterations):
-                    step_index = step.loop_target if step.loop_target >= 0 else step_index
-                    logger.info(f"  [loop] iteration {checkpoint.loop_iterations} → step {step_index}")
+                loop_counters[step_index] = loop_counters.get(step_index, 0) + 1
+                count = loop_counters[step_index]
+                max_count = step.loop_count or max_loop_iterations
+                if count < max_count:
+                    target = step.loop_target if step.loop_target >= 0 else step_index
+                    # Reset any inner loop counters that are between target and this step
+                    for k in list(loop_counters.keys()):
+                        if target <= k < step_index:
+                            loop_counters[k] = 0
+                    step_index = target
+                    logger.info(f"  [loop@{step_index}] iteration {count}/{max_count} → step {step_index}")
                     continue
                 else:
                     logger.info(f"  [loop] max iterations reached")
