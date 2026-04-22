@@ -332,6 +332,61 @@ class ClaudeExtractor:
         logger.info(f"  [claude-target] '{title[:40]}' at ({x}, {y})")
         return (x, y, title)
 
+    def find_all_listings(
+        self,
+        screenshot: Image.Image,
+    ) -> list[tuple[int, int, str]]:
+        """Find ALL listing cards on the page in ONE Claude call.
+
+        Returns list of (x, y, title) for every visible listing card.
+        Cost: ~$0.003-0.005 (one call regardless of how many cards).
+        The caller clicks each sequentially without calling Claude again.
+        """
+        prompt = (
+            f"Look at this search results page ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"Find ALL boat listing cards visible on this page. "
+            f"Each listing card has a boat photo and title text below it.\n\n"
+            f"Return the CENTER coordinates of each listing's TITLE TEXT area "
+            f"(below the photo, not the photo itself).\n\n"
+            f"Output ONLY a JSON array of ALL listings you can see:\n"
+            f"[{{\"x\": N, \"y\": N, \"title\": \"text or unknown\"}}, ...]\n"
+            f"If no listings visible: []"
+        )
+
+        text = self._call(screenshot, prompt)
+
+        # Parse JSON array
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1]
+        if text.endswith("```"):
+            text = text.rsplit("```", 1)[0]
+        text = text.strip()
+
+        # Find the JSON array in the response
+        import re as _re
+        match = _re.search(r'\[.*\]', text, _re.DOTALL)
+        if not match:
+            logger.warning(f"  [find_all] No JSON array in response: {text[:200]}")
+            return []
+
+        try:
+            items = json.loads(match.group())
+        except json.JSONDecodeError:
+            logger.warning(f"  [find_all] JSON parse failed: {text[:200]}")
+            return []
+
+        results = []
+        for item in items:
+            x = int(item.get("x", 0))
+            y = int(item.get("y", 0))
+            title = str(item.get("title", "unknown"))
+            if x > 0 and y > 0:
+                results.append((x, y, title))
+
+        logger.info(f"  [find_all] Found {len(results)} listings in one call")
+        return results
+
     def find_paginate_target(self, screenshot: Image.Image) -> tuple[int, int, str] | tuple[str] | None:
         """Find the Next page button or next page number on a search results page.
 

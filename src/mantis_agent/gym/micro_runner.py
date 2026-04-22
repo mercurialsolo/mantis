@@ -126,6 +126,8 @@ class MicroPlanRunner:
         self.checkpoint_path = checkpoint_path
         self._seen_urls: set[str] = set()
         self._extracted_titles: list[str] = []  # Exact titles Claude returned, for skip list
+        self._page_listings: list[tuple[int, int, str]] = []  # Cached card coords from find_all_listings
+        self._page_listing_index: int = 0  # Next card to click from cache
         self.max_cost = max_cost
         self.max_time = max_time_minutes * 60
 
@@ -239,6 +241,8 @@ class MicroPlanRunner:
                     listings_on_page = 0
                     self._listings_on_page = 0
                     self._extracted_titles = []  # New page = new listings
+                    self._page_listings = []   # Reset card cache
+                    self._page_listing_index = 0
                     # Scroll to top of new page + wait for load
                     try:
                         self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
@@ -475,64 +479,46 @@ class MicroPlanRunner:
             return StepResult(step_index=index, intent=step.intent, success=False)
 
     def _execute_claude_guided_click(self, step: MicroIntent, index: int) -> StepResult:
-        """Claude identifies click target → Holo3 clicks coordinates.
+        """Claude finds ALL listings once per page, clicks them one by one.
 
-        Handles three return types from find_click_target:
-          (x, y, title) — target found → click → verify
-          ("not_found",) — genuine page exhaustion
-          ("error",) — API/parse failure → retry up to 2 times
-
-        Post-click verification retries once (page may still be loading).
+        First call on a page: find_all_listings() → cache coordinates (1 Claude call)
+        Subsequent calls: pop next from cache (0 Claude calls)
+        Page exhausted when cache is empty.
         """
-        # Build skip list from exact titles Claude returned on previous clicks
-        skip_titles = list(self._extracted_titles)[-8:]
-
-        # Probe multiple viewports: Home, then Page_Down × 2
-        # Cards may be below the fold — don't declare exhausted from one viewport
-        viewports = ["Home", "Page_Down", "Page_Down"]
-        target = None
-
-        for vp_index, scroll_key in enumerate(viewports):
-            # Scroll to viewport position
+        # If no cached listings, scan the page (one Claude call for ALL cards)
+        if self._page_listing_index >= len(self._page_listings):
             try:
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": scroll_key}))
-                time.sleep(1.5 if scroll_key == "Home" else 1)
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                time.sleep(1.5)
             except Exception:
                 pass
 
-            # Ask Claude (with 1 retry on error per viewport)
-            for attempt in range(2):
-                screenshot = self.env.screenshot()
-                target = self.extractor.find_click_target(
-                    screenshot, skip_count=0, skip_urls=skip_titles,
-                )
-                self.costs["claude_extract"] += 1
+            screenshot = self.env.screenshot()
+            all_cards = self.extractor.find_all_listings(screenshot)
+            self.costs["claude_extract"] += 1
 
-                if isinstance(target, tuple) and len(target) == 3:
-                    break  # Got coordinates
-                elif isinstance(target, tuple) and target[0] == "not_found":
-                    logger.info(f"  [claude-click] No card in viewport {vp_index+1}/{len(viewports)}")
-                    break  # Try next viewport
-                elif isinstance(target, tuple) and target[0] == "error":
-                    logger.warning(f"  [claude-click] Error in viewport {vp_index+1} — retrying")
-                    time.sleep(2)
-                    continue
-                else:
-                    time.sleep(2)
-                    continue
+            # Filter out already-extracted titles
+            skip = set(t.lower() for t in self._extracted_titles)
+            filtered = [(x, y, t) for x, y, t in all_cards
+                       if t.lower() not in skip and t != "unknown"]
+            # Also keep "unknown" cards that we haven't tried yet
+            unknown_cards = [(x, y, t) for x, y, t in all_cards if t == "unknown"]
+            filtered.extend(unknown_cards)
 
-            if isinstance(target, tuple) and len(target) == 3:
-                break  # Found a card — stop probing viewports
+            self._page_listings = filtered
+            self._page_listing_index = 0
+            logger.info(f"  [claude-click] Scanned page: {len(all_cards)} cards, {len(filtered)} after skip filter")
 
-        # If no card found in any viewport, page is truly exhausted
-        if not isinstance(target, tuple) or len(target) != 3:
-            logger.info(f"  [claude-click] No cards found in {len(viewports)} viewports — page exhausted")
-            return StepResult(step_index=index, intent=step.intent, success=False,
-                            data="page_exhausted")
+            if not filtered:
+                logger.info(f"  [claude-click] No unextracted cards — page exhausted")
+                return StepResult(step_index=index, intent=step.intent, success=False,
+                                data="page_exhausted")
 
-        x, y, title = target
-        self._last_click_title = title  # Store for skip list
-        logger.info(f"  [claude-click] Target: '{title[:40]}' at ({x}, {y})")
+        # Pop next card from cache
+        x, y, title = self._page_listings[self._page_listing_index]
+        self._page_listing_index += 1
+        self._last_click_title = title
+        logger.info(f"  [claude-click] Card {self._page_listing_index}/{len(self._page_listings)}: '{title[:40]}' at ({x}, {y})")
 
         # Grounding refines — but only accept if the delta is small
         if self.grounding:
