@@ -114,8 +114,8 @@ class MicroPlanRunner:
         on_step: Any = None,
         max_retries: int = 2,
         checkpoint_path: str = "/data/checkpoints/micro_run.json",
-        max_cost: float = 2.0,      # Stop if total cost exceeds this
-        max_time_minutes: int = 30,  # Stop if runtime exceeds this
+        max_cost: float = 10.0,     # Stop if total cost exceeds this
+        max_time_minutes: int = 180, # Stop if runtime exceeds this (3 hours)
     ):
         self.brain = brain
         self.env = env
@@ -475,16 +475,29 @@ class MicroPlanRunner:
             time.sleep(1)
             return self._execute_claude_step(step, index)
 
-        # Paginate: try Holo3 first. If it fails without taking any actions,
-        # fall back to Claude-guided pagination on the unchanged page state.
+        # Paginate: try Holo3 first. If it fails, re-anchor the page and let
+        # Claude find the explicit Next control. Unlike click steps, the
+        # Claude paginator starts by rebuilding the viewport near the bottom,
+        # so it is still useful even after Holo3 has spent actions.
         if step.type == "paginate" and self.extractor:
             holo_result = self._execute_holo3_step(step, index)
             if holo_result.success:
                 return holo_result
-            if holo_result.steps_used == 0:
-                logger.info("  [paginate] Holo3 failed with 0 steps — falling back to Claude-guided paginate")
-                return self._execute_claude_guided_paginate(step, index)
-            return holo_result
+            logger.info(
+                "  [paginate] Holo3 failed after %d steps — falling back to Claude-guided paginate",
+                holo_result.steps_used,
+            )
+            claude_result = self._execute_claude_guided_paginate(step, index)
+            if claude_result.success:
+                return claude_result
+            return StepResult(
+                step_index=index,
+                intent=step.intent,
+                success=False,
+                data=claude_result.data or holo_result.data,
+                steps_used=holo_result.steps_used + claude_result.steps_used,
+                duration=holo_result.duration + claude_result.duration,
+            )
 
         # Holo3 steps (scroll, filter, navigate_back, paginate)
         return self._execute_holo3_step(step, index)
@@ -654,6 +667,13 @@ class MicroPlanRunner:
 
         Scrolls near the bottom, Claude finds pagination, retry on error, bounded grounding.
         """
+        # Clear focus traps such as open menus or overlays before repositioning.
+        try:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+            time.sleep(0.5)
+        except Exception:
+            pass
+
         # Go to bottom first so the pagination bar is likely on screen.
         try:
             self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
