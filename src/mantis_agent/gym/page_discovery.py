@@ -20,7 +20,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -293,7 +292,7 @@ If no element matches, reply: NONE"""
 
         try:
             if el.tag == "select":
-                selector = f"select"
+                selector = "select"
                 if el.id:
                     selector = f"#{el.id}"
                 elif el.name:

@@ -26,9 +26,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
 import subprocess
 import sys
 
@@ -94,7 +92,7 @@ def run_eval(
 
     logger.info(f"Running: {' '.join(cmd)}")
     print(f"\n{'='*60}")
-    print(f"  OSWorld-Verified × Gemma4 Evaluation")
+    print("  OSWorld-Verified × Gemma4 Evaluation")
     print(f"  Model: {model}")
     print(f"  Endpoint: {base_url}")
     print(f"  Mode: {'full (367 tasks)' if full else 'single task (debug)'}")

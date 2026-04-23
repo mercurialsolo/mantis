@@ -44,6 +44,88 @@ StreamingCUA / GymRunner (this repo):
 | Holo3-35B-A3B | vLLM | 2x A100 | Tool calling + reasoning parser |
 | Claude Sonnet/Opus | Anthropic API | None | API-based, saves trajectories for distillation |
 
+### Micro-Intent Pipeline (Production)
+
+The validated production pipeline for web data extraction:
+
+```
+Plain text plan OR JSON micro-plan
+  → MicroPlanRunner (micro_runner.py):
+    SETUP:    navigate (URL with filters) → gate (Claude verifies page)
+    EXTRACT:  click (Claude batch-finds all listings) → URL → scroll → extract → back → loop
+    PAGINATE: URL-based /page-N/ → Claude-guided → Holo3 fallback → loop
+```
+
+Each step: 1 sentence, fresh GymRunner, max 3-8 actions. Claude (Sonnet API) plans + reads data. Holo3 (3B GPU) clicks + scrolls.
+
+| Component | Role | Cost |
+|-----------|------|------|
+| Holo3-35B-A3B | Click, scroll, navigate (1× A100, llama.cpp GGUF) | ~$0.02/lead |
+| Claude Sonnet | Find listings, extract data, verify gates, grounding | ~$0.02/lead |
+| IPRoyal proxy | Residential, geo-targeted, sticky sessions | ~$0.07/lead |
+| **Total** | | **~$0.12/lead** |
+
+Key modules for micro-intent pipeline:
+
+| Module | Purpose |
+|--------|---------|
+| `gym/micro_runner.py` | MicroPlanRunner — execute micro-plans with checkpoint/verify/reverse |
+| `plan_decomposer.py` | Plain text → MicroIntents with sections, gates, loops (Claude, cached) |
+| `extraction.py` | ClaudeExtractor — find_all_listings, extract data, verify_gate, find_filter_target |
+| `grounding.py` | ClaudeGrounding — refine click coordinates (distance-scaled confidence) |
+
+### Running the Micro-Intent Pipeline
+
+```bash
+# From a JSON micro-plan (pre-built, no decomposition needed):
+uv run modal run --detach modal_cua_server.py \
+  --micro plans/boattrader/extract_url_filtered.json \
+  --model holo3 --viewer
+
+# From a plain text plan (decomposed by Claude Sonnet, cached):
+uv run modal run --detach modal_cua_server.py \
+  --micro plans/boattrader/extract_only.txt \
+  --model holo3 --viewer
+
+# Monitor:
+tail -f /tmp/longrun_*.log
+
+# Results on Modal volume 'osworld-data' at /results/holo3_results_*.json
+```
+
+### BoatTrader URL Filter Format
+
+BoatTrader encodes filters as URL path segments (no sidebar clicking needed):
+
+```
+https://www.boattrader.com/boats/state-fl/city-miami/zip-33101/by-owner/price-35000/
+                                 ^^^^^^^^  ^^^^^^^^^  ^^^^^^^^  ^^^^^^^^  ^^^^^^^^^^
+                                 state     city(auto) zip       seller    min price
+
+Pagination: .../price-35000/page-2/
+```
+
+### Plan JSON Format
+
+```json
+[
+  {"intent": "Navigate to https://...", "type": "navigate", "section": "setup", "required": true},
+  {"intent": "Verify filters applied", "type": "extract_data", "claude_only": true, "section": "setup", "gate": true, "verify": "..."},
+  {"intent": "Click listing title", "type": "click", "grounding": true, "section": "extraction"},
+  {"intent": "Read URL", "type": "extract_url", "claude_only": true, "section": "extraction"},
+  {"intent": "Scroll down", "type": "scroll", "budget": 10, "section": "extraction"},
+  {"intent": "Extract data", "type": "extract_data", "claude_only": true, "section": "extraction"},
+  {"intent": "Go back", "type": "navigate_back", "section": "extraction"},
+  {"intent": "Loop", "type": "loop", "loop_target": 2, "loop_count": 50, "section": "extraction"},
+  {"intent": "Paginate", "type": "paginate", "grounding": true, "section": "pagination"},
+  {"intent": "Loop", "type": "loop", "loop_target": 2, "loop_count": 50, "section": "pagination"}
+]
+```
+
+Step types: `navigate`, `filter`, `click`, `scroll`, `extract_url`, `extract_data`, `navigate_back`, `paginate`, `loop`
+
+Key fields: `section` (setup/extraction/pagination), `required` (retry then halt), `gate` (Claude verifies, halt on fail), `claude_only` (no Holo3), `grounding` (ClaudeGrounding refines clicks)
+
 ## Quick Start
 
 ```bash
@@ -61,6 +143,13 @@ mantis "Open Firefox and search for cats" --model google/gemma-4-E4B-it
 
 # Run with live viewer
 mantis --viewer "Open Firefox and search for cats"
+```
+
+### Development
+
+```bash
+# Lint Python sources
+uv run --extra dev ruff check .
 ```
 
 ## Live Viewer
@@ -159,20 +248,32 @@ src/mantis_agent/
   streamer.py           # Rolling frame buffer capture
   viewer.py             # Live web viewer (local/async)
   viewer_modal.py       # Live web viewer (Modal/threaded)
-  grounding.py          # RegionGrounding for click refinement
+  extraction.py         # ClaudeExtractor — screenshot → structured data
+  grounding.py          # ClaudeGrounding — click coordinate refinement
+  plan_decomposer.py    # PlanDecomposer — plain text → MicroIntents
   main.py               # CLI entry point
   gym/
     base.py             # GymEnvironment abstract base
     runner.py           # GymRunner — sync agent loop
+    micro_runner.py     # MicroPlanRunner — micro-intent execution
     xdotool_env.py      # X11 environment (Xvfb + xdotool)
-    workflow_runner.py   # Loop/pagination workflows
+    workflow_runner.py   # Loop/pagination workflows (legacy)
+  verification/         # Step verification + playbooks
   curriculum/           # Training curriculum techniques
   prompts/              # Prompt templates
 
-modal_cua_server.py     # Modal cloud deployment (all models)
+plans/
+  boattrader/
+    extract_url_filtered.json  # Production plan (URL-filtered + extraction loop)
+    extract_only.txt           # Plain text plan (decomposed by Claude)
+    test_url_filters.json      # Filter-only test
+    test_filters_only.json     # Sidebar filter test
+
+modal_cua_server.py     # Modal cloud deployment (all models, micro-plan support)
 run_osworld.py          # OSWorld benchmark runner
 run_gym_anything.py     # Generic gym environment runner
 run_web_tasks.py        # Web task automation
+export_leads.py         # CSV export with viability checks
 ```
 
 ## License

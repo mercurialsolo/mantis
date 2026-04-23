@@ -38,7 +38,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -290,7 +290,7 @@ class PlaywrightAdapter:
         This is dramatically more accurate for flat UI elements.
         """
         if not hasattr(self, '_last_elements') or not self._last_elements:
-            print(f"[SoM] No elements cached — falling back to noop")
+            print("[SoM] No elements cached — falling back to noop")
             return
         matches = [el for el in self._last_elements if el["id"] == element_id]
         if not matches:

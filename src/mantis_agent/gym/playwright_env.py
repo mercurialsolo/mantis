@@ -91,7 +91,6 @@ class PlaywrightGymEnv(GymEnvironment):
     def _launch_browser(self) -> None:
         """Launch browser — supports CDP (existing Chrome), stealth, and proxy."""
         from playwright.sync_api import sync_playwright
-        import random
 
         self._pw_ctx = sync_playwright().start()
 
@@ -566,7 +565,7 @@ class PlaywrightGymEnv(GymEnvironment):
             elif tag == "a":
                 parts.append(f'<link> "{el["text"][:40]}"')
             elif tag == "select":
-                parts.append(f"<dropdown>")
+                parts.append("<dropdown>")
                 if el.get("name"):
                     parts.append(f'name="{el["name"]}"')
             else:

@@ -112,7 +112,7 @@ class LearningRunner:
         logger.info(f"\n--- Phase 2: Learning extraction ({n_samples} samples) ---")
         self._learn_extraction(playbook, extract_intent, n_samples)
 
-        logger.info(f"\n=== LEARNING COMPLETE ===")
+        logger.info("\n=== LEARNING COMPLETE ===")
         logger.info(playbook.summary())
 
         return playbook
@@ -214,14 +214,14 @@ class LearningRunner:
 
                 # For the critical seller filter: retry with more explicit instruction
                 if filter_name == "apply_seller_filter" and not verified:
-                    logger.info(f"    Retrying seller filter with explicit instruction...")
+                    logger.info("    Retrying seller filter with explicit instruction...")
                     retry_runner = GymRunner(
                         brain=self.brain, env=self.env,
                         max_steps=20, frames_per_inference=1,
                         grounding=self.grounding,
                         on_step=self.on_step,
                     )
-                    retry_result = retry_runner.run(
+                    retry_runner.run(
                         task=(
                             "CRITICAL: You must click the 'By Owner' filter. "
                             "Scroll down in the LEFT SIDEBAR until you see 'For Sale By' section. "
@@ -238,9 +238,9 @@ class LearningRunner:
                     )
                     step.update_confidence(retry_check.verified)
                     if retry_check.verified:
-                        logger.info(f"    Retry VERIFIED")
+                        logger.info("    Retry VERIFIED")
                     else:
-                        logger.warning(f"    Retry also FAILED — seller filter cannot be applied")
+                        logger.warning("    Retry also FAILED — seller filter cannot be applied")
                         playbook.known_traps.append("Seller filter: model cannot find/click 'By Owner'")
 
             time.sleep(1.0)
@@ -355,7 +355,7 @@ class LearningRunner:
         # Deduplicate traps
         playbook.known_traps = list(set(playbook.known_traps + traps_found))
 
-        logger.info(f"\n  Extraction summary:")
+        logger.info("\n  Extraction summary:")
         logger.info(f"    Samples: {n_samples}")
         logger.info(f"    Avg scrolls: {avg_scrolls:.0f}")
         logger.info(f"    Phones found: {phones_found}/{n_samples}")

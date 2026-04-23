@@ -123,7 +123,6 @@ def download_model(vol_path: str) -> str:
 
 def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
     """Start llama-server on CUDA GPU."""
-    import glob
 
     # Find the model and mmproj files
     model_dir = os.path.dirname(model_path)
@@ -436,7 +435,7 @@ def run_osworld(domain: str = "os", max_tasks: int = 5, max_steps: int = 25):
     if max_tasks > 0:
         total = min(total, max_tasks)
 
-    print(f"\nOSWorld Evaluation")
+    print("\nOSWorld Evaluation")
     print(f"  Domain: {domain}")
     print(f"  Tasks: {total}")
     print(f"  Max steps: {max_steps}")
@@ -704,7 +703,7 @@ First reflect on what you see, then output code.""".strip()
             max_retries = 2  # Up to 2 retries after initial attempt
 
             if not setup_ok:
-                print(f"  Skipping eval — setup failed, retrying setup next run")
+                print("  Skipping eval — setup failed, retrying setup next run")
                 max_retries = 0  # Don't retry, setup is the problem
 
             for attempt in range(1 + max_retries):
@@ -772,7 +771,7 @@ First reflect on what you see, then output code.""".strip()
                                 result_state = None
 
                             if result_state is None:
-                                print(f"  Result getter returned None — VM service may be down")
+                                print("  Result getter returned None — VM service may be down")
                                 all_results.append("(eval infrastructure failure)")
                                 sub_scores.append(0.0)
                                 continue
@@ -826,7 +825,6 @@ First reflect on what you see, then output code.""".strip()
 
                             # Step 2: Deep diagnosis — extract specific fix from eval results
                             result_str = ' '.join(str(r) for r in all_results)
-                            expected_str = ' '.join(str(e) for e in all_expected)
 
                             if any("not found" in str(r).lower() or "no such" in str(r).lower() for r in all_results):
                                 analysis += "Diagnosis: Command or file not found. Check paths and command names.\n"
@@ -895,7 +893,7 @@ First reflect on what you see, then output code.""".strip()
 
                             print(f"  Attempt {attempt+1} failed. Results: {all_results}")
                             print(f"  Distilled: {analysis.split('Diagnosis:')[1].split(chr(10))[0].strip() if 'Diagnosis:' in analysis else '?'}")
-                            print(f"  Retrying with distilled learning...")
+                            print("  Retrying with distilled learning...")
 
                             # Step 4: Store learning for future tasks (accumulates on volume)
                             learning_entry = {
@@ -1175,7 +1173,7 @@ First reflect on what you see, then output code.""".strip()
                     scores[idx] = retry_score
                     print(f"    Retry PASSED! Score updated to {retry_score}")
                 else:
-                    print(f"    Retry still failed.")
+                    print("    Retry still failed.")
             except Exception as e:
                 print(f"    Retry eval error: {e}")
 
@@ -1229,7 +1227,7 @@ def main(domain: str = "os", tasks: int = 0, steps: int = 25):
     on Modal's infrastructure. Local client can disconnect safely.
     Results save incrementally to the 'osworld-data' volume.
     """
-    print(f"Mantis — OSWorld Benchmark")
+    print("Mantis — OSWorld Benchmark")
     print(f"  Domain: {domain}")
     print(f"  Tasks:  {'ALL (24)' if tasks == 0 else tasks}")
     print(f"  Steps:  {steps}")

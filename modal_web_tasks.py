@@ -32,7 +32,6 @@ Usage:
 
 import json
 import os
-import sys
 import time
 
 import modal
@@ -41,7 +40,6 @@ from modal_osworld_direct import (
     GEMMA4_MODEL,
     GGUF_CONFIGS,
     download_model,
-    start_llama_server as _start_llama_server_base,
     image as base_image,
     vol,
 )
@@ -147,16 +145,12 @@ def run_web_tasks(
         max_steps: Maximum steps per task.
         frames_per_inference: Number of recent frames to feed the brain.
     """
-    import subprocess
     import requests
     from datetime import datetime, timezone
-    from PIL import Image
-    from io import BytesIO
 
     from mantis_agent.brain_llamacpp import LlamaCppBrain
     from mantis_agent.gym.runner import GymRunner
-    from mantis_agent.gym.plans import Plan, load_text_plan, PlanInput, PlanStep
-    from mantis_agent.actions import ActionType
+    from mantis_agent.gym.plans import Plan
 
     plan_files = plan_files or {}
     plan_inputs = plan_inputs or {}
@@ -197,7 +191,7 @@ def run_web_tasks(
             print(f"  Warning: Failed to parse plan for {task_id}: {e}")
 
     print(f"\n{'='*60}")
-    print(f"Mantis — Web Task Benchmark")
+    print("Mantis — Web Task Benchmark")
     print(f"  Mode:     {mode}")
     print(f"  Session:  {session_name}")
     print(f"  Base URL: {base_url}")
@@ -273,7 +267,6 @@ def run_web_tasks(
     for i, task_config in enumerate(ordered_tasks):
         task_id = task_config["task_id"]
         intent = task_config["intent"]
-        start_url = task_config.get("start_url", base_url)
 
         print(f"\n{'='*60}")
         print(f"Task {i+1}/{len(ordered_tasks)}: {task_id}")
@@ -306,7 +299,7 @@ def run_web_tasks(
                     from mantis_agent.gym.page_discovery import PageDiscovery
                     executor = PlanExecutor(env=env, settle_time=1.5)
                     discoverer = PageDiscovery(env=env, max_elements=50)
-                    print(f"  Execution: direct + discovery fallback")
+                    print("  Execution: direct + discovery fallback")
 
             # Retry loop with learning distillation
             prior_learnings = ""
@@ -504,7 +497,6 @@ class QemuGymEnv:
 
     def reset(self, task, **kwargs):
         """Navigate to start URL and return initial screenshot."""
-        from mantis_agent.gym.base import GymObservation
 
         start_url = kwargs.get("start_url", self._base_url)
         # Open URL in Firefox inside the VM
@@ -519,9 +511,7 @@ class QemuGymEnv:
 
     def step(self, action):
         """Execute action via pyautogui inside the VM."""
-        import requests
-        from mantis_agent.gym.base import GymObservation, GymResult
-        from mantis_agent.actions import ActionType
+        from mantis_agent.gym.base import GymResult
 
         code = self._action_to_pyautogui(action)
         if code:
@@ -627,7 +617,6 @@ def _distill_failure(result) -> str:
 
     # Analyze what happened
     actions = [str(s.action)[:60] for s in result.trajectory]
-    unique_actions = set(a.split("(")[0] for a in actions)
     total_steps = len(result.trajectory)
     reason = result.termination_reason
 
@@ -733,7 +722,7 @@ def main(
     """
     import glob
 
-    print(f"Mantis — Web Task Benchmark (Modal)")
+    print("Mantis — Web Task Benchmark (Modal)")
     print(f"  Task file: {task_file}")
     print(f"  Plan dir:  {plan_dir}")
     print(f"  Mode:      {mode}")

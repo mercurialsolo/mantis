@@ -42,9 +42,7 @@ import argparse
 import base64
 import json
 import logging
-import os
 import sys
-from io import BytesIO
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")

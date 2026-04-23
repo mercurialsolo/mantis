@@ -302,8 +302,6 @@ def run_osworld_eval(domain: str = "os", max_steps: int = 15, max_tasks: int = 5
 def run_single_task(agent, example, instruction, max_steps, server_port, result_dir):
     """Run a single OSWorld task using direct QEMU VM connection."""
     import requests
-    from PIL import Image
-    from io import BytesIO
 
     os.makedirs(result_dir, exist_ok=True)
 

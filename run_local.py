@@ -116,7 +116,7 @@ def main():
         )
         if args.use_cdp:
             logger.info(f"CDP: Connected to Chrome at {args.use_cdp}")
-        logger.info(f"Environment: playwright")
+        logger.info("Environment: playwright")
 
     if args.human_speed:
         logger.info("Human speed: enabled")
@@ -193,7 +193,6 @@ def main():
                     break
 
                 if attempt < args.max_retries:
-                    actions = [str(s.action)[:60] for s in result.trajectory]
                     prior_learnings = f"\n\nPRIOR ATTEMPT FAILED ({result.termination_reason})."
                     logger.info(f"  Attempt {attempt}: FAIL — retrying")
 

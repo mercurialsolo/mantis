@@ -8,10 +8,8 @@ import base64
 import json
 import logging
 import time
-from io import BytesIO
 
 import requests
-from PIL import Image
 
 logger = logging.getLogger("desktopenv.agent")
 

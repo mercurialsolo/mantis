@@ -83,6 +83,14 @@ Plans MUST be organized into sections. Each section has a purpose and a gate:
 2. EXTRACTION section (depends on setup gate passing):
    - Click → URL → scroll → extract → back → loop
    - Only runs if setup gate passed
+   - Click only organic private-seller/by-owner result cards. Skip sponsored,
+     dealer, broker/company seller, "Request a Price", MarineMax, and ad cards.
+   - Extraction must inspect both contact/phone areas AND seller-written text.
+   - Extraction must reject dealer/sponsored/company listings even if a phone is visible.
+   - If Description, Seller Notes, More Details, or Additional Equipment is collapsed,
+     the extraction step must require expanding it before reading.
+   - Prefer safe reveal controls such as Show more, Read more, See more, Show phone,
+     View phone, or Call. Never use generic Contact Seller or Request Info forms.
 
 3. PAGINATION section (depends on extraction):
    - Paginate → loop back to extraction
@@ -113,7 +121,7 @@ STEP TYPES:
 - click: Click a specific element (budget=8, grounding=true, section="extraction")
 - scroll: Scroll until target content visible (budget=10, section="extraction")
 - extract_url: Read URL from address bar (claude_only=true, budget=0, section="extraction")
-- extract_data: Read structured data from screenshot (claude_only=true, budget=0)
+- extract_data: Inspect contact area and expanded description/details, then read structured data (claude_only=true, budget=0)
 - navigate_back: Go back (budget=3, section="extraction")
 - paginate: Click Next page (budget=10, grounding=true, section="pagination")
 - loop: Jump back to step index (loop_target=N, loop_count=max)
@@ -154,7 +162,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v3_sections_gates"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v5_private_seller_strict"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = plan_path.replace(".txt", f"_micro_{plan_hash}.json")
         if os.path.exists(cache_path):

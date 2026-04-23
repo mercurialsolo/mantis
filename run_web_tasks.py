@@ -63,7 +63,6 @@ def run_task(brain, env, task_config: dict, session_name: str, args) -> dict:
 
     task_id = task_config["task_id"]
     intent = task_config["intent"]
-    start_url = task_config.get("start_url", env._start_url)
 
     # Restore session if task requires authentication
     if task_config.get("require_session") and env.has_session(session_name):

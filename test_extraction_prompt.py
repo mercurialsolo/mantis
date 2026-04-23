@@ -17,7 +17,6 @@ Usage:
 
 import argparse
 import base64
-import json
 import os
 import sys
 from io import BytesIO
@@ -25,6 +24,8 @@ from pathlib import Path
 
 import requests
 from PIL import Image
+
+__test__ = False
 
 # The extraction prompt we're testing — edit this to iterate
 DEFAULT_PROMPT = """\

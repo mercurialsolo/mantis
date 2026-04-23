@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass
@@ -121,8 +120,6 @@ def _detect_sections(text: str, base_url: str, max_steps: int) -> list[Section]:
             # Determine section properties from content
             is_login = any(kw in content.lower() for kw in ["login", "authenticate", "sign in", "password", "credential"])
             is_search = any(kw in content.lower() for kw in ["search", "filter", "navigate", "sort"])
-            is_extract = any(kw in content.lower() for kw in ["extract", "read", "inspect", "check", "listing", "phone"])
-            is_entry = any(kw in content.lower() for kw in ["enter", "fill", "submit", "form"])
             is_loop = any(kw in content.lower() for kw in ["for each", "repeat", "loop", "next page", "pagination"])
 
             section = Section(

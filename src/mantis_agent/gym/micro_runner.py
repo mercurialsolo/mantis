@@ -32,7 +32,7 @@ from .runner import GymRunner
 from ..plan_decomposer import MicroIntent, MicroPlan
 
 if TYPE_CHECKING:
-    from ..extraction import ClaudeExtractor, ExtractionResult
+    from ..extraction import ClaudeExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class MicroPlanRunner:
         self._page_listings: list[tuple[int, int, str]] = []  # Cached card coords for current viewport
         self._page_listing_index: int = 0  # Next card to click from cache
         self._viewport_stage: int = 0  # 0=Home, 1=Page_Down, 2=Page_Down×2
-        self._max_viewport_stages: int = 3
+        self._max_viewport_stages: int = 6
         self.max_cost = max_cost
         self.max_time = max_time_minutes * 60
 
@@ -186,7 +186,6 @@ class MicroPlanRunner:
                 break
 
             step = plan.steps[step_index]
-            t0 = time.time()
 
             # Dynamic intent: inject listing position for click steps
             dynamic_intent = step.intent
@@ -200,6 +199,7 @@ class MicroPlanRunner:
                 budget=step.budget, reverse=step.reverse, grounding=step.grounding,
                 claude_only=step.claude_only, loop_target=step.loop_target,
                 loop_count=step.loop_count,
+                section=step.section, required=step.required, gate=step.gate,
             )
 
             logger.info(f"  [{step_index:2d}] {step.type:15s} {dynamic_intent[:60]}")
@@ -215,7 +215,7 @@ class MicroPlanRunner:
                     logger.info(f"  [loop@{step_index}] iteration {count}/{max_count} → step {step_index}")
                     continue
                 else:
-                    logger.info(f"  [loop] max iterations reached")
+                    logger.info("  [loop] max iterations reached")
                     step_index += 1
                     continue
 
@@ -262,7 +262,7 @@ class MicroPlanRunner:
                         time.sleep(8)
                     except Exception:
                         pass
-                    logger.info(f"  [paginate] Success — reset to top of new page")
+                    logger.info("  [paginate] Success — reset to top of new page")
 
                 # Verify navigate_back: check if we left the detail page
                 if step.type == "navigate_back" and self.extractor:
@@ -309,6 +309,21 @@ class MicroPlanRunner:
                         break
 
                 if step.gate:
+                    # If Cloudflare/anti-bot detected, retry navigate + gate once
+                    gate_data = step_result.data or ""
+                    gate_retry_key = f"gate_retry_{step_index}"
+                    if ("cloudflare" in gate_data.lower() or "blocked" in gate_data.lower() or
+                        "security" in gate_data.lower()):
+                        if not step_retry_counts.get(gate_retry_key):
+                            step_retry_counts[gate_retry_key] = 1
+                            print("  [gate] Anti-bot detected — waiting 15s and retrying from navigate")
+                            time.sleep(15)
+                            # Re-run navigate step (step 0) then retry gate
+                            nav_step = plan.steps[0] if plan.steps[0].type == "navigate" else None
+                            if nav_step:
+                                self._execute_navigate(nav_step, 0)
+                                time.sleep(5)
+                            continue  # Retry the gate step
                     logger.error(f"  [{step_index}] GATE FAILED: {step.verify[:60]} — HALTING")
                     print(f"  HALT: Gate verification '{step.verify[:50]}' failed. Setup incomplete.")
                     break
@@ -453,7 +468,7 @@ class MicroPlanRunner:
         elapsed = time.time() - self._run_start
 
         print(f"\n{'='*60}")
-        print(f"MICRO-PLAN COMPLETE")
+        print("MICRO-PLAN COMPLETE")
         print(f"  Time:     {elapsed/60:.0f}m")
         print(f"  Steps:    {len(results)}")
         print(f"  Leads:    {viable_count}")
@@ -489,10 +504,12 @@ class MicroPlanRunner:
 
         # Gate steps: dedicated verifier (not extract_data)
         if step.gate and self.extractor:
+            print(f"  [gate] Verifying: {(step.verify or step.intent)[:80]}")
             time.sleep(2)
             screenshot = self.env.screenshot()
             passed, reason = self.extractor.verify_gate(screenshot, step.verify or step.intent)
             self.costs["claude_extract"] += 1
+            print(f"  [gate] Result: {'PASS' if passed else 'FAIL'} — {reason[:80]}")
             return StepResult(
                 step_index=index, intent=step.intent,
                 success=passed, data=f"gate:{'PASS' if passed else 'FAIL'}:{reason[:100]}",
@@ -512,11 +529,19 @@ class MicroPlanRunner:
             result = self._execute_paginate_layered(step, index)
             return result
 
-        # Holo3 steps (scroll, filter, navigate_back, paginate)
+        # Filter steps: Claude identifies target → direct click/type (Holo3 can't handle sidebar)
+        if step.type == "filter" and self.extractor:
+            time.sleep(3)  # Longer wait — page filters may lazy-load
+            return self._execute_claude_guided_filter(step, index)
+
+        # Holo3 steps (scroll, navigate_back, paginate)
         return self._execute_holo3_step(step, index)
 
     def _execute_navigate(self, step: MicroIntent, index: int) -> StepResult:
-        """Navigate to a URL using env.reset() — no Holo3 steps needed."""
+        """Navigate to a URL using env.reset() — no Holo3 steps needed.
+
+        Waits for page load and handles Cloudflare challenges (auto-solve in 5-10s).
+        """
         import re
         url_match = re.search(r'https?://[^\s"]+', step.intent)
         url = url_match.group() if url_match else ""
@@ -528,9 +553,10 @@ class MicroPlanRunner:
         logger.info(f"  [navigate] Loading {url}")
         try:
             self.env.reset(task="navigate", start_url=url)
-            time.sleep(12)  # BoatTrader needs 8-12s to fully render
+            # Wait for Cloudflare challenge to auto-solve + page render
+            time.sleep(18)
             self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(1)
+            time.sleep(2)
             # Store as base URL for pagination (results page, not detail page)
             self._results_base_url = url
             return StepResult(step_index=index, intent=step.intent, success=True)
@@ -675,7 +701,151 @@ class MicroPlanRunner:
                 logger.info(f"  [claude-click] Not on detail page yet (url={url[:40]}) — retrying verify")
 
         logger.warning(f"  [claude-click] Failed verification after retries (url={url[:40]})")
+        # Mark title as tried so we don't re-attempt the same card
+        if hasattr(self, '_last_click_title') and self._last_click_title:
+            self._extracted_titles.append(self._last_click_title)
         return StepResult(step_index=index, intent=step.intent, success=False)
+
+    def _execute_claude_guided_filter(self, step: MicroIntent, index: int) -> StepResult:
+        """Claude identifies filter element → direct click/type via env.step().
+
+        Holo3 is 0% reliable on sidebar filters (clicks wrong elements).
+        Claude reads the screenshot, identifies exact coordinates and action type,
+        then we execute directly — no Holo3 involved.
+
+        If not found in current viewport, scrolls down and retries.
+        """
+        import random
+
+        # Reset sidebar to top before each filter step (scroll persists between steps).
+        # Filters are spread across the sidebar: Location near top, Seller Type near bottom.
+        try:
+            for _ in range(10):
+                self.env.step(Action(action_type=ActionType.SCROLL,
+                                   params={"direction": "up", "amount": 5,
+                                           "x": 150, "y": 400}))
+                time.sleep(0.3)
+        except Exception:
+            pass
+        time.sleep(1)
+
+        # Scan sidebar top-to-bottom with small scroll increments.
+        # Check each viewport position for the target filter element.
+        target = None
+        for scroll_attempt in range(8):
+            if scroll_attempt > 0:
+                # Scroll sidebar down in small increments (3 clicks ≈ ~100px)
+                try:
+                    self.env.step(Action(action_type=ActionType.SCROLL,
+                                       params={"direction": "down", "amount": 3,
+                                               "x": 150, "y": 400}))
+                    time.sleep(1)
+                except Exception:
+                    pass
+
+            screenshot = self.env.screenshot()
+            target = self.extractor.find_filter_target(screenshot, step.intent)
+            self.costs["claude_extract"] += 1
+
+            if target:
+                break
+            print(f"  [claude-filter] Not found in viewport {scroll_attempt}, scrolling sidebar")
+
+        if not target:
+            logger.warning("  [claude-filter] Could not find filter element")
+            return StepResult(step_index=index, intent=step.intent, success=False)
+
+        x, y = target["x"], target["y"]
+        action = target["action"]
+        value = target["value"]
+        label = target["label"]
+
+        # Grounding refines coordinates (bounded delta)
+        if self.grounding:
+            grounding_result = self.grounding.ground(screenshot, label or step.intent, x, y)
+            self.costs["claude_grounding"] += 1
+            dx = abs(grounding_result.x - x)
+            dy = abs(grounding_result.y - y)
+            if grounding_result.confidence > 0.5 and dx < 150 and dy < 150:
+                x, y = grounding_result.x, grounding_result.y
+                logger.info(f"  [grounding] filter refined to ({x},{y}) delta=({dx},{dy})")
+            else:
+                logger.info(f"  [grounding] filter rejected: delta=({dx},{dy}) conf={grounding_result.confidence}")
+
+        # Human-like delay before interaction
+        time.sleep(random.uniform(0.5, 1.5))
+
+        try:
+            if action == "click":
+                # Simple click — checkbox, radio, toggle
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                self.costs["gpu_steps"] += 1
+                time.sleep(2)  # Wait for filter to apply
+
+            elif action == "type":
+                # Click input → clear → type value → Enter
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                time.sleep(0.5)
+                # Triple-click to select all existing text
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                time.sleep(0.1)
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                time.sleep(0.3)
+                # Select all and delete
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+a"}))
+                time.sleep(0.2)
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Delete"}))
+                time.sleep(0.3)
+                # Type the value
+                if value:
+                    self.env.step(Action(action_type=ActionType.TYPE, params={"text": value}))
+                    time.sleep(0.5)
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Return"}))
+                    time.sleep(3)  # Wait for results to update
+                self.costs["gpu_steps"] += 1
+
+            elif action == "select":
+                # Click dropdown to open → wait → screenshot → find option → click
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                self.costs["gpu_steps"] += 1
+                time.sleep(1.5)
+
+                # Take new screenshot with dropdown open
+                dropdown_shot = self.env.screenshot()
+                # Ask Claude to find the specific option in the dropdown
+                option_target = self.extractor.find_filter_target(
+                    dropdown_shot,
+                    f"Find and click the option '{value}' in the open dropdown menu"
+                )
+                self.costs["claude_extract"] += 1
+
+                if option_target:
+                    ox, oy = option_target["x"], option_target["y"]
+                    time.sleep(random.uniform(0.3, 0.8))
+                    self.env.step(Action(action_type=ActionType.CLICK, params={"x": ox, "y": oy}))
+                    time.sleep(2)
+                else:
+                    # Dropdown option not found — close dropdown
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+                    time.sleep(0.5)
+                    logger.warning(f"  [claude-filter] Dropdown option '{value}' not found")
+                    return StepResult(step_index=index, intent=step.intent, success=False)
+
+            else:
+                # Unknown action — fall back to click
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                self.costs["gpu_steps"] += 1
+                time.sleep(2)
+
+        except Exception as e:
+            logger.warning(f"  [claude-filter] Action failed: {e}")
+            return StepResult(step_index=index, intent=step.intent, success=False)
+
+        logger.info(f"  [claude-filter] {action}@({x},{y}) '{label[:30]}' value='{value[:20]}'")
+        return StepResult(
+            step_index=index, intent=step.intent, success=True,
+            steps_used=1, duration=3.0,
+        )
 
     def _execute_paginate_layered(self, step: MicroIntent, index: int) -> StepResult:
         """Layered pagination: URL-based → Claude-guided → Holo3 fallback.
@@ -724,14 +894,14 @@ class MicroPlanRunner:
                 logger.warning(f"  [paginate] Layer 1 failed: {e}")
 
         # ── Layer 2: Claude-guided ──
-        logger.info(f"  [paginate] Layer 2: Claude-guided (End → Page_Up)")
+        logger.info("  [paginate] Layer 2: Claude-guided (End → Page_Up)")
         claude_result = self._execute_claude_guided_paginate(step, index)
         if claude_result.success:
             self._current_page += 1
             return claude_result
 
         # ── Layer 3: Holo3 fallback ──
-        logger.info(f"  [paginate] Layer 3: Holo3 fallback")
+        logger.info("  [paginate] Layer 3: Holo3 fallback")
         # Scroll to a calculated position: End then 2x Page_Up to avoid sidebar
         try:
             self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
@@ -811,7 +981,7 @@ class MicroPlanRunner:
             logger.warning(f"  [claude-paginate] empty response on attempt {attempt+1}/3")
 
         if not isinstance(target, tuple) or len(target) != 3:
-            logger.info(f"  [claude-paginate] No Next control found after retries")
+            logger.info("  [claude-paginate] No Next control found after retries")
             return StepResult(step_index=index, intent=step.intent, success=False)
 
         x, y, label = target
@@ -908,7 +1078,7 @@ class MicroPlanRunner:
             if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0][-1:]:
                 return True
             if url and url.endswith("/boats/by-owner/"):
-                logger.info(f"  [verify] Still on search page, not detail page")
+                logger.info("  [verify] Still on search page, not detail page")
                 return False
             # If no URL extracted, check if page looks different
             if not url:
@@ -953,12 +1123,20 @@ class MicroPlanRunner:
             )
 
         elif step.type == "extract_data":
-            data = self.extractor.extract(screenshot)
+            data, _actions_used = self._extract_listing_data_deep(screenshot)
             if data and data.is_viable():
                 summary = data.to_summary()
                 return StepResult(
                     step_index=index, intent=step.intent,
                     success=True, data=summary,
+                )
+            if data and data.dealer_reason():
+                reason = data.dealer_reason()
+                logger.info("  [extract] Rejected non-private listing: %s", reason)
+                return StepResult(
+                    step_index=index, intent=step.intent,
+                    success=False,
+                    data=f"REJECTED_DEALER|{reason}|{data.to_summary()[:160]}",
                 )
             return StepResult(
                 step_index=index, intent=step.intent,
@@ -966,6 +1144,105 @@ class MicroPlanRunner:
             )
 
         return StepResult(step_index=index, intent=step.intent, success=False)
+
+    def _extract_listing_data_deep(self, initial_screenshot):
+        """Capture top, expanded description, and lower detail viewports.
+
+        BoatTrader private-seller phones often appear inside seller-written
+        descriptions, and those descriptions can be collapsed. This routine is
+        the execution-time policy for dynamic pages: inspect each viewport,
+        click only safe reveal controls, then ask Claude to extract from the
+        complete screenshot set.
+        """
+        screenshots = []
+        labels = []
+        controls_clicked = 0
+        clicked_keys: set[str] = set()
+        max_screenshots = 12
+        max_viewports = 6
+
+        def capture(label: str):
+            if len(screenshots) >= max_screenshots:
+                return None
+            try:
+                shot = self.env.screenshot()
+                screenshots.append(shot)
+                labels.append(label)
+                return shot
+            except Exception as e:
+                logger.warning(f"  [deep-extract] screenshot failed: {e}")
+                return None
+
+        if initial_screenshot is not None:
+            screenshots.append(initial_screenshot)
+            labels.append("initial extraction viewport")
+
+        # Start from the top so the final prompt sees title, price, seller card,
+        # and any safe contact/phone reveal controls before scanning details.
+        try:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+            time.sleep(1.5)
+        except Exception:
+            pass
+        top_shot = capture("top/contact area")
+
+        for viewport in range(max_viewports):
+            if viewport == 0 and top_shot is not None:
+                shot = top_shot
+            else:
+                shot = capture(f"detail viewport {viewport + 1}")
+            if shot is None:
+                break
+
+            target = self.extractor.find_listing_content_control(shot)
+            self.costs["claude_extract"] += 1
+
+            if target:
+                key = (
+                    f"{target.get('action', '')}:{target.get('label', '').lower()}:"
+                    f"{target['x'] // 25}:{target['y'] // 25}"
+                )
+                if key not in clicked_keys:
+                    clicked_keys.add(key)
+                    try:
+                        self.env.step(Action(
+                            action_type=ActionType.CLICK,
+                            params={"x": target["x"], "y": target["y"]},
+                        ))
+                        controls_clicked += 1
+                        time.sleep(2)
+                        capture(
+                            f"after {target.get('action', 'expand')} "
+                            f"{target.get('label', '')[:40]}"
+                        )
+                        logger.info(
+                            "  [deep-extract] clicked %s '%s'",
+                            target.get("action", ""),
+                            target.get("label", "")[:60],
+                        )
+                    except Exception as e:
+                        logger.warning(f"  [deep-extract] reveal click failed: {e}")
+
+            if viewport < max_viewports - 1:
+                try:
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
+                    time.sleep(1)
+                except Exception:
+                    break
+
+        data = self.extractor.extract_multi(screenshots, labels=labels)
+        if data and data.is_viable():
+            return data, controls_clicked
+
+        # Fallback to legacy single-screenshot extraction if the multi-shot JSON
+        # parse fails or somehow loses the core listing identity.
+        fallback_shot = screenshots[-1] if screenshots else initial_screenshot
+        if fallback_shot is not None:
+            fallback = self.extractor.extract(fallback_shot)
+            self.costs["claude_extract"] += 1
+            return fallback, controls_clicked
+
+        return data, controls_clicked
 
     def _reverse_step(self, step: MicroIntent):
         """Undo a failed step using predefined reverse actions."""

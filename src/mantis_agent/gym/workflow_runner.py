@@ -24,7 +24,7 @@ import logging
 import random
 import re as _re_module
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ..actions import ActionType
@@ -216,7 +216,8 @@ class LearningStore:
         if not self.path:
             return
         try:
-            import json, os
+            import json
+            import os
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, "w") as f:
                 json.dump(self.learnings, f, indent=2)
@@ -234,7 +235,7 @@ class LearningStore:
     def get_top(self, n: int = 5) -> list[str]:
         """Get top N learnings by frequency, for prompt injection."""
         sorted_l = sorted(self.learnings, key=lambda x: x["count"], reverse=True)
-        return [l["rule"] for l in sorted_l[:n]]
+        return [learning["rule"] for learning in sorted_l[:n]]
 
 
 @dataclass
@@ -463,13 +464,15 @@ class WorkflowRunner:
                     )
                     results.append(iter_result)
                     if self.on_iteration:
-                        try: self.on_iteration(global_iteration, iter_result, results)
-                        except Exception: pass
+                        try:
+                            self.on_iteration(global_iteration, iter_result, results)
+                        except Exception:
+                            pass
                     continue
 
                 # Handle page exhaustion
                 if sub_result.page_exhausted:
-                    logger.info(f"  Page exhausted — paginating")
+                    logger.info("  Page exhausted — paginating")
                     paginated = self._sub_plan_runner.run_pagination()
                     if paginated:
                         page += 1
@@ -477,7 +480,7 @@ class WorkflowRunner:
                         consecutive_failures = 0
                         logger.info(f"  Paginated to page {page}")
                     else:
-                        logger.info(f"  No more pages")
+                        logger.info("  No more pages")
                         break
                     continue
 
@@ -523,8 +526,10 @@ class WorkflowRunner:
                                 page_iteration = tentative_ordinal
                                 consecutive_failures = 0
                                 if self.on_iteration:
-                                    try: self.on_iteration(global_iteration, iter_result, results)
-                                    except Exception: pass
+                                    try:
+                                        self.on_iteration(global_iteration, iter_result, results)
+                                    except Exception:
+                                        pass
                                 continue
 
                             extracted = ext_result.to_summary()
@@ -578,7 +583,7 @@ class WorkflowRunner:
             # with explicit instruction to click title text, not photo
             extracted_lower = extracted.lower() if extracted else ""
             if not viable and ("gallery" in extracted_lower or "1 of" in extracted_lower):
-                logger.info(f"  Gallery trap detected — retrying same listing")
+                logger.info("  Gallery trap detected — retrying same listing")
                 gallery_intent = intent + (
                     "\n\nCRITICAL: Your previous attempt opened a photo gallery by clicking the boat PHOTO. "
                     "This time, click the TITLE TEXT (Year Make Model text) which is BELOW the photo. "
@@ -589,7 +594,7 @@ class WorkflowRunner:
                 retry_extracted = self._extract_data(retry_result)
                 retry_viable = self._validate_viable(retry_extracted)
                 if retry_viable:
-                    logger.info(f"  Gallery retry SUCCEEDED")
+                    logger.info("  Gallery retry SUCCEEDED")
                     iter_result = IterationResult(
                         iteration=global_iteration, page=page,
                         success=True, data=retry_extracted,
@@ -600,10 +605,10 @@ class WorkflowRunner:
                     viable = True
                     extracted = retry_extracted
                 else:
-                    logger.info(f"  Gallery retry also failed")
+                    logger.info("  Gallery retry also failed")
 
             if result.success and not viable:
-                logger.warning(f"  Model claimed success but data failed validation (Cloudflare/empty)")
+                logger.warning("  Model claimed success but data failed validation (Cloudflare/empty)")
                 logger.warning(f"  Extracted data was: {extracted[:300]}")
 
             # Mostly-failed iterations = model couldn't act, don't count as real progress
@@ -683,7 +688,7 @@ class WorkflowRunner:
 
             # Check for hard failure (loop/max_steps without useful output)
             if result.termination_reason == "loop" and not result.success and not iter_result.data:
-                logger.warning(f"Iteration stuck (loop). Moving to pagination.")
+                logger.warning("Iteration stuck (loop). Moving to pagination.")
                 paginated = self._run_pagination()
                 if paginated:
                     page += 1
@@ -716,7 +721,7 @@ class WorkflowRunner:
         viable_count = sum(1 for r in results if r.success)
         logger.info(f"Loop complete: {len(results)} iterations, {page} pages, {viable_count} viable")
         if fail_counts:
-            logger.info(f"  Failure breakdown:")
+            logger.info("  Failure breakdown:")
             for cat, count in fail_counts.most_common():
                 logger.info(f"    {cat}: {count}")
         if self._learning_store.learnings:

@@ -27,5 +27,10 @@ __all__ = [
     "PlaywrightGymEnv",
     "get_missing_inputs",
     "load_plan",
+    "load_text_plan",
+    "LoopConfig",
     "save_plan",
+    "text_to_yaml",
+    "WorkflowRunner",
+    "IterationResult",
 ]

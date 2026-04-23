@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -539,7 +539,7 @@ def main():
         print(json.dumps(result, indent=2))
 
     opt = result.get("_optimization", {})
-    print(f"\nOptimization summary:")
+    print("\nOptimization summary:")
     print(f"  Sites: {opt.get('sites_detected', [])}")
     print(f"  Phases: {opt.get('phases', [])}")
     print(f"  Sections: {opt.get('sections_generated', 0)}")

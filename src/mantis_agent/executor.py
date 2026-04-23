@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import platform
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pyautogui
 
@@ -124,12 +124,12 @@ class ActionExecutor:
         import subprocess
 
         if platform.system() == "Darwin":
-            proc = subprocess.run(
+            subprocess.run(
                 ["pbcopy"], input=text.encode("utf-8"), check=True
             )
             pyautogui.hotkey("command", "v")
         elif platform.system() == "Linux":
-            proc = subprocess.run(
+            subprocess.run(
                 ["xclip", "-selection", "clipboard"],
                 input=text.encode("utf-8"),
                 check=True,
@@ -137,7 +137,7 @@ class ActionExecutor:
             pyautogui.hotkey("ctrl", "v")
         else:
             # Windows
-            proc = subprocess.run(
+            subprocess.run(
                 ["clip"], input=text.encode("utf-16le"), check=True
             )
             pyautogui.hotkey("ctrl", "v")

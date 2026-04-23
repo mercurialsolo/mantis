@@ -123,7 +123,6 @@ def download_model(vol_path: str) -> str:
 
 def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
     """Start llama-server on CUDA GPU."""
-    import glob
 
     # Find the model and mmproj files
     model_dir = os.path.dirname(model_path)
@@ -514,7 +513,7 @@ def run_osworld_impl(domain: str = "os", max_tasks: int = 5, max_steps: int = 25
     if max_tasks > 0:
         total = min(total, max_tasks)
 
-    print(f"\nOSWorld Evaluation")
+    print("\nOSWorld Evaluation")
     print(f"  Domain: {domain}")
     print(f"  Tasks: {total}")
     print(f"  Max steps: {max_steps}")
@@ -572,7 +571,7 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
 
     # Sanity check: log first 200 chars of the prompt the agent will actually use
     active_prompt = GEMMA4_A11Y_PROMPT if domain in ("chrome", "multi_apps") else GEMMA4_SYSTEM_PROMPT
-    print(f"\n=== ACTIVE PROMPT (first 200 chars) ===")
+    print("\n=== ACTIVE PROMPT (first 200 chars) ===")
     print(active_prompt[:200])
     print("=== END PROMPT PREVIEW ===\n")
 
@@ -1109,7 +1108,7 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                     print(f"  [feedback: {snippet[:400].replace(chr(10), ' | ')}]")
                 else:
                     if step > 0:
-                        print(f"  [feedback: <empty>]")
+                        print("  [feedback: <empty>]")
 
                 # Retry LLM calls on transient errors (400 image load, 500 server)
                 actions = None
@@ -1269,13 +1268,13 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
             max_retries = 2  # Up to 2 retries after initial attempt
 
             if not setup_ok and dom not in ("chrome", "multi_apps"):
-                print(f"  Skipping eval — setup failed, retrying setup next run")
+                print("  Skipping eval — setup failed, retrying setup next run")
                 max_retries = 0  # Don't retry, setup is the problem
             elif not setup_ok:
                 # Chrome/multi_apps: setup failure is expected (CDP not available
                 # via QEMU port forwarding). The agent ran from whatever Chrome
                 # state the VM desktop provides. Still try to evaluate.
-                print(f"  Setup failed (CDP unavailable) — evaluating anyway")
+                print("  Setup failed (CDP unavailable) — evaluating anyway")
 
             for attempt in range(1 + max_retries):
                 time.sleep(5)  # Let VM settle
@@ -1342,7 +1341,7 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                                 result_state = None
 
                             if result_state is None:
-                                print(f"  Result getter returned None — VM service may be down")
+                                print("  Result getter returned None — VM service may be down")
                                 all_results.append("(eval infrastructure failure)")
                                 sub_scores.append(0.0)
                                 continue
@@ -1499,7 +1498,7 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                             diag_short = analysis.split('Diagnosis:')[1].split(chr(10))[0].strip() if 'Diagnosis:' in analysis else '?'
                             print(f"  Attempt {attempt+1} failed. Results: {all_results}")
                             print(f"  Distilled: {diag_short}")
-                            print(f"  Retrying with distilled learning...")
+                            print("  Retrying with distilled learning...")
 
                             # Log to trace
                             task_trace["retries"].append({
@@ -1830,7 +1829,7 @@ This is MUCH more reliable than guessing coordinates from the screenshot. Always
                     scores[idx] = retry_score
                     print(f"    Retry PASSED! Score updated to {retry_score}")
                 else:
-                    print(f"    Retry still failed.")
+                    print("    Retry still failed.")
             except Exception as e:
                 print(f"    Retry eval error: {e}")
 
@@ -1901,7 +1900,7 @@ def main(domain: str = "os", tasks: int = 0, steps: int = 25):
     on Modal's infrastructure. Local client can disconnect safely.
     Results save incrementally to the 'osworld-data' volume.
     """
-    print(f"Mantis — OSWorld Benchmark")
+    print("Mantis — OSWorld Benchmark")
     print(f"  Domain: {domain}")
     print(f"  Tasks:  {'ALL (24)' if tasks == 0 else tasks}")
     print(f"  Steps:  {steps}")

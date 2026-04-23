@@ -27,7 +27,6 @@ from io import BytesIO
 from PIL import Image
 
 from .actions import Action, ActionType
-from .brain import Gemma4Brain
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -189,6 +188,8 @@ class Gemma4Agent:
                 temperature=temperature,
             )
         else:
+            from .brain import Gemma4Brain
+
             self.brain = Gemma4Brain(
                 model_name=model,
                 enable_thinking=enable_thinking,

@@ -12,11 +12,31 @@ import io
 import sys
 
 sys.path.insert(0, "src")
-sys.path.insert(0, "OSWorld")
 
 from PIL import Image, ImageDraw
 
-from cua_agent.osworld import Gemma4Agent
+from mantis_agent.actions import Action, ActionType
+from mantis_agent.osworld import Gemma4Agent
+
+
+class FakeBrain:
+    """Small deterministic brain for testing the OSWorld adapter contract."""
+
+    def load(self) -> None:
+        pass
+
+    def think(self, frames, task, action_history, screen_size):
+        if len(action_history) >= 2:
+            action = Action(ActionType.DONE, {"success": True, "summary": "done"})
+        elif action_history:
+            action = Action(ActionType.TYPE, {"text": "echo Hello World"})
+        else:
+            action = Action(ActionType.CLICK, {"x": 100, "y": 100})
+        return type(
+            "FakeInferenceResult",
+            (),
+            {"action": action, "raw_output": "", "thinking": f"Fake task: {task}"},
+        )()
 
 
 def make_screenshot(step: int = 0) -> bytes:
@@ -64,7 +84,9 @@ def test_agent():
         observation_type="screenshot",
         max_trajectory_length=5,
         enable_thinking=True,
+        backend="llamacpp",
     )
+    agent.brain = FakeBrain()
 
     print("\n1. Loading model...")
     agent.load()
@@ -110,7 +132,7 @@ def test_agent():
     print("\n" + "=" * 60)
     print(f"  Frame history: {len(agent._frame_history)} frames")
     print(f"  Action history: {len(agent._action_history)} actions")
-    print(f"  All assertions passed!")
+    print("  All assertions passed!")
     print("=" * 60)
 
     # Test reset

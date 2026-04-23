@@ -16,7 +16,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 
 
 def download_results(pattern=""):
@@ -159,7 +158,7 @@ def main():
     # Print summary
     if rows:
         viable = [r for r in rows if r["status"] == "VIABLE"]
-        print(f"\n=== LEADS SUMMARY ===")
+        print("\n=== LEADS SUMMARY ===")
         for i, r in enumerate(viable, 1):
             print(f"  {i}. {r['year']} {r['make']} {r['model']} | {r['price']} | ph={r['phone'] or 'none'}")
 

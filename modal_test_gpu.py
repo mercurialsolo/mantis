@@ -70,7 +70,8 @@ def test_inference():
     draw = ImageDraw.Draw(img)
     draw.rectangle([800, 500, 1000, 540], fill=(0, 120, 212))
     draw.text((850, 510), "Submit", fill="white")
-    buf = BytesIO(); img.save(buf, format="PNG")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode()
 
     tools = [{"type": "function", "function": {
@@ -115,7 +116,7 @@ def test_inference():
 def main():
     result = test_inference.remote()
     print(f"\n{'='*50}")
-    print(f"  GPU Inference Test Result:")
+    print("  GPU Inference Test Result:")
     print(f"  Time: {result.get('inference_time', 'N/A')}")
     print(f"  Tool calls: {result.get('tool_calls', 'none')}")
     print(f"{'='*50}")

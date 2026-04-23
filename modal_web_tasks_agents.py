@@ -126,7 +126,6 @@ def run_agents_tasks(
     max_retries: int = 5,
 ):
     """Run Agent-S3 brain against web tasks."""
-    import requests as req
     from datetime import datetime, timezone
 
     from mantis_agent.brain_agents import AgentSBrain
@@ -340,7 +339,7 @@ def main(
     max_steps: int = 50,
     max_retries: int = 5,
 ):
-    print(f"Mantis — Agent-S3 Web Tasks (Modal)")
+    print("Mantis — Agent-S3 Web Tasks (Modal)")
     print(f"  Worker:    {worker_model}")
     print(f"  Grounding: {grounding_model or 'none'}")
     print(f"  Steps:     {max_steps}, Retries: {max_retries}")

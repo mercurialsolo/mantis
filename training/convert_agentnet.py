@@ -36,7 +36,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import logging
 import os
@@ -354,7 +353,7 @@ def main():
                 logger.info(f"Converted {converted} tasks ({total_steps} steps)...")
 
     logger.info(f"\n{'='*50}")
-    logger.info(f"Conversion complete")
+    logger.info("Conversion complete")
     logger.info(f"  Total tasks read:      {total_tasks}")
     logger.info(f"  Converted:             {converted}")
     logger.info(f"  Total steps:           {total_steps}")

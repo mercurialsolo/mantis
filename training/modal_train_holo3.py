@@ -18,7 +18,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 
 import modal
 
@@ -164,7 +163,7 @@ def train_holo3_cua(
     vol.commit()
 
     # ── Step 3: Report ──
-    print(f"\n=== Training Complete ===")
+    print("\n=== Training Complete ===")
     print(f"Model saved to: {output_dir}")
     if export_gguf:
         gguf_dir = os.path.join(output_dir, "gguf")
@@ -176,8 +175,8 @@ def train_holo3_cua(
 
     print("\nTo deploy the fine-tuned model:")
     print(f"  1. GGUF is on Modal volume at: {output_dir}/gguf/")
-    print(f"  2. Update HOLO3_MODEL_DIR in modal_cua_server.py to point to it")
-    print(f"  3. Run: modal run modal_cua_server.py --model holo3 --task-file ...")
+    print("  2. Update HOLO3_MODEL_DIR in modal_cua_server.py to point to it")
+    print("  3. Run: modal run modal_cua_server.py --model holo3 --task-file ...")
 
 
 @app.local_entrypoint()
@@ -191,7 +190,7 @@ def main(
     export_gguf: bool = True,
 ):
     """Launch Holo3 training on Modal."""
-    print(f"Holo3-CUA Distillation Training")
+    print("Holo3-CUA Distillation Training")
     print(f"  Epochs:     {epochs}")
     print(f"  Batch size: {batch_size}")
     print(f"  LR:         {lr}")

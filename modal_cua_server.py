@@ -372,11 +372,11 @@ def _build_proxy_config(city: str = "", state: str = "", session_id: str = "") -
     proxy_pass = os.environ.get("PROXY_PASS", "")
     if proxy_user:
         # Append geo-targeting suffixes to password
-        if city and f"_city-" not in proxy_pass:
+        if city and "_city-" not in proxy_pass:
             proxy_pass = f"{proxy_pass}_city-{city}"
-        if state and f"_state-" not in proxy_pass:
+        if state and "_state-" not in proxy_pass:
             proxy_pass = f"{proxy_pass}_state-{state}"
-        if session_id and f"_session-" not in proxy_pass:
+        if session_id and "_session-" not in proxy_pass:
             proxy_pass = f"{proxy_pass}_session-{session_id}"
         proxy["username"] = proxy_user
         proxy["password"] = proxy_pass
@@ -439,7 +439,6 @@ def _run_executor(
     viewer: bool = False,
 ) -> dict:
     """Shared executor logic for all GPU tiers."""
-    import requests as req
     from datetime import datetime, timezone
 
     from mantis_agent.brain_opencua import OpenCUABrain
@@ -615,7 +614,7 @@ def _run_executor(
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration,
                                            start_url=task_config.get("start_url", ""),
-                                           grounding=grounding if 'grounding' in dir() else None,
+                                           grounding=locals().get("grounding"),
                                            on_step=viewer_event_bus.emit if viewer_event_bus else None,
                                            use_sub_plan=True)
                 results = wf_runner.run_loop()
@@ -671,7 +670,8 @@ def _run_executor(
                 print(f"  WARNING: Setup '{task_id}' failed — continuing with current page state")
 
         except Exception as e:
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             print(f"  ERROR: {e}")
             scores.append(0.0)
             task_details.append({
@@ -848,7 +848,7 @@ def _run_holo3_executor(
     tasks = task_suite.get("tasks", [])
 
     print(f"\n{'='*60}")
-    print(f"Mantis CUA Server — Holo3-35B-A3B (llama.cpp)")
+    print("Mantis CUA Server — Holo3-35B-A3B (llama.cpp)")
     print(f"  Session:  {session_name}")
     print(f"  Tasks:    {len(tasks)}")
     print(f"{'='*60}")
@@ -923,6 +923,8 @@ def _run_holo3_executor(
             grounding=grounding, extractor=extractor,
             on_step=viewer_event_bus.emit if viewer_event_bus else None,
             checkpoint_path=f"/data/checkpoints/micro_{session_name}_{run_id}.json",
+            max_cost=task_suite.get("_max_cost", 10.0),
+            max_time_minutes=task_suite.get("_max_time_minutes", 180),
         )
         step_results = micro_runner.run(micro_plan)
 
@@ -959,8 +961,10 @@ def _run_holo3_executor(
         env.close()
         llama_proc.terminate()
         if viewer_ctx:
-            try: viewer_ctx.__exit__(None, None, None)
-            except Exception: pass
+            try:
+                viewer_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
         return {"mode": "micro", "viable": viable, "steps": total}
 
     # ── Learning mode: run LearningRunner instead of normal task loop ──
@@ -1158,7 +1162,7 @@ def _run_holo3_executor(
                         screen_size=(1280, 720),
                     )
                     task_brain.load()
-                    print(f"  Using Claude Sonnet for setup (hybrid mode)")
+                    print("  Using Claude Sonnet for setup (hybrid mode)")
                 except Exception as e:
                     print(f"  Claude brain failed, using Holo3: {e}")
                     task_brain = brain
@@ -1192,7 +1196,7 @@ def _run_holo3_executor(
 
             # Post-setup validation: verify filters applied correctly
             if ("setup" in task_id or "filter" in task_id):
-                print(f"  Validating filters...")
+                print("  Validating filters...")
                 validate_runner = GymRunner(brain=brain, env=env, max_steps=8,
                                            frames_per_inference=1,
                                            grounding=grounding,
@@ -1213,7 +1217,7 @@ def _run_holo3_executor(
                 )
                 if not validate_result.success:
                     # Filter not applied — use CUA to navigate to the correct page
-                    print(f"  PRIVATE SELLER FILTER NOT APPLIED — CUA recovery navigation")
+                    print("  PRIVATE SELLER FILTER NOT APPLIED — CUA recovery navigation")
                     recovery_runner = GymRunner(brain=brain, env=env, max_steps=15,
                                                frames_per_inference=1,
                                                grounding=grounding,
@@ -1239,9 +1243,9 @@ def _run_holo3_executor(
                         time.sleep(1)
                     except Exception:
                         pass
-                    print(f"  CUA navigated to /boats/by-owner/")
+                    print("  CUA navigated to /boats/by-owner/")
                 else:
-                    print(f"  Private seller filter VERIFIED")
+                    print("  Private seller filter VERIFIED")
 
             success = result.success
             scores.append(1.0 if success else 0.0)
@@ -1258,7 +1262,8 @@ def _run_holo3_executor(
                 print(f"  WARNING: Setup '{task_id}' failed — continuing with current page state")
 
         except Exception as e:
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             print(f"  ERROR: {e}")
             scores.append(0.0)
             task_details.append({
@@ -1365,7 +1370,7 @@ def _run_gemma4_cua_executor(
     tasks = task_suite.get("tasks", [])
 
     print(f"\n{'='*60}")
-    print(f"Mantis CUA Server — Gemma4-31B-CUA (llama.cpp)")
+    print("Mantis CUA Server — Gemma4-31B-CUA (llama.cpp)")
     print(f"  Session:  {session_name}")
     print(f"  Tasks:    {len(tasks)}")
     print(f"{'='*60}")
@@ -1555,7 +1560,8 @@ def _run_gemma4_cua_executor(
                 print(f"  WARNING: Setup '{task_id}' failed — continuing with current page state")
 
         except Exception as e:
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             print(f"  ERROR: {e}")
             scores.append(0.0)
             task_details.append({
@@ -1725,7 +1731,6 @@ def _run_claude_executor(
     # Run tasks
     scores = []
     task_details = []
-    trajectories = []  # Save for distillation
     results_path = f"/data/results/claude_results_{session_name}_{run_id}.json"
     trajectories_path = f"/data/results/claude_trajectories_{session_name}_{run_id}.jsonl"
     os.makedirs("/data/results", exist_ok=True)
@@ -1885,7 +1890,8 @@ def _run_claude_executor(
                 print(f"  WARNING: Setup '{task_id}' failed — continuing with current page state")
 
         except Exception as e:
-            import traceback; traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             print(f"  ERROR: {e}")
             scores.append(0.0)
             task_details.append({
@@ -2035,9 +2041,7 @@ def run_gemma4_cua_worker(task_file_contents: str, worker_id: int = 0, **kwargs)
             result = _run_gemma4_cua_executor(task_file_contents, **kwargs)
 
             # Check if extraction actually produced results
-            passed = result.get("passed", 0)
             total = result.get("total", 0)
-            score = result.get("score", 0)
 
             if total == 0 and attempt < max_attempts:
                 print(f"  Worker {worker_id}: attempt {attempt} produced 0 results, retrying...")
@@ -2092,6 +2096,8 @@ def main(
     verify: bool = False,
     learn_samples: int = 5,
     micro: str = "",
+    max_cost: float = 10.0,
+    max_time_minutes: int = 180,
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
 
@@ -2139,12 +2145,12 @@ def main(
         try:
             r = requests.get(f"{planner_url}/v1/models", timeout=10)
             if r.status_code != 200:
-                print(f"  WARNING: Planner not responding. Deploy first: modal deploy modal_cua_server.py")
+                print("  WARNING: Planner not responding. Deploy first: modal deploy modal_cua_server.py")
                 sys.exit(1)
-            print(f"  Planner: OK")
-        except Exception as e:
+            print("  Planner: OK")
+        except Exception:
             print(f"  ERROR: Cannot reach planner at {planner_url}")
-            print(f"  Deploy first: uv run modal deploy modal_cua_server.py")
+            print("  Deploy first: uv run modal deploy modal_cua_server.py")
             sys.exit(1)
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
@@ -2156,7 +2162,7 @@ def main(
             max_tokens=4096, temperature=0.0,
         )
 
-        print(f"  Preprocessing plan with Gemma4...")
+        print("  Preprocessing plan with Gemma4...")
         task_suite = optimize_plan(
             plan_text=plan_text, inputs=plan_inputs,
             session_name=session_name, max_listings=max_listings,
@@ -2184,12 +2190,21 @@ def main(
         print(f"  Plan:    {micro}")
         print(f"  Mode:    Micro-Intent → {cua_config['name']}")
 
-        # Decompose plan into micro-intents (Claude Sonnet, cached)
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-        from mantis_agent.plan_decomposer import PlanDecomposer
+        from mantis_agent.plan_decomposer import PlanDecomposer, MicroPlan
 
-        decomposer = PlanDecomposer()
-        micro_plan = decomposer.decompose(micro)
+        if micro.endswith(".json"):
+            # Load pre-built micro-plan JSON directly (no decomposition)
+            with open(micro) as f:
+                raw_steps = json.load(f)
+            micro_plan = MicroPlan(domain="direct_json")
+            for s in raw_steps:
+                micro_plan.steps.append(PlanDecomposer._build_intent(s))
+        else:
+            # Decompose plain text plan into micro-intents (Claude Sonnet, cached)
+            decomposer = PlanDecomposer()
+            micro_plan = decomposer.decompose(micro)
+
         print(f"  Steps:   {len(micro_plan.steps)} micro-intents")
         print(micro_plan.summary())
 
@@ -2197,12 +2212,15 @@ def main(
         task_suite = {
             "session_name": f"micro_{micro_plan.domain.replace('.', '_')}",
             "base_url": "",
+            "_max_cost": max_cost,
+            "_max_time_minutes": max_time_minutes,
             "_micro_plan": [
                 {
                     "intent": s.intent, "type": s.type, "verify": s.verify,
                     "budget": s.budget, "reverse": s.reverse,
                     "grounding": s.grounding, "claude_only": s.claude_only,
                     "loop_target": s.loop_target, "loop_count": s.loop_count,
+                    "section": s.section, "required": s.required, "gate": s.gate,
                 } for s in micro_plan.steps
             ],
             "tasks": [],  # No traditional tasks — micro-runner handles execution
@@ -2216,7 +2234,7 @@ def main(
     # ── Learning mode: build playbook with step verification ─────
     if learn:
         print(f"\n  ═══ LEARNING MODE: {learn_samples} samples ═══")
-        print(f"  Building site playbook with step verification...")
+        print("  Building site playbook with step verification...")
 
         # Pass learn flag + samples to the executor
         task_suite_obj = json.loads(task_file_contents)
@@ -2225,8 +2243,8 @@ def main(
         task_file_contents = json.dumps(task_suite_obj)
 
     if verify:
-        print(f"\n  ═══ VERIFICATION MODE ═══")
-        print(f"  Step verification enabled for critical actions...")
+        print("\n  ═══ VERIFICATION MODE ═══")
+        print("  Step verification enabled for critical actions...")
         task_suite_obj = json.loads(task_file_contents)
         task_suite_obj["_verify"] = True
         task_file_contents = json.dumps(task_suite_obj)
@@ -2247,7 +2265,7 @@ def main(
 
             print(f"  Task: {loop_task['task_id']}")
             print(f"    Pages: {max_pages} | Workers: {workers}")
-            print(f"    Strategy: 1 worker = 1 page, dynamic queue")
+            print("    Strategy: 1 worker = 1 page, dynamic queue")
 
             # Page queue — workers pull from this
             import queue
@@ -2345,7 +2363,7 @@ def main(
                     print(f"    Page {page} (W{w}): ERROR — {e}")
 
             # Summary
-            print(f"\n  ═══ PARALLEL RESULTS ═══")
+            print("\n  ═══ PARALLEL RESULTS ═══")
             print(f"  Pages:     {max_pages}")
             print(f"  Workers:   {active_workers}")
             print(f"  Scanned:   {total_scanned}")

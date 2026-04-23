@@ -26,14 +26,13 @@ import base64
 import json
 import logging
 import os
-import time
 from dataclasses import dataclass
 from io import BytesIO
 
 import requests
 from PIL import Image
 
-from .actions import Action, ActionType, parse_tool_call
+from .actions import Action, ActionType
 
 logger = logging.getLogger(__name__)
 

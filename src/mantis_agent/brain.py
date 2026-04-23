@@ -14,7 +14,7 @@ of its previous actions.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import torch
 from PIL import Image

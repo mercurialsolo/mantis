@@ -68,6 +68,14 @@ CRITICAL RULES for your output:
 7. For FILTER/SETUP tasks: require verification of results (e.g. "result count should decrease") \
    and PROHIBIT calling done() without actual UI interaction
 8. For EXTRACTION tasks: URL from the address bar is ALWAYS a required output field
+   The click target must be an organic private-seller/by-owner listing card. Skip
+   sponsored, dealer, broker/company seller, "Request a Price", MarineMax, and ad cards.
+   EXTRACTION tasks must also handle dynamic listing pages: inspect the contact/call area,
+   inspect Description/Seller Notes/More Details/Additional Equipment, expand collapsed text
+   with safe controls such as "Show more", "Read more", "See more", chevrons, "Show phone",
+   "View phone", or "Call", and only then summarize fields. Do not open generic lead forms
+   like "Contact Seller" or "Request Info".
+   Reject dealer/sponsored/company listings even if a phone number is visible.
 9. MULTI-TASK CONTINUITY: The extraction task should set start_url to null so it \
    continues from where the setup task left off (with filters applied). \
    However, EVERY setup/filter task MUST end with a VERIFICATION step that checks:
@@ -154,10 +162,14 @@ PHONE NUMBER EXTRACTION RULES:
 - Phones are typically buried DEEP in listing pages: 5-6 scrolls below photos/gallery
 - Include explicit scrolling instructions: "scroll(direction='down', amount=5) AGGRESSIVELY \
   past the photo gallery to reach Description/Seller Notes where phone numbers appear"
-- Phone formats to look for: (305)555-1234, 786-555-1234, 305.555.5678, 10+ digit numbers
+- If Description, Seller Notes, More Details, or Additional Equipment is collapsed, click \
+  a safe expander such as "Show more", "Read more", "See more", or a section chevron before reading
+- Also inspect safe phone reveal controls such as "Show phone", "View phone", or "Call"
+- Phone formats to look for: (305)555-1234, 786-555-1234, 305.555.5678, +507 6615-9404, +596696520959, 10+ digit numbers
 - NOT phone numbers: prices ($45,000), years (2020), zip codes (33101), model numbers
 - Do NOT click "Contact Seller" or "Request Info" buttons — they open popup forms, not phone numbers
-- If the listing shows "Contact Seller" instead of a phone, the seller chose to hide their number — move on
+- If only a generic "Contact Seller" form is visible after checking expanded text and safe phone \
+  reveal controls, report "Phone: none" and move on
 - ALWAYS report phone: "Phone: 305-555-1234" or "Phone: none" — never omit the field
 
 OUTPUT FORMAT — exact format for done() calls with realistic examples
@@ -300,6 +312,7 @@ For each element, describe:
 4. DETAIL PAGE (if any screenshot shows one):
    - What does the detail page look like?
    - Where is the description/seller notes text relative to the photos?
+   - Which visual controls expand collapsed description/details text?
    - Where is the contact/phone info typically located?
 
 5. URL STRUCTURE:
@@ -357,7 +370,7 @@ def browse_and_plan(
             if cached.get("_plan_hash") == plan_hash:
                 logger.info(f"Using cached plan: {output_path} (hash={plan_hash})")
                 return cached
-            logger.info(f"Plan text changed (hash mismatch), regenerating...")
+            logger.info("Plan text changed (hash mismatch), regenerating...")
         except (json.JSONDecodeError, KeyError):
             pass
 

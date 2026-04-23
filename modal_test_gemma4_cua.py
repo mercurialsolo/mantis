@@ -19,8 +19,6 @@ import time
 import modal
 
 from modal_osworld_direct import (
-    GEMMA4_MODEL,
-    GGUF_CONFIGS,
     download_model as download_base_model,
     start_llama_server as start_base_llama_server,
     image as base_image,
@@ -174,7 +172,6 @@ def test_model(
 
     # Parse tasks
     task_suite = json.loads(task_file_contents)
-    session_name = task_suite.get("session_name", "test")
     base_url = task_suite.get("base_url", "")
     tasks = task_suite.get("tasks", [])
 
@@ -196,7 +193,6 @@ def test_model(
         intent = task_config["intent"]
         print(f"\nTask {i+1}/{len(tasks)}: {task_id}")
 
-        task_start = time.time()
         try:
             runner = GymRunner(brain=brain, env=env, max_steps=max_steps)
             result = runner.run(task=intent, task_id=task_id)
@@ -261,7 +257,7 @@ def main(
     max_steps: int = 30,
 ):
     """Test Gemma4-CUA on web tasks."""
-    print(f"Gemma4-CUA Test")
+    print("Gemma4-CUA Test")
     print(f"  Tasks: {task_file}")
     print(f"  Baseline: {baseline}")
 
@@ -278,7 +274,7 @@ def main(
         print(f"\nBase model: {json.dumps(result_base, indent=2)}")
 
         print(f"\n{'='*50}")
-        print(f"COMPARISON:")
+        print("COMPARISON:")
         print(f"  Fine-tuned (CUA): {result_cua['passed']}/{result_cua['total']} = {result_cua['score']:.0f}%")
         print(f"  Base (Gemma4):    {result_base['passed']}/{result_base['total']} = {result_base['score']:.0f}%")
         print(f"{'='*50}")

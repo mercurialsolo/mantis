@@ -148,7 +148,6 @@ def gemma4_agent_step(
 )
 def run_eval(max_tasks: int = 1, max_steps: int = 15):
     """Run OSWorld tasks using Gemma4 on A100 + HUD eval framework."""
-    import requests
 
     # 1. Download model
     model_path = download_model("/data")
@@ -163,7 +162,7 @@ def run_eval(max_tasks: int = 1, max_steps: int = 15):
     hud_api_key = os.environ.get("HUD_API_KEY", "")
 
     print(f"\nRunning OSWorld-Verified ({max_tasks} tasks, {max_steps} steps)")
-    print(f"Model: Gemma4 E4B via llama-server on A100")
+    print("Model: Gemma4 E4B via llama-server on A100")
 
     # Use hud eval with openai_compatible pointing at localhost
     cmd = [

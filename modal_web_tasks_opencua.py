@@ -642,7 +642,7 @@ def main(
         from mantis_agent.gym.plan_optimizer import optimize_plan
 
         print(f"  Plan file: {plan_file}")
-        print(f"  Mode:      LLM plan optimization (Gemma4 → task suite → EvoCUA)")
+        print("  Mode:      LLM plan optimization (Gemma4 → task suite → EvoCUA)")
         print(f"  Planner:   {planner_url}")
         print(f"  Executor:  {cfg['name']} ({cfg['gpus']})")
 
@@ -662,7 +662,7 @@ def main(
         )
 
         # Optimize: Gemma4 analyzes plan → structured sections with loops
-        print(f"  Preprocessing plan with Gemma4...")
+        print("  Preprocessing plan with Gemma4...")
         task_suite = optimize_plan(
             plan_text=plan_text,
             inputs=plan_inputs,

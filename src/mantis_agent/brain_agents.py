@@ -28,7 +28,6 @@ import logging
 import re
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any
 
 from PIL import Image
 
@@ -282,9 +281,6 @@ class AgentSBrain:
         """
         import requests
 
-        current_frame = frames[-1] if frames else Image.new("RGB", screen_size, "white")
-        img_b64 = _image_to_base64(current_frame)
-
         # Agent-S3 style system prompt
         system_prompt = (
             "You are a computer use agent. You see a screenshot and output "
@@ -309,8 +305,9 @@ class AgentSBrain:
 
         # Include history frames for context
         content: list[dict] = []
-        for i, frame in enumerate(frames[-3:]):
-            label = "CURRENT" if i == len(frames[-3:]) - 1 else f"previous"
+        frames_to_send = frames[-3:] or [Image.new("RGB", screen_size, "white")]
+        for i, frame in enumerate(frames_to_send):
+            label = "CURRENT" if i == len(frames_to_send) - 1 else "previous"
             content.append({"type": "text", "text": f"[{label}]"})
             content.append({
                 "type": "image_url",

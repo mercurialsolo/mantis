@@ -121,7 +121,7 @@ class RegionGrounding(GroundingModel):
         return GroundingResult(
             x=x, y=y,
             confidence=0.7 if not clamped else 0.4,
-            description=f"region-clamped" if clamped else "in-bounds",
+            description="region-clamped" if clamped else "in-bounds",
         )
 
 
@@ -283,7 +283,6 @@ Nothing else."""
 
     def ground(self, screenshot, description, initial_x=None, initial_y=None):
         import base64
-        import json
         from io import BytesIO
 
         import requests
@@ -350,5 +349,5 @@ Nothing else."""
             x=initial_x or screenshot.width // 2,
             y=initial_y or screenshot.height // 2,
             confidence=0.2,
-            description=f"grounding failed, using fallback",
+            description="grounding failed, using fallback",
         )

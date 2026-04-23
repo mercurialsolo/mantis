@@ -43,7 +43,7 @@ def run_multiapp(max_tasks: int = 5, max_steps: int = 40):
 def main(tasks: int = 0, steps: int = 40):
     """Run OSWorld multi-app eval. Multi-app tasks need more steps (~40)."""
     print("Mantis — OSWorld Multi-App Benchmark")
-    print(f"  Domain: multi_apps")
+    print("  Domain: multi_apps")
     print(f"  Tasks:  {'ALL' if tasks == 0 else tasks}")
     print(f"  Steps:  {steps}")
     print()

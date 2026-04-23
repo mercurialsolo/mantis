@@ -51,7 +51,7 @@ def run_chrome(max_tasks: int = 5, max_steps: int = 30):
 def main(tasks: int = 0, steps: int = 30):
     """Run OSWorld Chrome eval. tasks=0 means all 46 chrome tasks."""
     print("Mantis — OSWorld Chrome Benchmark")
-    print(f"  Domain: chrome")
+    print("  Domain: chrome")
     print(f"  Tasks:  {'ALL (46)' if tasks == 0 else tasks}")
     print(f"  Steps:  {steps}")
     print()

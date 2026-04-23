@@ -52,7 +52,6 @@ Plan format:
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -398,7 +397,6 @@ def load_text_plan(path: str) -> Plan:
 
 def _parse_text_input(line: str) -> PlanInput | None:
     """Parse an input line like: var_name = "default" (description)"""
-    import re
 
     # Pattern: name = "default" (description) or name (required) (description)
     line = line.strip()
@@ -428,7 +426,6 @@ def _parse_text_input(line: str) -> PlanInput | None:
 
 def _parse_text_step(line: str) -> PlanStep | None:
     """Parse a step line like: 1. Click on the User ID input field"""
-    import re
 
     # Strip numbered prefix: "1. ", "2) ", etc.
     match = re.match(r"^\d+[\.\)]\s*(.*)", line.strip())

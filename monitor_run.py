@@ -12,9 +12,7 @@ Usage:
 
 import argparse
 import json
-import os
 import subprocess
-import sys
 import time
 from datetime import datetime
 
@@ -170,8 +168,6 @@ def display_progress(data: dict, prev_state: dict | None = None) -> dict:
             loop_bar = f"{'█' * loop_filled}{'░' * (loop_bar_len - loop_filled)}"
             print(f"  {icon} {BOLD}{task_id}{RESET}  [{loop_bar}] {iterations} scanned, {duration}s")
             print(f"    {CYAN}{BOLD}Leads: {viable}{RESET}{CYAN} viable / {iterations} scanned ({viable/iterations*100:.0f}% hit rate){RESET}" if iterations > 0 else "")
-            # Show cost so far for this task
-            task_cost = duration / 3600 * cost / max(gpu_time, 1) * gpu_time if gpu_time > 0 else 0
             print(f"    {DIM}Cost so far: ${cost:.2f} | Rate: ${cost/max(duration,1)*3600:.2f}/hr{RESET}")
         else:
             icon = f"{GREEN}✓{RESET}" if success else f"{RED}✗{RESET}"
@@ -214,7 +210,14 @@ def check_containers() -> bool:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         # If output has content rows beyond the header
-        lines = [l for l in result.stdout.splitlines() if l.strip() and "Container ID" not in l and "━" not in l and "─" not in l]
+        lines = [
+            line
+            for line in result.stdout.splitlines()
+            if line.strip()
+            and "Container ID" not in line
+            and "━" not in line
+            and "─" not in line
+        ]
         return len(lines) > 0
     except Exception:
         return False

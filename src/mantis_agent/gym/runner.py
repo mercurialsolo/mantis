@@ -27,7 +27,7 @@ from typing import Any, Protocol
 from PIL import Image
 
 from ..actions import Action, ActionType
-from .base import GymEnvironment, GymObservation
+from .base import GymEnvironment
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +187,6 @@ class GymRunner:
         frame_history.append(obs.screenshot)
         last_url = obs.extras.get("url", "")
         last_title = obs.extras.get("title", "")
-        latest_obs = obs  # Track latest obs for SoM/DOM state injection
 
         self._emit(
             "task_start", task=task, max_steps=self.max_steps,
@@ -256,7 +255,7 @@ class GymRunner:
                         continue
                     else:
                         # Direct execution failed — try DOM discovery + brain choice
-                        print(f"  [executor] direct failed, trying discovery...")
+                        print("  [executor] direct failed, trying discovery...")
 
                         if self.page_discovery:
                             discovery_result = self._try_discovery_execution(
@@ -392,7 +391,6 @@ class GymRunner:
                 action_history.append(action)
                 frame_history.append(gym_result.observation.screenshot)
                 total_reward += gym_result.reward
-                latest_obs = gym_result.observation  # Update for next step's SoM
 
                 feedback = self._build_feedback(
                     action=action, gym_result=gym_result,
@@ -573,7 +571,7 @@ class GymRunner:
         discovery = self.page_discovery
         elements = discovery.discover()
         if not elements:
-            print(f"  [discovery] no elements found on page")
+            print("  [discovery] no elements found on page")
             return None
 
         # Resolve plan step target

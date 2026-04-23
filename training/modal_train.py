@@ -18,7 +18,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 
 import modal
 
@@ -62,7 +61,6 @@ def train_gemma4_cua(
     export_gguf: bool = True,
 ):
     """Full training pipeline on A100."""
-    import subprocess
 
     # Install unsloth at runtime (needs GPU, can't install at image build time)
     print("Installing unsloth (requires GPU)...")
@@ -150,7 +148,7 @@ def train_gemma4_cua(
 
     # ── Step 3: Train with QLoRA ──
     print(f"\n{'='*60}")
-    print(f"Training Gemma4-31B CUA")
+    print("Training Gemma4-31B CUA")
     print(f"  Data:    {converted_path}")
     print(f"  Output:  {output_dir}")
     print(f"  Epochs:  {epochs}")
@@ -181,7 +179,7 @@ def train_gemma4_cua(
     vol.commit()
 
     print(f"\n{'='*60}")
-    print(f"Training complete!")
+    print("Training complete!")
     print(f"Model saved to: {output_dir}")
     if export_gguf:
         print(f"GGUF saved to: {output_dir}/gguf/")
@@ -206,7 +204,7 @@ def main(
     export_gguf: bool = True,
 ):
     """Train Gemma4-CUA on Modal A100."""
-    print(f"Mantis — Gemma4 CUA Training (Modal)")
+    print("Mantis — Gemma4 CUA Training (Modal)")
     print(f"  Tasks:  {max_tasks}")
     print(f"  Epochs: {epochs}")
     print(f"  LoRA:   rank={lora_rank}")

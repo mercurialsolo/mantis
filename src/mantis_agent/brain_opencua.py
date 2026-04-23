@@ -32,7 +32,7 @@ from io import BytesIO
 import requests
 from PIL import Image
 
-from .actions import Action, ActionType, parse_tool_call
+from .actions import Action, ActionType
 
 logger = logging.getLogger(__name__)
 

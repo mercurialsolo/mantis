@@ -5,7 +5,7 @@ Architecture (7 steps per listing):
   CLICK     -> Holo3 clicks the title text, grounding=True   (3 steps)
   READ_URL  -> Claude reads URL from screenshot (API only)    (0 Holo3 steps)
   SCROLL    -> Holo3 scrolls past photos                     (5 steps)
-  EXTRACT   -> Claude reads scrolled screenshot (API only)    (0 Holo3 steps)
+  EXTRACT   -> Claude expands safe controls and reads screenshots (API only)
   RETURN    -> Holo3 presses Alt+Left                        (3 steps)
   PAGINATE  -> Holo3 scrolls to bottom, clicks Next          (10 steps)
 
@@ -41,7 +41,7 @@ from ..actions import Action, ActionType
 from .runner import GymRunner, RunResult
 
 if TYPE_CHECKING:
-    from ..extraction import ClaudeExtractor, ExtractionResult
+    from ..extraction import ClaudeExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +240,7 @@ class SubPlanRunner:
         # ── FIND + CLICK combined: click a listing title ────────────────
         # Combined because FIND alone ("look at the page") produces no action.
         # The model needs to actually CLICK something to advance.
-        logger.info(f"  [FIND+CLICK] starting (max_steps=8, grounding=ON)")
+        logger.info("  [FIND+CLICK] starting (max_steps=8, grounding=ON)")
         click_result = self._holo3_step(
             "Click a boat listing title. The title is blue text below a boat photo showing Year Make Model. "
             "done(success=true) after clicking.",
@@ -293,7 +293,7 @@ class SubPlanRunner:
 
         # ── DEDUP check ─────────────────────────────────────────────────
         if url and url in self._seen_urls:
-            logger.info(f"  [DEDUP] duplicate URL, skipping to RETURN")
+            logger.info("  [DEDUP] duplicate URL, skipping to RETURN")
             checkpoint.dedup = True
             return_result = self._holo3_step(
                 "Press Alt+Left to go back.",
@@ -331,12 +331,12 @@ class SubPlanRunner:
         checkpoint.step_name = "SCROLL"
         self._save_checkpoint(session_name, checkpoint)
 
-        # ── EXTRACT: Claude reads scrolled screenshot (API only) ────────
+        # ── EXTRACT: Claude expands safe controls and reads screenshots ─
         logger.info("  [EXTRACT] reading data from screenshots")
         scrolled_screenshot = self.env.screenshot()
         data: Any = None
         if self.extractor:
-            data = self.extractor.extract_full(top_screenshot, scrolled_screenshot)
+            data = self._extract_listing_data_deep(top_screenshot, scrolled_screenshot)
         checkpoint.step_name = "EXTRACT"
 
         # Store extracted data in checkpoint for persistence
@@ -386,6 +386,90 @@ class SubPlanRunner:
             url=url,
             micro_results=micro_results,
         )
+
+    def _extract_listing_data_deep(self, top_screenshot: Any, scrolled_screenshot: Any = None) -> Any:
+        """Capture top, expanded description, and lower detail viewports.
+
+        This keeps the sub-plan path consistent with MicroPlanRunner: Claude
+        detects safe expand/phone controls, the browser executes those clicks,
+        and final extraction reads the full screenshot set.
+        """
+        if not self.extractor:
+            return None
+
+        screenshots: list[Any] = []
+        labels: list[str] = []
+        clicked_keys: set[str] = set()
+        max_screenshots = 12
+        max_viewports = 6
+
+        def add_screenshot(shot: Any, label: str) -> None:
+            if shot is not None and len(screenshots) < max_screenshots:
+                screenshots.append(shot)
+                labels.append(label)
+
+        def capture(label: str) -> Any:
+            if len(screenshots) >= max_screenshots:
+                return None
+            try:
+                shot = self.env.screenshot()
+                add_screenshot(shot, label)
+                return shot
+            except Exception as exc:
+                logger.warning(f"  [deep-extract] screenshot failed: {exc}")
+                return None
+
+        add_screenshot(top_screenshot, "top/contact area before scroll")
+        add_screenshot(scrolled_screenshot, "scrolled detail area before expansion")
+
+        try:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+            time.sleep(1.5)
+        except Exception:
+            pass
+
+        for viewport in range(max_viewports):
+            shot = capture("top/contact area" if viewport == 0 else f"detail viewport {viewport + 1}")
+            if shot is None:
+                break
+
+            target = self.extractor.find_listing_content_control(shot)
+            if target:
+                key = (
+                    f"{target.get('action', '')}:{target.get('label', '').lower()}:"
+                    f"{target['x'] // 25}:{target['y'] // 25}"
+                )
+                if key not in clicked_keys:
+                    clicked_keys.add(key)
+                    try:
+                        self.env.step(Action(
+                            action_type=ActionType.CLICK,
+                            params={"x": target["x"], "y": target["y"]},
+                        ))
+                        time.sleep(2)
+                        capture(
+                            f"after {target.get('action', 'expand')} "
+                            f"{target.get('label', '')[:40]}"
+                        )
+                    except Exception as exc:
+                        logger.warning(f"  [deep-extract] reveal click failed: {exc}")
+
+            if viewport < max_viewports - 1:
+                try:
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
+                    time.sleep(1)
+                except Exception:
+                    break
+
+        data = self.extractor.extract_multi(screenshots, labels=labels)
+        if data and hasattr(data, "is_viable") and data.is_viable():
+            return data
+
+        if scrolled_screenshot is not None:
+            return self.extractor.extract_full(top_screenshot, scrolled_screenshot)
+        if screenshots:
+            return self.extractor.extract(screenshots[-1])
+        return None
 
     def run_pagination(self) -> bool:
         """Scroll to bottom and click the Next page button.

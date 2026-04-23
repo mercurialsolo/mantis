@@ -29,12 +29,59 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from io import BytesIO
 
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+
+DEALER_TEXT_INDICATORS = (
+    "dealername-",
+    "dealer website",
+    "view dealer website",
+    "more from this dealer",
+    "request a price",
+    "condition-new",
+    "certified dealer",
+    "sponsored",
+    "advertisement",
+    "boatsgroup",
+    "marinemax",
+)
+
+DEALER_SELLER_INDICATORS = (
+    "marine",
+    "marinemax",
+    "yacht",
+    "boats",
+    "brokerage",
+    "sales",
+    "dealer",
+    "center",
+    "inc",
+    "llc",
+)
+
+
+def _parse_bool(value: object) -> bool:
+    """Parse API booleans that may arrive as strings."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1", "dealer"}
+    return bool(value)
+
+
+def _contains_dealer_text(text: str) -> bool:
+    text_lower = text.lower()
+    return any(indicator in text_lower for indicator in DEALER_TEXT_INDICATORS)
+
+
+def _seller_looks_like_dealer(seller: str) -> bool:
+    seller_lower = seller.lower()
+    return any(indicator in seller_lower for indicator in DEALER_SELLER_INDICATORS)
 
 
 @dataclass
@@ -51,22 +98,44 @@ class ExtractionResult:
     raw_response: str = ""
     confidence: float = 0.0
 
+    def dealer_reason(self) -> str:
+        """Return a reason if this looks like dealer/sponsored inventory."""
+        if self.is_dealer:
+            return "extractor marked listing as dealer"
+        if _seller_looks_like_dealer(self.seller):
+            return f"seller looks like dealer: {self.seller}"
+        if _contains_dealer_text(f"{self.url} {self.price} {self.raw_response}"):
+            return "dealer/sponsored indicator in listing text"
+        return ""
+
+    def is_private_seller(self) -> bool:
+        """Strict private-seller check for BoatTrader lead extraction."""
+        return not self.dealer_reason()
+
     def to_summary(self) -> str:
         """Format as the VIABLE summary string."""
         parts = []
-        if self.year: parts.append(f"Year: {self.year}")
-        if self.make: parts.append(f"Make: {self.make}")
-        if self.model: parts.append(f"Model: {self.model}")
-        if self.price: parts.append(f"Price: {self.price}")
-        if self.phone: parts.append(f"Phone: {self.phone}")
-        else: parts.append("Phone: none")
-        if self.url: parts.append(f"URL: {self.url}")
-        if self.seller: parts.append(f"Seller: {self.seller}")
+        if self.year:
+            parts.append(f"Year: {self.year}")
+        if self.make:
+            parts.append(f"Make: {self.make}")
+        if self.model:
+            parts.append(f"Model: {self.model}")
+        if self.price:
+            parts.append(f"Price: {self.price}")
+        if self.phone:
+            parts.append(f"Phone: {self.phone}")
+        else:
+            parts.append("Phone: none")
+        if self.url:
+            parts.append(f"URL: {self.url}")
+        if self.seller:
+            parts.append(f"Seller: {self.seller}")
         return "VIABLE | " + " | ".join(parts) if parts else ""
 
     def is_viable(self) -> bool:
-        """Has enough data to be a useful lead."""
-        return bool(self.year and self.make)
+        """Has enough data to be a useful private-seller lead."""
+        return bool(self.year and self.make and self.is_private_seller())
 
 
 EXTRACT_PROMPT = """\
@@ -81,7 +150,9 @@ Extract ALL of the following data visible on the page:
 5. Price: The asking price (e.g. $42,500)
 6. Phone: Any phone number visible (10+ digits, format like 305-555-1234)
 7. Seller: The seller name if shown
-8. Is this a dealer listing? (look for "More From This Dealer" or "View Dealer Website")
+8. Is this a dealer/sponsored listing? Mark true for dealer inventory, broker listings,
+   company sellers, "Request a Price", "View Dealer Website", "More From This Dealer",
+   "MarineMax", sponsored ads, or new-boat/dealer inventory.
 
 For phone numbers: look in Description, Seller Notes, or contact sections.
 NOT phone numbers: prices, years, zip codes, model numbers, HP ratings.
@@ -102,6 +173,68 @@ NOT phone numbers: prices ($45,000), years (2020), zip codes (33101), HP ratings
 
 Output ONLY valid JSON:
 {"phone": "", "seller": "", "additional_info": ""}
+"""
+
+EXTRACT_MULTI_SCREENSHOT_PROMPT = """\
+You are looking at multiple screenshots from the SAME BoatTrader listing page.
+They were captured at the top/contact area, description area, after any visible
+"Show more" expansion, and lower details sections.
+
+Extract ALL fields visible across ALL screenshots:
+
+1. URL: Browser address bar from any screenshot
+2. Year: The model year
+3. Make: The boat manufacturer
+4. Model: The model name
+5. Price: The asking price
+6. Phone: First valid seller phone number visible anywhere
+7. Seller: Seller name if shown
+8. Is this a dealer/sponsored listing?
+
+Phone search priority:
+- Description text, Seller Notes, More Details, Additional Equipment
+- Contact/Call/phone reveal areas if visible
+- International numbers are valid, including +507 6615-9404 or +596696520959
+- Plain 10 digit numbers are valid, including 7863462333
+
+Dealer/sponsored detection:
+- is_dealer=true for dealer inventory, broker listings, company sellers, sponsored ads,
+  "Request a Price", "View Dealer Website", "More From This Dealer", "MarineMax",
+  dealerName URLs, condition-new URLs, or new-boat/dealer inventory.
+- Private-seller/person-name listings should use is_dealer=false.
+
+NOT phone numbers: prices, years, zip codes, engine hours, horsepower, model
+numbers, HIN/serial numbers, dimensions, fuel capacities, or loan terms.
+
+If a screenshot only shows a generic "Contact Seller" form button but no phone,
+do not invent a phone number. If no phone is visible, use "".
+
+Output ONLY valid JSON:
+{"year": "", "make": "", "model": "", "price": "", "phone": "", "url": "", "seller": "", "is_dealer": false}
+"""
+
+FIND_LISTING_CONTENT_CONTROL_PROMPT = """\
+Look at this BoatTrader listing screenshot.
+
+Find ONE visible control that should be clicked to reveal more seller-supplied
+listing text or a seller phone number.
+
+Prefer these safe targets:
+- "Show more", "Read more", "See more", "More", "Expand", or a chevron for a
+  collapsed Description, Seller Notes, More Details, or Additional Equipment
+  section.
+- "Show phone", "View phone", "Call", or a phone-number reveal button.
+
+Do NOT choose generic lead-form or financing controls:
+- Do not click "Contact Seller", "Request Info", "Email Seller",
+  "Get Pre-Qualified", loan calculator, financing, report-it, social links,
+  nav links, or ads.
+
+Return the center of the best target. Output ONLY valid JSON:
+{"x": N, "y": N, "action": "expand_description|show_phone|none", "label": "visible text", "reason": "brief reason"}
+
+If no safe reveal/expand control is visible, output:
+{"x": 0, "y": 0, "action": "none", "label": "", "reason": "none visible"}
 """
 
 
@@ -128,7 +261,7 @@ class ClaudeExtractor:
                 continue
         return os.path.join("/tmp", f"{stem}_{int(time.time())}{suffix}")
 
-    def _call(self, screenshot: Image.Image, prompt: str) -> str:
+    def _call(self, screenshot: Image.Image, prompt: str, max_tokens: int = 200) -> str:
         """Call Claude API with screenshot + prompt."""
         import requests
 
@@ -150,7 +283,7 @@ class ClaudeExtractor:
                 },
                 json={
                     "model": self.model,
-                    "max_tokens": 200,
+                    "max_tokens": max_tokens,
                     "messages": [{
                         "role": "user",
                         "content": [
@@ -173,6 +306,69 @@ class ClaudeExtractor:
                     return block["text"].strip()
         except Exception as e:
             logger.warning(f"ClaudeExtractor failed: {e}")
+        return ""
+
+    def _call_many(
+        self,
+        screenshots: list[Image.Image],
+        prompt: str,
+        labels: list[str] | None = None,
+        max_tokens: int = 350,
+    ) -> str:
+        """Call Claude API with multiple screenshots and one prompt."""
+        import requests
+
+        if not self.api_key:
+            logger.warning("ClaudeExtractor: no API key")
+            return ""
+
+        labels = labels or []
+        content: list[dict] = [{"type": "text", "text": prompt}]
+        for i, screenshot in enumerate(screenshots, 1):
+            label = labels[i - 1] if i - 1 < len(labels) else f"screenshot {i}"
+            buf = BytesIO()
+            screenshot.save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            content.append({"type": "text", "text": f"Screenshot {i}: {label}"})
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": b64,
+                },
+            })
+
+        try:
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "max_tokens": max_tokens,
+                    "messages": [{
+                        "role": "user",
+                        "content": content,
+                    }],
+                },
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "ClaudeExtractor multi API error %s: %s",
+                    resp.status_code,
+                    resp.text[:500],
+                )
+                return ""
+            for block in resp.json().get("content", []):
+                if block.get("type") == "text":
+                    return block["text"].strip()
+        except Exception as e:
+            logger.warning(f"ClaudeExtractor multi failed: {e}")
         return ""
 
     @staticmethod
@@ -215,7 +411,7 @@ class ClaudeExtractor:
             phone=str(parsed.get("phone", "")),
             url=str(parsed.get("url", "")),
             seller=str(parsed.get("seller", "")),
-            is_dealer=bool(parsed.get("is_dealer", False)),
+            is_dealer=_parse_bool(parsed.get("is_dealer", False)),
             raw_response=text,
             confidence=0.9,
         )
@@ -246,6 +442,94 @@ class ClaudeExtractor:
                 result.seller = extra["seller"]
 
         return result
+
+    def extract_multi(
+        self,
+        screenshots: list[Image.Image],
+        labels: list[str] | None = None,
+    ) -> ExtractionResult:
+        """Extract listing data from multiple screenshots of one detail page."""
+        if not screenshots:
+            return ExtractionResult(confidence=0.0)
+
+        text = self._call_many(
+            screenshots,
+            EXTRACT_MULTI_SCREENSHOT_PROMPT,
+            labels=labels,
+            max_tokens=450,
+        )
+        parsed = self._parse_json(text)
+
+        if not parsed:
+            return ExtractionResult(raw_response=text, confidence=0.1)
+
+        return ExtractionResult(
+            year=str(parsed.get("year", "")),
+            make=str(parsed.get("make", "")),
+            model=str(parsed.get("model", "")),
+            price=str(parsed.get("price", "")),
+            phone=str(parsed.get("phone", "")),
+            url=str(parsed.get("url", "")),
+            seller=str(parsed.get("seller", "")),
+            is_dealer=_parse_bool(parsed.get("is_dealer", False)),
+            raw_response=text,
+            confidence=0.9,
+        )
+
+    def find_listing_content_control(self, screenshot: Image.Image) -> dict | None:
+        """Find a safe expand or phone reveal control on a listing page.
+
+        Returns a dict with x/y/action/label/reason, or None if no safe target
+        is visible. This intentionally avoids generic Contact Seller forms.
+        """
+        debug_stem = "claude_listing_content_control"
+        try:
+            screenshot.save(self._debug_path(debug_stem, ".png"))
+        except Exception:
+            pass
+        try:
+            with open(self._debug_path(debug_stem, "_prompt.txt"), "w") as f:
+                f.write(FIND_LISTING_CONTENT_CONTROL_PROMPT)
+        except Exception:
+            pass
+
+        text = self._call(screenshot, FIND_LISTING_CONTENT_CONTROL_PROMPT)
+
+        try:
+            with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
+                f.write(text)
+        except Exception:
+            pass
+
+        parsed = self._parse_json(text)
+        if not parsed:
+            logger.warning(f"  [content-control] parse failed: {text[:200]}")
+            return None
+
+        action = str(parsed.get("action", "none"))
+        x = int(parsed.get("x", 0))
+        y = int(parsed.get("y", 0))
+        if action == "none" or x == 0 or y == 0:
+            return None
+
+        label = str(parsed.get("label", ""))
+        reason = str(parsed.get("reason", ""))
+        forbidden = (
+            "contact seller", "request info", "email seller",
+            "get pre-qualified", "pre-qualified", "loan", "financing",
+        )
+        target_text = f"{label} {reason}".lower()
+        if any(term in target_text for term in forbidden):
+            logger.info(f"  [content-control] rejected unsafe target: {label[:60]}")
+            return None
+
+        return {
+            "x": x,
+            "y": y,
+            "action": action,
+            "label": label,
+            "reason": reason,
+        }
 
     def verify_gate(self, screenshot: Image.Image, expected: str) -> tuple[bool, str]:
         """Verify a gate condition from a screenshot.
@@ -294,7 +578,7 @@ class ClaudeExtractor:
         skip_section = ""
         if skip_urls:
             skip_section = (
-                f"\n\nSKIP these listings (already extracted): "
+                "\n\nSKIP these listings (already extracted): "
                 + ", ".join(skip_urls[:6])
                 + "\nFind a DIFFERENT listing that is NOT in the skip list."
             )
@@ -375,20 +659,27 @@ class ClaudeExtractor:
         debug_stem = "claude_find_all"
         prompt = (
             f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"Find ALL boat listing cards visible anywhere in this screenshot. "
+            f"Find ALL eligible PRIVATE-SELLER boat listing cards visible anywhere in this screenshot. "
             f"Listing cards may start in the LOWER part of the screenshot. "
             f"The bottom-most card may be only partially visible — include it.\n\n"
             f"Each listing card has a boat photo and clickable title text below it "
             f"showing Year Make Model, plus a price.\n\n"
+            f"STRICT FILTER: only return organic private-seller/by-owner cards from the filtered results. "
+            f"Do NOT return sponsored cards, advertisement modules, dealer inventory, broker/company sellers, "
+            f"cards marked dealer/new, 'Request a Price' cards, MarineMax cards, dealerName URLs, "
+            f"'More From This Dealer' cards, or anything outside the current by-owner results list.\n\n"
             f"If the screenshot shows an error page, rate limit, bot check, CAPTCHA, sign-in wall, "
             f"or a message like 'Something went wrong' or 'Error 418', mark it as blocked.\n\n"
             f"Return the CENTER coordinates of each listing's TITLE TEXT area "
             f"(below the photo, not the photo itself). "
             f"If a title is hard to read, use \"unknown\".\n\n"
+            f"For each card include seller text if visible and whether it is private seller, dealer, or sponsored.\n\n"
             f"Also check: is there a pagination bar (page numbers like 1, 2, 3... or a Next button) "
             f"visible at the bottom of the listings? If so, note its Y coordinate.\n\n"
             f"Output ONLY valid JSON:\n"
-            f"{{\"status\": \"ok\", \"listings\": [{{\"x\": N, \"y\": N, \"title\": \"text or unknown\"}}, ...], "
+            f"{{\"status\": \"ok\", \"listings\": [{{\"x\": N, \"y\": N, \"title\": \"text or unknown\", "
+            f"\"seller\": \"seller text or empty\", \"is_private_seller\": true/false, "
+            f"\"is_dealer\": true/false, \"is_sponsored\": true/false, \"reason\": \"brief\"}}, ...], "
             f"\"pagination_y\": N_or_null}}\n"
             f"If this looks like a normal page but no listings are visible in this screenshot, output:\n"
             f"{{\"status\": \"empty\", \"listings\": []}}\n"
@@ -407,7 +698,7 @@ class ClaudeExtractor:
         except Exception as e:
             logger.debug(f"[find_all] failed to save prompt: {e}")
 
-        text = self._call(screenshot, prompt)
+        text = self._call(screenshot, prompt, max_tokens=500)
 
         try:
             with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
@@ -475,6 +766,26 @@ class ClaudeExtractor:
             x = int(item.get("x", 0))
             y = int(item.get("y", 0))
             title = str(item.get("title", "unknown"))
+            seller = str(item.get("seller", ""))
+            reason = str(item.get("reason", ""))
+            is_private_seller = item.get("is_private_seller")
+            is_dealer = _parse_bool(item.get("is_dealer", False))
+            is_sponsored = _parse_bool(item.get("is_sponsored", False))
+            card_text = f"{title} {seller} {reason}"
+            if (
+                is_private_seller is False
+                or is_dealer
+                or is_sponsored
+                or _contains_dealer_text(card_text)
+                or _seller_looks_like_dealer(seller)
+            ):
+                logger.info(
+                    "  [find_all] Skipping non-private card: title='%s' seller='%s' reason='%s'",
+                    title[:50],
+                    seller[:50],
+                    reason[:80],
+                )
+                continue
             if x > 0 and y > 0:
                 results.append((x, y, title))
 
@@ -545,3 +856,97 @@ class ClaudeExtractor:
 
         logger.info(f"  [claude-paginate] '{label[:20]}' at ({x}, {y})")
         return (x, y, label)
+
+    def find_filter_target(
+        self,
+        screenshot: Image.Image,
+        filter_intent: str,
+    ) -> dict | None:
+        """Find a filter element on the page and determine how to interact with it.
+
+        Args:
+            screenshot: Current page screenshot.
+            filter_intent: Description like "Click Private Seller option in seller type filter"
+                          or "Enter zip code 33101 in location search field".
+
+        Returns:
+            dict with keys: x, y, action ("click"|"type"|"select"), value (for type/select),
+                           label (what was found)
+            None on failure.
+        """
+        prompt = (
+            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"TASK: {filter_intent}\n\n"
+            f"This is a search results page. Look for filter controls in the LEFT SIDEBAR "
+            f"or in a TOP FILTER BAR. Common patterns:\n"
+            f"- Sidebar sections with headings like 'Seller Type', 'Location', 'Price Range'\n"
+            f"- Checkboxes or radio buttons next to text labels\n"
+            f"- Text input fields for zip/location/price (usually empty boxes or with placeholder text)\n"
+            f"- Dropdown menus (show current selection with arrow)\n"
+            f"- Clickable text links or pills for filter options\n\n"
+            f"The filter labels may not match exactly — look for close matches:\n"
+            f"- 'Private Seller' could be 'By Owner', 'Private', 'Owner', or under 'Seller Type'\n"
+            f"- 'zip code' could be 'Location', 'Zip', 'Near', 'Search location'\n"
+            f"- 'radius' could be 'Distance', 'Miles', 'Within'\n"
+            f"- 'minimum price' could be 'Min Price', 'Price From', 'Min $'\n"
+            f"- 'sort' could be 'Sort by', 'Order by' — often a dropdown at the top of results\n\n"
+            f"Find the element and determine the interaction:\n"
+            f"- \"click\" for checkboxes, radio buttons, links, pills, toggle buttons\n"
+            f"- \"type\" for text input fields (click field, clear, type value)\n"
+            f"- \"select\" for dropdown menus (click to open, then pick option)\n\n"
+            f"Return the CENTER coordinates of the interactive element.\n"
+            f"Output ONLY valid JSON:\n"
+            f"{{\"x\": N, \"y\": N, \"action\": \"click|type|select\", "
+            f"\"value\": \"text to type or option to select or empty\", "
+            f"\"label\": \"what element you found\"}}\n"
+            f"If you cannot find any matching filter element anywhere on the page:\n"
+            f"{{\"x\": 0, \"y\": 0, \"action\": \"not_found\", "
+            f"\"value\": \"\", \"label\": \"describe what you see instead\"}}"
+        )
+
+        debug_stem = "claude_filter"
+        try:
+            screenshot.save(self._debug_path(debug_stem, ".png"))
+        except Exception:
+            pass
+        try:
+            with open(self._debug_path(debug_stem, "_prompt.txt"), "w") as f:
+                f.write(prompt)
+        except Exception:
+            pass
+
+        text = self._call(screenshot, prompt)
+
+        try:
+            with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
+                f.write(text)
+        except Exception:
+            pass
+
+        parsed = self._parse_json(text)
+        if not parsed:
+            logger.warning(f"  [claude-filter] parse failed: {text[:200]}")
+            return None
+
+        if parsed.get("action") == "not_found":
+            label = parsed.get("label", "unknown")
+            logger.info(f"  [claude-filter] Element not visible: {filter_intent[:50]}")
+            logger.info(f"  [claude-filter] What Claude sees: {label[:100]}")
+            print(f"  [claude-filter] NOT FOUND: {label[:100]}")
+            return None
+
+        x = int(parsed.get("x", 0))
+        y = int(parsed.get("y", 0))
+        if x == 0 and y == 0:
+            logger.warning("  [claude-filter] zero coordinates")
+            return None
+
+        result = {
+            "x": x,
+            "y": y,
+            "action": str(parsed.get("action", "click")),
+            "value": str(parsed.get("value", "")),
+            "label": str(parsed.get("label", "")),
+        }
+        logger.info(f"  [claude-filter] '{result['label'][:40]}' at ({x},{y}) action={result['action']}")
+        return result

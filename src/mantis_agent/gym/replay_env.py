@@ -28,7 +28,7 @@ from typing import Any
 
 from PIL import Image
 
-from ..actions import Action, ActionType
+from ..actions import Action
 from .base import GymEnvironment, GymObservation, GymResult
 
 logger = logging.getLogger(__name__)
