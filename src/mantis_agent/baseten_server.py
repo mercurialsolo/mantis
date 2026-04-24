@@ -661,6 +661,8 @@ class BasetenCUARuntime:
             "_state_key": state_key,
             "_checkpoint_path": str(data_root / "checkpoints" / f"{state_key}.json"),
             "_plan_signature": plan_signature,
+            "_proxy_city": str(payload.get("proxy_city") or os.environ.get("MANTIS_PROXY_CITY", "")),
+            "_proxy_state": str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
             "_micro_plan": micro_plan_steps,
             "tasks": [],
         }
@@ -668,7 +670,11 @@ class BasetenCUARuntime:
     def _make_env(self, task_suite: dict[str, Any], run_id: str, settle_time: float) -> tuple[XdotoolGymEnv, Any]:
         data_root = _data_root()
         session_name = task_suite.get("session_name", "baseten_cua")
-        proxy = _build_proxy_config(city="miami", session_id=f"mantis{run_id.replace('_', '')}")
+        proxy = _build_proxy_config(
+            city=str(task_suite.get("_proxy_city") or ""),
+            state=str(task_suite.get("_proxy_state") or ""),
+            session_id=f"mantis{run_id.replace('_', '')}",
+        )
         proxy_proc = None
         proxy_server = ""
         if proxy:

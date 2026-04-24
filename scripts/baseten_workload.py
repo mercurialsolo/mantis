@@ -109,6 +109,10 @@ def command_run(args: argparse.Namespace) -> int:
         "max_cost": args.max_cost,
         "max_time_minutes": args.max_time_minutes,
     }
+    if args.proxy_city:
+        payload["proxy_city"] = args.proxy_city
+    if args.proxy_state:
+        payload["proxy_state"] = args.proxy_state
     if args.run_id:
         payload["run_id"] = args.run_id
     response = post_json(args, payload)
@@ -178,6 +182,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--resume-state", action="store_true")
     run.add_argument("--max-cost", type=float, default=10.0)
     run.add_argument("--max-time-minutes", type=int, default=180)
+    run.add_argument("--proxy-city", default="")
+    run.add_argument("--proxy-state", default="")
     run.add_argument("--run-id", help="optional deterministic run id")
     run.set_defaults(func=command_run)
 
