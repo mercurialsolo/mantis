@@ -18,7 +18,7 @@ docker_server:
   readiness_endpoint: /health
   liveness_endpoint: /health
 resources:
-  instance_type: "A100:12x144"
+  instance_type: "A100x12x144"
 runtime:
   predict_concurrency: 1
   health_checks:
