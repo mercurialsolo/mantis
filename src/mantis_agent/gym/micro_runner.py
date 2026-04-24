@@ -1430,6 +1430,73 @@ class MicroPlanRunner:
         except Exception as e:
             logger.warning(f"  [claude-click] Middle-click fallback failed: {e}")
 
+        logger.info("  [claude-click] Middle-click did not verify — trying card-area click probes")
+        probe_points = [
+            ("image_center", x, y - 145),
+            ("image_lower", x, y - 90),
+            ("title_lower", x, y + 28),
+            ("title_left", x - 90, y),
+            ("title_right", x + 90, y),
+        ]
+        tried_points: set[tuple[int, int]] = set()
+        for label, probe_x, probe_y in probe_points:
+            probe_x = max(1, min(int(probe_x), self.env.screen_size[0] - 2))
+            probe_y = max(1, min(int(probe_y), self.env.screen_size[1] - 2))
+            if (probe_x, probe_y) in tried_points:
+                continue
+            tried_points.add((probe_x, probe_y))
+
+            try:
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                time.sleep(0.3)
+                for _ in range(self._viewport_stage):
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
+                    time.sleep(0.3)
+                logger.info(
+                    "  [claude-click] Probe %s at (%s, %s)",
+                    label,
+                    probe_x,
+                    probe_y,
+                )
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": probe_x, "y": probe_y}))
+                self.costs["gpu_steps"] += 1
+                self.costs["gpu_seconds"] += 3
+                self.costs["proxy_mb"] += 5.0
+                time.sleep(3)
+
+                after = self.env.screenshot()
+                verify_data = self.extractor.extract(after)
+                self.costs["claude_extract"] += 1
+                url = verify_data.url if verify_data else ""
+                if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+                    logger.info(
+                        "  [claude-click] Probe %s opened detail: %s",
+                        label,
+                        url[:60],
+                    )
+                    self._last_known_url = url
+                    self.dynamic_verifier.record_item_opened(
+                        page=self._current_page,
+                        item=getattr(self, "_last_click_title", "") or title,
+                        url=url,
+                    )
+                    self._last_extracted = {
+                        **self._last_extracted,
+                        "last_clicked_title": getattr(self, "_last_click_title", ""),
+                        "last_attempted_url": url,
+                        "last_attempted_at": time.time(),
+                        "last_attempted_step": index,
+                    }
+                    self._set_scroll_state(context="detail_top", url=url, page_downs=0, wheel_downs=0)
+                    self._listings_on_page += 1
+                    if hasattr(self, '_last_click_title') and self._last_click_title:
+                        self._extracted_titles.append(self._last_click_title)
+                    return StepResult(step_index=index, intent=step.intent, success=True,
+                                    steps_used=3, duration=12.0)
+            except Exception as e:
+                logger.warning(f"  [claude-click] Probe {label} failed: {e}")
+
         logger.warning(f"  [claude-click] Failed verification after retries (url={url[:40]})")
         self.dynamic_verifier.record_item_completed(
             page=self._current_page,
