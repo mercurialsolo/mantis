@@ -1295,10 +1295,15 @@ class MicroPlanRunner:
         # Pop next card from cache — scroll to the viewport where it was found
         x, y, title = self._page_listings[self._page_listing_index]
         self._page_listing_index += 1
-        self._last_click_title = title
+        title_for_verification = (
+            title
+            if title.strip().lower() != "unknown"
+            else f"unknown@v{self._viewport_stage}:{x},{y}"
+        )
+        self._last_click_title = title_for_verification
         self.dynamic_verifier.record_item_attempt(
             page=self._current_page,
-            item=title,
+            item=title_for_verification,
             viewport_stage=self._viewport_stage,
         )
 
@@ -1319,14 +1324,17 @@ class MicroPlanRunner:
         except Exception:
             pass
 
-        logger.info(f"  [claude-click] Card {self._page_listing_index}/{len(self._page_listings)}: '{title[:40]}' at ({x}, {y}) viewport={self._viewport_stage}")
+        logger.info(
+            f"  [claude-click] Card {self._page_listing_index}/{len(self._page_listings)}: "
+            f"'{title_for_verification[:40]}' at ({x}, {y}) viewport={self._viewport_stage}"
+        )
 
         # Delay before the final screenshot so grounding sees the frame we will actually click.
         import random
         time.sleep(random.uniform(1.5, 3.5))
 
         # Grounding refines — but only accept if the delta is small
-        if self.grounding:
+        if self.grounding and title.strip().lower() != "unknown":
             screenshot = self.env.screenshot()
             grounding_result = self.grounding.ground(screenshot, title, x, y)
             self.costs["claude_grounding"] += 1
@@ -1337,6 +1345,8 @@ class MicroPlanRunner:
                 logger.info(f"  [grounding] refined to ({x}, {y}) delta=({dx},{dy})")
             else:
                 logger.info(f"  [grounding] rejected: delta=({dx},{dy}) conf={grounding_result.confidence}")
+        elif title.strip().lower() == "unknown":
+            logger.info("  [grounding] skipped for unknown-title card; using scan coordinates")
 
         # Click
         try:
