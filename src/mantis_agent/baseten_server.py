@@ -8,6 +8,7 @@ small FastAPI surface that runs the existing CUA task and micro-plan runners.
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
 import http.server
 import json
@@ -19,12 +20,15 @@ import socketserver
 import subprocess
 import threading
 import time
+import traceback
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import requests
 from fastapi import FastAPI, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from mantis_agent.gym.runner import GymRunner
 from mantis_agent.gym.xdotool_env import XdotoolGymEnv
@@ -64,7 +68,7 @@ def _load_secret_environment() -> None:
 def _data_root() -> Path:
     root = Path(os.environ.get("MANTIS_DATA_DIR", "/workspace/mantis-data"))
     root.mkdir(parents=True, exist_ok=True)
-    for child in ("results", "screenshots", "checkpoints", "chrome-profile"):
+    for child in ("results", "runs", "screenshots", "checkpoints", "chrome-profile"):
         (root / child).mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MANTIS_DEBUG_DIR", str(root / "screenshots" / "claude_debug"))
     return root
@@ -77,6 +81,54 @@ def _repo_root() -> Path:
 def _safe_state_key(raw: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
     return cleaned or "micro_state"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _new_run_id() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return f"{stamp}_{uuid.uuid4().hex[:8]}"
+
+
+def _parse_lead_row(lead: Any) -> dict[str, str]:
+    fields = ("status", "year", "make", "model", "price", "phone", "seller", "url")
+    raw = json.dumps(lead, sort_keys=True) if isinstance(lead, dict) else str(lead)
+    row = {field: "" for field in fields}
+    row["raw"] = raw
+
+    if isinstance(lead, dict):
+        for field in fields:
+            value = lead.get(field)
+            if value is not None:
+                row[field] = str(value)
+        return row
+
+    parts = [part.strip() for part in raw.split("|") if part.strip()]
+    if parts and ":" not in parts[0]:
+        row["status"] = parts[0]
+        parts = parts[1:]
+    for part in parts:
+        key, sep, value = part.partition(":")
+        if not sep:
+            continue
+        normalized = key.strip().lower().replace(" ", "_")
+        if normalized in row:
+            row[normalized] = value.strip()
+    return row
+
+
+def _write_leads_csv(path: Path, leads: list[Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["status", "year", "make", "model", "price", "phone", "seller", "url", "raw"],
+        )
+        writer.writeheader()
+        for lead in leads:
+            writer.writerow(_parse_lead_row(lead))
 
 
 def _plan_signature_from_steps(steps: list[dict[str, Any]]) -> str:
@@ -234,6 +286,7 @@ class BasetenCUARuntime:
         self.llama_proc: subprocess.Popen | None = None
         self.brain: Any = None
         self.lock = threading.Lock()
+        self.detached_threads: dict[str, threading.Thread] = {}
         self.loaded = False
 
     def load(self) -> None:
@@ -317,12 +370,197 @@ class BasetenCUARuntime:
         return brain
 
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        action = str(payload.get("action") or payload.get("op") or "").lower()
+        if action in {"status", "result", "logs"}:
+            return self._detached_action(action, payload)
+
         self.load()
+        if payload.get("detached"):
+            return self._start_detached(payload)
+
         with self.lock:
             task_suite = self._task_suite_from_payload(payload)
             if task_suite.get("_micro_plan"):
                 return self._run_micro(task_suite, payload)
             return self._run_tasks(task_suite, payload)
+
+    def _run_path(self, run_id: str, *, create: bool = False) -> Path:
+        safe_run_id = _safe_state_key(run_id)
+        if not safe_run_id or safe_run_id != run_id:
+            raise ValueError(f"invalid run_id: {run_id!r}")
+        path = _data_root() / "runs" / run_id
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2))
+        tmp_path.replace(path)
+
+    def _read_json_file(self, path: Path) -> dict[str, Any]:
+        if not path.exists():
+            raise FileNotFoundError(str(path))
+        return json.loads(path.read_text())
+
+    def _write_detached_status(self, run_id: str, status: dict[str, Any]) -> dict[str, Any]:
+        run_dir = self._run_path(run_id, create=True)
+        status_path = run_dir / "status.json"
+        existing: dict[str, Any] = {}
+        if status_path.exists():
+            try:
+                existing = json.loads(status_path.read_text())
+            except Exception:
+                existing = {}
+
+        merged = {
+            **existing,
+            **status,
+            "run_id": run_id,
+            "updated_at": _utc_now(),
+            "status_path": str(status_path),
+            "result_path": str(run_dir / "result.json"),
+            "csv_path": str(run_dir / "leads.csv"),
+            "events_path": str(run_dir / "events.log"),
+        }
+        self._write_json_atomic(status_path, merged)
+        return merged
+
+    def _append_detached_event(self, run_id: str, message: str) -> None:
+        run_dir = self._run_path(run_id, create=True)
+        line = json.dumps({"ts": _utc_now(), "message": message}, sort_keys=True)
+        with (run_dir / "events.log").open("a") as handle:
+            handle.write(line + "\n")
+
+    def _start_detached(self, payload: dict[str, Any]) -> dict[str, Any]:
+        run_id = _safe_state_key(str(payload.get("run_id") or _new_run_id()))
+        if run_id in self.detached_threads and self.detached_threads[run_id].is_alive():
+            raise RuntimeError(f"detached run already exists and is active: {run_id}")
+
+        run_payload = dict(payload)
+        run_payload.pop("detached", None)
+        run_payload["_detached_run_id"] = run_id
+        run_payload["_detached_started_at"] = _utc_now()
+
+        status = self._write_detached_status(
+            run_id,
+            {
+                "status": "queued",
+                "created_at": run_payload["_detached_started_at"],
+                "model": self.model_kind,
+                "mode": "detached",
+                "payload": {
+                    key: value
+                    for key, value in run_payload.items()
+                    if key not in {"task_file_contents"}
+                },
+            },
+        )
+        self._append_detached_event(run_id, "queued")
+
+        thread = threading.Thread(
+            target=self._run_detached_worker,
+            args=(run_id, run_payload),
+            name=f"baseten-detached-{run_id}",
+            daemon=True,
+        )
+        self.detached_threads[run_id] = thread
+        thread.start()
+        return status
+
+    def _run_detached_worker(self, run_id: str, payload: dict[str, Any]) -> None:
+        try:
+            self._append_detached_event(run_id, "waiting_for_runtime_lock")
+            with self.lock:
+                self._append_detached_event(run_id, "running")
+                self._write_detached_status(run_id, {"status": "running", "started_at": _utc_now()})
+                task_suite = self._task_suite_from_payload(payload)
+                if task_suite.get("_micro_plan"):
+                    result = self._run_micro(task_suite, payload, run_id=run_id)
+                else:
+                    result = self._run_tasks(task_suite, payload, run_id=run_id)
+                self._save_detached_result(run_id, result)
+                self._write_detached_status(
+                    run_id,
+                    {
+                        "status": "succeeded",
+                        "finished_at": _utc_now(),
+                        "summary": self._result_summary(result),
+                    },
+                )
+                self._append_detached_event(run_id, "succeeded")
+        except Exception as exc:
+            logger.exception("detached run %s failed", run_id)
+            self._write_detached_status(
+                run_id,
+                {
+                    "status": "failed",
+                    "finished_at": _utc_now(),
+                    "error": str(exc),
+                    "traceback": traceback.format_exc()[-4000:],
+                },
+            )
+            self._append_detached_event(run_id, f"failed: {exc}")
+
+    def _save_detached_result(self, run_id: str, result: dict[str, Any]) -> None:
+        run_dir = self._run_path(run_id, create=True)
+        run_result_path = run_dir / "result.json"
+        result["detached_result_path"] = str(run_result_path)
+        leads = result.get("leads")
+        if isinstance(leads, list):
+            csv_path = run_dir / "leads.csv"
+            _write_leads_csv(csv_path, leads)
+            result["detached_csv_path"] = str(csv_path)
+        self._write_json_atomic(run_result_path, result)
+
+    def _result_summary(self, result: dict[str, Any]) -> dict[str, Any]:
+        keys = (
+            "run_id",
+            "provider",
+            "session_name",
+            "model",
+            "mode",
+            "total_time_s",
+            "steps_executed",
+            "viable",
+            "leads_with_phone",
+            "passed",
+            "total",
+            "score",
+            "result_path",
+            "csv_path",
+            "detached_result_path",
+            "detached_csv_path",
+        )
+        return {key: result[key] for key in keys if key in result}
+
+    def _detached_action(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
+        run_id = str(payload.get("run_id") or "")
+        if not run_id:
+            raise ValueError("run_id is required")
+        run_dir = self._run_path(run_id)
+
+        if action == "status":
+            status = self._read_json_file(run_dir / "status.json")
+            thread = self.detached_threads.get(run_id)
+            if thread and thread.is_alive() and status.get("status") not in {"running", "queued"}:
+                status["in_memory_thread_alive"] = True
+            return status
+
+        if action == "result":
+            result_path = run_dir / "result.json"
+            if result_path.exists():
+                return self._read_json_file(result_path)
+            status = self._read_json_file(run_dir / "status.json")
+            return {"run_id": run_id, "status": status.get("status", "unknown"), "result_ready": False}
+
+        tail = int(payload.get("tail", 200))
+        events_path = run_dir / "events.log"
+        if not events_path.exists():
+            return {"run_id": run_id, "events": []}
+        lines = events_path.read_text(errors="ignore").splitlines()[-tail:]
+        return {"run_id": run_id, "events": lines}
 
     def _task_suite_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         if "task_suite" in payload:
@@ -428,13 +666,18 @@ class BasetenCUARuntime:
         )
         return env, proxy_proc
 
-    def _run_micro(self, task_suite: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    def _run_micro(
+        self,
+        task_suite: dict[str, Any],
+        payload: dict[str, Any],
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
         from mantis_agent.extraction import ClaudeExtractor
         from mantis_agent.grounding import ClaudeGrounding
         from mantis_agent.gym.micro_runner import MicroPlanRunner
         from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
 
-        run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         t0 = time.time()
         session_name = task_suite.get("session_name", "baseten_micro")
         env, proxy_proc = self._make_env(
@@ -504,10 +747,15 @@ class BasetenCUARuntime:
             if proxy_proc:
                 proxy_proc.terminate()
 
-    def _run_tasks(self, task_suite: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    def _run_tasks(
+        self,
+        task_suite: dict[str, Any],
+        payload: dict[str, Any],
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
         from mantis_agent.grounding import ClaudeGrounding
 
-        run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         t0 = time.time()
         tasks = task_suite.get("tasks", [])
         session_name = task_suite.get("session_name", "baseten_tasks")
@@ -581,8 +829,13 @@ class BasetenCUARuntime:
 
     def _save_result(self, result: dict[str, Any], prefix: str) -> None:
         result_path = _data_root() / "results" / f"{prefix}_results_{result['run_id']}.json"
-        result_path.write_text(json.dumps(result, indent=2))
         result["result_path"] = str(result_path)
+        leads = result.get("leads")
+        if isinstance(leads, list):
+            csv_path = _data_root() / "results" / f"{prefix}_leads_{result['run_id']}.csv"
+            _write_leads_csv(csv_path, leads)
+            result["csv_path"] = str(csv_path)
+        result_path.write_text(json.dumps(result, indent=2))
 
 
 runtime = BasetenCUARuntime()
@@ -612,7 +865,7 @@ async def predict(request: Request) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="request body must be a JSON object")
     try:
-        return runtime.run(payload)
+        return await run_in_threadpool(runtime.run, payload)
     except Exception as exc:
         logger.exception("predict failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

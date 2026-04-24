@@ -39,17 +39,39 @@ uvx truss push baseten/gemma4_26b \
 
 ## Trigger A Workload Run
 
-Use Baseten async inference for long runs. The default request runs
-`plans/boattrader/extract_url_filtered.json`.
+The default request runs `plans/boattrader/extract_url_filtered.json`. For
+Modal-like behavior, set `detached: true`; the Baseten server returns a
+`run_id` immediately, continues work in the replica, and writes status, results,
+and lead CSV files under `$MANTIS_DATA_DIR/runs/<run_id>/`.
 
 ```json
 {
+  "detached": true,
   "micro": "plans/boattrader/extract_url_filtered.json",
   "state_key": "boattrader-miami-private-v1",
   "resume_state": false,
   "max_cost": 10.0,
   "max_time_minutes": 180
 }
+```
+
+Poll status through the same `/predict` endpoint:
+
+```json
+{"action": "status", "run_id": "20260424_123456_ab12cd34"}
+```
+
+Fetch the result or server-side run events:
+
+```json
+{"action": "result", "run_id": "20260424_123456_ab12cd34"}
+{"action": "logs", "run_id": "20260424_123456_ab12cd34", "tail": 200}
+```
+
+Full model logs are still available from Baseten:
+
+```bash
+uvx truss model-logs --model-id <model_id> --deployment-id <deployment_id>
 ```
 
 ## Trigger Fine-Tuning

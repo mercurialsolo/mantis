@@ -174,6 +174,7 @@ class MicroPlanRunner:
         self._last_known_url: str = ""
         self._scroll_state: dict[str, Any] = {}
         self._last_extracted: dict[str, Any] = {}
+        self._opened_detail_in_new_tab: bool = False
         self._active_checkpoint_context: dict[str, Any] | None = None
         self._final_status: str = "running"
         self.max_cost = max_cost
@@ -620,8 +621,7 @@ class MicroPlanRunner:
                 logger.info(f"  [{step_index}] DEDUP — skipping to next listing")
                 # Go back to results page first
                 try:
-                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
-                    time.sleep(2)
+                    self._return_to_results_page()
                 except Exception:
                     pass
                 # Jump to loop step
@@ -1072,8 +1072,36 @@ class MicroPlanRunner:
             time.sleep(3)  # Longer wait — page filters may lazy-load
             return self._execute_claude_guided_filter(step, index)
 
+        if step.type == "navigate_back" and self._opened_detail_in_new_tab:
+            return self._execute_close_detail_tab(step, index)
+
         # Holo3 steps (scroll, navigate_back, paginate)
         return self._execute_holo3_step(step, index)
+
+    def _return_to_results_page(self) -> None:
+        if self._opened_detail_in_new_tab:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+w"}))
+            self._opened_detail_in_new_tab = False
+        else:
+            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
+        time.sleep(2)
+
+    def _execute_close_detail_tab(self, step: MicroIntent, index: int) -> StepResult:
+        try:
+            self._return_to_results_page()
+            if self.extractor:
+                screenshot = self.env.screenshot()
+                check = self.extractor.extract(screenshot)
+                self.costs["claude_extract"] += 1
+                url = check.url if check else ""
+                if url:
+                    self._last_known_url = url
+                if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+                    return StepResult(step_index=index, intent=step.intent, success=False)
+            return StepResult(step_index=index, intent=step.intent, success=True, steps_used=1)
+        except Exception as exc:
+            logger.warning("  [back] Failed closing detail tab: %s", exc)
+            return StepResult(step_index=index, intent=step.intent, success=False)
 
     def _execute_navigate(self, step: MicroIntent, index: int) -> StepResult:
         """Navigate to a URL using env.reset() — no Holo3 steps needed.
@@ -1265,6 +1293,43 @@ class MicroPlanRunner:
 
             if verify_attempt == 0:
                 logger.info(f"  [claude-click] Not on detail page yet (url={url[:40]}) — retrying verify")
+
+        logger.info("  [claude-click] Plain click did not navigate — trying middle-click fallback")
+        try:
+            self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y, "button": "middle"}))
+            self.costs["gpu_steps"] += 1
+            self.costs["gpu_seconds"] += 3
+            self.costs["proxy_mb"] += 5.0
+            time.sleep(2)
+
+            for switch_attempt in range(2):
+                after = self.env.screenshot()
+                verify_data = self.extractor.extract(after)
+                self.costs["claude_extract"] += 1
+                url = verify_data.url if verify_data else ""
+                if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+                    logger.info(f"  [claude-click] Middle-click fallback opened detail: {url[:60]}")
+                    self._opened_detail_in_new_tab = True
+                    self._last_known_url = url
+                    self._last_extracted = {
+                        **self._last_extracted,
+                        "last_clicked_title": getattr(self, "_last_click_title", ""),
+                        "last_attempted_url": url,
+                        "last_attempted_at": time.time(),
+                        "last_attempted_step": index,
+                    }
+                    self._set_scroll_state(context="detail_top", url=url, page_downs=0, wheel_downs=0)
+                    self._listings_on_page += 1
+                    if hasattr(self, '_last_click_title') and self._last_click_title:
+                        self._extracted_titles.append(self._last_click_title)
+                    return StepResult(step_index=index, intent=step.intent, success=True,
+                                    steps_used=2 + switch_attempt, duration=9.0)
+
+                if switch_attempt == 0:
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+Tab"}))
+                    time.sleep(2)
+        except Exception as e:
+            logger.warning(f"  [claude-click] Middle-click fallback failed: {e}")
 
         logger.warning(f"  [claude-click] Failed verification after retries (url={url[:40]})")
         # Mark title as tried so we don't re-attempt the same card
