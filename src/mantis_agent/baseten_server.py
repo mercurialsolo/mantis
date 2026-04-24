@@ -343,7 +343,13 @@ class BasetenCUARuntime:
         path = Path(raw_path)
         if path.is_absolute():
             return path
-        return _repo_root() / path
+        candidates = [_repo_root() / path]
+        if path.parts and path.parts[0] == "plans":
+            candidates.append(_repo_root().joinpath(*path.parts[1:]))
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
 
     def _micro_suite_from_path(self, raw_path: str, payload: dict[str, Any]) -> dict[str, Any]:
         from mantis_agent.plan_decomposer import MicroPlan, PlanDecomposer

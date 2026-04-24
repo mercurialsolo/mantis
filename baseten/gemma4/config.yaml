@@ -1,38 +1,61 @@
-model_name: mantis-gemma4-cua-workload
+model_name: "model:gemma-4-26B-A4B-it preset:latency"
 base_image:
-  image: pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel
-build_commands:
-  - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential cmake curl wget gnupg xvfb xdotool scrot ca-certificates fonts-liberation fonts-noto-color-emoji libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libpango-1.0-0 libcairo2 libasound2 libxshmfence1
-  - curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
-  - echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list
-  - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable
-  - git clone --depth 1 --branch baseten-support https://github.com/mercurialsolo/cua-agent.git /workspace/cua-agent
-  - cd /workspace/cua-agent && pip install --no-cache-dir -e . openai requests pillow mss huggingface-hub fastapi uvicorn pydantic
-  - git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp
-  - ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 && ldconfig
-  - cd /opt/llama.cpp && cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="80;90" -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON && cmake --build build --target llama-server --config Release -j$(nproc)
+  image: vllm/vllm-openai:nightly-bcc2306cefa4179c548d3e638e7a22a88d281733
+model_metadata:
+  repo_id: RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic
+  example_model_input:
+    model: google/gemma-4-26B-A4B-it
+    messages:
+      - role: user
+        content:
+          - type: text
+            text: "Describe this image in one sentence."
+          - type: image_url
+            image_url:
+              url: "https://picsum.photos/id/237/200/300"
+    stream: true
+    max_tokens: 512
+    temperature: 1.0
+  tags:
+    - openai-compatible
+weights:
+  - source: "hf://RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic@main"
+    mount_location: "/app/checkpoint/gemma"
+    auth:
+      auth_method: CUSTOM_SECRET
+      auth_secret_name: "hf_access_token"
 docker_server:
-  start_command: bash -lc "cd /workspace/cua-agent && MANTIS_MODEL=gemma4-cua MANTIS_LLAMA_PORT=18080 MANTIS_DATA_DIR=/workspace/mantis-data uvicorn mantis_agent.baseten_server:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 300"
-  server_port: 8000
-  predict_endpoint: /predict
+  start_command: >-
+    sh -c "GPU_COUNT=$(nvidia-smi --list-gpus | wc -l) && vllm serve /app/checkpoint/gemma
+    --tensor-parallel-size $GPU_COUNT
+    --served-model-name google/gemma-4-26B-A4B-it
+    --max-num-seqs 16
+    --max-model-len auto
+    --limit-mm-per-prompt '{\"image\": 1}'
+    --gpu-memory-utilization 0.9
+    --speculative-config '{\"model\":\"RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3\",\"num_speculative_tokens\":3,\"method\":\"eagle3\"}'
+    --trust-remote-code
+    --enable-auto-tool-choice
+    --reasoning-parser gemma4
+    --tool-call-parser gemma4"
   readiness_endpoint: /health
   liveness_endpoint: /health
+  predict_endpoint: /v1/chat/completions
+  server_port: 8000
+environment_variables:
+  VLLM_LOGGING_LEVEL: INFO
+requirements:
+  - huggingface_hub
+  - hf_transfer
+  - datasets
 resources:
-  instance_type: "H100"
-runtime:
-  predict_concurrency: 1
-  health_checks:
-    startup_threshold_seconds: 3000
-    stop_traffic_threshold_seconds: 1800
-    restart_threshold_seconds: 1800
-weights:
-  - source: "hf://ggml-org/gemma-4-E4B-it-GGUF@main"
-    mount_location: "/models/gemma4"
-    allow_patterns:
-      - "gemma-4-e4b-it-Q4_K_M.gguf"
-      - "mmproj-gemma-4-e4b-it-f16.gguf"
+  accelerator: H100:2
+  use_gpu: true
 secrets:
-  anthropic_api_key: null
-  proxy_url: null
-  proxy_user: null
-  proxy_pass: null
+  hf_access_token: null
+runtime:
+  health_checks:
+    restart_check_delay_seconds: 300
+    restart_threshold_seconds: 300
+    stop_traffic_threshold_seconds: 120
+  predict_concurrency: 8
