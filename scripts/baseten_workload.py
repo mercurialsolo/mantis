@@ -145,17 +145,21 @@ def command_result(args: argparse.Namespace) -> int:
 
 
 def command_watch(args: argparse.Namespace) -> int:
-    seen_events = 0
+    last_seen_event: str | None = None
     while True:
         status = post_json(args, {"action": "status", "run_id": args.run_id})
         events = post_json(args, {"action": "logs", "run_id": args.run_id, "tail": args.tail}).get(
             "events", []
         )
-        for line in events[seen_events:]:
-            print(line)
-        seen_events = len(events)
+        start = 0
+        if last_seen_event is not None and last_seen_event in events:
+            start = len(events) - 1 - events[::-1].index(last_seen_event) + 1
+        for line in events[start:]:
+            print(line, flush=True)
+        if events:
+            last_seen_event = events[-1]
         state = status.get("status")
-        print(f"status={state} updated_at={status.get('updated_at')}", file=sys.stderr)
+        print(f"status={state} updated_at={status.get('updated_at')}", file=sys.stderr, flush=True)
         if state not in {"queued", "running"}:
             print_json(status)
             return 0 if state == "succeeded" else 1
