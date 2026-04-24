@@ -10,7 +10,7 @@ from truss_train import (
 )
 
 
-BASE_IMAGE = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime"
+BASE_IMAGE = "pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel"
 
 training_runtime = Runtime(
     start_commands=[
