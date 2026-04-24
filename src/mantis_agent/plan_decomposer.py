@@ -96,6 +96,20 @@ Plans MUST be organized into sections. Each section has a purpose and a gate:
    - Paginate → loop back to extraction
    - Only runs after extraction exhausts current page
 
+DYNAMIC PLAN VERIFICATION CONTRACT:
+For any plan that browses search results, listings, products, profiles, rows, or
+other repeated page items, structure the plan so the runtime can prove coverage:
+   - The setup gate must state the required page/filter/search state.
+   - The extraction loop must discover visible items, attempt each discovered
+     item exactly once, open the item detail or row, and produce a terminal
+     extraction decision for it.
+   - Page exhaustion must be observable before pagination: the executor must
+     scan down the results page until no new relevant items remain.
+   - Pagination must be a separate step after page exhaustion, and the loop must
+     continue until no next page/control is available.
+   - Do not hardcode a fixed item count unless the user explicitly provides one;
+     use a bounded loop with runtime exhaustion checks.
+
 RULES:
 - Each step: ONE action, ONE sentence, under 20 words
 - POSITIVE framing only: "Click the blue title text" (not "Don't click the photo")
@@ -162,7 +176,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v5_private_seller_strict"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v6_dynamic_coverage"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = plan_path.replace(".txt", f"_micro_{plan_hash}.json")
         if os.path.exists(cache_path):

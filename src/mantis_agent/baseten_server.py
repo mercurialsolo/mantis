@@ -555,6 +555,7 @@ class BasetenCUARuntime:
             "csv_path",
             "detached_result_path",
             "detached_csv_path",
+            "dynamic_verification_summary",
         )
         return {key: result[key] for key in keys if key in result}
 
@@ -736,6 +737,15 @@ class BasetenCUARuntime:
             unique_leads = {runner._lead_key(lead): lead for lead in lead_rows}
             leads = list(unique_leads.values())
             costs = getattr(runner, "_final_costs", {})
+            dynamic_verification = runner.dynamic_verification_report(
+                status=costs.get("status") or getattr(runner, "_final_status", "unknown")
+            )
+            dynamic_verification_summary = {
+                "status": dynamic_verification.get("status"),
+                "verdict": dynamic_verification.get("verdict"),
+                "totals": dynamic_verification.get("totals", {}),
+                "checks": dynamic_verification.get("checks", []),
+            }
             result = {
                 "run_id": run_id,
                 "provider": "baseten",
@@ -751,6 +761,8 @@ class BasetenCUARuntime:
                 "plan_signature": task_suite.get("_plan_signature", ""),
                 "resume_state": resume_state,
                 "costs": costs,
+                "dynamic_verification": dynamic_verification,
+                "dynamic_verification_summary": dynamic_verification_summary,
                 "leads": leads,
                 "step_details": [
                     {

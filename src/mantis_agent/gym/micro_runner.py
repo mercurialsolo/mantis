@@ -32,6 +32,7 @@ from ..actions import Action, ActionType
 from .runner import GymRunner
 
 from ..plan_decomposer import MicroIntent, MicroPlan
+from ..verification.dynamic_plan_verifier import DynamicPlanVerifier
 
 if TYPE_CHECKING:
     from ..extraction import ClaudeExtractor
@@ -87,6 +88,7 @@ class RunCheckpoint:
     scroll_state: dict = field(default_factory=dict)
     last_extracted: dict = field(default_factory=dict)
     costs: dict = field(default_factory=dict)
+    dynamic_coverage: dict = field(default_factory=dict)
     timestamp: float = 0.0
 
     def save(self, path: str):
@@ -147,6 +149,7 @@ class MicroPlanRunner:
         plan_signature: str = "",
         resume_state: bool = False,
         on_checkpoint: Any = None,
+        dynamic_verifier: DynamicPlanVerifier | None = None,
         max_cost: float = 10.0,     # Stop if total cost exceeds this
         max_time_minutes: int = 180, # Stop if runtime exceeds this (3 hours)
     ):
@@ -162,6 +165,7 @@ class MicroPlanRunner:
         self.plan_signature = plan_signature
         self.resume_state = resume_state
         self.on_checkpoint = on_checkpoint
+        self.dynamic_verifier = dynamic_verifier or DynamicPlanVerifier(plan_name=session_name)
         self._seen_urls: set[str] = set()
         self._extracted_titles: list[str] = []  # Exact titles Claude returned, for skip list
         self._page_listings: list[tuple[int, int, str]] = []  # Cached card coords for current viewport
@@ -189,6 +193,9 @@ class MicroPlanRunner:
             "proxy_mb": 0.0,       # Estimated proxy bandwidth
         }
         self._run_start = time.time()
+
+    def dynamic_verification_report(self, status: str | None = None) -> dict[str, Any]:
+        return self.dynamic_verifier.report(status=status or self._final_status)
 
     @staticmethod
     def _compute_plan_signature(plan: MicroPlan) -> str:
@@ -306,6 +313,7 @@ class MicroPlanRunner:
         checkpoint.scroll_state = dict(self._scroll_state)
         checkpoint.last_extracted = dict(self._last_extracted)
         checkpoint.costs = dict(self.costs)
+        checkpoint.dynamic_coverage = self.dynamic_verification_report(status=status)
         checkpoint.save(self.checkpoint_path)
         self._final_status = status
         if self.on_checkpoint:
@@ -330,6 +338,8 @@ class MicroPlanRunner:
         self._scroll_state = dict(checkpoint.scroll_state or {})
         self._last_extracted = dict(checkpoint.last_extracted or {})
         self.costs.update(checkpoint.costs or {})
+        if checkpoint.dynamic_coverage:
+            self.dynamic_verifier.load_report(checkpoint.dynamic_coverage)
         self._listings_on_page = checkpoint.listings_on_page
         results = [StepResult.from_dict(item) for item in checkpoint.step_results]
         loop_counters = {int(k): int(v) for k, v in (checkpoint.loop_counters or {}).items()}
@@ -536,6 +546,12 @@ class MicroPlanRunner:
         if not self._results_base_url and plan.steps:
             self._results_base_url = self._extract_url_from_intent(plan.steps[0].intent)
             self._required_filter_tokens = self._derive_filter_tokens(self._results_base_url)
+            self.dynamic_verifier.set_required_filter_tokens(self._required_filter_tokens)
+            if self._results_base_url:
+                self.dynamic_verifier.record_page_start(
+                    page=self._current_page,
+                    url=self._current_results_page_url() or self._results_base_url,
+                )
 
         def persist(next_step_index: int, status: str = "running", halt_reason: str = "") -> None:
             self._persist_checkpoint(
@@ -978,6 +994,12 @@ class MicroPlanRunner:
 
         if not force_reload and self._url_has_required_filters(url):
             self._last_known_url = url
+            self.dynamic_verifier.record_filter_check(
+                page=self._current_page,
+                url=url,
+                passed=True,
+                reason="url_contains_required_filters",
+            )
             return True
 
         if not force_reload and not url and screenshot is not None:
@@ -991,8 +1013,20 @@ class MicroPlanRunner:
                 if passed:
                     logger.info("  [filters] Visual filter gate passed despite unreadable URL")
                     self._last_known_url = self._current_results_page_url() or self._results_base_url
+                    self.dynamic_verifier.record_filter_check(
+                        page=self._current_page,
+                        url=self._last_known_url,
+                        passed=True,
+                        reason="visual_gate_passed",
+                    )
                     return True
                 logger.warning("  [filters] Visual filter gate failed: %s", reason[:120])
+                self.dynamic_verifier.record_filter_check(
+                    page=self._current_page,
+                    url=url,
+                    passed=False,
+                    reason=reason[:200],
+                )
             except Exception as e:
                 logger.warning("  [filters] Visual filter gate errored: %s", e)
 
@@ -1012,9 +1046,21 @@ class MicroPlanRunner:
             self._reset_results_scan_state()
             self._last_known_url = reload_url
             self._set_scroll_state(context="results_top", url=reload_url, page_downs=0, wheel_downs=0)
+            self.dynamic_verifier.record_filter_check(
+                page=self._current_page,
+                url=reload_url,
+                passed=True,
+                reason="reloaded_canonical_filtered_results",
+            )
             return True
         except Exception as e:
             logger.error("  [filters] Failed to reload filtered results: %s", e)
+            self.dynamic_verifier.record_filter_check(
+                page=self._current_page,
+                url=url,
+                passed=False,
+                reason=f"reload_failed:{e}",
+            )
             return False
 
     def _execute_step(self, step: MicroIntent, index: int) -> StepResult:
@@ -1130,6 +1176,8 @@ class MicroPlanRunner:
             self._last_known_url = url
             self._reset_results_scan_state()
             self._set_scroll_state(context="results_top", url=url, page_downs=0, wheel_downs=0)
+            self.dynamic_verifier.set_required_filter_tokens(self._required_filter_tokens)
+            self.dynamic_verifier.record_page_start(page=self._current_page, url=url)
             return StepResult(step_index=index, intent=step.intent, success=True)
         except Exception as e:
             logger.error(f"  [navigate] Failed: {e}")
@@ -1170,10 +1218,19 @@ class MicroPlanRunner:
                 scan_result = self.extractor.find_all_listings(screenshot)
                 self.costs["claude_extract"] += 1
 
+                scan_status = "ok"
                 if isinstance(scan_result, tuple):
                     status = scan_result[0]
                     if status == "blocked":
                         logger.warning(f"  [claude-click] Viewport {self._viewport_stage}: blocked/error page")
+                        self.dynamic_verifier.record_viewport_scan(
+                            page=self._current_page,
+                            viewport_stage=self._viewport_stage,
+                            cards=[],
+                            new_cards=[],
+                            status="blocked",
+                            url=self._current_results_page_url() or self._last_known_url,
+                        )
                         return StepResult(
                             step_index=index,
                             intent=step.intent,
@@ -1182,12 +1239,21 @@ class MicroPlanRunner:
                         )
                     if status == "error":
                         logger.warning(f"  [claude-click] Viewport {self._viewport_stage}: parse/API failure")
+                        self.dynamic_verifier.record_viewport_scan(
+                            page=self._current_page,
+                            viewport_stage=self._viewport_stage,
+                            cards=[],
+                            new_cards=[],
+                            status="error",
+                            url=self._current_results_page_url() or self._last_known_url,
+                        )
                         return StepResult(
                             step_index=index,
                             intent=step.intent,
                             success=False,
                             data="scan_error",
                         )
+                    scan_status = status
                     cards = []
                 else:
                     cards = scan_result
@@ -1199,6 +1265,14 @@ class MicroPlanRunner:
                 unknown_cards = [(x, y, t) for x, y, t in cards if t == "unknown"]
                 filtered.extend(unknown_cards)
                 filtered.sort(key=lambda c: c[1])
+                self.dynamic_verifier.record_viewport_scan(
+                    page=self._current_page,
+                    viewport_stage=self._viewport_stage,
+                    cards=cards,
+                    new_cards=filtered,
+                    status=scan_status,
+                    url=self._current_results_page_url() or self._last_known_url,
+                )
 
                 logger.info(f"  [claude-click] Viewport {self._viewport_stage}: {len(cards)} cards, {len(filtered)} new")
 
@@ -1211,6 +1285,10 @@ class MicroPlanRunner:
 
             if not self._page_listings or self._page_listing_index >= len(self._page_listings):
                 logger.info(f"  [claude-click] All {self._max_viewport_stages} viewports exhausted")
+                self.dynamic_verifier.record_page_exhausted(
+                    page=self._current_page,
+                    reason=f"all_{self._max_viewport_stages}_viewports_exhausted",
+                )
                 return StepResult(step_index=index, intent=step.intent, success=False,
                                 data="page_exhausted")
 
@@ -1218,6 +1296,11 @@ class MicroPlanRunner:
         x, y, title = self._page_listings[self._page_listing_index]
         self._page_listing_index += 1
         self._last_click_title = title
+        self.dynamic_verifier.record_item_attempt(
+            page=self._current_page,
+            item=title,
+            viewport_stage=self._viewport_stage,
+        )
 
         # Scroll to the correct viewport (Home + N Page_Downs)
         try:
@@ -1263,6 +1346,12 @@ class MicroPlanRunner:
             self.costs["proxy_mb"] += 5.0
         except Exception as e:
             logger.warning(f"  [claude-click] Click failed: {e}")
+            self.dynamic_verifier.record_item_completed(
+                page=self._current_page,
+                item=getattr(self, "_last_click_title", "") or title,
+                success=False,
+                reason=f"click_failed:{e}",
+            )
             return StepResult(step_index=index, intent=step.intent, success=False)
 
         # Verify: are we on a detail page? Retry once (page may still load)
@@ -1276,6 +1365,11 @@ class MicroPlanRunner:
             if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
                 logger.info(f"  [claude-click] Verified on detail page: {url[:60]}")
                 self._last_known_url = url
+                self.dynamic_verifier.record_item_opened(
+                    page=self._current_page,
+                    item=getattr(self, "_last_click_title", "") or title,
+                    url=url,
+                )
                 self._last_extracted = {
                     **self._last_extracted,
                     "last_clicked_title": getattr(self, "_last_click_title", ""),
@@ -1311,6 +1405,11 @@ class MicroPlanRunner:
                     logger.info(f"  [claude-click] Middle-click fallback opened detail: {url[:60]}")
                     self._opened_detail_in_new_tab = True
                     self._last_known_url = url
+                    self.dynamic_verifier.record_item_opened(
+                        page=self._current_page,
+                        item=getattr(self, "_last_click_title", "") or title,
+                        url=url,
+                    )
                     self._last_extracted = {
                         **self._last_extracted,
                         "last_clicked_title": getattr(self, "_last_click_title", ""),
@@ -1332,6 +1431,13 @@ class MicroPlanRunner:
             logger.warning(f"  [claude-click] Middle-click fallback failed: {e}")
 
         logger.warning(f"  [claude-click] Failed verification after retries (url={url[:40]})")
+        self.dynamic_verifier.record_item_completed(
+            page=self._current_page,
+            item=getattr(self, "_last_click_title", "") or title,
+            url=url,
+            success=False,
+            reason="detail_page_not_verified",
+        )
         # Mark title as tried so we don't re-attempt the same card
         if hasattr(self, '_last_click_title') and self._last_click_title:
             self._extracted_titles.append(self._last_click_title)
@@ -1500,6 +1606,7 @@ class MicroPlanRunner:
         # Track current page number
         if not hasattr(self, '_current_page'):
             self._current_page = 1
+        current_page = self._current_page
 
         # ── Layer 1: URL-based pagination ──
         # Use the stored results base URL (from initial navigate), NOT the current page URL
@@ -1528,10 +1635,24 @@ class MicroPlanRunner:
                 self._current_page = next_page
                 self._last_known_url = next_url
                 self._set_scroll_state(context="results_top", url=next_url, page_downs=0, wheel_downs=0)
+                self.dynamic_verifier.record_pagination(
+                    page=current_page,
+                    success=True,
+                    method="url",
+                    next_url=next_url,
+                )
+                self.dynamic_verifier.record_page_start(page=next_page, url=next_url)
                 return StepResult(step_index=index, intent=step.intent, success=True,
                                 steps_used=0, data=f"url_paginate_page{next_page}")
             except Exception as e:
                 logger.warning(f"  [paginate] Layer 1 failed: {e}")
+                self.dynamic_verifier.record_pagination(
+                    page=current_page,
+                    success=False,
+                    method="url",
+                    next_url=next_url,
+                    reason=f"url_navigation_failed:{e}",
+                )
 
         # ── Layer 2: Claude-guided ──
         logger.info("  [paginate] Layer 2: Claude-guided (End → Page_Up)")
@@ -1540,6 +1661,13 @@ class MicroPlanRunner:
             self._current_page += 1
             self._last_known_url = self._current_results_page_url()
             self._set_scroll_state(context="results_top", url=self._last_known_url, page_downs=0, wheel_downs=0)
+            self.dynamic_verifier.record_pagination(
+                page=current_page,
+                success=True,
+                method="claude_guided",
+                next_url=self._last_known_url,
+            )
+            self.dynamic_verifier.record_page_start(page=self._current_page, url=self._last_known_url)
             return claude_result
 
         # ── Layer 3: Holo3 fallback ──
@@ -1568,6 +1696,20 @@ class MicroPlanRunner:
             self._current_page += 1
             self._last_known_url = self._current_results_page_url()
             self._set_scroll_state(context="results_top", url=self._last_known_url, page_downs=0, wheel_downs=0)
+            self.dynamic_verifier.record_pagination(
+                page=current_page,
+                success=True,
+                method="holo3",
+                next_url=self._last_known_url,
+            )
+            self.dynamic_verifier.record_page_start(page=self._current_page, url=self._last_known_url)
+        else:
+            self.dynamic_verifier.record_pagination(
+                page=current_page,
+                success=False,
+                method="all_layers",
+                reason="next_control_not_found",
+            )
         return holo_result
 
     def _execute_claude_guided_paginate(self, step: MicroIntent, index: int) -> StepResult:
@@ -1748,6 +1890,25 @@ class MicroPlanRunner:
         # Default: trust the runner's success signal
         return True
 
+    def _current_item_label(self, data: Any = None) -> str:
+        title = (
+            self._last_extracted.get("last_clicked_title")
+            or getattr(self, "_last_click_title", "")
+        )
+        if title:
+            return str(title)
+        if data is not None:
+            year = getattr(data, "year", "") or ""
+            make = getattr(data, "make", "") or ""
+            model = getattr(data, "model", "") or ""
+            label = " ".join(part for part in (year, make, model) if part).strip()
+            if label:
+                return label
+            url = getattr(data, "url", "") or ""
+            if url:
+                return url
+        return self._last_extracted.get("last_attempted_url") or "unknown"
+
     def _execute_claude_step(self, step: MicroIntent, index: int) -> StepResult:
         """Execute a Claude-only step (screenshot → API → data)."""
         if not self.extractor:
@@ -1762,6 +1923,13 @@ class MicroPlanRunner:
             # Dedup check
             if url and url in self._seen_urls:
                 logger.info(f"  [dedup] Already seen: {url[:50]}")
+                self.dynamic_verifier.record_item_completed(
+                    page=self._current_page,
+                    item=self._current_item_label(data),
+                    url=url,
+                    success=True,
+                    reason="duplicate_url_skipped",
+                )
                 return StepResult(
                     step_index=index, intent=step.intent,
                     success=False, data=f"DUPLICATE|{url}",
@@ -1783,6 +1951,7 @@ class MicroPlanRunner:
 
         elif step.type == "extract_data":
             data, _actions_used = self._extract_listing_data_deep(screenshot)
+            item_label = self._current_item_label(data)
             if data and getattr(data, "url", ""):
                 self._last_known_url = data.url
                 self._last_extracted = {
@@ -1802,6 +1971,13 @@ class MicroPlanRunner:
                     "last_completed_step": index,
                     "last_completed_at": time.time(),
                 }
+                self.dynamic_verifier.record_item_completed(
+                    page=self._current_page,
+                    item=item_label,
+                    url=data.url,
+                    success=True,
+                    reason="viable_lead",
+                )
                 return StepResult(
                     step_index=index, intent=step.intent,
                     success=True, data=summary,
@@ -1816,6 +1992,13 @@ class MicroPlanRunner:
                     "last_rejected_step": index,
                     "last_rejected_at": time.time(),
                 }
+                self.dynamic_verifier.record_item_completed(
+                    page=self._current_page,
+                    item=item_label,
+                    url=data.url,
+                    success=True,
+                    reason=f"rejected_dealer:{reason}",
+                )
                 return StepResult(
                     step_index=index, intent=step.intent,
                     success=False,
@@ -1831,11 +2014,25 @@ class MicroPlanRunner:
                     "last_rejected_step": index,
                     "last_rejected_at": time.time(),
                 }
+                self.dynamic_verifier.record_item_completed(
+                    page=self._current_page,
+                    item=item_label,
+                    url=data.url,
+                    success=True,
+                    reason=f"rejected_incomplete:{reason}",
+                )
                 return StepResult(
                     step_index=index, intent=step.intent,
                     success=False,
                     data=f"REJECTED_INCOMPLETE|{reason}|{data.to_summary()[:160]}",
                 )
+            self.dynamic_verifier.record_item_completed(
+                page=self._current_page,
+                item=item_label,
+                url=getattr(data, "url", "") if data else "",
+                success=False,
+                reason="extract_data_incomplete",
+            )
             return StepResult(
                 step_index=index, intent=step.intent,
                 success=False, data=data.raw_response[:100] if data else "",
