@@ -260,6 +260,7 @@ class BasetenCUARuntime:
             "-ngl", "99",
             "-c", os.environ.get("MANTIS_CONTEXT_SIZE", "8192"),
             "-ub", os.environ.get("MANTIS_UBATCH_SIZE", "2048"),
+            "--fit", "off",
         ]
         if mmproj_path:
             cmd.extend(["--mmproj", str(mmproj_path)])

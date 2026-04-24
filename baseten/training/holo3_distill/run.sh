@@ -12,10 +12,10 @@ cd "${WORKDIR}"
 
 python -m pip install --upgrade pip
 python -m pip install --no-cache-dir \
-  "transformers>=5.2" "torch>=2.1" "datasets" \
+  "transformers>=5.2" "datasets" \
   "trl>=0.14" "peft>=0.15" "bitsandbytes>=0.45" \
   "accelerate>=1.5" "huggingface-hub" "pillow" \
-  "unsloth[colab-new]"
+  "xformers==0.0.30" "unsloth[colab-new]==2025.7.2"
 
 args=(
   training/train_holo3_distill.py

@@ -12,7 +12,7 @@ build_commands:
   - pip install --no-cache-dir openai requests pillow mss huggingface-hub fastapi uvicorn pydantic
   - git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp
   - ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 && ldconfig
-  - cd /opt/llama.cpp && cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="80;90" -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON && cmake --build build --target llama-server --config Release -j$(nproc)
+  - cd /opt/llama.cpp && cmake -B build -DGGML_CUDA=ON -DGGML_NATIVE=OFF -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DCMAKE_CUDA_ARCHITECTURES="80;90" -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON && cmake --build build --target llama-server --config Release -j$(nproc)
 docker_server:
   start_command: bash -lc "PYTHONPATH=/packages MANTIS_MODEL=holo3 MANTIS_LLAMA_PORT=18080 MANTIS_DATA_DIR=/workspace/mantis-data MANTIS_REPO_ROOT=/packages uvicorn mantis_agent.baseten_server:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 300"
   server_port: 8000

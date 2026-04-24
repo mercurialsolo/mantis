@@ -88,8 +88,8 @@ def train(args):
         from unsloth import FastVisionModel
         logger.info("Using Unsloth for memory-efficient training")
         use_unsloth = True
-    except ImportError:
-        logger.warning("Unsloth not available, falling back to standard HF")
+    except Exception:
+        logger.exception("Unsloth unavailable, falling back to standard HF")
         use_unsloth = False
 
     # 1. Load model
