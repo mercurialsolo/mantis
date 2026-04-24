@@ -112,6 +112,23 @@ class ExtractionResult:
         """Strict private-seller check for BoatTrader lead extraction."""
         return not self.dealer_reason()
 
+    def has_phone(self) -> bool:
+        """Require an actually visible phone number for lead viability."""
+        phone = self.phone.strip().lower()
+        if phone in {"", "none", "n/a", "na", "unknown", "not visible", "not shown"}:
+            return False
+        digits = re.sub(r"\D", "", phone)
+        return len(digits) >= 10
+
+    def missing_required_reason(self) -> str:
+        """Return why this extraction is not a usable lead."""
+        missing = []
+        if not self.year:
+            missing.append("year")
+        if not self.make:
+            missing.append("make")
+        return f"missing required field(s): {', '.join(missing)}" if missing else ""
+
     def to_summary(self) -> str:
         """Format as the VIABLE summary string."""
         parts = []
@@ -155,6 +172,7 @@ Extract ALL of the following data visible on the page:
    "MarineMax", sponsored ads, or new-boat/dealer inventory.
 
 For phone numbers: look in Description, Seller Notes, or contact sections.
+If no seller phone is visible, return phone as "".
 NOT phone numbers: prices, years, zip codes, model numbers, HP ratings.
 
 Output ONLY valid JSON:
@@ -196,6 +214,11 @@ Phone search priority:
 - Contact/Call/phone reveal areas if visible
 - International numbers are valid, including +507 6615-9404 or +596696520959
 - Plain 10 digit numbers are valid, including 7863462333
+
+Phone reporting:
+- A visible seller phone number makes the lead higher value.
+- If no phone is visible, return phone as "" so metrics can separate phone leads
+  from private-seller leads without phone.
 
 Dealer/sponsored detection:
 - is_dealer=true for dealer inventory, broker listings, company sellers, sponsored ads,
@@ -698,7 +721,7 @@ class ClaudeExtractor:
         except Exception as e:
             logger.debug(f"[find_all] failed to save prompt: {e}")
 
-        text = self._call(screenshot, prompt, max_tokens=500)
+        text = self._call(screenshot, prompt, max_tokens=1500)
 
         try:
             with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:

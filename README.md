@@ -82,6 +82,19 @@ uv run modal run --detach modal_cua_server.py \
   --micro plans/boattrader/extract_url_filtered.json \
   --model holo3 --viewer
 
+# Production run with externalized checkpoint state:
+uv run modal run --detach modal_cua_server.py \
+  --micro plans/boattrader/extract_url_filtered.json \
+  --model holo3 --viewer \
+  --state-key boattrader-miami-private-v1
+
+# Retry a later Modal run from the last checkpoint for that state key:
+uv run modal run --detach modal_cua_server.py \
+  --micro plans/boattrader/extract_url_filtered.json \
+  --model holo3 --viewer \
+  --state-key boattrader-miami-private-v1 \
+  --resume-state
+
 # From a plain text plan (decomposed by Claude Sonnet, cached):
 uv run modal run --detach modal_cua_server.py \
   --micro plans/boattrader/extract_only.txt \
@@ -92,6 +105,8 @@ tail -f /tmp/longrun_*.log
 
 # Results on Modal volume 'osworld-data' at /results/holo3_results_*.json
 ```
+
+Micro-runs save step-level checkpoints to the Modal volume under `/data/checkpoints/<state-key>.json`. The checkpoint stores logical execution state, including current step, current results page, seen URLs, extracted leads, loop counters, listing cursor/cache, costs, and a re-entry URL; `--resume-state` reconstructs browser state from that snapshot before continuing.
 
 ### BoatTrader URL Filter Format
 

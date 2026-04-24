@@ -21,7 +21,9 @@ Usage:
 """
 
 import json
+import hashlib
 import os
+import re
 import subprocess
 import sys
 import time
@@ -72,6 +74,17 @@ CUA_MODELS = {
         "tp": 0,  # No GPU needed
     },
 }
+
+
+def _plan_signature_from_steps(steps: list[dict]) -> str:
+    return hashlib.sha256(
+        json.dumps(steps, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _safe_state_key(raw: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
+    return cleaned or "micro_state"
 
 # Fine-tuned Gemma4-31B-CUA (trained on AgentNet, native tool calling)
 # Already quantized to GGUF on the Modal volume
@@ -915,23 +928,42 @@ def _run_holo3_executor(
         for s in micro_plan_data:
             micro_plan.steps.append(MicroIntent(**s))
 
+        resume_state = bool(task_suite.get("_resume_state", False))
+        state_key = task_suite.get("_state_key", "")
+        checkpoint_path = task_suite.get("_checkpoint_path") or f"/data/checkpoints/micro_{session_name}_{run_id}.json"
+        plan_signature = task_suite.get("_plan_signature", "")
+
         print(f"\n  === MICRO-INTENT MODE ({len(micro_plan.steps)} steps) ===")
         print(micro_plan.summary())
+        if state_key:
+            print(f"  State key:  {state_key}")
+            print(f"  Resume:     {'on' if resume_state else 'off'}")
+            print(f"  Checkpoint: {checkpoint_path}")
 
         micro_runner = MicroPlanRunner(
             brain=brain, env=env,
             grounding=grounding, extractor=extractor,
             on_step=viewer_event_bus.emit if viewer_event_bus else None,
-            checkpoint_path=f"/data/checkpoints/micro_{session_name}_{run_id}.json",
+            checkpoint_path=checkpoint_path,
+            run_key=state_key or session_name,
+            session_name=session_name,
+            plan_signature=plan_signature,
+            resume_state=resume_state,
+            on_checkpoint=vol.commit,
             max_cost=task_suite.get("_max_cost", 10.0),
             max_time_minutes=task_suite.get("_max_time_minutes", 180),
         )
-        step_results = micro_runner.run(micro_plan)
+        step_results = micro_runner.run(micro_plan, resume=resume_state)
 
         # Summarize
-        viable = sum(1 for r in step_results if r.success and "VIABLE" in (r.data or ""))
+        lead_rows = micro_runner._successful_lead_data(step_results)
+        unique_leads = {}
+        for lead in lead_rows:
+            unique_leads[micro_runner._lead_key(lead)] = lead
+        leads = list(unique_leads.values())
+        viable = len(leads)
+        leads_with_phone = sum(1 for lead in leads if micro_runner._lead_has_phone(lead))
         total = len(step_results)
-        leads = [r.data for r in step_results if r.success and "VIABLE" in (r.data or "")]
 
         results_path = f"/data/results/holo3_results_{session_name}_{run_id}.json"
         os.makedirs("/data/results", exist_ok=True)
@@ -941,7 +973,12 @@ def _run_holo3_executor(
             "model": "Holo3-35B-A3B (micro)", "mode": "micro_intent",
             "total_time_s": round(time.time() - t0),
             "steps_executed": total, "viable": viable,
+            "leads_with_phone": leads_with_phone,
             "costs": costs,
+            "checkpoint_path": checkpoint_path,
+            "state_key": state_key,
+            "plan_signature": plan_signature,
+            "resume_state": resume_state,
             "leads": leads,
             "step_details": [
                 {"step": r.step_index, "intent": r.intent[:80],
@@ -954,7 +991,10 @@ def _run_holo3_executor(
             json.dump(summary, f, indent=2)
         vol.commit()
 
-        print(f"\n  Micro-intent complete: {viable} viable leads from {total} steps")
+        print(
+            f"\n  Micro-intent complete: {viable} viable leads "
+            f"({leads_with_phone} with phone) from {total} steps"
+        )
         for i, lead in enumerate(leads, 1):
             print(f"    [{i}] {lead[:150]}")
 
@@ -965,7 +1005,14 @@ def _run_holo3_executor(
                 viewer_ctx.__exit__(None, None, None)
             except Exception:
                 pass
-        return {"mode": "micro", "viable": viable, "steps": total}
+        return {
+            "mode": "micro",
+            "viable": viable,
+            "steps": total,
+            "state_key": state_key,
+            "checkpoint_path": checkpoint_path,
+            "status": costs.get("status", ""),
+        }
 
     # ── Learning mode: run LearningRunner instead of normal task loop ──
     learn_mode = task_suite.get("_learn", False)
@@ -2098,6 +2145,8 @@ def main(
     micro: str = "",
     max_cost: float = 10.0,
     max_time_minutes: int = 180,
+    resume_state: bool = False,
+    state_key: str = "",
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
 
@@ -2115,6 +2164,7 @@ def main(
     Learning: --learn --learn-samples 5   (build site playbook from N samples)
     Verification: --verify   (enable step verification during execution)
     Micro: --micro plan.txt   (decompose → micro-intents → execute with checkpoint/reverse)
+    Resume: --resume-state --state-key my-run   (reuse externalized micro state across sessions)
     """
     cua_config = CUA_MODELS.get(model, CUA_MODELS["evocua-8b"])
     print(f"Mantis CUA Server — {cua_config['name']}")
@@ -2208,21 +2258,35 @@ def main(
         print(f"  Steps:   {len(micro_plan.steps)} micro-intents")
         print(micro_plan.summary())
 
+        micro_plan_steps = [
+            {
+                "intent": s.intent, "type": s.type, "verify": s.verify,
+                "budget": s.budget, "reverse": s.reverse,
+                "grounding": s.grounding, "claude_only": s.claude_only,
+                "loop_target": s.loop_target, "loop_count": s.loop_count,
+                "section": s.section, "required": s.required, "gate": s.gate,
+            }
+            for s in micro_plan.steps
+        ]
+        plan_signature = _plan_signature_from_steps(micro_plan_steps)
+        default_state_key = f"micro_{micro_plan.domain.replace('.', '_')}_{plan_signature[:12]}"
+        resolved_state_key = _safe_state_key(state_key or default_state_key)
+        checkpoint_path = f"/data/checkpoints/{resolved_state_key}.json"
+
+        print(f"  State:   {resolved_state_key}")
+        print(f"  Resume:  {'on' if resume_state else 'off'}")
+
         # Pack micro-plan into task_file_contents for the executor
         task_suite = {
             "session_name": f"micro_{micro_plan.domain.replace('.', '_')}",
             "base_url": "",
             "_max_cost": max_cost,
             "_max_time_minutes": max_time_minutes,
-            "_micro_plan": [
-                {
-                    "intent": s.intent, "type": s.type, "verify": s.verify,
-                    "budget": s.budget, "reverse": s.reverse,
-                    "grounding": s.grounding, "claude_only": s.claude_only,
-                    "loop_target": s.loop_target, "loop_count": s.loop_count,
-                    "section": s.section, "required": s.required, "gate": s.gate,
-                } for s in micro_plan.steps
-            ],
+            "_resume_state": resume_state,
+            "_state_key": resolved_state_key,
+            "_checkpoint_path": checkpoint_path,
+            "_plan_signature": plan_signature,
+            "_micro_plan": micro_plan_steps,
             "tasks": [],  # No traditional tasks — micro-runner handles execution
         }
         task_file_contents = json.dumps(task_suite)

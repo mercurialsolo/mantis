@@ -36,7 +36,7 @@
     "section": "extraction"
   },
   {
-    "intent": "Reject dealers, inspect contact area, expand collapsed Description or More Details, then extract Year Make Model Price Phone and Seller Name",
+    "intent": "Reject dealers, inspect contact area, expand collapsed Description or More Details, then extract Year Make Model Price Phone if visible and Seller Name",
     "type": "extract_data",
     "claude_only": true,
     "budget": 0,
