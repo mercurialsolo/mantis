@@ -24,7 +24,7 @@ weights:
     auth_secret_name: "hf_access_token"
 docker_server:
   start_command: >-
-    sh -c "GPU_COUNT=$(nvidia-smi --list-gpus | wc -l) && vllm serve /app/checkpoint/gemma
+    sh -c "export HF_TOKEN=$(cat /secrets/hf_access_token 2>/dev/null || true); export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN; GPU_COUNT=$(nvidia-smi --list-gpus | wc -l) && vllm serve /app/checkpoint/gemma
     --tensor-parallel-size $GPU_COUNT
     --served-model-name google/gemma-4-26B-A4B-it
     --max-num-seqs 16
@@ -42,7 +42,9 @@ docker_server:
   server_port: 8000
 environment_variables:
   VLLM_LOGGING_LEVEL: INFO
+  HF_HUB_ENABLE_HF_TRANSFER: "1"
 requirements:
+  - git+https://github.com/huggingface/transformers.git
   - huggingface_hub
   - hf_transfer
   - datasets
