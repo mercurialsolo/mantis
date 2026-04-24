@@ -7,16 +7,10 @@ small FastAPI surface that runs the existing CUA task and micro-plan runners.
 
 from __future__ import annotations
 
-import base64
-import csv
-import hashlib
-import http.server
 import json
 import logging
 import os
 import re
-import socket
-import socketserver
 import subprocess
 import threading
 import time
@@ -32,6 +26,22 @@ from starlette.concurrency import run_in_threadpool
 
 from mantis_agent.gym.runner import GymRunner
 from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+from mantis_agent.server_utils import (
+    build_micro_result,
+    build_micro_suite,
+    build_proxy_config,
+    micro_plan_steps_to_dicts,
+    parse_lead_row,
+    plan_signature_from_steps,
+    resolve_proxy_server,
+    result_summary,
+    safe_state_key,
+    save_result_json,
+    start_local_proxy,
+    utc_now,
+    wait_for_openai_server,
+    write_leads_csv,
+)
 
 logger = logging.getLogger("mantis_agent.baseten_server")
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -78,13 +88,10 @@ def _repo_root() -> Path:
     return Path(os.environ.get("MANTIS_REPO_ROOT", "/workspace/cua-agent"))
 
 
-def _safe_state_key(raw: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
-    return cleaned or "micro_state"
+_safe_state_key = safe_state_key  # backward compat alias
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+_utc_now = utc_now  # backward compat alias
 
 
 def _new_run_id() -> str:
@@ -108,48 +115,13 @@ class _DetachedRunLogHandler(logging.Handler):
             self.handleError(record)
 
 
-def _parse_lead_row(lead: Any) -> dict[str, str]:
-    fields = ("status", "year", "make", "model", "price", "phone", "seller", "url")
-    raw = json.dumps(lead, sort_keys=True) if isinstance(lead, dict) else str(lead)
-    row = {field: "" for field in fields}
-    row["raw"] = raw
-
-    if isinstance(lead, dict):
-        for field in fields:
-            value = lead.get(field)
-            if value is not None:
-                row[field] = str(value)
-        return row
-
-    parts = [part.strip() for part in raw.split("|") if part.strip()]
-    if parts and ":" not in parts[0]:
-        row["status"] = parts[0]
-        parts = parts[1:]
-    for part in parts:
-        key, sep, value = part.partition(":")
-        if not sep:
-            continue
-        normalized = key.strip().lower().replace(" ", "_")
-        if normalized in row:
-            row[normalized] = value.strip()
-    return row
+_parse_lead_row = parse_lead_row  # backward compat alias
 
 
-def _write_leads_csv(path: Path, leads: list[Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=["status", "year", "make", "model", "price", "phone", "seller", "url", "raw"],
-        )
-        writer.writeheader()
-        for lead in leads:
-            writer.writerow(_parse_lead_row(lead))
+_write_leads_csv = write_leads_csv  # backward compat alias
 
 
-def _plan_signature_from_steps(steps: list[dict[str, Any]]) -> str:
-    payload = json.dumps(steps, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+_plan_signature_from_steps = plan_signature_from_steps  # backward compat alias
 
 
 def _first_existing(paths: list[Path]) -> Path:
@@ -190,109 +162,13 @@ def _find_mmproj(model_dir: Path, preferred: str = "") -> Path | None:
     return candidates[0] if candidates else None
 
 
-def _wait_for_openai_server(port: int, proc: subprocess.Popen, label: str) -> None:
-    for i in range(180):
-        try:
-            resp = requests.get(f"http://127.0.0.1:{port}/v1/models", timeout=2)
-            if resp.status_code == 200:
-                logger.info("%s ready after %ss", label, i * 2)
-                return
-        except Exception:
-            pass
-        if proc.poll() is not None:
-            log_path = Path("/tmp/llama.log")
-            log = log_path.read_text(errors="ignore")[-3000:] if log_path.exists() else ""
-            raise RuntimeError(f"{label} crashed during startup:\n{log[-1000:]}")
-        time.sleep(2)
-    log = Path("/tmp/llama.log").read_text(errors="ignore")[-2000:]
-    raise RuntimeError(f"{label} startup timeout:\n{log}")
+_wait_for_openai_server = wait_for_openai_server  # backward compat alias
 
 
-def _start_local_proxy(upstream_proxy: dict[str, str], local_port: int = 3128) -> subprocess.Popen:
-    proxy_server = upstream_proxy.get("server", "")
-    proxy_user = upstream_proxy.get("username", "")
-    proxy_pass = upstream_proxy.get("password", "")
-
-    class ProxyHandler(http.server.BaseHTTPRequestHandler):
-        upstream = proxy_server
-        auth = base64.b64encode(f"{proxy_user}:{proxy_pass}".encode()).decode()
-
-        def do_CONNECT(self):
-            from urllib.parse import urlparse
-
-            parsed = urlparse(self.upstream)
-            try:
-                upstream_socket = socket.create_connection((parsed.hostname, parsed.port), timeout=30)
-                connect_req = (
-                    f"CONNECT {self.path} HTTP/1.1\r\n"
-                    f"Host: {self.path}\r\n"
-                    f"Proxy-Authorization: Basic {self.auth}\r\n\r\n"
-                )
-                upstream_socket.sendall(connect_req.encode())
-                response = upstream_socket.recv(4096)
-                if b"200" not in response:
-                    self.send_error(502)
-                    return
-                self.send_response(200)
-                self.end_headers()
-
-                def forward(src, dst):
-                    try:
-                        while True:
-                            data = src.recv(65536)
-                            if not data:
-                                break
-                            dst.sendall(data)
-                    except OSError:
-                        pass
-
-                client = self.request
-                t1 = threading.Thread(target=forward, args=(client, upstream_socket), daemon=True)
-                t2 = threading.Thread(target=forward, args=(upstream_socket, client), daemon=True)
-                t1.start()
-                t2.start()
-                t1.join()
-                t2.join()
-            except Exception as exc:
-                self.send_error(502, str(exc))
-
-        def log_message(self, *_args):
-            return
-
-    server = socketserver.ThreadingTCPServer(("127.0.0.1", local_port), ProxyHandler)
-
-    def serve():
-        with server:
-            server.serve_forever()
-
-    thread = threading.Thread(target=serve, daemon=True)
-    thread.start()
-
-    class ProxyProcess:
-        def terminate(self):
-            server.shutdown()
-
-    logger.info("local proxy forwarder listening on :%s", local_port)
-    return ProxyProcess()  # type: ignore[return-value]
+_start_local_proxy = start_local_proxy  # backward compat alias
 
 
-def _build_proxy_config(city: str = "", state: str = "", session_id: str = "") -> dict[str, str] | None:
-    proxy_url = os.environ.get("PROXY_URL", "")
-    if not proxy_url:
-        return None
-    proxy: dict[str, str] = {"server": proxy_url}
-    proxy_user = os.environ.get("PROXY_USER", "")
-    proxy_pass = os.environ.get("PROXY_PASS", "")
-    if proxy_user:
-        if city and "_city-" not in proxy_pass:
-            proxy_pass = f"{proxy_pass}_city-{city}"
-        if state and "_state-" not in proxy_pass:
-            proxy_pass = f"{proxy_pass}_state-{state}"
-        if session_id and "_session-" not in proxy_pass:
-            proxy_pass = f"{proxy_pass}_session-{session_id}"
-        proxy["username"] = proxy_user
-        proxy["password"] = proxy_pass
-    return proxy
+_build_proxy_config = build_proxy_config  # backward compat alias
 
 
 class BasetenCUARuntime:
@@ -538,26 +414,7 @@ class BasetenCUARuntime:
         self._write_json_atomic(run_result_path, result)
 
     def _result_summary(self, result: dict[str, Any]) -> dict[str, Any]:
-        keys = (
-            "run_id",
-            "provider",
-            "session_name",
-            "model",
-            "mode",
-            "total_time_s",
-            "steps_executed",
-            "viable",
-            "leads_with_phone",
-            "passed",
-            "total",
-            "score",
-            "result_path",
-            "csv_path",
-            "detached_result_path",
-            "detached_csv_path",
-            "dynamic_verification_summary",
-        )
-        return {key: result[key] for key in keys if key in result}
+        return result_summary(result)
 
     def _detached_action(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         run_id = str(payload.get("run_id") or "")
@@ -631,41 +488,20 @@ class BasetenCUARuntime:
             decomposer = PlanDecomposer()
             micro_plan = decomposer.decompose(str(path))
 
-        micro_plan_steps = [
-            {
-                "intent": s.intent,
-                "type": s.type,
-                "verify": s.verify,
-                "budget": s.budget,
-                "reverse": s.reverse,
-                "grounding": s.grounding,
-                "claude_only": s.claude_only,
-                "loop_target": s.loop_target,
-                "loop_count": s.loop_count,
-                "section": s.section,
-                "required": s.required,
-                "gate": s.gate,
-            }
-            for s in micro_plan.steps
-        ]
-        plan_signature = _plan_signature_from_steps(micro_plan_steps)
-        default_state_key = f"micro_{micro_plan.domain.replace('.', '_')}_{plan_signature[:12]}"
-        state_key = _safe_state_key(str(payload.get("state_key") or default_state_key))
+        steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
         data_root = _data_root()
-        return {
-            "session_name": f"micro_{micro_plan.domain.replace('.', '_')}",
-            "base_url": "",
-            "_max_cost": float(payload.get("max_cost", 10.0)),
-            "_max_time_minutes": int(payload.get("max_time_minutes", 180)),
-            "_resume_state": bool(payload.get("resume_state", False)),
-            "_state_key": state_key,
-            "_checkpoint_path": str(data_root / "checkpoints" / f"{state_key}.json"),
-            "_plan_signature": plan_signature,
-            "_proxy_city": str(payload.get("proxy_city") or os.environ.get("MANTIS_PROXY_CITY", "")),
-            "_proxy_state": str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
-            "_micro_plan": micro_plan_steps,
-            "tasks": [],
-        }
+        suite = build_micro_suite(
+            steps_dicts,
+            micro_plan.domain,
+            max_cost=float(payload.get("max_cost", 10.0)),
+            max_time_minutes=int(payload.get("max_time_minutes", 180)),
+            resume_state=bool(payload.get("resume_state", False)),
+            state_key=str(payload.get("state_key") or ""),
+            checkpoint_dir=str(data_root / "checkpoints"),
+            proxy_city=str(payload.get("proxy_city") or os.environ.get("MANTIS_PROXY_CITY", "")),
+            proxy_state=str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
+        )
+        return suite
 
     def _make_env(self, task_suite: dict[str, Any], run_id: str, settle_time: float) -> tuple[XdotoolGymEnv, Any]:
         data_root = _data_root()
@@ -739,48 +575,19 @@ class BasetenCUARuntime:
                 max_time_minutes=task_suite.get("_max_time_minutes", 180),
             )
             step_results = runner.run(micro_plan, resume=resume_state)
-            lead_rows = runner._successful_lead_data(step_results)
-            unique_leads = {runner._lead_key(lead): lead for lead in lead_rows}
-            leads = list(unique_leads.values())
-            costs = getattr(runner, "_final_costs", {})
-            dynamic_verification = runner.dynamic_verification_report(
-                status=costs.get("status") or getattr(runner, "_final_status", "unknown")
+            result = build_micro_result(
+                runner,
+                step_results,
+                run_id=run_id,
+                provider="baseten",
+                session_name=session_name,
+                model_name=self.model_kind,
+                elapsed_seconds=time.time() - t0,
+                state_key=task_suite.get("_state_key", ""),
+                checkpoint_path=checkpoint_path,
+                plan_signature=task_suite.get("_plan_signature", ""),
+                resume_state=resume_state,
             )
-            dynamic_verification_summary = {
-                "status": dynamic_verification.get("status"),
-                "verdict": dynamic_verification.get("verdict"),
-                "totals": dynamic_verification.get("totals", {}),
-                "checks": dynamic_verification.get("checks", []),
-            }
-            result = {
-                "run_id": run_id,
-                "provider": "baseten",
-                "session_name": session_name,
-                "model": self.model_kind,
-                "mode": "micro_intent",
-                "total_time_s": round(time.time() - t0),
-                "steps_executed": len(step_results),
-                "viable": len(leads),
-                "leads_with_phone": sum(1 for lead in leads if runner._lead_has_phone(lead)),
-                "state_key": task_suite.get("_state_key", ""),
-                "checkpoint_path": checkpoint_path,
-                "plan_signature": task_suite.get("_plan_signature", ""),
-                "resume_state": resume_state,
-                "costs": costs,
-                "dynamic_verification": dynamic_verification,
-                "dynamic_verification_summary": dynamic_verification_summary,
-                "leads": leads,
-                "step_details": [
-                    {
-                        "step": r.step_index,
-                        "intent": r.intent[:120],
-                        "success": r.success,
-                        "steps": r.steps_used,
-                        "data": r.data[:300] if r.data else "",
-                    }
-                    for r in step_results
-                ],
-            }
             self._save_result(result, prefix=self.model_kind.replace("-", "_"))
             return result
         finally:
@@ -869,14 +676,7 @@ class BasetenCUARuntime:
                 proxy_proc.terminate()
 
     def _save_result(self, result: dict[str, Any], prefix: str) -> None:
-        result_path = _data_root() / "results" / f"{prefix}_results_{result['run_id']}.json"
-        result["result_path"] = str(result_path)
-        leads = result.get("leads")
-        if isinstance(leads, list):
-            csv_path = _data_root() / "results" / f"{prefix}_leads_{result['run_id']}.csv"
-            _write_leads_csv(csv_path, leads)
-            result["csv_path"] = str(csv_path)
-        result_path.write_text(json.dumps(result, indent=2))
+        save_result_json(result, _data_root() / "results", prefix)
 
 
 runtime = BasetenCUARuntime()
