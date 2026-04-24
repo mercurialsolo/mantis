@@ -3,8 +3,8 @@
 This directory contains Baseten Truss artifacts for the current Mantis CUA
 workload:
 
-- `holo3/`: Holo3-35B-A3B GGUF + Chrome/Xvfb/xdotool workload runner.
-- `gemma4/`: Gemma4 GGUF + Chrome/Xvfb/xdotool workload runner.
+- `holo3/`: Holo3-35B-A3B GGUF + Chrome/Xvfb/xdotool workload runner on H100.
+- `gemma4/`: Gemma4 GGUF + Chrome/Xvfb/xdotool workload runner on H100.
 - `training/holo3_distill/`: Baseten Training job for the current BoatTrader
   Holo3 distillation data.
 
