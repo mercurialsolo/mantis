@@ -5,17 +5,12 @@ export PIP_CACHE_DIR="${BT_RW_CACHE_DIR:-/tmp}/pip-cache"
 export HF_HOME="${BT_PROJECT_CACHE_DIR:-/tmp}/huggingface"
 export TRANSFORMERS_CACHE="${HF_HOME}/transformers"
 
-REPO_URL="${REPO_URL:-https://github.com/mercurialsolo/cua-agent.git}"
-GIT_REF="${GIT_REF:-baseten-support}"
-WORKDIR="${BT_SCRATCH_DIR:-/tmp}/cua-agent"
+WORKDIR="$(pwd)"
 OUTPUT_DIR="${BT_CHECKPOINT_DIR:-/tmp/training_checkpoints}/holo3-cua-distilled"
 
-rm -rf "${WORKDIR}"
-git clone --depth 1 --branch "${GIT_REF}" "${REPO_URL}" "${WORKDIR}"
 cd "${WORKDIR}"
 
 python -m pip install --upgrade pip
-python -m pip install --no-cache-dir -e .
 python -m pip install --no-cache-dir \
   "transformers>=5.2" "torch>=2.1" "datasets" \
   "trl>=0.14" "peft>=0.15" "bitsandbytes>=0.45" \

@@ -17,8 +17,6 @@ training_runtime = Runtime(
         "chmod +x ./run.sh && ./run.sh",
     ],
     environment_variables={
-        "REPO_URL": "https://github.com/mercurialsolo/cua-agent.git",
-        "GIT_REF": "baseten-support",
         "EPOCHS": "1",
         "BATCH_SIZE": "1",
         "LORA_RANK": "16",

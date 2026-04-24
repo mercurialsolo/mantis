@@ -21,9 +21,7 @@ model_metadata:
 weights:
   - source: "hf://RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic@main"
     mount_location: "/app/checkpoint/gemma"
-    auth:
-      auth_method: CUSTOM_SECRET
-      auth_secret_name: "hf_access_token"
+    auth_secret_name: "hf_access_token"
 docker_server:
   start_command: >-
     sh -c "GPU_COUNT=$(nvidia-smi --list-gpus | wc -l) && vllm serve /app/checkpoint/gemma

@@ -49,8 +49,8 @@ Use Baseten async inference for long runs. The default request runs
 
 ## Trigger Fine-Tuning
 
-The training job clones this branch, trains on
-`training/data/holo3_distill_train.jsonl`, and writes checkpoints under
+The training job packages `training/train_holo3_distill.py` plus the local
+distillation JSONL/screenshots, then writes checkpoints under
 `$BT_CHECKPOINT_DIR` so Baseten can deploy them later.
 
 ```bash
