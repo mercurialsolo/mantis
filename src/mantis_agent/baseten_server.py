@@ -92,6 +92,22 @@ def _new_run_id() -> str:
     return f"{stamp}_{uuid.uuid4().hex[:8]}"
 
 
+class _DetachedRunLogHandler(logging.Handler):
+    def __init__(self, runtime: "BasetenCUARuntime", run_id: str, thread_id: int) -> None:
+        super().__init__(level=logging.INFO)
+        self.runtime = runtime
+        self.run_id = run_id
+        self.thread_id = thread_id
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.thread != self.thread_id:
+            return
+        try:
+            self.runtime._append_detached_event(self.run_id, self.format(record))
+        except Exception:
+            self.handleError(record)
+
+
 def _parse_lead_row(lead: Any) -> dict[str, str]:
     fields = ("status", "year", "make", "model", "price", "phone", "seller", "url")
     raw = json.dumps(lead, sort_keys=True) if isinstance(lead, dict) else str(lead)
@@ -470,6 +486,10 @@ class BasetenCUARuntime:
         return status
 
     def _run_detached_worker(self, run_id: str, payload: dict[str, Any]) -> None:
+        handler = _DetachedRunLogHandler(self, run_id, threading.get_ident())
+        handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+        agent_logger = logging.getLogger("mantis_agent")
+        agent_logger.addHandler(handler)
         try:
             self._append_detached_event(run_id, "waiting_for_runtime_lock")
             with self.lock:
@@ -502,6 +522,9 @@ class BasetenCUARuntime:
                 },
             )
             self._append_detached_event(run_id, f"failed: {exc}")
+        finally:
+            agent_logger.removeHandler(handler)
+            handler.close()
 
     def _save_detached_result(self, run_id: str, result: dict[str, Any]) -> None:
         run_dir = self._run_path(run_id, create=True)

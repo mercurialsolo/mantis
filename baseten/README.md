@@ -74,6 +74,22 @@ Full model logs are still available from Baseten:
 uvx truss model-logs --model-id <model_id> --deployment-id <deployment_id>
 ```
 
+There is also a local helper that mirrors the Modal detach/poll flow and loads
+the Baseten API key from `.env`:
+
+```bash
+uv run python scripts/baseten_workload.py run \
+  --micro plans/boattrader/extract_url_filtered.json \
+  --state-key boattrader-miami-private-v1 \
+  --max-cost 10 \
+  --max-time-minutes 180
+
+uv run python scripts/baseten_workload.py status --run-id <run_id>
+uv run python scripts/baseten_workload.py logs --run-id <run_id> --tail 200 --raw
+uv run python scripts/baseten_workload.py watch --run-id <run_id>
+uv run python scripts/baseten_workload.py result --run-id <run_id> --csv-out leads.csv
+```
+
 ## Trigger Fine-Tuning
 
 The training job packages `training/train_holo3_distill.py` plus the local
