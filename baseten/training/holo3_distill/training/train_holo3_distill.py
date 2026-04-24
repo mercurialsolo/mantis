@@ -84,13 +84,16 @@ def format_for_sft(conversations: list[dict]) -> str:
 
 def train(args):
     """Run QLoRA fine-tuning."""
-    try:
+    use_unsloth = False
+    if os.environ.get("DISABLE_UNSLOTH", "false").lower() not in {"1", "true", "yes"}:
+        try:
+            from unsloth import FastVisionModel
+            logger.info("Using Unsloth for memory-efficient training")
+            use_unsloth = True
+        except Exception:
+            logger.exception("Unsloth unavailable, falling back to standard HF")
+    if use_unsloth:
         from unsloth import FastVisionModel
-        logger.info("Using Unsloth for memory-efficient training")
-        use_unsloth = True
-    except Exception:
-        logger.exception("Unsloth unavailable, falling back to standard HF")
-        use_unsloth = False
 
     # 1. Load model
     model_name = args.model
@@ -118,13 +121,20 @@ def train(args):
             random_state=42,
         )
     else:
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-        from peft import get_peft_model, LoraConfig
+        from peft import get_peft_model, LoraConfig, prepare_model_for_kbit_training
+
+        def max_memory_by_gpu() -> dict[int, str] | None:
+            if not torch.cuda.is_available():
+                return None
+            per_gpu = os.environ.get("MAX_MEMORY_PER_GPU", "70GiB")
+            return {gpu_index: per_gpu for gpu_index in range(torch.cuda.device_count())}
 
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype="bfloat16",
+            bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
 
@@ -132,9 +142,16 @@ def train(args):
             model_name,
             quantization_config=bnb_config,
             device_map="auto",
+            max_memory=max_memory_by_gpu(),
+            dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
             trust_remote_code=True,
         )
+        model.config.use_cache = False
+        model = prepare_model_for_kbit_training(model)
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
         lora_config = LoraConfig(
             r=args.lora_rank,
@@ -154,8 +171,22 @@ def train(args):
     logger.info(f"Training on {len(dataset)} samples")
 
     # 3. Training config
-    from transformers import TrainingArguments
-    from trl import SFTTrainer
+    from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
+
+    def tokenize_batch(batch):
+        return tokenizer(
+            batch["text"],
+            truncation=True,
+            max_length=args.max_seq_length,
+            padding=False,
+        )
+
+    tokenized_dataset = dataset.map(
+        tokenize_batch,
+        batched=True,
+        remove_columns=dataset.column_names,
+        desc="Tokenizing training samples",
+    )
 
     training_args = TrainingArguments(
         output_dir=args.output,
@@ -171,20 +202,18 @@ def train(args):
         save_total_limit=2,
         bf16=True,
         gradient_checkpointing=True,
-        optim="adamw_8bit" if use_unsloth else "adamw_torch",
+        optim="adamw_torch",
         report_to="none",
         max_grad_norm=1.0,
         seed=42,
     )
 
-    trainer = SFTTrainer(
+    trainer = Trainer(
         model=model,
-        tokenizer=tokenizer,
-        train_dataset=dataset,
         args=training_args,
-        dataset_text_field="text",
-        max_seq_length=args.max_seq_length,
-        packing=False,  # Don't pack — each sample has its own image context
+        train_dataset=tokenized_dataset,
+        processing_class=tokenizer,
+        data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
     )
 
     # 4. Train

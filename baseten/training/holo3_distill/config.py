@@ -22,14 +22,17 @@ training_runtime = Runtime(
         "LORA_RANK": "16",
         "LR": "1e-4",
         "MAX_SAMPLES": "73",
-        "EXPORT_GGUF": "true",
+        "DISABLE_UNSLOTH": "true",
+        "EXPORT_GGUF": "false",
+        "MAX_MEMORY_PER_GPU": "70GiB",
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
     },
     cache_config=CacheConfig(enabled=True),
     checkpointing_config=CheckpointingConfig(enabled=True),
 )
 
 training_compute = Compute(
-    accelerator=AcceleratorSpec(accelerator="H100", count=1),
+    accelerator=AcceleratorSpec(accelerator="H100", count=2),
 )
 
 training_job = TrainingJob(

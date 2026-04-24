@@ -1,10 +1,10 @@
-model_name: "model:gemma-4-26B-A4B-it preset:latency"
+model_name: "model:gemma-4-31B-it preset:latency"
 base_image:
-  image: vllm/vllm-openai:nightly-bcc2306cefa4179c548d3e638e7a22a88d281733
+  image: vllm/vllm-openai:nightly-b075604da10a9e8ff23d23f63d5113d43f0e4208
 model_metadata:
-  repo_id: RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic
+  repo_id: RedHatAI/gemma-4-31B-it-FP8-block
   example_model_input:
-    model: google/gemma-4-26B-A4B-it
+    model: google/gemma-4-31B-it
     messages:
       - role: user
         content:
@@ -19,19 +19,19 @@ model_metadata:
   tags:
     - openai-compatible
 weights:
-  - source: "hf://RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic@main"
+  - source: "hf://RedHatAI/gemma-4-31B-it-FP8-block@main"
     mount_location: "/app/checkpoint/gemma"
     auth_secret_name: "hf_access_token"
 docker_server:
   start_command: >-
     sh -c "export HF_TOKEN=$(cat /secrets/hf_access_token 2>/dev/null || true); export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN; GPU_COUNT=$(nvidia-smi --list-gpus | wc -l) && vllm serve /app/checkpoint/gemma
     --tensor-parallel-size $GPU_COUNT
-    --served-model-name google/gemma-4-26B-A4B-it
+    --served-model-name google/gemma-4-31B-it
     --max-num-seqs 16
     --max-model-len auto
     --limit-mm-per-prompt '{\"image\": 1}'
     --gpu-memory-utilization 0.9
-    --speculative-config '{\"model\":\"RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3\",\"num_speculative_tokens\":3,\"method\":\"eagle3\"}'
+    --speculative-config '{\"model\":\"RedHatAI/gemma-4-31B-it-speculator.eagle3\",\"num_speculative_tokens\":3,\"method\":\"eagle3\"}'
     --trust-remote-code
     --enable-auto-tool-choice
     --reasoning-parser gemma4

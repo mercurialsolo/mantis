@@ -4,6 +4,7 @@ set -euxo pipefail
 export PIP_CACHE_DIR="${BT_RW_CACHE_DIR:-/tmp}/pip-cache"
 export HF_HOME="${BT_PROJECT_CACHE_DIR:-/tmp}/huggingface"
 export TRANSFORMERS_CACHE="${HF_HOME}/transformers"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 WORKDIR="$(pwd)"
 OUTPUT_DIR="${BT_CHECKPOINT_DIR:-/tmp/training_checkpoints}/holo3-cua-distilled"
@@ -13,9 +14,8 @@ cd "${WORKDIR}"
 python -m pip install --upgrade pip
 python -m pip install --no-cache-dir \
   "transformers>=5.2" "datasets" \
-  "trl>=0.14" "peft>=0.15" "bitsandbytes>=0.45" \
-  "accelerate>=1.5" "huggingface-hub" "pillow" \
-  "xformers==0.0.30" "unsloth[colab-new]==2025.7.2"
+  "peft>=0.15" "bitsandbytes>=0.45" \
+  "accelerate>=1.5" "huggingface-hub" "pillow"
 
 args=(
   training/train_holo3_distill.py
