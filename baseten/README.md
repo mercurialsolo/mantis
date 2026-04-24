@@ -4,7 +4,8 @@ This directory contains Baseten Truss artifacts for the current Mantis CUA
 workload:
 
 - `holo3/`: Holo3-35B-A3B GGUF + Chrome/Xvfb/xdotool workload runner on H100.
-- `gemma4/`: Gemma4 GGUF + Chrome/Xvfb/xdotool workload runner on H100.
+- `gemma4/`: Gemma4-31B vLLM OpenAI-compatible endpoint on 2x H100.
+- `gemma4_26b/`: Gemma4-26B A4B vLLM OpenAI-compatible endpoint on 2x H100.
 - `training/holo3_distill/`: Baseten Training job for the current BoatTrader
   Holo3 distillation data.
 
@@ -28,7 +29,11 @@ uvx truss push baseten/holo3 \
   --include-git-info
 
 uvx truss push baseten/gemma4 \
-  --promote --wait --deployment-name baseten-gemma4-workload \
+  --environment production --wait --deployment-name baseten-gemma4-31b \
+  --include-git-info
+
+uvx truss push baseten/gemma4_26b \
+  --environment production --wait --deployment-name baseten-gemma4-26b \
   --include-git-info
 ```
 
