@@ -47,6 +47,7 @@ class TaskLoopConfig:
     max_steps: int = 30
     frames_per_inference: int = 5
     use_sub_plan: bool = True
+    site_config: Any = None  # SiteConfig for URL patterns (passed to callbacks)
 
     # ── Viewer ──
     viewer_event_bus: Any = None
