@@ -38,6 +38,7 @@ uv.lock
 logs/
 cache/
 results/
+outputs/
 
 # Claude
 .claude/

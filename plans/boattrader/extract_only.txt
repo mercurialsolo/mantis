@@ -25,9 +25,9 @@ For each listing in the search results:
 - Do NOT click "Contact Seller" or "Request Info" buttons — they open popup traps
 - Look for phone: (305)555-1234, 786-555-1234, 10+ digit numbers
 - NOT phones: prices, years, zip codes, model numbers
-- Extract ALL of: Year, Make, Model, Price, URL, Phone (or "none"), Seller Name
+- Extract ALL of: Year, Make, Model, Price, URL, Phone if visible, Seller Name
 - Reject non-private sellers even if they have phone numbers
-- A listing is VIABLE even without a phone — but phone is the highest value field
+- Private-seller listings are viable even without a visible phone number, but phone leads must be reported separately
 - Go back to results (Alt+Left)
 - Process all listings on the page, then click Next page
 - Continue until no more pages
@@ -35,4 +35,4 @@ For each listing in the search results:
 Scale:
 - Process up to 200 listings across up to 50 pages
 - Allow 40 steps per listing extraction (click, scroll deep for phone, read, go back)
-- Extract partial data — do not skip listings just because phone is missing
+- Save private-seller leads even when phone is missing; mark phone as "none"

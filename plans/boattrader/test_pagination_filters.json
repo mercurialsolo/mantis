@@ -1,0 +1,55 @@
+[
+  {
+    "intent": "Navigate to BoatTrader filtered results at https://www.boattrader.com/boats/state-fl/city-miami/zip-33101/by-owner/price-35000/",
+    "type": "navigate",
+    "budget": 3,
+    "section": "setup",
+    "required": true
+  },
+  {
+    "intent": "Verify page 1 shows BoatTrader private-seller results with Miami 33101 and price over $35,000 filters applied",
+    "type": "extract_data",
+    "claude_only": true,
+    "budget": 0,
+    "section": "setup",
+    "gate": true,
+    "required": true,
+    "verify": "BoatTrader results page is loaded, URL or heading shows by-owner/private-seller results near Miami 33101, and price over $35,000 filter is active"
+  },
+  {
+    "intent": "Paginate directly to the next BoatTrader filtered results page without clicking listing cards",
+    "type": "paginate",
+    "budget": 5,
+    "grounding": true,
+    "section": "pagination",
+    "required": true
+  },
+  {
+    "intent": "Verify page 2 preserves all BoatTrader filters after pagination",
+    "type": "extract_data",
+    "claude_only": true,
+    "budget": 0,
+    "section": "pagination",
+    "gate": true,
+    "required": true,
+    "verify": "Browser is on BoatTrader page 2 results and URL still includes state-fl, city-miami, zip-33101, by-owner, and price-35000 filters"
+  },
+  {
+    "intent": "Paginate directly to page 3 while preserving the same filters",
+    "type": "paginate",
+    "budget": 5,
+    "grounding": true,
+    "section": "pagination",
+    "required": true
+  },
+  {
+    "intent": "Verify page 3 preserves all BoatTrader filters after pagination",
+    "type": "extract_data",
+    "claude_only": true,
+    "budget": 0,
+    "section": "pagination",
+    "gate": true,
+    "required": true,
+    "verify": "Browser is on BoatTrader page 3 results and URL still includes state-fl, city-miami, zip-33101, by-owner, and price-35000 filters"
+  }
+]
