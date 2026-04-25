@@ -582,7 +582,14 @@ class BasetenCUARuntime:
                 micro_plan.steps.append(MicroIntent(**step))
 
             grounding = ClaudeGrounding()
-            extractor = ClaudeExtractor()
+            schema = None
+            objective_data = task_suite.get("_objective")
+            if objective_data:
+                from mantis_agent.graph.objective import ObjectiveSpec
+                from mantis_agent.extraction import ExtractionSchema
+                objective = ObjectiveSpec.from_dict(objective_data)
+                schema = ExtractionSchema.from_objective(objective)
+            extractor = ClaudeExtractor(schema=schema)
             resume_state = bool(task_suite.get("_resume_state", False))
             checkpoint_path = task_suite.get("_checkpoint_path")
             runner = MicroPlanRunner(
