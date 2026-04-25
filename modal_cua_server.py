@@ -1223,6 +1223,8 @@ def main(
     max_time_minutes: int = 180,
     resume_state: bool = False,
     state_key: str = "",
+    graph_learn: bool = False,
+    graph_learn_only: bool = False,
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
 
@@ -1232,6 +1234,8 @@ def main(
       --learn --task-file tasks/...                 (learning phase: build playbook)
       --verify --task-file tasks/...                (execution with step verification)
       --micro plans/boattrader/extract_only.txt     (micro-intent decompose + execute)
+      --graph-learn --micro plan.txt                (probe site + generate dependency graph + execute)
+      --graph-learn-only --micro plan.txt           (probe site + generate graph, no execution)
 
     Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, holo3, gemma4-cua, claude
     Parallel: --workers 5   (auto fan-out looped tasks across N GPUs)
@@ -1241,6 +1245,7 @@ def main(
     Verification: --verify   (enable step verification during execution)
     Micro: --micro plan.txt   (decompose → micro-intents → execute with checkpoint/reverse)
     Resume: --resume-state --state-key my-run   (reuse externalized micro state across sessions)
+    Graph: --graph-learn   (probe + graph + compile + execute) --graph-learn-only (no execution)
     """
     cua_config = CUA_MODELS.get(model, CUA_MODELS["evocua-8b"])
     print(f"Mantis CUA Server — {cua_config['name']}")
@@ -1314,12 +1319,48 @@ def main(
     # Mode 3: Micro-intent decompose + execute
     elif micro:
         print(f"  Plan:    {micro}")
-        print(f"  Mode:    Micro-Intent → {cua_config['name']}")
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
         from mantis_agent.plan_decomposer import PlanDecomposer, MicroPlan
 
-        if micro.endswith(".json"):
+        # ── Graph learning mode: probe site + generate dependency graph ──
+        if graph_learn or graph_learn_only:
+            print(f"  Mode:    Graph Learning → {cua_config['name']}")
+            from mantis_agent.graph import GraphLearner, GraphCompiler, GraphStore
+
+            # Read plan text for objective parsing
+            with open(micro) as f:
+                plan_text = f.read()
+
+            # Extract start URL from plan text
+            import re as _re
+            start_url = ""
+            url_match = _re.search(r"https?://[^\s]+", plan_text)
+            if url_match:
+                start_url = url_match.group(0).rstrip("/.,;:)")
+
+            learner = GraphLearner(store=GraphStore())
+            graph = learner.learn(
+                objective_text=plan_text,
+                start_url=start_url,
+                n_samples=0,  # No sample execution in local entrypoint (GPU not available yet)
+                force_relearn=graph_learn_only,
+            )
+            print(f"\n  Graph: {len(graph.phases)} phases, {len(graph.edges)} edges")
+            print(f"  Topo:  {graph.topological_order()}")
+
+            if graph_learn_only:
+                print(f"\n  Graph saved. Use --graph-learn (without --only) to also execute.")
+                print(json.dumps({"mode": "graph_learn", "phases": len(graph.phases), "domain": graph.domain}, indent=2))
+                return
+
+            # Compile graph to MicroPlan
+            compiler = GraphCompiler()
+            micro_plan = compiler.compile(graph)
+            print(f"\n  Compiled: {len(micro_plan.steps)} micro-intents from graph")
+
+        elif micro.endswith(".json"):
+            print(f"  Mode:    Micro-Intent → {cua_config['name']}")
             # Load pre-built micro-plan JSON directly (no decomposition)
             with open(micro) as f:
                 raw_steps = json.load(f)
@@ -1327,6 +1368,7 @@ def main(
             for s in raw_steps:
                 micro_plan.steps.append(PlanDecomposer._build_intent(s))
         else:
+            print(f"  Mode:    Micro-Intent → {cua_config['name']}")
             # Decompose plain text plan into micro-intents (Claude Sonnet, cached)
             decomposer = PlanDecomposer()
             micro_plan = decomposer.decompose(micro)

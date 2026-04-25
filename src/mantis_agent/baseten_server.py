@@ -265,6 +265,8 @@ class BasetenCUARuntime:
         action = str(payload.get("action") or payload.get("op") or "").lower()
         if action in {"status", "result", "logs"}:
             return self._detached_action(action, payload)
+        if action == "graph_learn":
+            return self._graph_learn(payload)
 
         self.load()
         if payload.get("detached"):
@@ -275,6 +277,40 @@ class BasetenCUARuntime:
             if task_suite.get("_micro_plan"):
                 return self._run_micro(task_suite, payload)
             return self._run_tasks(task_suite, payload)
+
+    def _graph_learn(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Run graph learning phase (probe + graph generation).
+
+        Does NOT require GPU — uses Claude screenshots only.
+        Returns the compiled MicroPlan as a task_suite for execution.
+        """
+        from mantis_agent.graph import GraphLearner, GraphCompiler, GraphStore
+        from mantis_agent.server_utils import micro_plan_steps_to_dicts
+
+        objective_text = str(payload.get("objective") or payload.get("plan_text") or "")
+        start_url = str(payload.get("start_url") or "")
+        force = bool(payload.get("force_relearn", False))
+
+        if not objective_text:
+            raise ValueError("graph_learn requires 'objective' or 'plan_text'")
+
+        data_root = _data_root()
+        learner = GraphLearner(store=GraphStore(base_path=str(data_root / "graphs")))
+        graph = learner.learn(objective_text, start_url=start_url, n_samples=0, force_relearn=force)
+
+        compiler = GraphCompiler()
+        micro_plan = compiler.compile(graph)
+
+        steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
+        return {
+            "mode": "graph_learn",
+            "domain": graph.domain,
+            "phases": len(graph.phases),
+            "edges": len(graph.edges),
+            "compiled_steps": len(micro_plan.steps),
+            "objective_hash": graph.objective_hash[:12],
+            "micro_plan": steps_dicts,
+        }
 
     def _run_path(self, run_id: str, *, create: bool = False) -> Path:
         safe_run_id = _safe_state_key(run_id)
@@ -504,33 +540,21 @@ class BasetenCUARuntime:
         return suite
 
     def _make_env(self, task_suite: dict[str, Any], run_id: str, settle_time: float) -> tuple[XdotoolGymEnv, Any]:
+        from mantis_agent.task_loop import setup_env
+
         data_root = _data_root()
         session_name = task_suite.get("session_name", "baseten_cua")
-        proxy = _build_proxy_config(
-            city=str(task_suite.get("_proxy_city") or ""),
-            state=str(task_suite.get("_proxy_state") or ""),
-            session_id=f"mantis{run_id.replace('_', '')}",
-        )
-        proxy_proc = None
-        proxy_server = ""
-        if proxy:
-            if proxy.get("username"):
-                proxy_proc = _start_local_proxy(proxy, local_port=3128)
-                proxy_server = "http://127.0.0.1:3128"
-            else:
-                proxy_server = proxy["server"]
-
-        env = XdotoolGymEnv(
-            start_url=task_suite.get("base_url", ""),
-            viewport=(1280, 720),
-            browser=os.environ.get("MANTIS_BROWSER", "google-chrome"),
+        return setup_env(
+            base_url=task_suite.get("base_url", ""),
+            run_id=run_id,
+            session_name=session_name,
             settle_time=settle_time,
-            human_speed=False,
-            proxy_server=proxy_server,
+            proxy_city=str(task_suite.get("_proxy_city") or ""),
+            proxy_state=str(task_suite.get("_proxy_state") or ""),
+            browser=os.environ.get("MANTIS_BROWSER", "google-chrome"),
             profile_dir=str(data_root / "chrome-profile"),
-            save_screenshots=str(data_root / "screenshots" / f"{session_name}_{run_id}"),
+            save_screenshots_dir=str(data_root / "screenshots"),
         )
-        return env, proxy_proc
 
     def _run_micro(
         self,
@@ -602,10 +626,10 @@ class BasetenCUARuntime:
         run_id: str | None = None,
     ) -> dict[str, Any]:
         from mantis_agent.grounding import ClaudeGrounding
+        from mantis_agent.task_loop import TaskLoopConfig, run_executor_lifecycle
 
         run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         t0 = time.time()
-        tasks = task_suite.get("tasks", [])
         session_name = task_suite.get("session_name", "baseten_tasks")
         env, proxy_proc = self._make_env(
             task_suite,
@@ -613,67 +637,26 @@ class BasetenCUARuntime:
             settle_time=4.0 if self.model_kind == "holo3" else 2.0,
         )
         grounding = ClaudeGrounding()
-        scores: list[float] = []
-        task_details: list[dict[str, Any]] = []
 
-        try:
-            for i, task in enumerate(tasks):
-                task_start = time.time()
-                task_id = task.get("task_id", f"task_{i + 1}")
-                runner = GymRunner(
-                    brain=self.brain,
-                    env=env,
-                    max_steps=int(payload.get("max_steps", 30)),
-                    frames_per_inference=1 if self.model_kind == "holo3" else 2,
-                    grounding=grounding,
-                )
-                try:
-                    result = runner.run(
-                        task=task["intent"],
-                        task_id=task_id,
-                        start_url=task.get("start_url", ""),
-                    )
-                    success = bool(result.success)
-                    scores.append(1.0 if success else 0.0)
-                    task_details.append(
-                        {
-                            "task_id": task_id,
-                            "success": success,
-                            "steps": result.total_steps,
-                            "duration_s": round(time.time() - task_start),
-                            "termination_reason": result.termination_reason,
-                        }
-                    )
-                except Exception as exc:
-                    logger.exception("task %s failed", task_id)
-                    scores.append(0.0)
-                    task_details.append(
-                        {
-                            "task_id": task_id,
-                            "success": False,
-                            "error": str(exc),
-                            "duration_s": round(time.time() - task_start),
-                        }
-                    )
-            passed = sum(1 for score in scores if score > 0)
-            result = {
-                "run_id": run_id,
-                "provider": "baseten",
-                "session_name": session_name,
-                "model": self.model_kind,
-                "mode": "tasks",
-                "passed": passed,
-                "total": len(scores),
-                "score": (sum(scores) / len(scores) * 100) if scores else 0,
-                "total_time_s": round(time.time() - t0),
-                "task_details": task_details,
-            }
-            self._save_result(result, prefix=self.model_kind.replace("-", "_"))
-            return result
-        finally:
-            env.close()
-            if proxy_proc:
-                proxy_proc.terminate()
+        config = TaskLoopConfig(
+            run_id=run_id,
+            session_name=session_name,
+            model_name=self.model_kind,
+            results_prefix=self.model_kind.replace("-", "_"),
+            brain=self.brain,
+            env=env,
+            grounding=grounding,
+            max_steps=int(payload.get("max_steps", 30)),
+            frames_per_inference=1 if self.model_kind == "holo3" else 2,
+            results_dir=str(_data_root() / "results"),
+        )
+        result = run_executor_lifecycle(
+            task_suite, config,
+            proxy_proc=proxy_proc, t0=t0,
+        )
+        result["provider"] = "baseten"
+        self._save_result(result, prefix=self.model_kind.replace("-", "_"))
+        return result
 
     def _save_result(self, result: dict[str, Any], prefix: str) -> None:
         save_result_json(result, _data_root() / "results", prefix)
