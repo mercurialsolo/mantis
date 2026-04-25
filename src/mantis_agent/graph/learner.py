@@ -392,10 +392,24 @@ class GraphLearner:
 
         Compiles the graph to a MicroPlan, runs n_candidates items,
         and updates phase confidence scores.
+
+        For new/unlearned sites, Claude CUA is preferred for the learning
+        phase since it has stronger reasoning for unfamiliar layouts.
+        Set self.brain to a ClaudeBrain instance for best results.
         """
         if not self.brain or not self.env:
             logger.info("GraphLearner: no brain/env, skipping sample execution")
             return
+
+        # Prefer Claude for learning when available and no cached graph exists
+        sample_brain = self.brain
+        if graph.learning_samples == 0:
+            try:
+                from ..brain_claude import ClaudeBrain
+                if not isinstance(self.brain, ClaudeBrain):
+                    logger.info("GraphLearner: first-time learning — Claude CUA recommended for best results")
+            except ImportError:
+                pass
 
         from ..gym.micro_runner import MicroPlanRunner
 
@@ -410,7 +424,7 @@ class GraphLearner:
                 step.loop_count = 1  # Only 1 pagination in sample
 
         runner = MicroPlanRunner(
-            brain=self.brain,
+            brain=sample_brain,
             env=self.env,
             grounding=self.grounding,
             extractor=self.extractor,
