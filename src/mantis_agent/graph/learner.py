@@ -281,7 +281,7 @@ class GraphLearner:
         domain = objective.domains[0] if objective.domains else ""
         url = objective.start_url or f"https://www.{domain}/"
 
-        phases = {
+        phases: dict[str, PhaseNode] = {
             "navigate": PhaseNode(
                 id="navigate",
                 role=PhaseRole.SETUP,
@@ -290,80 +290,111 @@ class GraphLearner:
                 required=True,
                 postconditions=[Postcondition(description="Page loaded with results")],
             ),
-            "setup_filters": PhaseNode(
+        }
+
+        # Break required_filters into individual filter steps — each is a
+        # separate phase with its own intent so the CUA applies them one by one.
+        # This mirrors the PlanDecomposer's atomic filter approach.
+        filter_ids: list[str] = []
+        if objective.required_filters:
+            for i, filt in enumerate(objective.required_filters):
+                fid = f"filter_{i}"
+                filter_ids.append(fid)
+                phases[fid] = PhaseNode(
+                    id=fid,
+                    role=PhaseRole.SETUP,
+                    intent_template=f"Apply filter: {filt}",
+                    budget=8,
+                    grounding=True,
+                    required=True,
+                )
+        else:
+            # No filters specified — single generic step
+            filter_ids.append("setup_filters")
+            phases["setup_filters"] = PhaseNode(
                 id="setup_filters",
                 role=PhaseRole.SETUP,
                 intent_template="Apply required search filters on the page",
                 budget=8,
                 grounding=True,
                 required=True,
-            ),
-            "verify_scope": PhaseNode(
-                id="verify_scope",
-                role=PhaseRole.GATE,
-                intent_template=f"Verify page shows {objective.target_entity} listings with filters applied",
-                claude_only=True,
-                budget=0,
-                gate=True,
-                preconditions=[Precondition(description="Filters applied")],
-                postconditions=[Postcondition(description="Page shows filtered results")],
-            ),
-            "admit_candidate": PhaseNode(
-                id="admit_candidate",
-                role=PhaseRole.ADMISSION,
-                intent_template=f"Click an organic {objective.target_entity} title; skip sponsored and dealer cards",
-                budget=8,
-                grounding=True,
-                repeat=RepeatMode.FOR_EACH,
-                source_phase="discover_candidates",
-            ),
-            "extract_url": PhaseNode(
-                id="extract_url",
-                role=PhaseRole.EXTRACTION,
-                intent_template="Read the URL from browser address bar",
-                claude_only=True,
-                budget=0,
-                repeat=RepeatMode.FOR_EACH,
-                source_phase="discover_candidates",
-            ),
-            "scroll_to_details": PhaseNode(
-                id="scroll_to_details",
-                role=PhaseRole.EXTRACTION,
-                intent_template="Scroll down toward the Description and More Details sections",
-                budget=10,
-                repeat=RepeatMode.FOR_EACH,
-                source_phase="discover_candidates",
-            ),
-            "extract_fields": PhaseNode(
-                id="extract_fields",
-                role=PhaseRole.EXTRACTION,
-                intent_template="Reject dealers, inspect contact area, expand collapsed sections, then extract structured data",
-                claude_only=True,
-                budget=0,
-                repeat=RepeatMode.FOR_EACH,
-                source_phase="discover_candidates",
-            ),
-            "return_to_results": PhaseNode(
-                id="return_to_results",
-                role=PhaseRole.RETURN,
-                intent_template="Go back to search results page",
-                budget=3,
-                repeat=RepeatMode.FOR_EACH,
-                source_phase="discover_candidates",
-            ),
-            "paginate": PhaseNode(
-                id="paginate",
-                role=PhaseRole.PAGINATION,
-                intent_template="Click Next page button to continue to next results page",
-                budget=10,
-                grounding=True,
-                repeat=RepeatMode.UNTIL_EXHAUSTED,
-            ),
-        }
+            )
 
-        edges = [
-            PhaseEdge(source="navigate", target="setup_filters"),
-            PhaseEdge(source="setup_filters", target="verify_scope"),
+        filter_summary = ", ".join(objective.required_filters) if objective.required_filters else "required filters"
+        phases["verify_scope"] = PhaseNode(
+            id="verify_scope",
+            role=PhaseRole.GATE,
+            intent_template=f"Verify page shows {objective.target_entity} results with {filter_summary} applied",
+            claude_only=True,
+            budget=0,
+            gate=True,
+            preconditions=[Precondition(description=f"Filters applied: {filter_summary}")],
+            postconditions=[Postcondition(
+                description=f"Page shows filtered {objective.target_entity} results",
+                verify_prompt=f"Page shows {objective.target_entity} results with these filters active: {filter_summary}. Result count should be reasonable (not unfiltered).",
+            )],
+        )
+        phases["admit_candidate"] = PhaseNode(
+            id="admit_candidate",
+            role=PhaseRole.ADMISSION,
+            intent_template=f"Click an organic {objective.target_entity} title; skip sponsored and dealer cards",
+            budget=8,
+            grounding=True,
+            repeat=RepeatMode.FOR_EACH,
+            source_phase="discover_candidates",
+        )
+        phases["extract_url"] = PhaseNode(
+            id="extract_url",
+            role=PhaseRole.EXTRACTION,
+            intent_template="Read the URL from browser address bar",
+            claude_only=True,
+            budget=0,
+            repeat=RepeatMode.FOR_EACH,
+            source_phase="discover_candidates",
+        )
+        phases["scroll_to_details"] = PhaseNode(
+            id="scroll_to_details",
+            role=PhaseRole.EXTRACTION,
+            intent_template="Scroll down toward the Description and More Details sections",
+            budget=10,
+            repeat=RepeatMode.FOR_EACH,
+            source_phase="discover_candidates",
+        )
+        phases["extract_fields"] = PhaseNode(
+            id="extract_fields",
+            role=PhaseRole.EXTRACTION,
+            intent_template="Reject dealers, inspect contact area, expand collapsed sections, then extract structured data",
+            claude_only=True,
+            budget=0,
+            repeat=RepeatMode.FOR_EACH,
+            source_phase="discover_candidates",
+        )
+        phases["return_to_results"] = PhaseNode(
+            id="return_to_results",
+            role=PhaseRole.RETURN,
+            intent_template="Go back to search results page",
+            budget=3,
+            repeat=RepeatMode.FOR_EACH,
+            source_phase="discover_candidates",
+        )
+        phases["paginate"] = PhaseNode(
+            id="paginate",
+            role=PhaseRole.PAGINATION,
+            intent_template="Click Next page button to continue to next results page",
+            budget=10,
+            grounding=True,
+            repeat=RepeatMode.UNTIL_EXHAUSTED,
+        )
+
+        # Build edge chain: navigate → filter_0 → filter_1 → ... → verify_scope
+        edges: list[PhaseEdge] = []
+        prev = "navigate"
+        for fid in filter_ids:
+            edges.append(PhaseEdge(source=prev, target=fid))
+            prev = fid
+        edges.append(PhaseEdge(source=prev, target="verify_scope"))
+
+        edges.extend([
             PhaseEdge(source="verify_scope", target="admit_candidate"),
             PhaseEdge(source="admit_candidate", target="extract_url"),
             PhaseEdge(source="extract_url", target="scroll_to_details"),
@@ -371,7 +402,7 @@ class GraphLearner:
             PhaseEdge(source="extract_fields", target="return_to_results"),
             PhaseEdge(source="return_to_results", target="paginate", condition="exhausted"),
             PhaseEdge(source="paginate", target="admit_candidate"),
-        ]
+        ])
 
         playbook = Playbook(domain=domain)
         if probe.estimated_listings_per_page:
