@@ -178,6 +178,55 @@ def test_compiler_simple_graph():
     assert plan.steps[2].claude_only is True
 
 
+def test_compiler_gate_verify_prompt_from_postconditions():
+    """Gate step.verify should come from postconditions verify_prompt or description."""
+    spec = ObjectiveSpec(raw_text="test", domains=["example.com"])
+    graph = WorkflowGraph(
+        objective=spec,
+        phases={
+            "setup": PhaseNode(
+                id="setup", role=PhaseRole.SETUP,
+                intent_template="Apply filters", required=True,
+            ),
+            "gate": PhaseNode(
+                id="gate", role=PhaseRole.GATE,
+                intent_template="Verify filters",
+                gate=True, claude_only=True,
+                postconditions=[Postcondition(
+                    description="Page shows filtered results",
+                    verify_prompt="Check that the page heading says 'filtered' and result count < 1000",
+                )],
+            ),
+        },
+        edges=[PhaseEdge(source="setup", target="gate")],
+    )
+    compiler = GraphCompiler()
+    plan = compiler.compile(graph)
+
+    gate_step = [s for s in plan.steps if s.gate][0]
+    # Should prefer verify_prompt over description
+    assert gate_step.verify == "Check that the page heading says 'filtered' and result count < 1000"
+
+
+def test_compiler_gate_falls_back_to_description():
+    """When verify_prompt is empty, gate step.verify uses description."""
+    spec = ObjectiveSpec(raw_text="test", domains=["example.com"])
+    graph = WorkflowGraph(
+        objective=spec,
+        phases={
+            "gate": PhaseNode(
+                id="gate", role=PhaseRole.GATE,
+                intent_template="Verify", gate=True, claude_only=True,
+                postconditions=[Postcondition(description="Filters are applied")],
+            ),
+        },
+        edges=[],
+    )
+    compiler = GraphCompiler()
+    plan = compiler.compile(graph)
+    assert plan.steps[0].verify == "Filters are applied"
+
+
 def test_compiler_default_skeleton_produces_valid_microplan():
     """Default listing-extraction skeleton compiles to correct MicroPlan."""
     spec = ObjectiveSpec._parse_heuristic("Search BoatTrader.com for private seller boats")

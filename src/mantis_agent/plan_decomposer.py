@@ -78,19 +78,17 @@ Plans MUST be organized into sections. Each section has a purpose and a gate:
    - Every filter step has required=true
    - The LAST step in setup is a GATE (gate=true): Claude verifies filters applied
    - If the gate FAILS, the entire pipeline HALTS — do not extract from wrong page
-   - Example gate: "Verify page heading shows private seller and result count < 5000"
+   - Example gate: "Verify page heading shows expected filters and result count is reasonable"
 
 2. EXTRACTION section (depends on setup gate passing):
    - Click → URL → scroll → extract → back → loop
    - Only runs if setup gate passed
-   - Click only organic private-seller/by-owner result cards. Skip sponsored,
-     dealer, broker/company seller, "Request a Price", MarineMax, and ad cards.
-   - Extraction must inspect both contact/phone areas AND seller-written text.
-   - Extraction must reject dealer/sponsored/company listings even if a phone is visible.
-   - If Description, Seller Notes, More Details, or Additional Equipment is collapsed,
-     the extraction step must require expanding it before reading.
+   - Click only organic target result cards. Skip sponsored, paid, or off-topic cards.
+   - Extraction must inspect both contact areas AND expanded text sections.
+   - Extraction must reject off-topic or spam listings even if data is visible.
+   - If any content section is collapsed, the extraction step must expand it first.
    - Prefer safe reveal controls such as Show more, Read more, See more, Show phone,
-     View phone, or Call. Never use generic Contact Seller or Request Info forms.
+     View phone, or Call. Never use generic contact forms or lead-generation buttons.
 
 3. PAGINATION section (depends on extraction):
    - Paginate → loop back to extraction
@@ -176,7 +174,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v6_dynamic_coverage"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v7_domain_agnostic"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = plan_path.replace(".txt", f"_micro_{plan_hash}.json")
         if os.path.exists(cache_path):

@@ -775,55 +775,65 @@ def _run_holo3_executor(
 
         # Post-setup filter validation
         if "setup" in task_id or "filter" in task_id:
+            sc = config.site_config
+            gate_prompt = (sc.gate_verify_prompt if sc else "") or "Page shows filtered results"
             print("  Validating filters...")
             validate_runner = GymRunner(brain=_brain, env=_env, max_steps=8,
                                        frames_per_inference=1, grounding=config.grounding, on_step=on_step)
             validate_result = validate_runner.run(
                 task=(
                     "READ the current page. Do NOT click anything.\n\n"
-                    "Check these THREE things:\n"
-                    "1. Read the URL in the address bar — does it contain 'by-owner'?\n"
-                    "2. Read the page heading — does it say 'by owner' or 'private seller'?\n"
-                    "3. Read the result count — is it LESS than 20,000?\n\n"
-                    "If the URL contains 'by-owner' OR the heading mentions 'owner'/'private': "
-                    "done(success=true, summary='Private seller filter active: [URL] [heading] [count]')\n\n"
-                    "If the URL is just '/boats/' and heading says 'Boats for sale' with 100,000+ results: "
-                    "done(success=false, summary='NO private seller filter — URL: [url] Count: [count]')"
+                    "Check if the page shows the expected filtered results:\n"
+                    f"- {gate_prompt}\n"
+                    "- Read the URL and page heading for filter evidence\n"
+                    "- Check the result count is reasonable (not unfiltered)\n\n"
+                    "If filters appear active: done(success=true, summary='Filters verified: [evidence]')\n"
+                    "If filters are NOT applied: done(success=false, summary='Filters missing: [evidence]')"
                 ),
                 task_id=f"{task_id}_validate",
             )
             if not validate_result.success:
-                print("  PRIVATE SELLER FILTER NOT APPLIED — CUA recovery navigation")
-                recovery_runner = GymRunner(brain=_brain, env=_env, max_steps=15,
-                                           frames_per_inference=1, grounding=config.grounding, on_step=on_step)
-                recovery_runner.run(
-                    task=(
-                        "Navigate to the private seller boats page. Steps:\n"
-                        "1. Click the browser address bar at the top of the screen\n"
-                        "2. Select all text in the address bar (Ctrl+A)\n"
-                        "3. Type: https://www.boattrader.com/boats/by-owner/\n"
-                        "4. Press Enter to navigate\n"
-                        "5. Wait for the page to load\n"
-                        "6. Press Home key to scroll to the top of the page\n"
-                        "7. done(success=true, summary='Navigated to by-owner page')"
-                    ),
-                    task_id="filter_recovery_navigate",
-                )
-                time.sleep(3)
-                try:
-                    from mantis_agent.actions import Action, ActionType
-                    _env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-                    time.sleep(1)
-                except Exception:
-                    pass
-                print("  CUA navigated to /boats/by-owner/")
+                recovery_url = (sc.filtered_results_url if sc else "") or ""
+                if recovery_url:
+                    print(f"  FILTERS NOT APPLIED — CUA recovery navigation to {recovery_url}")
+                    recovery_runner = GymRunner(brain=_brain, env=_env, max_steps=15,
+                                               frames_per_inference=1, grounding=config.grounding, on_step=on_step)
+                    recovery_runner.run(
+                        task=(
+                            f"Navigate to the filtered results page. Steps:\n"
+                            f"1. Click the browser address bar at the top of the screen\n"
+                            f"2. Select all text in the address bar (Ctrl+A)\n"
+                            f"3. Type: {recovery_url}\n"
+                            f"4. Press Enter to navigate\n"
+                            f"5. Wait for the page to load\n"
+                            f"6. Press Home key to scroll to the top of the page\n"
+                            f"7. done(success=true, summary='Navigated to filtered page')"
+                        ),
+                        task_id="filter_recovery_navigate",
+                    )
+                    time.sleep(3)
+                    try:
+                        from mantis_agent.actions import Action, ActionType
+                        _env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                        time.sleep(1)
+                    except Exception:
+                        pass
+                    print(f"  CUA navigated to {recovery_url}")
+                else:
+                    print("  FILTERS NOT APPLIED — no recovery URL configured, continuing")
             else:
-                print("  Private seller filter VERIFIED")
+                print("  Filters VERIFIED")
 
         return result
 
     # ── Delegate task loop to shared infrastructure ──
     from mantis_agent.task_loop import TaskLoopConfig, run_executor_lifecycle
+
+    from mantis_agent.site_config import SiteConfig
+    site_cfg = SiteConfig.default_boattrader()
+    site_cfg_data = task_suite.get("_site_config")
+    if site_cfg_data:
+        site_cfg = SiteConfig.from_dict(site_cfg_data)
 
     config = TaskLoopConfig(
         run_id=run_id, session_name=session_name,
@@ -831,6 +841,7 @@ def _run_holo3_executor(
         brain=brain, env=env, grounding=grounding, extractor=extractor,
         max_steps=max_steps, frames_per_inference=frames_per_inference,
         use_sub_plan=sub_plan,
+        site_config=site_cfg,
         viewer_event_bus=viewer_event_bus,
         on_task_result=_holo3_on_task_result,
         on_loop_complete=vol.commit,

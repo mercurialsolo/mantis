@@ -185,5 +185,5 @@ class GraphCompiler:
             required=phase.required,
             gate=phase.gate,
             reverse=phase.recovery_action,
-            verify=phase.postconditions[0].description if phase.postconditions else "",
+            verify=(phase.postconditions[0].verify_prompt or phase.postconditions[0].description) if phase.postconditions else "",
         )
