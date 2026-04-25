@@ -94,7 +94,10 @@ def test_lead_counts_split_phone_leads_from_total_leads():
 
 
 def test_filter_tokens_require_boattrader_private_seller_filters():
+    from mantis_agent.site_config import SiteConfig
+
     runner = object.__new__(MicroPlanRunner)
+    runner.site_config = SiteConfig.default_boattrader()
     runner._required_filter_tokens = MicroPlanRunner._derive_filter_tokens(
         "https://www.boattrader.com/boats/state-fl/city-miami/zip-33101/by-owner/price-35000/"
     )
@@ -181,7 +184,10 @@ def test_checkpoint_load_ignores_unknown_fields(tmp_path):
 
 
 def test_current_results_page_url_preserves_filtered_page_number():
+    from mantis_agent.site_config import SiteConfig
+
     runner = object.__new__(MicroPlanRunner)
+    runner.site_config = SiteConfig.default_boattrader()
     runner._results_base_url = (
         "https://www.boattrader.com/boats/state-fl/city-miami/zip-33101/by-owner/price-35000/"
     )

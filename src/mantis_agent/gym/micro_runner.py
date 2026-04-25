@@ -32,6 +32,7 @@ from ..actions import Action, ActionType
 from .runner import GymRunner
 
 from ..plan_decomposer import MicroIntent, MicroPlan
+from ..site_config import SiteConfig
 from ..verification.dynamic_plan_verifier import DynamicPlanVerifier
 
 if TYPE_CHECKING:
@@ -152,6 +153,7 @@ class MicroPlanRunner:
         dynamic_verifier: DynamicPlanVerifier | None = None,
         max_cost: float = 10.0,     # Stop if total cost exceeds this
         max_time_minutes: int = 180, # Stop if runtime exceeds this (3 hours)
+        site_config: SiteConfig | None = None,
     ):
         self.brain = brain
         self.env = env
@@ -166,6 +168,7 @@ class MicroPlanRunner:
         self.resume_state = resume_state
         self.on_checkpoint = on_checkpoint
         self.dynamic_verifier = dynamic_verifier or DynamicPlanVerifier(plan_name=session_name)
+        self.site_config = site_config or SiteConfig.default_boattrader()
         self._seen_urls: set[str] = set()
         self._extracted_titles: list[str] = []  # Exact titles Claude returned, for skip list
         self._page_listings: list[tuple[int, int, str]] = []  # Cached card coords for current viewport
@@ -264,10 +267,14 @@ class MicroPlanRunner:
     def _current_results_page_url(self) -> str:
         if not self._results_base_url:
             return ""
-        base_clean = re.sub(r"/page-\d+/?$", "", self._results_base_url.rstrip("/"))
         if self._current_page <= 1:
+            base_clean = re.sub(
+                self.site_config.pagination_strip_pattern or r"/page-\d+/?$",
+                "",
+                self._results_base_url.rstrip("/"),
+            )
             return f"{base_clean}/"
-        return f"{base_clean}/page-{self._current_page}/"
+        return self.site_config.paginated_url(self._results_base_url, self._current_page)
 
     def _reentry_url_for_step(self, plan: MicroPlan, next_step_index: int) -> str:
         next_step = plan.steps[next_step_index] if 0 <= next_step_index < len(plan.steps) else None
@@ -683,7 +690,7 @@ class MicroPlanRunner:
                     url = check.url if check else ""
                     if url:
                         self._last_known_url = url
-                    if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+                    if url and self.site_config.is_detail_page(url):
                         # Still on detail page — give the CUA a recovery task
                         # Use the plan's reverse intent, not hardcoded site knowledge
                         recovery_intent = step.reverse or "Go back to the previous page."
@@ -798,7 +805,7 @@ class MicroPlanRunner:
                             logger.error(
                                 f"  [{step_index}] PAGE_BLOCKED after filtered reload — halting"
                             )
-                            print("  HALT: Filtered BoatTrader results page is blocked/erroring.")
+                            print("  HALT: Filtered results page is blocked/erroring.")
                             persist(step_index, status="halted", halt_reason="page_blocked")
                             break
                     # Click failed — skip extraction cycle to loop
@@ -844,7 +851,7 @@ class MicroPlanRunner:
                             url = check.url if check else ""
                             if url:
                                 self._last_known_url = url
-                            if url and "/boats/" in url and "/boat/" not in url:
+                            if url and self.site_config.is_results_page(url) and not self.site_config.is_detail_page(url):
                                 logger.info(f"  [back] Verified on results page after {back_attempt+1} attempts")
                                 break
                     step_index += 1
@@ -965,10 +972,12 @@ class MicroPlanRunner:
 
     def _url_has_required_filters(self, url: str) -> bool:
         url_lower = url.lower()
+        is_results = self.site_config.is_results_page(url) if self.site_config.results_page_pattern else bool(url_lower)
+        is_detail = self.site_config.is_detail_page(url) if self.site_config.detail_page_pattern else False
         return (
             bool(url_lower)
-            and "/boats/" in url_lower
-            and "/boat/" not in url_lower
+            and is_results
+            and not is_detail
             and all(token in url_lower for token in self._required_filter_tokens)
         )
 
@@ -1003,8 +1012,9 @@ class MicroPlanRunner:
             return True
 
         if not force_reload and not url and screenshot is not None:
+            gate_prefix = self.site_config.gate_verify_prompt or "Page is a filtered results page with these active filters: "
             requirement = (
-                "Page is a BoatTrader filtered results page with these active filters: "
+                gate_prefix
                 + ", ".join(self._required_filter_tokens)
             )
             try:
@@ -1142,7 +1152,7 @@ class MicroPlanRunner:
                 url = check.url if check else ""
                 if url:
                     self._last_known_url = url
-                if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+                if url and self.site_config.is_detail_page(url):
                     return StepResult(step_index=index, intent=step.intent, success=False)
             return StepResult(step_index=index, intent=step.intent, success=True, steps_used=1)
         except Exception as exc:
@@ -1372,7 +1382,7 @@ class MicroPlanRunner:
             self.costs["claude_extract"] += 1
             url = verify_data.url if verify_data else ""
 
-            if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+            if url and self.site_config.is_detail_page(url):
                 logger.info(f"  [claude-click] Verified on detail page: {url[:60]}")
                 self._last_known_url = url
                 self.dynamic_verifier.record_item_opened(
@@ -1411,7 +1421,7 @@ class MicroPlanRunner:
                 verify_data = self.extractor.extract(after)
                 self.costs["claude_extract"] += 1
                 url = verify_data.url if verify_data else ""
-                if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+                if url and self.site_config.is_detail_page(url):
                     logger.info(f"  [claude-click] Middle-click fallback opened detail: {url[:60]}")
                     self._opened_detail_in_new_tab = True
                     self._last_known_url = url
@@ -1479,7 +1489,7 @@ class MicroPlanRunner:
                 verify_data = self.extractor.extract(after)
                 self.costs["claude_extract"] += 1
                 url = verify_data.url if verify_data else ""
-                if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0]:
+                if url and self.site_config.is_detail_page(url):
                     logger.info(
                         "  [claude-click] Probe %s opened detail: %s",
                         label,
@@ -1689,15 +1699,9 @@ class MicroPlanRunner:
         # Use the stored results base URL (from initial navigate), NOT the current page URL
         # (which might be a detail page after extraction)
         base_url = getattr(self, '_results_base_url', '')
-        if base_url:
+        if base_url and self.site_config.pagination_format:
             next_page = self._current_page + 1
-            # Append ?page=N to the results base URL
-            # BoatTrader uses path-based pagination: /page-N/ appended to URL path
-            # E.g., /boats/by-owner/ → /boats/by-owner/page-2/
-            base_clean = base_url.rstrip("/")
-            # Remove existing page segment if present
-            base_clean = _re.sub(r'/page-\d+$', '', base_clean)
-            next_url = f"{base_clean}/page-{next_page}/"
+            next_url = self.site_config.paginated_url(base_url, next_page)
 
             # Ensure full URL
             if not next_url.startswith("http"):
@@ -1945,10 +1949,9 @@ class MicroPlanRunner:
 
         # Click verification: should be on a detail page, not search results
         if "detail page" in v or "page opens" in v:
-            # URL should contain /boat/ (single listing) not just /boats/ (search)
-            if url and "/boat/" in url and "/boats/" not in url.split("/boat/")[0][-1:]:
+            if url and self.site_config.is_detail_page(url):
                 return True
-            if url and url.endswith("/boats/by-owner/"):
+            if url and self.site_config.is_results_page(url) and not self.site_config.is_detail_page(url):
                 logger.info("  [verify] Still on search page, not detail page")
                 return False
             # If no URL extracted, check if page looks different
@@ -2120,7 +2123,7 @@ class MicroPlanRunner:
     def _extract_listing_data_deep(self, initial_screenshot):
         """Capture top, expanded description, and lower detail viewports.
 
-        BoatTrader private-seller phones often appear inside seller-written
+        Private-seller phones often appear inside seller-written
         descriptions, and those descriptions can be collapsed. This routine is
         the execution-time policy for dynamic pages: inspect each viewport,
         click only safe reveal controls, then ask Claude to extract from the
