@@ -899,18 +899,18 @@ class ClaudeExtractor:
                 + "\nFind a DIFFERENT listing that is NOT in the skip list."
             )
 
+        entity = self.schema.entity_name if self.schema else "boat listing"
         prompt = (
-            f"Look at this full BoatTrader search-results screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"Look at this search-results screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
             f"The top of the screenshot may show the page header, search controls, and filters. "
-            f"Boat listing cards may start only in the LOWER part of the screenshot, and the bottom-most card may be only partially visible.\n\n"
-            f"Find the first unprocessed boat listing card visible in this screenshot. "
-            f"Ignore the page header, filters, sort controls, ads, and footer links. "
-            f"Each listing card has a large boat photo and clickable title text below it showing Year Make Model, plus a price."
+            f"Result cards may start only in the LOWER part of the screenshot, and the bottom-most card may be only partially visible.\n\n"
+            f"Find the first unprocessed {entity} card visible in this screenshot. "
+            f"Ignore the page header, filters, sort controls, ads, and footer links."
             f"{skip_section}\n\n"
-            f"Return the CENTER coordinates of the clickable TITLE TEXT below the photo, NOT the photo.\n"
+            f"Return the CENTER coordinates of the clickable TITLE TEXT, NOT any image.\n"
             f"If the exact title text is hard to read, return approximate coordinates for the title-text region and use \"unknown\" for the title.\n\n"
             f"Output ONLY valid JSON: {{\"x\": N, \"y\": N, \"title\": \"the title text or unknown\"}}\n"
-            f"If no listing card is visible anywhere in the screenshot, output: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
+            f"If no {entity} card is visible anywhere in the screenshot, output: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
         )
 
         debug_stem = f"claude_click_skip{skip_count}"
@@ -973,25 +973,29 @@ class ClaudeExtractor:
         The caller clicks each sequentially without calling Claude again.
         """
         debug_stem = "claude_find_all"
+        entity = self.schema.entity_name if self.schema else "boat listing"
+        spam_label = self.schema.spam_label if self.schema else "dealer"
+        spam_examples = ""
+        if self.schema and self.schema.spam_indicators:
+            spam_examples = ", ".join(f'"{s}"' for s in self.schema.spam_indicators[:6])
+        else:
+            spam_examples = '"sponsored", "advertisement", "dealer inventory", "Request a Price"'
         prompt = (
             f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"Find ALL eligible PRIVATE-SELLER boat listing cards visible anywhere in this screenshot. "
-            f"Listing cards may start in the LOWER part of the screenshot. "
+            f"Find ALL eligible {entity} cards visible anywhere in this screenshot. "
+            f"Result cards may start in the LOWER part of the screenshot. "
             f"The bottom-most card may be only partially visible — include it.\n\n"
-            f"Each listing card has a boat photo and clickable title text below it "
-            f"showing Year Make Model, plus a price.\n\n"
-            f"STRICT FILTER: only return organic private-seller/by-owner cards from the filtered results. "
-            f"Do NOT return sponsored cards, advertisement modules, dealer inventory, broker/company sellers, "
-            f"cards marked dealer/new, 'Request a Price' cards, MarineMax cards, dealerName URLs, "
-            f"'More From This Dealer' cards, or anything outside the current by-owner results list.\n\n"
+            f"STRICT FILTER: only return organic result cards. "
+            f"Do NOT return {spam_label} cards, sponsored content, advertisements, "
+            f"or items matching these signals: {spam_examples}.\n\n"
             f"If the screenshot shows an error page, rate limit, bot check, CAPTCHA, sign-in wall, "
             f"or a message like 'Something went wrong' or 'Error 418', mark it as blocked.\n\n"
-            f"Return the CENTER coordinates of each listing's TITLE TEXT area "
-            f"(below the photo, not the photo itself). "
+            f"Return the CENTER coordinates of each card's TITLE TEXT area "
+            f"(not any image). "
             f"If a title is hard to read, use \"unknown\".\n\n"
-            f"For each card include seller text if visible and whether it is private seller, dealer, or sponsored.\n\n"
+            f"For each card include seller text if visible and whether it is organic or {spam_label}/sponsored.\n\n"
             f"Also check: is there a pagination bar (page numbers like 1, 2, 3... or a Next button) "
-            f"visible at the bottom of the listings? If so, note its Y coordinate.\n\n"
+            f"visible at the bottom? If so, note its Y coordinate.\n\n"
             f"Output ONLY valid JSON:\n"
             f"{{\"status\": \"ok\", \"listings\": [{{\"x\": N, \"y\": N, \"title\": \"text or unknown\", "
             f"\"seller\": \"seller text or empty\", \"is_private_seller\": true/false, "
@@ -1118,8 +1122,8 @@ class ClaudeExtractor:
             None — empty response
         """
         prompt = (
-            f"Look at this BoatTrader results-page screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"You are near the bottom of the results. The pagination bar is usually BELOW the last listing cards "
+            f"Look at this results-page screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"You are near the bottom of the results. The pagination bar is usually BELOW the last result cards "
             f"and ABOVE the footer/social icons. Find the control that goes to the NEXT results page.\n\n"
             f"Valid targets:\n"
             f"- A link that says 'Next'\n"
