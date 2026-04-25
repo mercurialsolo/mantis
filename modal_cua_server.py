@@ -1393,6 +1393,22 @@ def main(
         print(f"  Steps:   {len(micro_plan.steps)} micro-intents")
         print(micro_plan.summary())
 
+        # Validate and enhance the plan before execution
+        from mantis_agent.graph.plan_validator import PlanValidator
+        objective_for_validation = None
+        if graph_learn or graph_learn_only:
+            objective_for_validation = graph.objective
+        validator = PlanValidator()
+        issues = validator.validate(micro_plan, objective=objective_for_validation)
+        if issues:
+            for issue in issues:
+                tag = "ERROR" if issue.severity == "error" else "WARN"
+                fix = f" (auto-fix: {issue.auto_fix})" if issue.auto_fix else ""
+                print(f"  [{tag}] {issue.code}: {issue.message}{fix}")
+            micro_plan = validator.enhance(micro_plan, objective=objective_for_validation)
+            print(f"  Enhanced plan: {len(micro_plan.steps)} steps")
+            print(micro_plan.summary())
+
         # Embed objective when available (graph-learn path) for schema-driven extraction
         objective_dict = None
         if graph_learn or graph_learn_only:
