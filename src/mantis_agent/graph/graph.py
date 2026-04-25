@@ -121,9 +121,14 @@ class PhaseNode:
         postconditions = [
             Postcondition(**p) for p in data.get("postconditions", [])
         ]
+        raw_role = data.get("role", "extraction")
+        try:
+            role = PhaseRole(raw_role.lower() if isinstance(raw_role, str) else raw_role)
+        except ValueError:
+            role = PhaseRole.EXTRACTION
         return cls(
             id=data["id"],
-            role=PhaseRole(data.get("role", "extraction")),
+            role=role,
             intent_template=data.get("intent_template", ""),
             repeat=RepeatMode(data.get("repeat", "once")),
             source_phase=data.get("source_phase", ""),
