@@ -577,8 +577,14 @@ def _run_holo3_executor(
         base_url=base_url, run_id=run_id, session_name=session_name,
         settle_time=4.0,  # Holo3 needs longer settle — sees black screen with 2s
     )
-    from mantis_agent.extraction import ClaudeExtractor
-    extractor = ClaudeExtractor()
+    from mantis_agent.extraction import ClaudeExtractor, ExtractionSchema
+    schema = None
+    objective_data = task_suite.get("_objective")
+    if objective_data:
+        from mantis_agent.graph.objective import ObjectiveSpec
+        objective = ObjectiveSpec.from_dict(objective_data)
+        schema = ExtractionSchema.from_objective(objective)
+    extractor = ClaudeExtractor(schema=schema)
     viewer_ctx, viewer_event_bus = setup_viewer(viewer)
 
     # ── Micro-intent mode: run MicroPlanRunner ──
@@ -1376,6 +1382,11 @@ def main(
         print(f"  Steps:   {len(micro_plan.steps)} micro-intents")
         print(micro_plan.summary())
 
+        # Embed objective when available (graph-learn path) for schema-driven extraction
+        objective_dict = None
+        if graph_learn or graph_learn_only:
+            objective_dict = graph.objective.to_dict()
+
         steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
         task_suite = build_micro_suite(
             steps_dicts,
@@ -1384,6 +1395,7 @@ def main(
             max_time_minutes=max_time_minutes,
             resume_state=resume_state,
             state_key=state_key,
+            objective=objective_dict,
         )
         resolved_state_key = task_suite["_state_key"]
 

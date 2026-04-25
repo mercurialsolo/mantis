@@ -422,10 +422,13 @@ def build_micro_suite(
     checkpoint_dir: str = "/data/checkpoints",
     proxy_city: str = "",
     proxy_state: str = "",
+    objective: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
     Used by both Modal main() and Baseten _micro_suite_from_path().
+    When ``objective`` is provided, it's embedded so downstream code
+    (e.g. ClaudeExtractor) can build an ExtractionSchema from it.
     """
     signature = plan_signature_from_steps(micro_plan_steps)
     safe_domain = domain.replace(".", "_")
@@ -433,7 +436,7 @@ def build_micro_suite(
     resolved_key = safe_state_key(state_key or default_key)
     checkpoint_path = f"{checkpoint_dir}/{resolved_key}.json"
 
-    return {
+    suite: dict[str, Any] = {
         "session_name": f"micro_{safe_domain}",
         "base_url": "",
         "_max_cost": max_cost,
@@ -447,6 +450,9 @@ def build_micro_suite(
         "_micro_plan": micro_plan_steps,
         "tasks": [],
     }
+    if objective:
+        suite["_objective"] = objective
+    return suite
 
 
 # ── Server readiness polling ─────────────────────────────────────

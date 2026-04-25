@@ -29,12 +29,135 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
+from typing import Any
 
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+
+# ── ExtractionSchema — domain-agnostic extraction configuration ───
+
+
+@dataclass
+class ExtractionSchema:
+    """Describes what to extract, how to detect spam, and what viability means.
+
+    When passed to ClaudeExtractor, overrides the hardcoded BoatTrader prompts
+    with dynamic prompts generated from these fields.
+
+    Use ExtractionSchema.from_objective(spec) to build from an ObjectiveSpec,
+    or ExtractionSchema.default_boattrader() for backward compatibility.
+    """
+
+    entity_name: str = "listing"  # "boat listing", "job posting", "property"
+    fields: list[dict[str, Any]] = field(default_factory=list)  # OutputField-like dicts
+    required_fields: list[str] = field(default_factory=list)  # field names for viability
+    spam_indicators: list[str] = field(default_factory=list)  # replaces DEALER_TEXT_INDICATORS
+    spam_seller_indicators: list[str] = field(default_factory=list)  # replaces DEALER_SELLER_INDICATORS
+    spam_label: str = "dealer/spam"  # what to call spam (e.g. "dealer", "recruiter")
+    forbidden_controls: list[str] = field(default_factory=list)  # "Contact Seller", etc.
+    allowed_controls: list[str] = field(default_factory=list)  # "Show more", "Show phone"
+
+    @classmethod
+    def from_objective(cls, objective: Any) -> ExtractionSchema:
+        """Build from an ObjectiveSpec."""
+        fields = [
+            {"name": f.name, "type": f.type, "required": f.required, "example": f.example}
+            for f in getattr(objective, "output_schema", [])
+        ]
+        required = [f["name"] for f in fields if f.get("required", True)]
+        forbidden = list(getattr(objective, "forbidden_actions", []))
+        allowed = list(getattr(objective, "allowed_reveal_actions", []))
+
+        return cls(
+            entity_name=getattr(objective, "target_entity", "listing") or "listing",
+            fields=fields or cls._default_fields(),
+            required_fields=required or ["url"],
+            spam_indicators=list(DEALER_TEXT_INDICATORS),
+            spam_seller_indicators=list(DEALER_SELLER_INDICATORS),
+            forbidden_controls=forbidden or [
+                "Contact Seller", "Request Info", "Email Seller",
+                "Get Pre-Qualified", "loan", "financing",
+            ],
+            allowed_controls=allowed or [
+                "Show more", "Read more", "See more", "Show phone",
+                "View phone", "Call",
+            ],
+        )
+
+    @classmethod
+    def default_boattrader(cls) -> ExtractionSchema:
+        """The current hardcoded BoatTrader schema for backward compatibility."""
+        return cls(
+            entity_name="boat listing",
+            fields=cls._boattrader_fields(),
+            required_fields=["year", "make"],
+            spam_indicators=list(DEALER_TEXT_INDICATORS),
+            spam_seller_indicators=list(DEALER_SELLER_INDICATORS),
+            spam_label="dealer",
+            forbidden_controls=[
+                "Contact Seller", "Request Info", "Email Seller",
+                "Get Pre-Qualified", "loan", "financing",
+            ],
+            allowed_controls=[
+                "Show more", "Read more", "See more", "Show phone",
+                "View phone", "Call",
+            ],
+        )
+
+    @staticmethod
+    def _boattrader_fields() -> list[dict[str, Any]]:
+        return [
+            {"name": "year", "type": "str", "required": True, "example": "2018"},
+            {"name": "make", "type": "str", "required": True, "example": "Sea Ray"},
+            {"name": "model", "type": "str", "required": False, "example": "240 Sundeck"},
+            {"name": "price", "type": "str", "required": False, "example": "$42,500"},
+            {"name": "phone", "type": "str", "required": False, "example": "305-555-1234"},
+            {"name": "url", "type": "str", "required": False, "example": "boattrader.com/boat/..."},
+            {"name": "seller", "type": "str", "required": False, "example": "John Smith"},
+        ]
+
+    @staticmethod
+    def _default_fields() -> list[dict[str, Any]]:
+        return [
+            {"name": "url", "type": "str", "required": True, "example": ""},
+            {"name": "title", "type": "str", "required": False, "example": ""},
+            {"name": "price", "type": "str", "required": False, "example": ""},
+            {"name": "phone", "type": "str", "required": False, "example": ""},
+            {"name": "seller", "type": "str", "required": False, "example": ""},
+        ]
+
+    def field_names(self) -> list[str]:
+        return [f["name"] for f in self.fields]
+
+    def json_template(self) -> str:
+        """JSON template string for the extraction prompt."""
+        obj = {}
+        for f in self.fields:
+            obj[f["name"]] = ""
+        obj["is_spam"] = False
+        return json.dumps(obj)
+
+    def field_descriptions(self) -> str:
+        """Numbered field list for extraction prompts."""
+        lines = []
+        for i, f in enumerate(self.fields, 1):
+            example = f" (e.g. {f['example']})" if f.get("example") else ""
+            required = " [REQUIRED]" if f.get("required") else ""
+            lines.append(f"{i}. {f['name']}: {f.get('type', 'str')}{example}{required}")
+        lines.append(f"{len(self.fields) + 1}. is_spam: Is this a {self.spam_label} listing? (true/false)")
+        return "\n".join(lines)
+
+    def contains_spam_text(self, text: str) -> bool:
+        text_lower = text.lower()
+        return any(ind in text_lower for ind in self.spam_indicators)
+
+    def seller_looks_like_spam(self, seller: str) -> bool:
+        seller_lower = seller.lower()
+        return any(ind in seller_lower for ind in self.spam_seller_indicators)
 
 
 DEALER_TEXT_INDICATORS = (
@@ -86,7 +209,14 @@ def _seller_looks_like_dealer(seller: str) -> bool:
 
 @dataclass
 class ExtractionResult:
-    """Structured data extracted from a listing screenshot."""
+    """Structured data extracted from a listing screenshot.
+
+    Named fields (year, make, model, etc.) are kept for backward compatibility.
+    When an ExtractionSchema is set, the generic ``fields`` dict is the primary
+    data store and all viability/spam checks use the schema configuration.
+    """
+
+    # Existing named fields (backward compat with BoatTrader)
     year: str = ""
     make: str = ""
     model: str = ""
@@ -98,8 +228,23 @@ class ExtractionResult:
     raw_response: str = ""
     confidence: float = 0.0
 
+    # Generic field storage — populated when schema is set
+    extracted_fields: dict[str, str] = field(default_factory=dict)
+    _schema: ExtractionSchema | None = field(default=None, repr=False)
+
     def dealer_reason(self) -> str:
-        """Return a reason if this looks like dealer/sponsored inventory."""
+        """Return a reason if this looks like spam/dealer inventory."""
+        if self._schema:
+            if self.is_dealer:
+                return f"extractor marked as {self._schema.spam_label}"
+            if self._schema.seller_looks_like_spam(self.seller or self.extracted_fields.get("seller", "")):
+                seller = self.seller or self.extracted_fields.get("seller", "")
+                return f"seller looks like {self._schema.spam_label}: {seller}"
+            text = f"{self.url} {self.raw_response} " + " ".join(self.extracted_fields.values())
+            if self._schema.contains_spam_text(text):
+                return f"{self._schema.spam_label} indicator in listing text"
+            return ""
+        # Legacy BoatTrader path
         if self.is_dealer:
             return "extractor marked listing as dealer"
         if _seller_looks_like_dealer(self.seller):
@@ -109,12 +254,13 @@ class ExtractionResult:
         return ""
 
     def is_private_seller(self) -> bool:
-        """Strict private-seller check for BoatTrader lead extraction."""
+        """Not spam/dealer."""
         return not self.dealer_reason()
 
     def has_phone(self) -> bool:
-        """Require an actually visible phone number for lead viability."""
-        phone = self.phone.strip().lower()
+        """Require an actually visible phone number."""
+        phone_val = self.phone or self.extracted_fields.get("phone", "")
+        phone = phone_val.strip().lower()
         if phone in {"", "none", "n/a", "na", "unknown", "not visible", "not shown"}:
             return False
         digits = re.sub(r"\D", "", phone)
@@ -122,6 +268,13 @@ class ExtractionResult:
 
     def missing_required_reason(self) -> str:
         """Return why this extraction is not a usable lead."""
+        if self._schema:
+            missing = [
+                name for name in self._schema.required_fields
+                if not self.extracted_fields.get(name)
+            ]
+            return f"missing required field(s): {', '.join(missing)}" if missing else ""
+        # Legacy
         missing = []
         if not self.year:
             missing.append("year")
@@ -131,6 +284,17 @@ class ExtractionResult:
 
     def to_summary(self) -> str:
         """Format as the VIABLE summary string."""
+        if self._schema and self.extracted_fields:
+            parts = []
+            for f in self._schema.fields:
+                name = f["name"]
+                val = self.extracted_fields.get(name, "")
+                if val:
+                    parts.append(f"{name.replace('_', ' ').title()}: {val}")
+                elif name == "phone":
+                    parts.append("Phone: none")
+            return "VIABLE | " + " | ".join(parts) if parts else ""
+        # Legacy BoatTrader
         parts = []
         if self.year:
             parts.append(f"Year: {self.year}")
@@ -151,7 +315,14 @@ class ExtractionResult:
         return "VIABLE | " + " | ".join(parts) if parts else ""
 
     def is_viable(self) -> bool:
-        """Has enough data to be a useful private-seller lead."""
+        """Has enough data to be a useful lead (not spam, required fields present)."""
+        if self._schema:
+            has_required = all(
+                self.extracted_fields.get(name)
+                for name in self._schema.required_fields
+            )
+            return has_required and self.is_private_seller()
+        # Legacy
         return bool(self.year and self.make and self.is_private_seller())
 
 
@@ -266,12 +437,121 @@ class ClaudeExtractor:
 
     Same API pattern as ClaudeGrounding — cheap, fast, vision-capable.
     Called 1-2 times per listing (top screenshot + scrolled screenshot).
+
+    When ``schema`` is provided, prompts are generated dynamically from the
+    schema fields instead of using the hardcoded BoatTrader constants.
+    Callers that construct ``ClaudeExtractor()`` with no args get the existing
+    BoatTrader behavior unchanged.
     """
 
-    def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-20250514"):
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = "claude-sonnet-4-20250514",
+        schema: ExtractionSchema | None = None,
+    ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
+        self.schema = schema
         self.debug_dir = os.environ.get("MANTIS_DEBUG_DIR", "/data/screenshots/claude_debug")
+
+    # ── Dynamic prompt generation from schema ─────────────────────
+
+    def _get_extract_prompt(self) -> str:
+        """Return extraction prompt — dynamic from schema or legacy hardcoded."""
+        if not self.schema:
+            return EXTRACT_PROMPT
+        s = self.schema
+        return (
+            f"Look at this screenshot of a {s.entity_name} page.\n\n"
+            f"Extract ALL of the following data visible on the page:\n\n"
+            f"{s.field_descriptions()}\n\n"
+            f"For phone numbers: look in description, contact, or seller sections.\n"
+            f"If no phone is visible, return phone as \"\".\n\n"
+            f"Output ONLY valid JSON:\n{s.json_template()}"
+        )
+
+    def _get_multi_extract_prompt(self) -> str:
+        """Return multi-screenshot extraction prompt."""
+        if not self.schema:
+            return EXTRACT_MULTI_SCREENSHOT_PROMPT
+        s = self.schema
+        spam_rules = ", ".join(f'"{ind}"' for ind in s.spam_indicators[:6])
+        return (
+            f"You are looking at multiple screenshots from the SAME {s.entity_name} page.\n"
+            f"They were captured at different scroll positions.\n\n"
+            f"Extract ALL fields visible across ALL screenshots:\n\n"
+            f"{s.field_descriptions()}\n\n"
+            f"Phone search priority:\n"
+            f"- Description text, contact sections, detail areas\n"
+            f"- Phone reveal buttons if visible\n"
+            f"- International numbers are valid\n\n"
+            f"{s.spam_label.title()} detection:\n"
+            f"- is_spam=true for {s.spam_label} listings containing: {spam_rules}\n\n"
+            f"If no phone is visible, use \"\".\n\n"
+            f"Output ONLY valid JSON:\n{s.json_template()}"
+        )
+
+    def _get_find_listings_prompt(self, skip_titles: list[str] | None = None) -> str:
+        """Return find-all-listings prompt."""
+        if not self.schema:
+            return ""  # Legacy path uses hardcoded prompt inline
+        s = self.schema
+        skip = ""
+        if skip_titles:
+            skip = "\n\nSKIP these already-processed items:\n" + "\n".join(f"- {t}" for t in skip_titles[:20])
+        return (
+            f"Look at this screenshot of a search results page.\n\n"
+            f"Find ALL visible {s.entity_name} cards/items on this page.\n"
+            f"For each, report the center coordinates and title text.\n\n"
+            f"SKIP: sponsored, advertisement, {s.spam_label} inventory.\n"
+            f"ONLY include organic {s.entity_name} results."
+            f"{skip}\n\n"
+            f"Output ONLY valid JSON:\n"
+            f"{{\"listings\": [[x, y, \"title text\"], ...], \"pagination_y\": null_or_number}}"
+        )
+
+    def _get_content_control_prompt(self) -> str:
+        """Return find-content-control prompt."""
+        if not self.schema:
+            return FIND_LISTING_CONTENT_CONTROL_PROMPT
+        s = self.schema
+        allowed = ", ".join(f'"{c}"' for c in s.allowed_controls)
+        forbidden = ", ".join(f'"{c}"' for c in s.forbidden_controls)
+        return (
+            f"Look at this {s.entity_name} page screenshot.\n\n"
+            f"Find ONE visible control that should be clicked to reveal more\n"
+            f"seller-supplied text or contact information.\n\n"
+            f"Prefer these safe targets:\n- {allowed}\n\n"
+            f"Do NOT choose: {forbidden}\n\n"
+            f"Return the center of the best target. Output ONLY valid JSON:\n"
+            f"{{\"x\": N, \"y\": N, \"action\": \"expand_description|show_phone|none\", "
+            f"\"label\": \"visible text\", \"reason\": \"brief reason\"}}\n\n"
+            f"If no safe control is visible, output:\n"
+            f"{{\"x\": 0, \"y\": 0, \"action\": \"none\", \"label\": \"\", \"reason\": \"none visible\"}}"
+        )
+
+    def _parse_schema_result(self, data: dict[str, Any]) -> ExtractionResult:
+        """Parse Claude response dict into ExtractionResult with schema fields."""
+        # Populate both named fields (backward compat) and generic dict
+        result = ExtractionResult(
+            year=str(data.get("year", "")),
+            make=str(data.get("make", "")),
+            model=str(data.get("model", "")),
+            price=str(data.get("price", "")),
+            phone=str(data.get("phone", "")),
+            url=str(data.get("url", "")),
+            seller=str(data.get("seller", "")),
+            is_dealer=_parse_bool(data.get("is_dealer") or data.get("is_spam", False)),
+            raw_response=json.dumps(data),
+            _schema=self.schema,
+        )
+        # Fill generic fields from schema
+        if self.schema:
+            for f in self.schema.fields:
+                name = f["name"]
+                result.extracted_fields[name] = str(data.get(name, ""))
+        return result
 
     def _debug_path(self, stem: str, suffix: str) -> str:
         """Build a writable debug artifact path."""
@@ -417,14 +697,20 @@ class ClaudeExtractor:
     def extract(self, screenshot: Image.Image) -> ExtractionResult:
         """Extract listing data from a detail page screenshot.
 
-        Call this right after navigating to a listing page.
-        Returns structured data with year, make, model, price, phone, URL.
+        When schema is set, uses dynamic prompts and populates generic fields.
+        Otherwise uses legacy BoatTrader hardcoded prompt.
         """
-        text = self._call(screenshot, EXTRACT_PROMPT)
+        prompt = self._get_extract_prompt()
+        text = self._call(screenshot, prompt)
         parsed = self._parse_json(text)
 
         if not parsed:
-            return ExtractionResult(raw_response=text, confidence=0.1)
+            return ExtractionResult(raw_response=text, confidence=0.1, _schema=self.schema)
+
+        if self.schema:
+            result = self._parse_schema_result(parsed)
+            result.confidence = 0.9
+            return result
 
         return ExtractionResult(
             year=str(parsed.get("year", "")),
@@ -473,18 +759,24 @@ class ClaudeExtractor:
     ) -> ExtractionResult:
         """Extract listing data from multiple screenshots of one detail page."""
         if not screenshots:
-            return ExtractionResult(confidence=0.0)
+            return ExtractionResult(confidence=0.0, _schema=self.schema)
 
+        prompt = self._get_multi_extract_prompt()
         text = self._call_many(
             screenshots,
-            EXTRACT_MULTI_SCREENSHOT_PROMPT,
+            prompt,
             labels=labels,
             max_tokens=450,
         )
         parsed = self._parse_json(text)
 
         if not parsed:
-            return ExtractionResult(raw_response=text, confidence=0.1)
+            return ExtractionResult(raw_response=text, confidence=0.1, _schema=self.schema)
+
+        if self.schema:
+            result = self._parse_schema_result(parsed)
+            result.confidence = 0.9
+            return result
 
         return ExtractionResult(
             year=str(parsed.get("year", "")),
@@ -510,13 +802,14 @@ class ClaudeExtractor:
             screenshot.save(self._debug_path(debug_stem, ".png"))
         except Exception:
             pass
+        prompt = self._get_content_control_prompt()
         try:
             with open(self._debug_path(debug_stem, "_prompt.txt"), "w") as f:
-                f.write(FIND_LISTING_CONTENT_CONTROL_PROMPT)
+                f.write(prompt)
         except Exception:
             pass
 
-        text = self._call(screenshot, FIND_LISTING_CONTENT_CONTROL_PROMPT)
+        text = self._call(screenshot, prompt)
 
         try:
             with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
