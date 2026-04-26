@@ -178,10 +178,20 @@ class PlanValidator:
             return issues
         filter_steps = [s for s in steps if s.type == "filter"]
         if not filter_steps:
-            issues.append(PlanIssue(
-                severity="warning", code="no_filter_steps",
-                message=f"Objective requires {len(required_filters)} filters but plan has no filter steps: {required_filters}",
-            ))
+            # Check if filters are encoded in the navigate URL
+            navigate_steps = [s for s in steps if s.type == "navigate"]
+            url_has_filters = False
+            if navigate_steps:
+                nav_url = navigate_steps[0].intent.lower()
+                url_has_filters = "filtered" in nav_url or any(
+                    kw.replace(" ", "-") in nav_url
+                    for kw in ("by-owner", "by owner", "private", "zip-", "price-")
+                )
+            if not url_has_filters:
+                issues.append(PlanIssue(
+                    severity="warning", code="no_filter_steps",
+                    message=f"Objective requires {len(required_filters)} filters but plan has no filter steps: {required_filters}",
+                ))
         return issues
 
     def _check_gate(self, steps: list[MicroIntent]) -> list[PlanIssue]:

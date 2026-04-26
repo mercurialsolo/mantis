@@ -156,7 +156,9 @@ class PlanEnhancer:
         try:
             data = json.loads(text)
             # Validate and fill defaults
-            data.setdefault("navigation_url", objective.start_url or "")
+            # Try URL-based filter encoding
+            nav_url = data.get("navigation_url") or objective.start_url or ""
+            data["navigation_url"] = self._try_build_filtered_url(nav_url, objective)
             data.setdefault("filter_strategy", [])
             data.setdefault("card_description", "")
             data.setdefault("detail_scrolls", 5)
@@ -174,26 +176,52 @@ class PlanEnhancer:
         """Heuristic enhancement when API is unavailable."""
         url = objective.start_url or ""
 
-        # Try to detect URL-based filter encoding from existing URL patterns
+        # Try to build a filtered URL from the objective text
+        # Many sites encode filters as URL path segments or query params.
+        # Look for clues in the objective text and probe data.
+        url = self._try_build_filtered_url(url, objective)
+
+        # Determine filter strategy per filter
+        # If the URL was enhanced with filter segments, mark those as "url" method
+        url_lower = url.lower()
         filter_strategy = []
         for filt in objective.required_filters:
+            filt_lower = filt.lower()
             method = "unknown"
-            # Check if the filter keyword appears in any detected filter options
-            for detected in probe.filters_detected:
-                options = [o.lower() for o in detected.get("options", [])]
-                if filt.lower() in " ".join(options):
-                    location = detected.get("location", "")
-                    if "sidebar" in location.lower():
-                        method = "sidebar"
-                    elif "dropdown" in location.lower() or "select" in location.lower():
-                        method = "dropdown"
-                    else:
-                        method = "sidebar"
-                    break
+
+            # Check if this filter got encoded into the URL
+            url_encoded = False
+            if "by-owner" in url_lower and filt_lower in ("private seller", "by owner"):
+                url_encoded = True
+            elif "zip-" in url_lower and filt_lower in ("zip", "location", "zip code"):
+                url_encoded = True
+            elif "price-" in url_lower and filt_lower in ("price", "min price", "minimum price"):
+                url_encoded = True
+            elif "city-" in url_lower and filt_lower in ("city", "location"):
+                url_encoded = True
+            elif "state-" in url_lower and filt_lower in ("state", "location"):
+                url_encoded = True
+
+            if url_encoded:
+                method = "url"
+            else:
+                # Check probe-detected filters
+                for detected in probe.filters_detected:
+                    options = [o.lower() for o in detected.get("options", [])]
+                    if filt_lower in " ".join(options):
+                        location = detected.get("location", "")
+                        if "sidebar" in location.lower():
+                            method = "sidebar"
+                        elif "dropdown" in location.lower() or "select" in location.lower():
+                            method = "dropdown"
+                        else:
+                            method = "sidebar"
+                        break
+
             filter_strategy.append({
                 "filter": filt,
                 "method": method,
-                "detail": f"Apply {filt} via {method}",
+                "detail": f"Encoded in URL" if method == "url" else f"Apply {filt} via {method}",
             })
 
         # Pagination detection
@@ -227,6 +255,71 @@ class PlanEnhancer:
             "pagination_method": pag_method,
             "pagination_detail": pag_detail,
         }
+
+    def _try_build_filtered_url(self, base_url: str, objective: ObjectiveSpec) -> str:
+        """Try to build a URL with filters encoded in the path.
+
+        Scans the objective text for filter values (zip codes, price,
+        seller type keywords) and attempts to encode them as URL segments.
+        Returns the enhanced URL, or the original if no pattern detected.
+        """
+        if not base_url:
+            return base_url
+
+        raw = objective.raw_text.lower()
+        url = base_url.rstrip("/")
+        segments: list[str] = []
+
+        # Detect common URL-encodable filter patterns from the objective text
+        # Private seller / by owner
+        if "private seller" in raw or "by owner" in raw or "by-owner" in raw:
+            if "/by-owner" not in url:
+                segments.append("by-owner")
+
+        # Zip code
+        zip_match = re.search(r"(?:zip\s*(?:code)?\s*)(\d{5})", raw)
+        if zip_match:
+            zipcode = zip_match.group(1)
+            if f"zip-{zipcode}" not in url:
+                segments.append(f"zip-{zipcode}")
+
+        # State
+        state_match = re.search(r"\b(florida|california|texas|new york|miami)\b", raw)
+        if state_match:
+            state_name = state_match.group(1)
+            state_map = {
+                "florida": "state-fl", "california": "state-ca",
+                "texas": "state-tx", "new york": "state-ny",
+            }
+            state_seg = state_map.get(state_name, "")
+            if state_seg and state_seg not in url:
+                segments.append(state_seg)
+
+        # City
+        city_match = re.search(r"\b(?:near|in)\s+(\w+)(?:\s+(?:fl|ca|tx|ny))?\b", raw)
+        if city_match:
+            city = city_match.group(1).lower()
+            if city not in ("the", "a", "an", "all") and f"city-{city}" not in url:
+                segments.append(f"city-{city}")
+
+        # Price
+        price_match = re.search(r"\$\s*([\d,]+)", raw)
+        if price_match:
+            price = price_match.group(1).replace(",", "")
+            if f"price-{price}" not in url:
+                segments.append(f"price-{price}")
+
+        if not segments:
+            return base_url
+
+        # Append segments to URL path
+        enhanced = url
+        for seg in segments:
+            enhanced = f"{enhanced}/{seg}"
+        enhanced += "/"
+
+        logger.info("PlanEnhancer: built filtered URL: %s", enhanced)
+        return enhanced
 
     def build_enhanced_phases(
         self,
