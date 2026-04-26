@@ -188,16 +188,24 @@ class ObjectiveSpec:
         """Fallback parser — extract what we can without API."""
         domains: list[str] = []
         start_url = ""
+        # Extract full URLs with paths first
+        for url_match in re.finditer(r"https?://[^\s,)]+", text):
+            url = url_match.group(0).rstrip("/.,;:)")
+            if not start_url:
+                start_url = url
+            # Extract domain from URL
+            domain_match = re.search(r"(?:www\.)?([\w\-]+\.[\w]+)", url)
+            if domain_match:
+                domain = domain_match.group(1)
+                if domain not in domains:
+                    domains.append(domain)
+        # Also extract bare domain mentions
         for match in re.finditer(
-            r"(?:https?://)?(?:www\.)?([\w\-]+\.[\w]+)", text
+            r"(?:www\.)?([\w\-]+\.(?:com|org|net|io|co))\b", text
         ):
             domain = match.group(1)
             if domain not in domains:
                 domains.append(domain)
-            if not start_url:
-                full = match.group(0)
-                if full.startswith("http"):
-                    start_url = full
 
         filters: list[str] = []
         for keyword in [
