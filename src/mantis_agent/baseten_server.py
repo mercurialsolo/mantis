@@ -514,6 +514,8 @@ class BasetenCUARuntime:
         if not path.exists():
             raise FileNotFoundError(f"micro plan not found: {path}")
 
+        objective_dict = None
+
         if path.suffix == ".json":
             raw_steps = json.loads(path.read_text())
             domain = path.stem
@@ -521,8 +523,32 @@ class BasetenCUARuntime:
             for step in raw_steps:
                 micro_plan.steps.append(PlanDecomposer._build_intent(step))
         else:
-            decomposer = PlanDecomposer()
-            micro_plan = decomposer.decompose(str(path))
+            # Text plan: use graph learning path for enhancement
+            plan_text = path.read_text()
+            try:
+                from mantis_agent.graph import GraphLearner, GraphCompiler, GraphStore
+                from mantis_agent.graph.plan_validator import PlanValidator
+
+                data_root = _data_root()
+                learner = GraphLearner(
+                    store=GraphStore(base_path=str(data_root / "graphs")),
+                )
+                graph = learner.learn(objective_text=plan_text, n_samples=0)
+                compiler = GraphCompiler()
+                micro_plan = compiler.compile(graph)
+                validator = PlanValidator()
+                issues = validator.validate(micro_plan, objective=graph.objective)
+                if issues:
+                    micro_plan = validator.enhance(micro_plan, objective=graph.objective)
+                objective_dict = graph.objective.to_dict()
+                logger.info(
+                    "Baseten: graph-enhanced plan from %s (%d steps)",
+                    path.name, len(micro_plan.steps),
+                )
+            except Exception as e:
+                logger.warning("Baseten: graph learning failed (%s), falling back to PlanDecomposer", e)
+                decomposer = PlanDecomposer()
+                micro_plan = decomposer.decompose(str(path))
 
         steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
         data_root = _data_root()
@@ -536,6 +562,7 @@ class BasetenCUARuntime:
             checkpoint_dir=str(data_root / "checkpoints"),
             proxy_city=str(payload.get("proxy_city") or os.environ.get("MANTIS_PROXY_CITY", "")),
             proxy_state=str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
+            objective=objective_dict,
         )
         return suite
 
@@ -580,6 +607,41 @@ class BasetenCUARuntime:
             micro_plan = MicroPlan(domain=session_name)
             for step in task_suite["_micro_plan"]:
                 micro_plan.steps.append(MicroIntent(**step))
+
+            # If objective available, probe site inside container and re-enhance
+            objective_data = task_suite.get("_objective")
+            if objective_data and env:
+                try:
+                    from mantis_agent.graph.objective import ObjectiveSpec as _OS
+                    from mantis_agent.graph.probe import SiteProber
+                    from mantis_agent.graph.enhancer import PlanEnhancer
+                    from mantis_agent.graph import GraphCompiler, PlanValidator
+                    from mantis_agent.graph.graph import WorkflowGraph
+                    from mantis_agent.verification.playbook import Playbook as _PB
+
+                    obj = _OS.from_dict(objective_data)
+                    if obj.start_url:
+                        logger.info("Baseten: probing %s inside container", obj.start_url)
+                        prober = SiteProber(env=env)
+                        probe = prober.probe(obj.start_url, obj)
+                        enhancer = PlanEnhancer()
+                        enhancement = enhancer.enhance(obj, probe)
+                        phases, edges = enhancer.build_enhanced_phases(obj, probe, enhancement)
+                        graph = WorkflowGraph(
+                            objective=obj, phases=phases, edges=edges,
+                            playbook=_PB(domain=obj.domains[0] if obj.domains else "", listings_per_page=probe.estimated_listings_per_page or 25),
+                            domain=obj.domains[0] if obj.domains else "",
+                            objective_hash=obj.objective_hash,
+                        )
+                        compiler = GraphCompiler()
+                        micro_plan = compiler.compile(graph)
+                        validator = PlanValidator()
+                        issues = validator.validate(micro_plan, objective=obj)
+                        if issues:
+                            micro_plan = validator.enhance(micro_plan, objective=obj)
+                        logger.info("Baseten: probe-enhanced plan: %d steps", len(micro_plan.steps))
+                except Exception as e:
+                    logger.warning("Baseten: probe enhancement failed: %s", e)
 
             grounding = ClaudeGrounding()
             schema = None
