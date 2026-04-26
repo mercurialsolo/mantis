@@ -523,8 +523,9 @@ class BasetenCUARuntime:
             for step in raw_steps:
                 micro_plan.steps.append(PlanDecomposer._build_intent(step))
         else:
-            # Text plan: use graph learning path for enhancement
+            # Text plan: try graph learning path first, fall back to PlanDecomposer
             plan_text = path.read_text()
+            graph_ok = False
             try:
                 from mantis_agent.graph import GraphLearner, GraphCompiler, GraphStore
                 from mantis_agent.graph.plan_validator import PlanValidator
@@ -541,12 +542,16 @@ class BasetenCUARuntime:
                 if issues:
                     micro_plan = validator.enhance(micro_plan, objective=graph.objective)
                 objective_dict = graph.objective.to_dict()
+                graph_ok = True
                 logger.info(
                     "Baseten: graph-enhanced plan from %s (%d steps)",
                     path.name, len(micro_plan.steps),
                 )
+            except (ImportError, ModuleNotFoundError) as e:
+                logger.info("Baseten: graph modules not available (%s), using PlanDecomposer", e)
             except Exception as e:
-                logger.warning("Baseten: graph learning failed (%s), falling back to PlanDecomposer", e)
+                logger.warning("Baseten: graph learning failed (%s), using PlanDecomposer", e)
+            if not graph_ok:
                 decomposer = PlanDecomposer()
                 micro_plan = decomposer.decompose(str(path))
 
