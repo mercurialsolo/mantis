@@ -163,17 +163,20 @@ class GraphCompiler:
         step_type = _ROLE_TO_TYPE.get(phase.role, "click")
         section = _ROLE_TO_SECTION.get(phase.role, "extraction")
 
-        # Override type based on intent template content
+        # Override type based on intent template content — but only for
+        # generic roles (SETUP, EXTRACTION). Specific roles like PAGINATION
+        # already have the correct type from the role mapping.
         intent = phase.intent_template
-        if intent.lower().startswith("navigate to"):
-            step_type = "navigate"
-            section = "setup"
-        elif "read the url" in intent.lower() or "address bar" in intent.lower():
-            step_type = "extract_url"
-        elif "scroll" in intent.lower():
-            step_type = "scroll"
-        elif "go back" in intent.lower():
-            step_type = "navigate_back"
+        if phase.role not in (PhaseRole.PAGINATION, PhaseRole.RETURN):
+            if intent.lower().startswith("navigate to"):
+                step_type = "navigate"
+                section = "setup"
+            elif "read the url" in intent.lower() or "address bar" in intent.lower():
+                step_type = "extract_url"
+            elif "scroll" in intent.lower():
+                step_type = "scroll"
+            elif "go back" in intent.lower():
+                step_type = "navigate_back"
 
         return MicroIntent(
             intent=intent,
