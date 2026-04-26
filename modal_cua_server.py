@@ -597,6 +597,52 @@ def _run_holo3_executor(
         for s in micro_plan_data:
             micro_plan.steps.append(MicroIntent(**s))
 
+        # If objective is available, run site probe to enhance the plan
+        # This runs INSIDE the container where env/browser is available
+        objective_data = task_suite.get("_objective")
+        if objective_data and env:
+            try:
+                from mantis_agent.graph.objective import ObjectiveSpec as _OS
+                from mantis_agent.graph.probe import SiteProber, ProbeResult
+                from mantis_agent.graph.enhancer import PlanEnhancer
+                from mantis_agent.graph import GraphCompiler, PlanValidator
+                from mantis_agent.graph.graph import WorkflowGraph
+                from mantis_agent.verification.playbook import Playbook
+
+                obj = _OS.from_dict(objective_data)
+                if obj.start_url:
+                    print(f"\n  === SITE PROBE (inside container) ===")
+                    prober = SiteProber(env=env)
+                    probe = prober.probe(obj.start_url, obj)
+                    print(f"  Probe: {probe.page_type}, {len(probe.filters_detected)} filters, {probe.estimated_listings_per_page} listings/page")
+
+                    # Re-enhance with probe data
+                    enhancer = PlanEnhancer()
+                    enhancement = enhancer.enhance(obj, probe)
+                    phases, edges = enhancer.build_enhanced_phases(obj, probe, enhancement)
+                    print(f"  Enhanced: {len(phases)} phases, nav={enhancement.get('navigation_url', '')[:60]}")
+
+                    # Recompile
+                    graph = WorkflowGraph(
+                        objective=obj, phases=phases, edges=edges,
+                        playbook=Playbook(domain=obj.domains[0] if obj.domains else "", listings_per_page=probe.estimated_listings_per_page or 25),
+                        domain=obj.domains[0] if obj.domains else "",
+                        objective_hash=obj.objective_hash,
+                    )
+                    compiler = GraphCompiler()
+                    micro_plan = compiler.compile(graph)
+
+                    # Validate
+                    validator = PlanValidator()
+                    issues = validator.validate(micro_plan, objective=obj)
+                    if issues:
+                        micro_plan = validator.enhance(micro_plan, objective=obj)
+
+                    print(f"  Probe-enhanced plan: {len(micro_plan.steps)} steps")
+                    print(micro_plan.summary())
+            except Exception as e:
+                print(f"  Probe enhancement failed (using original plan): {e}")
+
         resume_state = bool(task_suite.get("_resume_state", False))
         state_key = task_suite.get("_state_key", "")
         checkpoint_path = task_suite.get("_checkpoint_path") or f"/data/checkpoints/micro_{session_name}_{run_id}.json"
