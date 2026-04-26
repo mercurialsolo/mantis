@@ -109,8 +109,21 @@ class PlanEnhancer:
             logger.warning("PlanEnhancer: no API key, using heuristic enhancement")
             return self._enhance_heuristic(objective, probe)
 
+        # Try URL-based filter encoding as a hint for Claude
+        candidate_url = self._try_build_filtered_url(
+            objective.start_url or "", objective
+        )
+        url_hint = ""
+        if candidate_url != (objective.start_url or ""):
+            url_hint = (
+                f"\n\nURL FILTER HINT: I attempted to build a filtered URL: {candidate_url}\n"
+                f"If this site encodes filters as URL path segments, use this or correct the format.\n"
+                f"If the site does NOT use URL-based filters, ignore this hint and use sidebar/dropdown methods.\n"
+                f"IMPORTANT: Get the URL segment order correct for this specific site."
+            )
+
         prompt = ENHANCE_PROMPT.format(
-            objective_text=objective.raw_text[:1500],
+            objective_text=objective.raw_text[:1500] + url_hint,
             probe_json=json.dumps(probe.to_dict(), indent=2)[:2000],
             filters=", ".join(objective.required_filters) or "none specified",
             entity=objective.target_entity or "listing",
@@ -158,7 +171,22 @@ class PlanEnhancer:
             # Validate and fill defaults
             # Try URL-based filter encoding
             nav_url = data.get("navigation_url") or objective.start_url or ""
-            data["navigation_url"] = self._try_build_filtered_url(nav_url, objective)
+            enhanced_url = self._try_build_filtered_url(nav_url, objective)
+            data["navigation_url"] = enhanced_url
+
+            # Mark filters as "url" if they appear encoded in the nav URL
+            url_lower = enhanced_url.lower()
+            for fs in data.get("filter_strategy", []):
+                filt_lower = fs.get("filter", "").lower()
+                if any(seg in url_lower for seg in [
+                    "by-owner", "by_owner",
+                ] if filt_lower in ("private seller", "by owner")) or (
+                    "zip-" in url_lower and filt_lower in ("zip", "location", "zip code")
+                ) or (
+                    "price-" in url_lower and filt_lower in ("price", "min price", "minimum price")
+                ):
+                    fs["method"] = "url"
+                    fs["detail"] = "Encoded in URL"
             data.setdefault("filter_strategy", [])
             data.setdefault("card_description", "")
             data.setdefault("detail_scrolls", 5)
@@ -311,6 +339,18 @@ class PlanEnhancer:
 
         if not segments:
             return base_url
+
+        # Sort segments in canonical order: state → city → zip → by-owner → price
+        # This matches the URL pattern used by BoatTrader and similar sites
+        ORDER = {"state-": 0, "city-": 1, "zip-": 2, "by-owner": 3, "price-": 4}
+
+        def seg_order(seg: str) -> int:
+            for prefix, rank in ORDER.items():
+                if seg.startswith(prefix) or seg == prefix.rstrip("-"):
+                    return rank
+            return 5
+
+        segments.sort(key=seg_order)
 
         # Append segments to URL path
         enhanced = url
