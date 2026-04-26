@@ -22,6 +22,8 @@ from .store import GraphStore
 from .compiler import GraphCompiler
 from .learner import GraphLearner
 from .plan_validator import PlanValidator
+from .enhancer import PlanEnhancer
+from .section_decomposer import SectionDecomposer, ExecutionSection
 
 __all__ = [
     "CompletionCondition",
