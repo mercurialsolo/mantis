@@ -62,30 +62,49 @@ def _extract_url_latest(trajectory: list, year: str = "") -> str | None:
     return best_url
 
 
-def _extract_url_from_text(text: str) -> str | None:
-    """Extract a BoatTrader listing URL from text.
+def _extract_url_from_text(text: str, domain: str = "") -> str | None:
+    """Extract a listing URL from text.
 
-    Matches patterns like:
-    - boattrader.com/boat/2018-everglades-355-cc-1234567/
-    - boattrader.com/boats/2018-everglades-355/
-    - www.boattrader.com/boat/...
-    - https://www.boattrader.com/boat/...
-
-    Returns the URL without protocol prefix, or None if not found.
+    When domain is provided, matches URLs for that domain.
+    Otherwise matches any URL with a path slug (generic).
     """
-    # Try full URL first (with or without protocol)
+    if domain:
+        # Domain-specific match
+        escaped = _re_module.escape(domain)
+        pattern = rf"(?:https?://)?(?:www\.)?{escaped}/[\w\-/]+/?(?:\?[\w=&%-]*)?"
+        match = _re_module.search(pattern, text)
+        if match:
+            url = match.group()
+            url = _re_module.sub(r"^https?://(?:www\.)?", "", url)
+            # Must have a path beyond just the domain
+            parts = url.split("/", 1)
+            if len(parts) > 1 and len(parts[1].strip("/")) > 3:
+                return url
+    else:
+        # Generic: match any URL with a meaningful path
+        match = _re_module.search(
+            r"(?:https?://)?(?:www\.)?[\w\-]+\.[\w]+/[\w\-]+(?:/[\w\-]*)*/?",
+            text,
+        )
+        if match:
+            url = match.group()
+            url = _re_module.sub(r"^https?://(?:www\.)?", "", url)
+            return url
+    return None
+
+
+# Legacy BoatTrader-specific URL extractor (kept as backup/reference)
+def _extract_boattrader_url(text: str) -> str | None:
+    """Extract a BoatTrader listing URL from text (legacy)."""
     match = _re_module.search(
         r"(?:https?://)?(?:www\.)?boattrader\.com/boats?/[\w\-]+(?:/[\w\-]*)*/?",
         text,
     )
     if match:
         url = match.group()
-        # Strip protocol and www prefix for consistency
         url = _re_module.sub(r"^https?://(?:www\.)?", "", url)
-        # Don't return the base listings URL (that's not a specific listing)
         if url.rstrip("/") in ("boattrader.com/boats", "boattrader.com/boat"):
             return None
-        # Must have at least a slug after /boat(s)/
         slug = _re_module.search(r"/boats?/([\w\-]+)", url)
         if slug and len(slug.group(1)) > 5:
             return url
@@ -138,18 +157,24 @@ class FailureCategory:
     UNKNOWN = "unknown"
 
 
-def _classify_failure(data: str, result=None) -> tuple[str, str]:
+# Default spam/dealer signals for failure classification (BoatTrader defaults kept as backup)
+DEFAULT_DEALER_SIGNALS = [
+    "more from this dealer", "view dealer website", "dealer listing",
+    "visit seller website", "more boats from this dealer",
+]
+
+
+def _classify_failure(data: str, result=None, spam_signals: list[str] | None = None) -> tuple[str, str]:
     """Classify a failed iteration into category + reason.
 
     Returns (category, reason) tuple for structured logging.
     """
     text = (data or "").lower()
 
-    # Dealer listing detection (highest priority — wrong listing type entirely)
-    dealer_signals = ["more from this dealer", "view dealer website", "dealer listing",
-                      "visit seller website", "more boats from this dealer"]
-    if any(sig in text for sig in dealer_signals):
-        return FailureCategory.DEALER_LISTING, "Clicked dealer listing instead of private seller"
+    # Spam/dealer listing detection (highest priority — wrong listing type entirely)
+    signals = spam_signals or DEFAULT_DEALER_SIGNALS
+    if any(sig in text for sig in signals):
+        return FailureCategory.DEALER_LISTING, "Clicked spam/dealer listing instead of target entity"
 
     if "popup" in text or "modal" in text or "contact seller" in text or "request info" in text:
         return FailureCategory.POPUP_TRAP, "Modal/popup blocked interaction"
@@ -904,20 +929,20 @@ class WorkflowRunner:
                     f"CRITICAL: You navigated to {domain} by clicking a social media link. "
                     f"Social icons are SMALL colored squares (20-40px): blue=Facebook, gradient=Instagram. "
                     f"They appear in the FOOTER (bottom of page, y>650) or SIDEBAR (right edge, x>1100). "
-                    f"Listing cards are LARGE rectangles (~250px tall) in the CENTER showing: "
-                    f"[boat photo] [Year Make Model] [$Price]. ONLY click elements with a boat photo AND a price."
+                    f"Result cards are LARGE rectangles in the CENTER of the page. "
+                    f"ONLY click result card titles, not social icons or footer links."
                 )
 
-        # External dealer/brand sites
-        external_sites = [
+        # External brand/dealer sites (default list kept as backup)
+        external_sites = getattr(self, '_external_sites', [
             "hanover yachts", "tige boats", "cobalt boats", "bayliner.com",
             "sea ray.com", "boston whaler.com", "grady-white.com",
-        ]
+        ])
         for site in external_sites:
             if site in all_thinking or site in data:
                 return (
-                    f"You navigated to an external dealer/brand website ({site}). "
-                    f"Only click listings within BoatTrader search results. "
+                    f"You navigated to an external website ({site}). "
+                    f"Only click listings within the search results page. "
                     f"If you end up on a different site, press Alt+Left immediately to go back."
                 )
 
@@ -926,9 +951,9 @@ class WorkflowRunner:
         if back_actions >= 3:
             return (
                 "You pressed Alt+Left (back) too many times — you keep clicking wrong elements. "
-                "STOP and look carefully at the search results. Listing cards show a boat image, "
-                "Year/Make/Model text, and a price. Click the TITLE TEXT or the BOAT IMAGE, "
-                "not menu items, ads, social icons, or the 'Research' dropdown."
+                "STOP and look carefully at the search results. Result cards show an image, "
+                "title text, and key details. Click the TITLE TEXT of a result card, "
+                "not menu items, ads, social icons, or navigation links."
             )
 
         # ── Image gallery trap ──
@@ -1180,25 +1205,29 @@ class WorkflowRunner:
                 return False
             self._seen_urls.add(listing_url)
 
-        # Check for boat data — need at least Year OR (Make/Model + Price)
+        # Check for meaningful data — need at least Year/Date OR (entity keywords + Price)
         has_year = bool(re.search(r'(?:19|20)\d{2}', data))
         has_price = bool(re.search(r'\$[\d,]+', data))
-        has_boat_info = False
-        boat_keywords = [
-            "make", "model", "hull", "engine", "console", "cabin",
-            "grady", "boston whaler", "sea hunt", "tracker", "yamaha",
-            "mercury", "suzuki", "honda", "evinrude", "intrepid",
-            "azimut", "sea ray", "sundeck", "walkaround", "sportfish",
-            "bayliner", "chaparral", "everglades", "cigarette", "century",
-            "cobia", "nor-tech", "may-craft", "key west", "robalo",
-        ]
-        for kw in boat_keywords:
+        has_entity_info = False
+        # Use extractor schema keywords if available, else default boat keywords
+        entity_keywords = getattr(self, '_entity_keywords', None)
+        if entity_keywords is None:
+            # Default: BoatTrader keywords (kept as backup for backward compat)
+            entity_keywords = [
+                "make", "model", "hull", "engine", "console", "cabin",
+                "grady", "boston whaler", "sea hunt", "tracker", "yamaha",
+                "mercury", "suzuki", "honda", "evinrude", "intrepid",
+                "azimut", "sea ray", "sundeck", "walkaround", "sportfish",
+                "bayliner", "chaparral", "everglades", "cigarette", "century",
+                "cobia", "nor-tech", "may-craft", "key west", "robalo",
+            ]
+        for kw in entity_keywords:
             if kw in text:
-                has_boat_info = True
+                has_entity_info = True
                 break
 
-        # Viable if we have meaningful boat data
-        if has_year and (has_price or has_boat_info):
+        # Viable if we have meaningful data
+        if has_year and (has_price or has_entity_info):
             # Track phone for dedup if present
             phone = self._extract_phone(data)
             if phone:

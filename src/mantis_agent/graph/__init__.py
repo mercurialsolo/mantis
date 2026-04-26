@@ -21,6 +21,7 @@ from .graph import (
 from .store import GraphStore
 from .compiler import GraphCompiler
 from .learner import GraphLearner
+from .plan_validator import PlanValidator
 
 __all__ = [
     "CompletionCondition",

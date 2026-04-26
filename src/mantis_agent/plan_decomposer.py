@@ -250,7 +250,7 @@ class PlanDecomposer:
     @staticmethod
     def _build_intent(s: dict) -> MicroIntent:
         """Build a MicroIntent from a raw dict — used by both cache and fresh paths."""
-        step_type = s.get("type") or s.get("action") or "click"
+        step_type = s.get("type") or s.get("step_type") or s.get("action") or "click"
         reverse = s.get("reverse") or s.get("reverse_action") or ""
 
         # Infer section from step type if not provided
