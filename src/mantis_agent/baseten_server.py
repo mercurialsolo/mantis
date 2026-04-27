@@ -527,8 +527,10 @@ class BasetenCUARuntime:
             plan_text = path.read_text()
             graph_ok = False
             try:
+                print("[baseten] Attempting graph learning path for text plan")
                 from mantis_agent.graph import GraphLearner, GraphCompiler, GraphStore
                 from mantis_agent.graph.plan_validator import PlanValidator
+                print("[baseten] Graph imports OK")
 
                 data_root = _data_root()
                 learner = GraphLearner(
@@ -548,11 +550,11 @@ class BasetenCUARuntime:
                     path.name, len(micro_plan.steps),
                 )
             except (ImportError, ModuleNotFoundError) as e:
-                logger.info("Baseten: graph modules not available (%s), using PlanDecomposer", e)
+                print(f"[baseten] Graph modules not available: {e}")
             except Exception as e:
                 import traceback as _tb
-                logger.warning("Baseten: graph learning failed (%s), using PlanDecomposer", e)
-                logger.warning("Baseten: graph learning traceback:\n%s", _tb.format_exc())
+                print(f"[baseten] Graph learning FAILED: {e}")
+                print(f"[baseten] Traceback:\n{_tb.format_exc()}")
             if not graph_ok:
                 decomposer = PlanDecomposer()
                 micro_plan = decomposer.decompose(str(path))
