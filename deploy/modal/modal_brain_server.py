@@ -6,7 +6,7 @@ while running Playwright locally (residential IP).
 
 Usage:
     # Deploy (stays running, gives you a URL)
-    modal deploy modal_brain_server.py
+    modal deploy deploy/modal/modal_brain_server.py
 
     # Then run locally
     python run_local.py \

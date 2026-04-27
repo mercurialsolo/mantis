@@ -6,16 +6,16 @@ Single `modal deploy` gives you:
 
 Usage:
     # Deploy the planner (stays running, warm for 10 min):
-    uv run modal deploy modal_cua_server.py
+    uv run modal deploy deploy/modal/modal_cua_server.py
 
     # Run from a free-text plan (Gemma4 preprocesses → EvoCUA executes):
-    uv run modal run modal_cua_server.py \
+    uv run modal run deploy/modal/modal_cua_server.py \
         --plan-file plans/boattrader/full_spec.txt \
         --model evocua-8b \
         --inputs "pop_password=SelfService38#,zip_code=33101,search_radius=35"
 
     # Run from a pre-built task suite (bypasses planner):
-    uv run modal run modal_cua_server.py \
+    uv run modal run deploy/modal/modal_cua_server.py \
         --task-file tasks/boattrader/dynamic_production.json \
         --model evocua-8b
 """
@@ -1339,15 +1339,15 @@ def main(
         try:
             r = requests.get(f"{planner_url}/v1/models", timeout=10)
             if r.status_code != 200:
-                print("  WARNING: Planner not responding. Deploy first: modal deploy modal_cua_server.py")
+                print("  WARNING: Planner not responding. Deploy first: modal deploy deploy/modal/modal_cua_server.py")
                 sys.exit(1)
             print("  Planner: OK")
         except Exception:
             print(f"  ERROR: Cannot reach planner at {planner_url}")
-            print("  Deploy first: uv run modal deploy modal_cua_server.py")
+            print("  Deploy first: uv run modal deploy deploy/modal/modal_cua_server.py")
             sys.exit(1)
 
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src"))
         from mantis_agent.brain_llamacpp import LlamaCppBrain
         from mantis_agent.gym.plan_optimizer import optimize_plan
 
@@ -1383,7 +1383,7 @@ def main(
     elif micro:
         print(f"  Plan:    {micro}")
 
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "src"))
         from mantis_agent.plan_decomposer import PlanDecomposer, MicroPlan
 
         # ── Graph learning mode: probe site + generate dependency graph ──

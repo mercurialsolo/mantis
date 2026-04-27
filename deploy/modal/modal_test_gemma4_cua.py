@@ -6,8 +6,8 @@ Two modes:
   2. Baseline: use existing base Gemma4 GGUF from OSWorld runs
 
 Usage:
-    modal run modal_test_gemma4_cua.py --task-file tasks/crm/original_test.json
-    modal run modal_test_gemma4_cua.py --task-file tasks/crm/original_test.json --baseline
+    modal run deploy/modal/modal_test_gemma4_cua.py --task-file tasks/crm/original_test.json
+    modal run deploy/modal/modal_test_gemma4_cua.py --task-file tasks/crm/original_test.json --baseline
 """
 
 import json

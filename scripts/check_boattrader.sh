@@ -43,7 +43,7 @@ import json, re, glob, os
 files = sorted(glob.glob('/tmp/mantis_bt_*.json'), key=os.path.getmtime, reverse=True)
 if not files:
     print('  No results found on Modal volume.')
-    print('  Run: uv run modal run --detach modal_cua_server.py --task-file tasks/boattrader/dynamic_production.json --model evocua-8b --max-steps 40')
+    print('  Run: uv run modal run --detach deploy/modal/modal_cua_server.py --task-file tasks/boattrader/dynamic_production.json --model evocua-8b --max-steps 40')
     exit(0)
 
 def is_real_phone(phone):

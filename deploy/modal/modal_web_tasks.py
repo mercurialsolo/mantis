@@ -21,10 +21,10 @@ Architecture (qemu mode):
 
 Usage:
     # Playwright mode (default, fast)
-    modal run modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json
+    modal run deploy/modal/modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json
 
     # QEMU VM mode (full desktop)
-    modal run modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json --mode qemu
+    modal run deploy/modal/modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json --mode qemu
 
     # Detached
     modal run --detach modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json

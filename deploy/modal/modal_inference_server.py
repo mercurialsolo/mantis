@@ -19,7 +19,7 @@ Architecture:
 
 Usage:
     # Deploy (keeps running until stopped):
-    modal deploy modal_inference_server.py
+    modal deploy deploy/modal/modal_inference_server.py
 
     # Or run ephemerally for testing:
     modal serve modal_inference_server.py

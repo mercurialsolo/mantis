@@ -9,12 +9,12 @@ does both reasoning and coordinate prediction from screenshots).
 
 Usage:
     # With EvoCUA-32B as worker (API-only, no grounding model)
-    modal run modal_web_tasks_agents.py \
+    modal run deploy/modal/modal_web_tasks_agents.py \
       --task-file tasks/crm/original_test.json \
       --worker-model evocua-32b
 
     # With full Agent-S3 (worker + grounding)
-    modal run modal_web_tasks_agents.py \
+    modal run deploy/modal/modal_web_tasks_agents.py \
       --task-file tasks/crm/original_test.json \
       --worker-model evocua-32b \
       --grounding-model ui-tars-7b

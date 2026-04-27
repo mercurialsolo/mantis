@@ -13,7 +13,7 @@ Architecture:
     ├── Playwright + Chromium (headless, 1280x720)
     ├── VWA env adapter (translates our click/type/key actions to
     │                    Playwright page operations)
-    └── Agent loop (same one as modal_osworld_direct.py, modulo the
+    └── Agent loop (same one as deploy/modal/modal_osworld_direct.py, modulo the
                     screenshot/action layer)
 
 The 5 VWA sidecar Docker services (Classifieds, Shopping, Reddit,

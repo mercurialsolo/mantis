@@ -25,7 +25,7 @@ fi
 
 if [ ! -f /tmp/mantis_results_31b.json ]; then
     echo "  No results found on Modal volume (osworld-data-31b-f16)"
-    echo "  Run: modal run --detach modal_osworld_31b_f16.py --domain $DOMAIN"
+    echo "  Run: modal run --detach deploy/modal/modal_osworld_31b_f16.py --domain $DOMAIN"
     echo ""
     exit 0
 fi

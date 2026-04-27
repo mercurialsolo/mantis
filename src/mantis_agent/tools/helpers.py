@@ -43,7 +43,7 @@ def _autosudo(cmd):
     Only wraps the simple case of a command starting with ``sudo ``. More
     complex cases (piped sudo, chained sudo, multi-sudo) rely on the
     passwordless-sudo setup that the harness runs once at task start
-    (see ``_setup_passwordless_sudo`` in modal_osworld_direct.py). After
+    (see ``_setup_passwordless_sudo`` in deploy/modal/modal_osworld_direct.py). After
     that setup, every ``sudo`` in any position "just works" without any
     wrapping needed.
 

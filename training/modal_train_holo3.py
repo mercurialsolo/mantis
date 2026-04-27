@@ -175,8 +175,8 @@ def train_holo3_cua(
 
     print("\nTo deploy the fine-tuned model:")
     print(f"  1. GGUF is on Modal volume at: {output_dir}/gguf/")
-    print("  2. Update HOLO3_MODEL_DIR in modal_cua_server.py to point to it")
-    print("  3. Run: modal run modal_cua_server.py --model holo3 --task-file ...")
+    print("  2. Update HOLO3_MODEL_DIR in deploy/modal/modal_cua_server.py to point to it")
+    print("  3. Run: modal run deploy/modal/modal_cua_server.py --model holo3 --task-file ...")
 
 
 @app.local_entrypoint()

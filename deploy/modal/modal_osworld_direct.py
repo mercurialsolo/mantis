@@ -9,8 +9,8 @@ The agent loop, image, volume, and helpers live in
 1900+ lines of orchestration.
 
 Usage:
-    modal run modal_osworld_direct.py
-    modal run modal_osworld_direct.py --domain os --tasks 10
+    modal run deploy/modal/modal_osworld_direct.py
+    modal run deploy/modal/modal_osworld_direct.py --domain os --tasks 10
 """
 
 import json

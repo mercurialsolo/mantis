@@ -13,10 +13,10 @@ Architecture:
 
 Usage:
     # Run single task:
-    modal run modal_hud_eval.py
+    modal run deploy/modal/modal_hud_eval.py
 
     # Run full benchmark:
-    modal run modal_hud_eval.py --tasks 367
+    modal run deploy/modal/modal_hud_eval.py --tasks 367
 """
 
 import json

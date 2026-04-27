@@ -17,7 +17,7 @@ Architecture:
 Usage:
     from mantis_agent.opus_planner import plan_with_opus
     task_suite = plan_with_opus("plans/boattrader/extract_only.txt")
-    # Returns JSON task suite ready for modal_cua_server.py
+    # Returns JSON task suite ready for deploy/modal/modal_cua_server.py
 """
 
 from __future__ import annotations
@@ -194,7 +194,7 @@ def plan_with_opus(
         output_path: Optional path to save the generated JSON.
 
     Returns:
-        Task suite dict ready for modal_cua_server.py
+        Task suite dict ready for deploy/modal/modal_cua_server.py
     """
     import hashlib
 

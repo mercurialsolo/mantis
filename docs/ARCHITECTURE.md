@@ -199,7 +199,7 @@ Run result:
 ### Modal
 
 ```
-modal_cua_server.py
+deploy/modal/modal_cua_server.py
   |
   +-> gemma4_planner()       Persistent T4, llama.cpp, /v1/chat/completions
   +-> run_holo3()            Per-run A100, llama.cpp GGUF
@@ -227,7 +227,7 @@ Uses same `task_loop.run_executor_lifecycle()` as Modal.
 
 ```python
 set -a && source .env && set +a
-uv run modal run modal_cua_server.py \
+uv run modal run deploy/modal/modal_cua_server.py \
   --micro plans/boattrader/extract_url_filtered.json \
   --model holo3 --max-cost 0.30
 ```
@@ -263,9 +263,15 @@ cua-agent/
     server_utils.py     Shared proxy, result builders, CSV
     task_loop.py        Shared executor lifecycle
     plan_decomposer.py  Text -> MicroPlan via Claude
-  modal_cua_server.py   Modal deployment (GPU executors)
-  scripts/              CLI tools (baseten_workload.py)
+  deploy/
+    modal/              Modal CLI entrypoints (modal_cua_server.py, modal_osworld_*.py, ...)
+    baseten/            Baseten Truss deployments (holo3, gemma4, gemma4_26b)
+  docker/               Containerfiles (cua, hud, local)
+  scripts/              CLI tools (run_*.py, check_*.sh, baseten_workload.py)
   plans/                Plan files (.txt, .json)
+  tasks/                Task descriptors
+  benchmarks/           OSWorld / VWA benchmark harnesses (per-domain Modal apps)
+  training/             Distillation and fine-tuning configs
+  tests/                pytest suite
   docs/                 Architecture documentation
-  test_*.py             Test suites
 ```

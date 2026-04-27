@@ -13,8 +13,8 @@ Architecture:
             └── Evaluation → binary pass/fail
 
 Usage:
-    modal run modal_osworld_direct.py
-    modal run modal_osworld_direct.py --domain os --tasks 10
+    modal run deploy/modal/modal_osworld_direct.py
+    modal run deploy/modal/modal_osworld_direct.py --domain os --tasks 10
 """
 
 import json

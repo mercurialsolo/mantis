@@ -18,10 +18,10 @@ Usage:
     modal volume put osworld-data ./OSWorld/docker_vm_data/Ubuntu.qcow2 /Ubuntu.qcow2
 
     # Run single domain:
-    modal run modal_osworld.py --domain os
+    modal run deploy/modal/modal_osworld.py --domain os
 
     # Run full benchmark:
-    modal run modal_osworld.py --domain all
+    modal run deploy/modal/modal_osworld.py --domain all
 """
 
 import os

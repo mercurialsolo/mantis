@@ -39,7 +39,7 @@ if [ ! -f /tmp/mantis_results.json ]; then
     echo "  ╚═══════════════════════════════════════════════╝"
     echo ""
     echo "  No results found on Modal volume"
-    echo "  Run: modal run --detach modal_osworld_direct.py --domain $DOMAIN"
+    echo "  Run: modal run --detach deploy/modal/modal_osworld_direct.py --domain $DOMAIN"
     echo ""
     exit 0
 fi

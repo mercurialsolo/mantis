@@ -1,6 +1,6 @@
 """OSWorld Chrome benchmark — own Modal app for parallel execution.
 
-Identical infrastructure to ``modal_osworld_direct.py`` but runs in a
+Identical infrastructure to ``deploy/modal/modal_osworld_direct.py`` but runs in a
 distinct Modal app namespace so chrome runs do not collide with the
 ongoing OS run. Both benchmarks share the underlying ``run_osworld_impl``
 agent loop, the same image, the same llama-server setup, and the same

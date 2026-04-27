@@ -8,13 +8,13 @@ Supported models:
 
 Usage:
     # EvoCUA-8B (default — best single-GPU performance)
-    modal run modal_web_tasks_opencua.py --task-file tasks/crm/original_test.json
+    modal run deploy/modal/modal_web_tasks_opencua.py --task-file tasks/crm/original_test.json
 
     # EvoCUA-32B (SOTA)
-    CUA_MODEL=evocua-32b modal run modal_web_tasks_opencua.py --task-file tasks/crm/original_test.json
+    CUA_MODEL=evocua-32b modal run deploy/modal/modal_web_tasks_opencua.py --task-file tasks/crm/original_test.json
 
     # OpenCUA-32B
-    CUA_MODEL=opencua-32b modal run modal_web_tasks_opencua.py --task-file tasks/crm/original_test.json
+    CUA_MODEL=opencua-32b modal run deploy/modal/modal_web_tasks_opencua.py --task-file tasks/crm/original_test.json
 """
 
 import json
