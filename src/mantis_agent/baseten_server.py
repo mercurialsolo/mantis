@@ -550,7 +550,9 @@ class BasetenCUARuntime:
             except (ImportError, ModuleNotFoundError) as e:
                 logger.info("Baseten: graph modules not available (%s), using PlanDecomposer", e)
             except Exception as e:
+                import traceback as _tb
                 logger.warning("Baseten: graph learning failed (%s), using PlanDecomposer", e)
+                logger.warning("Baseten: graph learning traceback:\n%s", _tb.format_exc())
             if not graph_ok:
                 decomposer = PlanDecomposer()
                 micro_plan = decomposer.decompose(str(path))
