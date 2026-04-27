@@ -21,8 +21,8 @@ import logging
 import os
 import sys
 
-# Add OSWorld to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "OSWorld"))
+# Add OSWorld (lives at repo root) to path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "OSWorld"))
 
 from tqdm import tqdm
 

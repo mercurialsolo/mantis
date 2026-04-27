@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir \
 
 # Copy source
 COPY src/ ./src/
-COPY run_local.py ./
+COPY scripts/run_local.py ./
 COPY tasks/ ./tasks/
 COPY plans/ ./plans/
 
