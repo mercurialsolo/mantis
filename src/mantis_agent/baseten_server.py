@@ -523,18 +523,32 @@ class BasetenCUARuntime:
             for step in raw_steps:
                 micro_plan.steps.append(PlanDecomposer._build_intent(step))
         else:
-            # Text plan: decompose now, graph learning happens later in _run_micro
-            # (inside the detached thread where env is available and timeouts don't block)
-            decomposer = PlanDecomposer()
-            micro_plan = decomposer.decompose(str(path))
-            # Embed the raw plan text so _run_micro can run graph learning
+            # Text plan: embed raw text + heuristic objective for the detached thread.
+            # The actual decomposition/enhancement happens inside _run_micro where
+            # there's no request timeout and the browser env is available for probing.
+            plan_text = path.read_text()
             objective_dict = None
             try:
                 from mantis_agent.graph.objective import ObjectiveSpec
-                obj = ObjectiveSpec._parse_heuristic(path.read_text())
+                obj = ObjectiveSpec._parse_heuristic(plan_text)
                 objective_dict = obj.to_dict()
+                objective_dict["_raw_plan_text"] = plan_text
+                objective_dict["_plan_path"] = str(path)
             except Exception:
                 pass
+            # Use the default filtered JSON plan as a safe fallback for the micro suite.
+            # The detached thread will replace it with an enhanced plan from graph learning.
+            fallback_path = self._resolve_path("plans/boattrader/extract_url_filtered.json")
+            if fallback_path.exists():
+                raw_steps = json.loads(fallback_path.read_text())
+                domain = "boattrader.com"
+                micro_plan = MicroPlan(domain=domain)
+                for step in raw_steps:
+                    micro_plan.steps.append(PlanDecomposer._build_intent(step))
+            else:
+                # No fallback available — decompose synchronously (may timeout)
+                decomposer = PlanDecomposer()
+                micro_plan = decomposer.decompose(str(path))
 
         steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
         data_root = _data_root()
