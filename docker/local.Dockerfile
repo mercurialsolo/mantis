@@ -1,7 +1,7 @@
 # Local CUA agent container — runs with your residential IP
 # Uses Xvfb for headed Playwright (needed for some CF bypasses)
 #
-# Build:  docker build -f Dockerfile.local -t mantis-cua .
+# Build:  docker build -f docker/local.Dockerfile -t mantis-cua .
 # Run:    docker run --rm -v $(pwd)/results:/app/results mantis-cua \
 #           --task-file tasks/boattrader/full_production.json \
 #           --brain-url http://host.docker.internal:8080/v1

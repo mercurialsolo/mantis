@@ -2,7 +2,7 @@
 # Matches the Vision Claude architecture:
 #   Xvfb → Openbox → Chromium → xdotool → screenshot → brain → repeat
 #
-# Build:  docker build -f Dockerfile.cua -t mantis-cua .
+# Build:  docker build -f docker/cua.Dockerfile -t mantis-cua .
 # Run:    docker run --rm -e BRAIN_URL=https://your-brain/v1 mantis-cua \
 #           --task-file tasks/boattrader/full_production.json
 
