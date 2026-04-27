@@ -536,19 +536,35 @@ class BasetenCUARuntime:
                 objective_dict["_plan_path"] = str(path)
             except Exception:
                 pass
-            # Use the default filtered JSON plan as a safe fallback for the micro suite.
-            # The detached thread will replace it with an enhanced plan from graph learning.
-            fallback_path = self._resolve_path("plans/boattrader/extract_url_filtered.json")
-            if fallback_path.exists():
-                raw_steps = json.loads(fallback_path.read_text())
-                domain = "boattrader.com"
-                micro_plan = MicroPlan(domain=domain)
-                for step in raw_steps:
-                    micro_plan.steps.append(PlanDecomposer._build_intent(step))
-            else:
-                # No fallback available — decompose synchronously (may timeout)
-                decomposer = PlanDecomposer()
-                micro_plan = decomposer.decompose(str(path))
+            # Use the default filtered JSON plan as a safe fallback.
+            # The detached thread will replace it with an enhanced plan via graph learning.
+            fallback_candidates = [
+                self._resolve_path("plans/boattrader/extract_url_filtered.json"),
+                self._resolve_path("boattrader/extract_url_filtered.json"),
+                Path(os.environ.get("MANTIS_DEFAULT_MICRO", "plans/boattrader/extract_url_filtered.json")),
+            ]
+            fallback_loaded = False
+            for fallback_path in fallback_candidates:
+                if fallback_path.exists():
+                    try:
+                        raw_steps = json.loads(fallback_path.read_text())
+                        domain = obj.domains[0] if objective_dict and obj.domains else "unknown"
+                        micro_plan = MicroPlan(domain=domain)
+                        for step in raw_steps:
+                            micro_plan.steps.append(PlanDecomposer._build_intent(step))
+                        fallback_loaded = True
+                        logger.info("Baseten: loaded fallback plan from %s", fallback_path)
+                        break
+                    except Exception:
+                        continue
+            if not fallback_loaded:
+                # Last resort: create a minimal navigate-only plan from the objective
+                domain = obj.domains[0] if objective_dict and obj.domains else "unknown"
+                start_url = obj.start_url if objective_dict else "about:blank"
+                micro_plan = MicroPlan(domain=domain, steps=[
+                    MicroIntent(intent=f"Navigate to {start_url}", type="navigate", budget=3, section="setup", required=True),
+                ])
+                logger.warning("Baseten: no fallback plan found, using minimal navigate-only plan")
 
         steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
         data_root = _data_root()
