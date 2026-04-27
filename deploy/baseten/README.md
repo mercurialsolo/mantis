@@ -24,15 +24,15 @@ Create these in the Baseten secret manager before deploying:
 ## Deploy
 
 ```bash
-uvx truss push baseten/holo3 \
+uvx truss push deploy/baseten/holo3 \
   --promote --wait --deployment-name baseten-holo3-workload \
   --include-git-info
 
-uvx truss push baseten/gemma4 \
+uvx truss push deploy/baseten/gemma4 \
   --environment production --wait --deployment-name baseten-gemma4-31b \
   --include-git-info
 
-uvx truss push baseten/gemma4_26b \
+uvx truss push deploy/baseten/gemma4_26b \
   --environment production --wait --deployment-name baseten-gemma4-26b \
   --include-git-info
 ```
@@ -97,7 +97,7 @@ distillation JSONL/screenshots, then writes checkpoints under
 `$BT_CHECKPOINT_DIR` so Baseten can deploy them later.
 
 ```bash
-uvx truss train push baseten/training/holo3_distill/config.py \
+uvx truss train push deploy/baseten/training/holo3_distill/config.py \
   --job-name holo3-boattrader-distill
 ```
 

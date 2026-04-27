@@ -1,6 +1,6 @@
 """Baseten workload server for Mantis CUA.
 
-This module is used by the Baseten custom-server Trusses under ``baseten/``.
+This module is used by the Baseten custom-server Trusses under ``deploy/baseten/``.
 It starts a local llama.cpp server for either Holo3 or Gemma4, then exposes a
 small FastAPI surface that runs the existing CUA task and micro-plan runners.
 """
