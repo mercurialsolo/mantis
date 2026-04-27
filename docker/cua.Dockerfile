@@ -34,7 +34,7 @@ COPY tasks/ ./tasks/
 COPY plans/ ./plans/
 
 # Startup script: Xvfb + openbox + agent
-COPY docker_entrypoint.sh ./
+COPY scripts/docker_entrypoint.sh ./
 RUN chmod +x docker_entrypoint.sh
 
 ENTRYPOINT ["./docker_entrypoint.sh"]
