@@ -39,6 +39,11 @@ logs/
 cache/
 results/
 outputs/
+screenshots/
+
+# Run output artifacts (CSVs at repo root); CSVs under tasks/ and plans/ stay tracked
+/leads_*.csv
+/boattrader_leads*.csv
 
 # Claude
 .claude/
