@@ -523,41 +523,18 @@ class BasetenCUARuntime:
             for step in raw_steps:
                 micro_plan.steps.append(PlanDecomposer._build_intent(step))
         else:
-            # Text plan: try graph learning path first, fall back to PlanDecomposer
-            plan_text = path.read_text()
-            graph_ok = False
+            # Text plan: decompose now, graph learning happens later in _run_micro
+            # (inside the detached thread where env is available and timeouts don't block)
+            decomposer = PlanDecomposer()
+            micro_plan = decomposer.decompose(str(path))
+            # Embed the raw plan text so _run_micro can run graph learning
+            objective_dict = None
             try:
-                print("[baseten] Attempting graph learning path for text plan")
-                from mantis_agent.graph import GraphLearner, GraphCompiler, GraphStore
-                from mantis_agent.graph.plan_validator import PlanValidator
-                print("[baseten] Graph imports OK")
-
-                data_root = _data_root()
-                learner = GraphLearner(
-                    store=GraphStore(base_path=str(data_root / "graphs")),
-                )
-                graph = learner.learn(objective_text=plan_text, n_samples=0)
-                compiler = GraphCompiler()
-                micro_plan = compiler.compile(graph)
-                validator = PlanValidator()
-                issues = validator.validate(micro_plan, objective=graph.objective)
-                if issues:
-                    micro_plan = validator.enhance(micro_plan, objective=graph.objective)
-                objective_dict = graph.objective.to_dict()
-                graph_ok = True
-                logger.info(
-                    "Baseten: graph-enhanced plan from %s (%d steps)",
-                    path.name, len(micro_plan.steps),
-                )
-            except (ImportError, ModuleNotFoundError) as e:
-                print(f"[baseten] Graph modules not available: {e}")
-            except Exception as e:
-                import traceback as _tb
-                print(f"[baseten] Graph learning FAILED: {e}")
-                print(f"[baseten] Traceback:\n{_tb.format_exc()}")
-            if not graph_ok:
-                decomposer = PlanDecomposer()
-                micro_plan = decomposer.decompose(str(path))
+                from mantis_agent.graph.objective import ObjectiveSpec
+                obj = ObjectiveSpec._parse_heuristic(path.read_text())
+                objective_dict = obj.to_dict()
+            except Exception:
+                pass
 
         steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
         data_root = _data_root()
