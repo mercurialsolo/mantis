@@ -174,7 +174,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v7_domain_agnostic"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v8_step_type_fix"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = plan_path.replace(".txt", f"_micro_{plan_hash}.json")
         if os.path.exists(cache_path):
