@@ -9,9 +9,6 @@ Simulates the OSWorld evaluation loop without a VM to verify:
 """
 
 import io
-import sys
-
-sys.path.insert(0, "src")
 
 from PIL import Image, ImageDraw
 
