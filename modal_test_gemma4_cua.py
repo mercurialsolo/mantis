@@ -18,7 +18,7 @@ import time
 
 import modal
 
-from modal_osworld_direct import (
+from mantis_agent.modal_runtime import (
     download_model as download_base_model,
     start_llama_server as start_base_llama_server,
     image as base_image,

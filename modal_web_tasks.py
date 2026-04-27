@@ -36,7 +36,7 @@ import time
 
 import modal
 
-from modal_osworld_direct import (
+from mantis_agent.modal_runtime import (
     GEMMA4_MODEL,
     GGUF_CONFIGS,
     download_model,

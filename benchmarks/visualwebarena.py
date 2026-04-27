@@ -35,12 +35,8 @@ from __future__ import annotations
 import io
 import json
 import os
-import sys
 import time
-from pathlib import Path
 from typing import Optional
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import modal
 
@@ -49,7 +45,7 @@ import modal
 # and every Python dep the agent loop needs. Building a separate VWA image
 # would just duplicate the llama.cpp compile step and add cold-start time.
 # The QEMU/VM code paths in that image are dormant unless we invoke them.
-from modal_osworld_direct import (
+from mantis_agent.modal_runtime import (
     GEMMA4_MODEL,
     GGUF_CONFIGS,
     download_model,
