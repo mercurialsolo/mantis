@@ -58,8 +58,8 @@ We're building a CUA (Computer Use Agent) that can extract leads from boat listi
 ### 8. Screenshot Replay — 60x Faster Prompt Iteration
 - Every run now saves screenshots to Modal volume (`/data/screenshots/`)
 - `ReplayGymEnv` replays cached screenshots locally without browser/GPU
-- `test_extraction_prompt.py` tests prompts against screenshots via Claude API in 30sec
-- `replay_test.py` CLI: download, test single prompts, run full replay
+- `scripts/test_extraction_prompt.py` tests prompts against screenshots via Claude API in 30sec
+- `scripts/replay_test.py` CLI: download, test single prompts, run full replay
 - **Key finding from screenshots**: Phone was visible on step 20 but model clicked into photo gallery and got trapped for 60 steps
 
 ### 9. RegionGrounding — Heuristic Click Safety
@@ -250,13 +250,13 @@ Check results on Modal volume → Diagnose failure from logs → Repeat
 
 6. **No unit tests for visual grounding**: We can't unit-test "does the model click the right thing on a boat listing page" without actually running the model on the page. There's no synthetic benchmark for this.
 
-7. **Log inspection is manual**: Results land on Modal volumes. `check_boattrader.sh` helps but debugging requires reading through JSON traces step-by-step.
+7. **Log inspection is manual**: Results land on Modal volumes. `scripts/check_boattrader.sh` helps but debugging requires reading through JSON traces step-by-step.
 
 ### What We've Done to Speed Things Up
 
 - `human_speed=False` + removed inter-iteration sleep → 2-3x faster per listing
 - Parallel workers → 5x wall-clock reduction for multi-page runs
-- `check_boattrader.sh` / `monitor_boattrader.sh` → live progress without waiting for completion
+- `scripts/check_boattrader.sh` / `scripts/monitor_boattrader.sh` → live progress without waiting for completion
 - `--detach` runs → start and check later instead of blocking terminal
 - Fast-fail on 404/error pages → skip stale listings immediately
 

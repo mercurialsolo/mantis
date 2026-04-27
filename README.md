@@ -284,11 +284,26 @@ plans/
     test_url_filters.json      # Filter-only test
     test_filters_only.json     # Sidebar filter test
 
-modal_cua_server.py     # Modal cloud deployment (all models, micro-plan support)
-run_osworld.py          # OSWorld benchmark runner
-run_gym_anything.py     # Generic gym environment runner
-run_web_tasks.py        # Web task automation
-export_leads.py         # CSV export with viability checks
+modal_cua_server.py     # Modal CLI entrypoint (all models, micro-plan support)
+deploy/
+  baseten/              # Baseten Truss deployments (holo3, gemma4, gemma4_26b)
+docker/
+  cua.Dockerfile        # CUA container (Xvfb + xdotool + Chromium)
+  hud.Dockerfile        # HUD environment container
+  local.Dockerfile      # Local container with Playwright
+scripts/
+  run_osworld.py        # OSWorld benchmark runner
+  run_gym_anything.py   # Generic gym environment runner
+  run_web_tasks.py      # Web task automation
+  run_local.py          # Local CUA loop
+  export_leads.py       # CSV export with viability checks
+  monitor_run.py        # Tail Modal/Baseten run state
+  replay_test.py        # Replay cached screenshots
+  baseten_workload.py   # Detached run/poll helper for Baseten
+tests/                  # pytest suite
+docs/
+  ARCHITECTURE.md
+  learnings.md
 ```
 
 ## License
