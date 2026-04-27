@@ -44,7 +44,7 @@ environment_variables:
   VLLM_LOGGING_LEVEL: INFO
   HF_HUB_ENABLE_HF_TRANSFER: "1"
 requirements:
-  - "transformers @ https://github.com/huggingface/transformers/archive/refs/heads/main.zip"
+  - "transformers @ https://github.com/huggingface/transformers/archive/aa935fb53dc38b56f10cc86b3a74354c2e99412f.zip"  # v5.6.2
   - huggingface_hub
   - hf_transfer
   - datasets

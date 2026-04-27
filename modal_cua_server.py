@@ -116,7 +116,7 @@ planner_image = (
     )
     .apt_install("git", "build-essential", "cmake")
     .run_commands(
-        "git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp",
+        "git clone --depth 1 --branch b8948 https://github.com/ggerganov/llama.cpp /opt/llama.cpp",  # SHA 42401c72b8d239240ed0fb37694d29ac33b3bc4f
         # Symlink CUDA driver stubs so linker finds libcuda.so during image build
         "ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 "
         "&& ldconfig",

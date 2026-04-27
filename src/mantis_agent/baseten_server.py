@@ -20,8 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import hmac
+
 import requests
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.concurrency import run_in_threadpool
 
 from mantis_agent.gym.runner import GymRunner
@@ -55,7 +58,27 @@ SECRET_ENV_MAP = {
     "proxy_user": "PROXY_USER",
     "proxy_pass": "PROXY_PASS",
     "hf_access_token": "HF_TOKEN",
+    "mantis_api_token": "MANTIS_API_TOKEN",
 }
+
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _require_bearer_token(
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> None:
+    expected = os.environ.get("MANTIS_API_TOKEN", "").strip()
+    if not expected:
+        # Fail closed: refuse traffic if the deployment did not provision a token.
+        raise HTTPException(status_code=503, detail="server auth not configured")
+    if creds is None or creds.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=401,
+            detail="missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not hmac.compare_digest(creds.credentials, expected):
+        raise HTTPException(status_code=401, detail="invalid bearer token")
 
 
 def _read_secret(name: str) -> str:
@@ -765,7 +788,7 @@ def models() -> dict[str, Any]:
     return {"data": [{"id": runtime.model_kind, "object": "model"}]}
 
 
-@app.post("/predict")
+@app.post("/predict", dependencies=[Depends(_require_bearer_token)])
 async def predict(request: Request) -> dict[str, Any]:
     try:
         payload = await request.json()

@@ -10,7 +10,7 @@ build_commands:
   - echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list
   - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable
   - pip install --no-cache-dir openai requests pillow mss huggingface-hub fastapi uvicorn pydantic
-  - git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp
+  - git clone --depth 1 --branch b8948 https://github.com/ggerganov/llama.cpp /opt/llama.cpp  # SHA 42401c72b8d239240ed0fb37694d29ac33b3bc4f
   - ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/lib/x86_64-linux-gnu/libcuda.so.1 && ldconfig
   - cd /opt/llama.cpp && cmake -B build -DGGML_CUDA=ON -DGGML_NATIVE=OFF -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DCMAKE_CUDA_ARCHITECTURES="80;90" -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON && cmake --build build --target llama-server --config Release -j$(nproc)
 docker_server:
@@ -38,3 +38,4 @@ secrets:
   proxy_url: null
   proxy_user: null
   proxy_pass: null
+  mantis_api_token: null
