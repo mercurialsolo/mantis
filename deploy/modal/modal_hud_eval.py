@@ -144,7 +144,7 @@ def gemma4_agent_step(
     timeout=86400,
     memory=32768,
     cpu=8,
-    secrets=[modal.Secret.from_name("hud-api-key", required=False)],
+    secrets=[modal.Secret.from_name("hud-api-key")],
 )
 def run_eval(max_tasks: int = 1, max_steps: int = 15):
     """Run OSWorld tasks using Gemma4 on A100 + HUD eval framework."""

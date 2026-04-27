@@ -23,9 +23,17 @@ from typing import Any
 import hmac
 
 import requests
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from starlette.concurrency import run_in_threadpool
+
+try:
+    from fastapi import Depends, FastAPI, HTTPException, Request
+    from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+    from starlette.concurrency import run_in_threadpool
+except ImportError as exc:  # pragma: no cover - container-only deps
+    raise ImportError(
+        "mantis_agent.baseten_server requires fastapi + uvicorn. "
+        "Install via: pip install -e '.[server]'  (or run inside the "
+        "Baseten Truss image, which provisions them in build_commands)."
+    ) from exc
 
 from mantis_agent.gym.runner import GymRunner
 from mantis_agent.gym.xdotool_env import XdotoolGymEnv
