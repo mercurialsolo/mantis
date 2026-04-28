@@ -5,7 +5,7 @@ external_package_dirs:
 base_image:
   image: pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel
 build_commands:
-  - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential cmake curl wget gnupg xvfb xdotool scrot ca-certificates fonts-liberation fonts-noto-color-emoji libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libpango-1.0-0 libcairo2 libasound2 libxshmfence1
+  - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential cmake curl wget gnupg xvfb xdotool scrot ffmpeg ca-certificates fonts-liberation fonts-noto-color-emoji libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 libpango-1.0-0 libcairo2 libasound2 libxshmfence1
   - curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
   - echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list
   - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable
