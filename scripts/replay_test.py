@@ -6,10 +6,10 @@ Usage:
     python replay_test.py download [session_name]
 
     # Test a prompt against cached screenshots:
-    python replay_test.py test --prompt "Click the first listing" --dir screenshots/run_001
+    python replay_test.py test --prompt "Click the first listing" --dir outputs/screenshots/run_001
 
     # Run full extraction test with replay env:
-    python replay_test.py run --dir screenshots/run_001 --max-steps 10
+    python replay_test.py run --dir outputs/screenshots/run_001 --max-steps 10
 
     # List available screenshot sets:
     python replay_test.py list
@@ -36,7 +36,7 @@ def cmd_list(args):
 def cmd_download(args):
     """Download screenshots from Modal volume."""
     session = args.session or ""
-    local_dir = f"screenshots/{session}" if session else "screenshots"
+    local_dir = f"outputs/screenshots/{session}" if session else "outputs/screenshots"
     os.makedirs(local_dir, exist_ok=True)
 
     if session:
@@ -53,7 +53,7 @@ def cmd_download(args):
             return
         session = dirs[0]
         remote = f"screenshots/{session}/"
-        local_dir = f"screenshots/{session}"
+        local_dir = f"outputs/screenshots/{session}"
         os.makedirs(local_dir, exist_ok=True)
 
     print(f"Downloading {remote} → {local_dir}/")

@@ -12,7 +12,7 @@ Usage:
     python test_extraction_prompt.py --prompt "your custom prompt"
 
     # Or test against a specific screenshot:
-    python test_extraction_prompt.py --screenshot screenshots/bt_latest/0020.png
+    python test_extraction_prompt.py --screenshot outputs/screenshots/bt_latest/0020.png
 """
 
 import argparse
@@ -101,7 +101,7 @@ def test_screenshot(screenshot_path: str, prompt: str, model: str = "claude-sonn
 def main():
     parser = argparse.ArgumentParser(description="Test extraction prompts against cached screenshots")
     parser.add_argument("--screenshot", default="", help="Single screenshot to test")
-    parser.add_argument("--dir", default="screenshots/bt_latest", help="Directory of screenshots")
+    parser.add_argument("--dir", default="outputs/screenshots/bt_latest", help="Directory of screenshots")
     parser.add_argument("--prompt", default="", help="Custom prompt (default: built-in extraction prompt)")
     parser.add_argument("--model", default="claude-sonnet-4-20250514", help="Claude model")
     parser.add_argument("--max", type=int, default=5, help="Max screenshots to test from dir")

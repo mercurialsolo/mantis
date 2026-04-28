@@ -53,6 +53,7 @@ target-version = "py311"
 extend-exclude = [
     "OSWorld",
     "VWA_configs",
+    "outputs",
     "screenshots",
 ]
 
@@ -66,5 +67,6 @@ norecursedirs = [
     ".claude",
     "OSWorld",
     "VWA_configs",
+    "outputs",
     "screenshots",
 ]
