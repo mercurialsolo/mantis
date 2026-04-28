@@ -31,7 +31,99 @@ from typing import Any, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
+from .actions import Action, ActionType
+from .gym.base import GymEnvironment, GymObservation, GymResult
+
 logger = logging.getLogger("mantis_agent.presentation")
+
+
+# ── Click event capture ────────────────────────────────────────────────────
+@dataclasses.dataclass
+class ClickEvent:
+    """One click action observed during a run.
+
+    ``t_seconds`` is the elapsed time since the recording started, NOT
+    wall-clock — so it lines up with the raw video timeline regardless of
+    how long the agent took to spin up.
+    """
+
+    t_seconds: float
+    x: int
+    y: int
+    button: str = "left"
+
+
+class ClickEventLog:
+    """Captures clicks made during a run; safe to write from multiple threads.
+
+    The runtime instantiates one of these alongside the ScreenRecorder and
+    wraps the env with :class:`ClickRecordingEnv` so every Action(CLICK)
+    becomes a ClickEvent here. After the run ends, the log gets handed to
+    :func:`render_ripple_overlay_pngs`.
+    """
+
+    def __init__(self, anchor_time: float | None = None) -> None:
+        import threading
+        import time as _time
+        self._anchor = anchor_time if anchor_time is not None else _time.time()
+        self._events: list[ClickEvent] = []
+        self._lock = threading.Lock()
+
+    def record(self, x: int, y: int, button: str = "left") -> None:
+        import time as _time
+        elapsed = max(0.0, _time.time() - self._anchor)
+        with self._lock:
+            self._events.append(ClickEvent(t_seconds=elapsed, x=int(x), y=int(y), button=button))
+
+    @property
+    def events(self) -> list[ClickEvent]:
+        with self._lock:
+            return list(self._events)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._events)
+
+
+class ClickRecordingEnv(GymEnvironment):
+    """Pass-through wrapper that logs every CLICK action to a ``ClickEventLog``.
+
+    Universal for any computer-use scenario — browser, file manager, terminal,
+    desktop apps. The env contract talks pixels, and ripples render at pixel
+    coordinates regardless of what's painted at those coordinates.
+    """
+
+    def __init__(self, inner: GymEnvironment, log: ClickEventLog) -> None:
+        self._inner = inner
+        self._log = log
+
+    @property
+    def screen_size(self) -> tuple[int, int]:
+        return self._inner.screen_size
+
+    def reset(self, task: str, **kwargs: Any) -> GymObservation:
+        return self._inner.reset(task, **kwargs)
+
+    def step(self, action: Action) -> GymResult:
+        if action.action_type == ActionType.CLICK:
+            params = action.params or {}
+            try:
+                x = int(params.get("x", 0))
+                y = int(params.get("y", 0))
+                btn = str(params.get("button", "left"))
+                self._log.record(x, y, button=btn)
+            except (TypeError, ValueError):
+                pass  # Don't let logging break the run
+        return self._inner.step(action)
+
+    def close(self) -> None:
+        self._inner.close()
+
+    # Forward attribute access so callers reading env.current_url etc. still work.
+    def __getattr__(self, name: str) -> Any:
+        # __getattr__ is only invoked for attributes NOT found on self,
+        # so the wrapper's own methods take precedence.
+        return getattr(self._inner, name)
 
 
 # ── Cards (PIL-rendered, no external font deps) ─────────────────────────────
@@ -258,6 +350,108 @@ def captions_to_srt(captions: list[StepCaption]) -> str:
     return "\n".join(out)
 
 
+# ── Click ripple overlay (PNG sequence) ────────────────────────────────────
+RIPPLE_DURATION_SECONDS = 0.6
+RIPPLE_RING_COUNT = 2
+RIPPLE_MAX_RADIUS = 90
+RIPPLE_MIN_RADIUS = 18
+RIPPLE_COLOR = (56, 189, 248)   # sky-400 — high-contrast on most desktops
+RIPPLE_INNER_COLOR = (255, 255, 255)
+RIPPLE_PEAK_ALPHA = 220
+
+
+def render_ripple_overlay_pngs(
+    out_dir: Path,
+    *,
+    duration_seconds: float,
+    fps: int,
+    width: int,
+    height: int,
+    clicks: list[ClickEvent],
+    title_offset_seconds: float = 0.0,
+) -> Path | None:
+    """Render a PNG image sequence ready for ffmpeg's image2 demuxer.
+
+    Each PNG is a transparent-background frame containing whatever click
+    ripples are active at that frame. The same blank frame is reused for
+    moments with no active ripples (cheap; PIL only renders novel frames).
+
+    Returns the directory containing ``frame_%06d.png``, or None when
+    there are no clicks to render (caller should skip overlay).
+    """
+    if not clicks:
+        return None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n_frames = max(1, int(round(duration_seconds * fps)))
+
+    # Pre-render the empty frame once and reuse for blank slots.
+    blank_path = out_dir / "_blank.png"
+    Image.new("RGBA", (width, height), (0, 0, 0, 0)).save(blank_path)
+
+    # Pre-compute per-click visibility window.
+    clicks_t = [
+        (c.t_seconds + title_offset_seconds, c.x, c.y) for c in clicks
+    ]
+
+    written = 0
+    for i in range(n_frames):
+        t = i / fps
+        active = [
+            (ct, x, y, t - ct)
+            for (ct, x, y) in clicks_t
+            if 0.0 <= t - ct <= RIPPLE_DURATION_SECONDS
+        ]
+        out_path = out_dir / f"frame_{i:06d}.png"
+        if not active:
+            # Hard-link or copy the blank frame; on Linux hardlink is O(1).
+            try:
+                if not out_path.exists():
+                    out_path.hardlink_to(blank_path)
+            except (OSError, AttributeError):
+                # Fall back to file copy (Windows / older Python on some FS).
+                import shutil as _sh
+                _sh.copyfile(blank_path, out_path)
+            continue
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(canvas)
+        for (_ct, x, y, elapsed) in active:
+            progress = max(0.0, min(1.0, elapsed / RIPPLE_DURATION_SECONDS))
+            # Outer ring expands and fades out
+            for ring in range(RIPPLE_RING_COUNT):
+                ring_progress = max(0.0, progress - 0.15 * ring)
+                if ring_progress <= 0:
+                    continue
+                radius = int(
+                    RIPPLE_MIN_RADIUS
+                    + (RIPPLE_MAX_RADIUS - RIPPLE_MIN_RADIUS) * ring_progress
+                )
+                alpha = int(RIPPLE_PEAK_ALPHA * (1.0 - ring_progress))
+                if alpha <= 0:
+                    continue
+                # Outline thickness shrinks as the ring expands
+                line_w = max(2, 6 - int(4 * ring_progress))
+                draw.ellipse(
+                    [x - radius, y - radius, x + radius, y + radius],
+                    outline=(*RIPPLE_COLOR, alpha),
+                    width=line_w,
+                )
+            # Inner solid dot to mark the click locus crisply
+            inner_r = max(2, int(8 * (1.0 - progress)))
+            inner_alpha = int(255 * (1.0 - progress))
+            if inner_alpha > 0 and inner_r > 0:
+                draw.ellipse(
+                    [x - inner_r, y - inner_r, x + inner_r, y + inner_r],
+                    fill=(*RIPPLE_INNER_COLOR, inner_alpha),
+                )
+        canvas.save(out_path, optimize=True)
+        written += 1
+    logger.info(
+        "ripple overlay: %d clicks → %d frames (%d non-blank) at %s",
+        len(clicks), n_frames, written, out_dir,
+    )
+    return out_dir
+
+
 # ── Composition (ffmpeg) ────────────────────────────────────────────────────
 def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
@@ -270,6 +464,8 @@ def compose_polished_video(
     subtitles_srt: Optional[Path],
     output: Path,
     *,
+    ripples_dir: Optional[Path] = None,
+    ripples_fps: int = 30,
     title_duration: float = 3.0,
     outro_duration: float = 5.0,
     width: int = 1280,
@@ -309,6 +505,17 @@ def compose_polished_video(
         inputs += ["-loop", "1", "-t", str(outro_duration), "-i", str(outro_card)]
         outro_idx = (len(inputs) // 2) - 1
 
+    # Optional ripple PNG sequence (image2 demuxer)
+    ripples_idx: Optional[int] = None
+    if ripples_dir and ripples_dir.exists():
+        first = ripples_dir / "frame_000000.png"
+        if first.exists():
+            inputs += [
+                "-framerate", str(ripples_fps),
+                "-i", str(ripples_dir / "frame_%06d.png"),
+            ]
+            ripples_idx = (len(inputs) // 2) - 1
+
     # Build filter_complex
     parts: list[str] = []
     # Normalize raw to target size + 30 fps (so concat doesn't choke on
@@ -322,7 +529,19 @@ def compose_polished_video(
         # path with backslash-escaped colons.
         srt_path = str(subtitles_srt).replace(":", r"\:").replace("'", r"\'")
         raw_chain += f",subtitles=filename='{srt_path}'"
-    parts.append(f"{raw_chain}[v_main]")
+    parts.append(f"{raw_chain}[v_run]")
+
+    if ripples_idx is not None:
+        # Normalize the PNG sequence to the same canvas + framerate, then
+        # overlay onto the run. PNGs are RGBA; ffmpeg honors the alpha
+        # channel so transparent regions pass through.
+        parts.append(
+            f"[{ripples_idx}:v]scale={width}:{height},setsar=1,fps=30,"
+            f"format=rgba[v_ripples]"
+        )
+        parts.append("[v_run][v_ripples]overlay=0:0[v_main]")
+    else:
+        parts.append("[v_run]copy[v_main]")
 
     concat_inputs: list[str] = []
 

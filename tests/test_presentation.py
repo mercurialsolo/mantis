@@ -265,3 +265,136 @@ def test_compose_handles_only_raw_no_title_no_outro(tmp_path: Path):
         )
     assert ok
     assert out.exists()
+
+
+# ── Click ripple overlay ────────────────────────────────────────────────────
+def test_click_event_log_records_with_anchor():
+    import time
+    from mantis_agent.presentation import ClickEventLog
+    log = ClickEventLog(anchor_time=time.time())
+    log.record(100, 200, button="left")
+    time.sleep(0.05)
+    log.record(300, 400, button="right")
+    events = log.events
+    assert len(events) == 2
+    assert events[0].x == 100 and events[0].y == 200 and events[0].button == "left"
+    assert events[1].button == "right"
+    # Timestamps are monotonic and elapsed-from-anchor (i.e., near-zero).
+    assert 0.0 <= events[0].t_seconds < 1.0
+    assert events[1].t_seconds >= events[0].t_seconds
+
+
+def test_click_recording_env_intercepts_clicks():
+    import time
+    from mantis_agent.actions import Action, ActionType
+    from mantis_agent.gym.base import GymObservation, GymResult
+    from mantis_agent.presentation import ClickEventLog, ClickRecordingEnv
+
+    class FakeEnv:
+        screen_size = (1280, 720)
+        def reset(self, task, **kw): return GymObservation(screenshot=None)  # type: ignore
+        def step(self, action):
+            return GymResult(GymObservation(screenshot=None), 0.0, False, {})  # type: ignore
+        def close(self): pass
+
+    log = ClickEventLog(anchor_time=time.time())
+    env = ClickRecordingEnv(FakeEnv(), log)
+    env.step(Action(action_type=ActionType.CLICK, params={"x": 50, "y": 60}))
+    env.step(Action(action_type=ActionType.TYPE, params={"text": "hi"}))
+    env.step(Action(action_type=ActionType.CLICK, params={"x": 200, "y": 300, "button": "right"}))
+    assert len(log) == 2  # only CLICK actions logged
+    assert log.events[0].x == 50
+    assert log.events[1].button == "right"
+
+
+def test_click_recording_env_handles_bad_params():
+    import time
+    from mantis_agent.actions import Action, ActionType
+    from mantis_agent.gym.base import GymObservation, GymResult
+    from mantis_agent.presentation import ClickEventLog, ClickRecordingEnv
+
+    class FakeEnv:
+        screen_size = (1280, 720)
+        def reset(self, task, **kw): return GymObservation(screenshot=None)  # type: ignore
+        def step(self, action):
+            return GymResult(GymObservation(screenshot=None), 0.0, False, {})  # type: ignore
+        def close(self): pass
+
+    log = ClickEventLog(anchor_time=time.time())
+    env = ClickRecordingEnv(FakeEnv(), log)
+    # Click with non-int x/y — should not crash, should still pass through.
+    env.step(Action(action_type=ActionType.CLICK, params={"x": "bad", "y": 60}))
+    assert len(log) == 0  # bad coords skipped
+
+
+def test_render_ripple_overlay_returns_none_when_no_clicks(tmp_path: Path):
+    from mantis_agent.presentation import render_ripple_overlay_pngs
+    out = render_ripple_overlay_pngs(
+        tmp_path / "ripples", duration_seconds=2.0, fps=10,
+        width=1280, height=720, clicks=[],
+    )
+    assert out is None
+
+
+def test_render_ripple_overlay_writes_png_sequence(tmp_path: Path):
+    import time
+    from mantis_agent.presentation import (
+        ClickEvent, render_ripple_overlay_pngs, RIPPLE_DURATION_SECONDS,
+    )
+    clicks = [
+        ClickEvent(t_seconds=0.0, x=100, y=200),
+        ClickEvent(t_seconds=1.0, x=500, y=400),
+    ]
+    out = render_ripple_overlay_pngs(
+        tmp_path / "ripples", duration_seconds=2.0, fps=10,
+        width=1280, height=720, clicks=clicks,
+    )
+    assert out is not None
+    frames = sorted(out.glob("frame_*.png"))
+    assert len(frames) == 20  # 2s * 10fps
+    # Active ripple windows: [0, 0.6] and [1.0, 1.6]. Frames 0-5 and 10-15 active.
+    sizes = [f.stat().st_size for f in frames]
+    # Active frames are bigger than blank ones.
+    blank_size = sizes[8]  # frame at t=0.8 — between ripples
+    assert sizes[0] > blank_size  # first ripple visible
+    assert sizes[10] > blank_size  # second ripple visible
+    assert sizes[8] == blank_size  # no active ripple at t=0.8
+
+
+def test_compose_polished_video_threads_ripples_dir(tmp_path: Path):
+    """When ripples_dir is provided, ffmpeg gets a -framerate / image2 input."""
+    raw = tmp_path / "raw.mp4"
+    raw.write_bytes(b"raw" * 256)
+    ripples = tmp_path / "ripples"
+    ripples.mkdir()
+    # Provide a frame_000000.png so the renderer recognises the dir.
+    (ripples / "frame_000000.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    out = tmp_path / "polished.mp4"
+
+    captured: dict = {}
+    def _capture(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        captured["cmd"] = cmd
+        Path(cmd[-1]).write_bytes(b"v")
+        proc = MagicMock(); proc.returncode = 0; proc.stderr = b""
+        return proc
+    with patch("mantis_agent.presentation._ffmpeg_available", return_value=True), \
+         patch("mantis_agent.presentation.subprocess.run", side_effect=_capture):
+        ok = compose_polished_video(
+            raw_video=raw,
+            title_card=None,
+            outro_card=None,
+            subtitles_srt=None,
+            ripples_dir=ripples,
+            output=out,
+        )
+    assert ok
+    cmd = captured["cmd"]
+    # The PNG sequence input should appear in the input list.
+    assert any("frame_%06d.png" in str(arg) for arg in cmd)
+    # filter_complex should overlay the ripples onto the run footage.
+    fc_idx = cmd.index("-filter_complex")
+    fc = cmd[fc_idx + 1]
+    assert "[v_run]" in fc
+    assert "[v_ripples]" in fc
+    assert "overlay=0:0" in fc

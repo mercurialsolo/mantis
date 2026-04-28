@@ -740,17 +740,17 @@ class BasetenCUARuntime:
 
     def _maybe_record(
         self, payload: dict[str, Any], run_id: str
-    ) -> Any:
+    ) -> tuple[Any, Any]:
         """Spawn a ScreenRecorder if payload.record_video is set.
 
-        Output path is namespaced by tenant id (read from MANTIS_TENANT_ID,
-        which the handler sets per request) so callers cannot read each
-        other's recordings via /v1/runs/<run_id>/video.
-
-        Returns the started recorder, or None if disabled / failed to start.
+        Returns ``(recorder, click_log)`` so the caller can wrap the env
+        with a ``ClickRecordingEnv`` to capture click coordinates that
+        feed the polished video's ripple animations. Either may be None
+        when recording is disabled.
         """
         if not payload.get("record_video"):
-            return None
+            return (None, None)
+        from mantis_agent.presentation import ClickEventLog
         from mantis_agent.recorder import ScreenRecorder
 
         tenant_id = safe_state_key(
@@ -765,16 +765,21 @@ class BasetenCUARuntime:
             fps=int(payload.get("video_fps", 5)),
             fmt=fmt,  # type: ignore[arg-type]
         )
+        click_log = ClickEventLog()
         if not rec.start():
             logger.warning(
                 "recorder requested but failed to start: %s",
                 rec.result.error if rec.result else "unknown",
             )
-            return rec  # caller still records the error in result
-        return rec
+            return (rec, click_log)
+        # Re-anchor the click log to the moment ffmpeg started capturing,
+        # so click timestamps align with the raw video timeline.
+        if hasattr(rec, "_started_at") and rec._started_at:
+            click_log._anchor = rec._started_at
+        return (rec, click_log)
 
     def _attach_recording_metadata(
-        self, result: dict[str, Any], recorder: Any
+        self, result: dict[str, Any], recorder: Any, click_log: Any = None,
     ) -> None:
         if not recorder:
             return
@@ -786,6 +791,7 @@ class BasetenCUARuntime:
             "duration_seconds": round(rec_result.duration_seconds, 2),
             "bytes": rec_result.bytes_written,
             "error": rec_result.error,
+            "clicks": len(click_log) if click_log is not None else 0,
         }
         # Polish the raw recording into a feature-walkthrough video.
         if rec_result.succeeded and rec_result.output_path:
@@ -793,12 +799,14 @@ class BasetenCUARuntime:
                 raw_video=rec_result.output_path,
                 result=result,
                 recorder=recorder,
+                click_log=click_log,
             )
             if polished_path is not None:
                 result["video"]["polished_path"] = str(polished_path)
 
     def _polish_recording(
         self, raw_video: Any, result: dict[str, Any], recorder: Any,
+        click_log: Any = None,
     ) -> Any:
         """Compose title + raw-with-captions + outro into a polished video.
 
@@ -846,11 +854,33 @@ class BasetenCUARuntime:
                 srt_path = run_dir / "_captions.srt"
                 srt_path.write_text(presentation.captions_to_srt(captions), encoding="utf-8")
 
+            # Click ripple overlay (works for any computer-use click —
+            # browser, file manager, terminal, dialog, anything visible
+            # on the Xvfb display).
+            ripples_dir: Any = None
+            if click_log is not None and len(click_log) > 0:
+                ripples_dir = run_dir / "_ripples"
+                # Recording duration tells us how many overlay frames to render.
+                duration = (
+                    recorder.result.duration_seconds
+                    if recorder.result and recorder.result.duration_seconds
+                    else 60.0
+                )
+                ripples_dir = presentation.render_ripple_overlay_pngs(
+                    ripples_dir,
+                    duration_seconds=duration,
+                    fps=30,
+                    width=width,
+                    height=height,
+                    clicks=click_log.events,
+                )
+
             ok = presentation.compose_polished_video(
                 raw_video=raw_video,
                 title_card=title_card_path,
                 outro_card=outro_card_path,
                 subtitles_srt=srt_path,
+                ripples_dir=ripples_dir,
                 output=polished_path,
                 width=width,
                 height=height,
@@ -907,7 +937,10 @@ class BasetenCUARuntime:
             run_id,
             settle_time=4.0 if self.model_kind == "holo3" else 2.0,
         )
-        recorder = self._maybe_record(payload, run_id)
+        recorder, click_log = self._maybe_record(payload, run_id)
+        if click_log is not None:
+            from mantis_agent.presentation import ClickRecordingEnv
+            env = ClickRecordingEnv(env, click_log)
 
         try:
             micro_plan = MicroPlan(domain=session_name)
@@ -987,7 +1020,7 @@ class BasetenCUARuntime:
                 plan_signature=task_suite.get("_plan_signature", ""),
                 resume_state=resume_state,
             )
-            self._attach_recording_metadata(result, recorder)
+            self._attach_recording_metadata(result, recorder, click_log=click_log)
             self._save_result(result, prefix=self.model_kind.replace("-", "_"))
             return result
         finally:
@@ -1021,7 +1054,10 @@ class BasetenCUARuntime:
             run_id,
             settle_time=4.0 if self.model_kind == "holo3" else 2.0,
         )
-        recorder = self._maybe_record(payload, run_id)
+        recorder, click_log = self._maybe_record(payload, run_id)
+        if click_log is not None:
+            from mantis_agent.presentation import ClickRecordingEnv
+            env = ClickRecordingEnv(env, click_log)
         grounding = ClaudeGrounding()
 
         try:
@@ -1042,7 +1078,7 @@ class BasetenCUARuntime:
                 proxy_proc=proxy_proc, t0=t0,
             )
             result["provider"] = "baseten"
-            self._attach_recording_metadata(result, recorder)
+            self._attach_recording_metadata(result, recorder, click_log=click_log)
             self._save_result(result, prefix=self.model_kind.replace("-", "_"))
             return result
         finally:

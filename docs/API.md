@@ -382,23 +382,49 @@ For comparison, equivalent Claude-only CUA flow ~$0.50–$1.50 per listing.
 
 Send a plan with `record_video: true` and the runtime produces a feature-walkthrough video — title card → captioned run footage → outro card with the result summary. Fetch with `GET /v1/runs/{run_id}/video`. The raw screencast is preserved alongside; pass `?raw=1` to fetch it instead.
 
-The walkthrough has three segments:
+The walkthrough has three segments plus animated click ripples on top of the run footage:
 
 ```
 ┌─────────────────┐  ┌─────────────────────────┐  ┌─────────────────┐
-│  Title card     │→ │  Run footage (captions) │→ │  Outro card     │
-│  (3s)           │  │  per-step intent shown  │  │  (5s)           │
-│                 │  │  with [OK] / [FAIL]     │  │                 │
-│  Mantis CUA     │  │  in the bottom strip    │  │  Run complete   │
-│  ───            │  │  while the action plays │  │  ───            │
-│  <plan name>    │  │  on screen              │  │  3 viable leads │
-│  tenant: …      │  │                         │  │  1 with phone   │
-│  run: …         │  │                         │  │  17 steps · 9m  │
+│  Title card     │→ │  Run footage (captions  │→ │  Outro card     │
+│  (3s)           │  │   + click ripples)      │  │  (5s)           │
+│                 │  │  per-step intent shown  │  │                 │
+│  Mantis CUA     │  │  with [OK] / [FAIL]     │  │  Run complete   │
+│  ───            │  │  in the bottom strip    │  │  ───            │
+│  <plan name>    │  │  while the action plays │  │  3 viable leads │
+│  tenant: …      │  │  + expanding sky-blue   │  │  1 with phone   │
+│  run: …         │  │  ripple at every click  │  │  17 steps · 9m  │
 │                 │  │                         │  │  cost: $0.42    │
 └─────────────────┘  └─────────────────────────┘  └─────────────────┘
 ```
 
-Title and outro are rendered with PIL; captions are SRT cues burned in by ffmpeg's `subtitles=` filter (libass). The polish step is best-effort — if anything fails (PIL, ffmpeg, libass not built in the image), the raw recording is still saved and the endpoint serves it.
+Title and outro are rendered with PIL. Captions are SRT cues burned in by ffmpeg's `subtitles=` filter (libass). Click ripples are PNG-sequence overlay frames composited via ffmpeg's `overlay` filter. Polish is best-effort — if anything fails (PIL, ffmpeg, libass not built in the image), the raw recording is still saved and the endpoint serves it.
+
+### Click ripples — universal computer use
+
+Ripples render the same way regardless of *what* the agent clicks. The agent emits `Action(CLICK, {x, y})` with pixel coordinates on the Xvfb display; xdotool clicks the pixel; ffmpeg overlays the ripple at the same pixel. So the ripple looks identical when the agent clicks:
+
+- a button on a Chrome web page
+- a file icon in a file manager (Nautilus, Files, etc.)
+- a row in a desktop database tool
+- a menu item in LibreOffice
+- a tab in a terminal multiplexer
+- a confirmation button in a system dialog
+
+Anything visible on the Xvfb display works. The ripple is a 0.6-second expanding sky-blue circle (with a small white center dot at the click locus) that fades out over the animation. It's purposely minimal — visible but not visually disruptive.
+
+You'll see this as a `clicks` count in the result metadata:
+
+```jsonc
+{
+  "video": {
+    "path": ".../recording.mp4",
+    "polished_path": ".../recording_polished.mp4",
+    "clicks": 17,
+    ...
+  }
+}
+```
 
 ```bash
 # 1. Submit a recorded run
