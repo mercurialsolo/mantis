@@ -1,0 +1,36 @@
+# Local CUA agent container — runs with your residential IP
+# Uses Xvfb for headed Playwright (needed for some CF bypasses)
+#
+# Build:  docker build -f docker/local.Dockerfile -t mantis-cua .
+# Run:    docker run --rm -v $(pwd)/results:/app/results mantis-cua \
+#           --task-file tasks/boattrader/full_production.json \
+#           --brain-url http://host.docker.internal:8080/v1
+
+FROM python:3.11-slim
+
+# System deps for Playwright + Xvfb
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 \
+    libpango-1.0-0 libcairo2 libasound2 libxshmfence1 \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir \
+    playwright playwright-stealth \
+    requests pillow openai \
+    && playwright install chromium
+
+# Copy source
+COPY src/ ./src/
+COPY scripts/run_local.py ./
+COPY tasks/ ./tasks/
+COPY plans/ ./plans/
+
+# Default: run with Xvfb (virtual display for headed mode)
+ENTRYPOINT ["xvfb-run", "--auto-servernum", "python", "run_local.py"]
+CMD ["--task-file", "tasks/boattrader/full_production.json", "--brain-url", "http://host.docker.internal:8080/v1", "--headed"]

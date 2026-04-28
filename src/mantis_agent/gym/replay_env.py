@@ -179,7 +179,7 @@ def test_prompt(brain, screenshot_path: str, prompt: str,
     Returns the brain's action and thinking — no env needed.
 
     Usage:
-        result = test_prompt(brain, "screenshots/search_results.png",
+        result = test_prompt(brain, "outputs/screenshots/search_results.png",
                             "Click the first boat listing card")
         print(result["action"], result["thinking"])
     """

@@ -11,18 +11,10 @@ Run with:
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import modal
 
-from modal_osworld_direct import (
-    image,
-    vol,
-    run_osworld_impl,
-)
+from mantis_agent.modal_runtime import image, run_osworld_impl, vol
 
 multiapp_app = modal.App("gemma4-osworld-multiapp")
 

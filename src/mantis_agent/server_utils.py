@@ -1,6 +1,6 @@
 """Shared utilities for Mantis CUA server deployments (Modal, Baseten, local).
 
-Consolidates duplicated logic across modal_cua_server.py and baseten_server.py:
+Consolidates duplicated logic across deploy/modal/modal_cua_server.py and baseten_server.py:
   - Proxy configuration and local proxy forwarding
   - Plan signature hashing and state key sanitization
   - Micro-intent result building with dynamic verification

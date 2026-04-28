@@ -2,7 +2,7 @@
 
 Prompts live as Python string constants in this module so they ship cleanly
 through Modal's ``add_local_python_source`` (which only includes ``.py`` files).
-This keeps the prompt content out of ``modal_osworld_direct.py`` and gives us
+This keeps the prompt content out of ``deploy/modal/modal_osworld_direct.py`` and gives us
 one place to iterate on prompt wording, A/B test versions, and review changes.
 
 Adding a new prompt:

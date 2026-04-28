@@ -78,25 +78,25 @@ Key modules for micro-intent pipeline:
 
 ```bash
 # From a JSON micro-plan (pre-built, no decomposition needed):
-uv run modal run --detach modal_cua_server.py \
+uv run modal run --detach deploy/modal/modal_cua_server.py \
   --micro plans/boattrader/extract_url_filtered.json \
   --model holo3 --viewer
 
 # Production run with externalized checkpoint state:
-uv run modal run --detach modal_cua_server.py \
+uv run modal run --detach deploy/modal/modal_cua_server.py \
   --micro plans/boattrader/extract_url_filtered.json \
   --model holo3 --viewer \
   --state-key boattrader-miami-private-v1
 
 # Retry a later Modal run from the last checkpoint for that state key:
-uv run modal run --detach modal_cua_server.py \
+uv run modal run --detach deploy/modal/modal_cua_server.py \
   --micro plans/boattrader/extract_url_filtered.json \
   --model holo3 --viewer \
   --state-key boattrader-miami-private-v1 \
   --resume-state
 
 # From a plain text plan (decomposed by Claude Sonnet, cached):
-uv run modal run --detach modal_cua_server.py \
+uv run modal run --detach deploy/modal/modal_cua_server.py \
   --micro plans/boattrader/extract_only.txt \
   --model holo3 --viewer
 
@@ -181,7 +181,7 @@ mantis --viewer "your task here"
 ### Modal (remote GPU)
 
 ```bash
-uv run modal run modal_cua_server.py \
+uv run modal run deploy/modal/modal_cua_server.py \
     --task-file tasks/your_tasks.json \
     --model gemma4-cua \
     --viewer
@@ -212,27 +212,27 @@ cloudflared tunnel --url http://localhost:7860
 
 ```bash
 # Deploy the planner (stays warm for 10 min)
-uv run modal deploy modal_cua_server.py
+uv run modal deploy deploy/modal/modal_cua_server.py
 
 # Run with a pre-built task suite
-uv run modal run modal_cua_server.py \
+uv run modal run deploy/modal/modal_cua_server.py \
     --task-file tasks/boattrader/dynamic_production.json \
     --model gemma4-cua
 
 # Run with plan preprocessing (Gemma4 planner -> executor)
-uv run modal run modal_cua_server.py \
+uv run modal run deploy/modal/modal_cua_server.py \
     --plan-file plans/boattrader/full_spec.txt \
     --model evocua-8b \
     --inputs "pop_password=SelfService38#,zip_code=33101"
 
 # Parallel extraction (fan-out across GPUs)
-uv run modal run modal_cua_server.py \
+uv run modal run deploy/modal/modal_cua_server.py \
     --task-file tasks/boattrader/dynamic_production.json \
     --model gemma4-cua \
     --workers 5
 
 # Claude (API-based, no GPU)
-uv run modal run modal_cua_server.py \
+uv run modal run deploy/modal/modal_cua_server.py \
     --task-file tasks/your_tasks.json \
     --model claude \
     --claude-model claude-sonnet-4-20250514 \
@@ -284,11 +284,26 @@ plans/
     test_url_filters.json      # Filter-only test
     test_filters_only.json     # Sidebar filter test
 
-modal_cua_server.py     # Modal cloud deployment (all models, micro-plan support)
-run_osworld.py          # OSWorld benchmark runner
-run_gym_anything.py     # Generic gym environment runner
-run_web_tasks.py        # Web task automation
-export_leads.py         # CSV export with viability checks
+deploy/
+  modal/                # Modal entrypoints (modal_cua_server.py, modal_osworld_*.py, ...)
+  baseten/              # Baseten Truss deployments (holo3, gemma4, gemma4_26b)
+docker/
+  cua.Dockerfile        # CUA container (Xvfb + xdotool + Chromium)
+  hud.Dockerfile        # HUD environment container
+  local.Dockerfile      # Local container with Playwright
+scripts/
+  run_osworld.py        # OSWorld benchmark runner
+  run_gym_anything.py   # Generic gym environment runner
+  run_web_tasks.py      # Web task automation
+  run_local.py          # Local CUA loop
+  export_leads.py       # CSV export with viability checks
+  monitor_run.py        # Tail Modal/Baseten run state
+  replay_test.py        # Replay cached screenshots
+  baseten_workload.py   # Detached run/poll helper for Baseten
+tests/                  # pytest suite
+docs/
+  ARCHITECTURE.md
+  learnings.md
 ```
 
 ## License

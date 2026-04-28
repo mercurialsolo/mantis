@@ -1,6 +1,6 @@
 """OSWorld Chrome benchmark — own Modal app for parallel execution.
 
-Identical infrastructure to ``modal_osworld_direct.py`` but runs in a
+Identical infrastructure to ``deploy/modal/modal_osworld_direct.py`` but runs in a
 distinct Modal app namespace so chrome runs do not collide with the
 ongoing OS run. Both benchmarks share the underlying ``run_osworld_impl``
 agent loop, the same image, the same llama-server setup, and the same
@@ -13,22 +13,10 @@ Run with:
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
-
-# Make the parent directory importable so this file works when launched
-# locally with `modal run`. Inside the Modal container, modal_osworld_direct
-# is shipped via image.add_local_python_source (see modal_osworld_direct.py)
-# so this sys.path mutation is a no-op there.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import modal
 
-from modal_osworld_direct import (
-    image,
-    vol,
-    run_osworld_impl,
-)
+from mantis_agent.modal_runtime import image, run_osworld_impl, vol
 
 # Distinct app namespace from the OS benchmark.
 chrome_app = modal.App("gemma4-osworld-chrome")

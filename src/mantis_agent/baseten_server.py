@@ -1,6 +1,6 @@
 """Baseten workload server for Mantis CUA.
 
-This module is used by the Baseten custom-server Trusses under ``baseten/``.
+This module is used by the Baseten custom-server Trusses under ``deploy/baseten/``.
 It starts a local llama.cpp server for either Holo3 or Gemma4, then exposes a
 small FastAPI surface that runs the existing CUA task and micro-plan runners.
 """
@@ -20,9 +20,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import hmac
+
 import requests
-from fastapi import FastAPI, HTTPException, Request
-from starlette.concurrency import run_in_threadpool
+
+try:
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request
+    from starlette.concurrency import run_in_threadpool
+except ImportError as exc:  # pragma: no cover - container-only deps
+    raise ImportError(
+        "mantis_agent.baseten_server requires fastapi + uvicorn. "
+        "Install via: pip install -e '.[server]'  (or run inside the "
+        "Baseten Truss image, which provisions them in build_commands)."
+    ) from exc
 
 from mantis_agent.gym.runner import GymRunner
 from mantis_agent.gym.xdotool_env import XdotoolGymEnv
@@ -55,7 +65,26 @@ SECRET_ENV_MAP = {
     "proxy_user": "PROXY_USER",
     "proxy_pass": "PROXY_PASS",
     "hf_access_token": "HF_TOKEN",
+    "mantis_api_token": "MANTIS_API_TOKEN",
 }
+
+def _require_mantis_token(
+    x_mantis_token: str | None = Header(default=None, alias="X-Mantis-Token"),
+) -> None:
+    """Container-level auth.
+
+    Uses a custom header (``X-Mantis-Token``) instead of ``Authorization: Bearer``
+    so it does not collide with Baseten's gateway auth, which sends
+    ``Authorization: Api-Key <baseten_key>`` to the container. Fails closed
+    if the deployment didn't provision the secret.
+    """
+    expected = os.environ.get("MANTIS_API_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="server auth not configured")
+    if not x_mantis_token:
+        raise HTTPException(status_code=401, detail="missing X-Mantis-Token header")
+    if not hmac.compare_digest(x_mantis_token, expected):
+        raise HTTPException(status_code=401, detail="invalid X-Mantis-Token")
 
 
 def _read_secret(name: str) -> str:
@@ -514,6 +543,8 @@ class BasetenCUARuntime:
         if not path.exists():
             raise FileNotFoundError(f"micro plan not found: {path}")
 
+        objective_dict = None
+
         if path.suffix == ".json":
             raw_steps = json.loads(path.read_text())
             domain = path.stem
@@ -521,8 +552,48 @@ class BasetenCUARuntime:
             for step in raw_steps:
                 micro_plan.steps.append(PlanDecomposer._build_intent(step))
         else:
-            decomposer = PlanDecomposer()
-            micro_plan = decomposer.decompose(str(path))
+            # Text plan: embed raw text + heuristic objective for the detached thread.
+            # The actual decomposition/enhancement happens inside _run_micro where
+            # there's no request timeout and the browser env is available for probing.
+            plan_text = path.read_text()
+            objective_dict = None
+            try:
+                from mantis_agent.graph.objective import ObjectiveSpec
+                obj = ObjectiveSpec._parse_heuristic(plan_text)
+                objective_dict = obj.to_dict()
+                objective_dict["_raw_plan_text"] = plan_text
+                objective_dict["_plan_path"] = str(path)
+            except Exception:
+                pass
+            # Use the default filtered JSON plan as a safe fallback.
+            # The detached thread will replace it with an enhanced plan via graph learning.
+            fallback_candidates = [
+                self._resolve_path("plans/boattrader/extract_url_filtered.json"),
+                self._resolve_path("boattrader/extract_url_filtered.json"),
+                Path(os.environ.get("MANTIS_DEFAULT_MICRO", "plans/boattrader/extract_url_filtered.json")),
+            ]
+            fallback_loaded = False
+            for fallback_path in fallback_candidates:
+                if fallback_path.exists():
+                    try:
+                        raw_steps = json.loads(fallback_path.read_text())
+                        domain = obj.domains[0] if objective_dict and obj.domains else "unknown"
+                        micro_plan = MicroPlan(domain=domain)
+                        for step in raw_steps:
+                            micro_plan.steps.append(PlanDecomposer._build_intent(step))
+                        fallback_loaded = True
+                        logger.info("Baseten: loaded fallback plan from %s", fallback_path)
+                        break
+                    except Exception:
+                        continue
+            if not fallback_loaded:
+                # Last resort: create a minimal navigate-only plan from the objective
+                domain = obj.domains[0] if objective_dict and obj.domains else "unknown"
+                start_url = obj.start_url if objective_dict else "about:blank"
+                micro_plan = MicroPlan(domain=domain, steps=[
+                    MicroIntent(intent=f"Navigate to {start_url}", type="navigate", budget=3, section="setup", required=True),
+                ])
+                logger.warning("Baseten: no fallback plan found, using minimal navigate-only plan")
 
         steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
         data_root = _data_root()
@@ -536,6 +607,7 @@ class BasetenCUARuntime:
             checkpoint_dir=str(data_root / "checkpoints"),
             proxy_city=str(payload.get("proxy_city") or os.environ.get("MANTIS_PROXY_CITY", "")),
             proxy_state=str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
+            objective=objective_dict,
         )
         return suite
 
@@ -580,6 +652,41 @@ class BasetenCUARuntime:
             micro_plan = MicroPlan(domain=session_name)
             for step in task_suite["_micro_plan"]:
                 micro_plan.steps.append(MicroIntent(**step))
+
+            # If objective available, probe site inside container and re-enhance
+            objective_data = task_suite.get("_objective")
+            if objective_data and env:
+                try:
+                    from mantis_agent.graph.objective import ObjectiveSpec as _OS
+                    from mantis_agent.graph.probe import SiteProber
+                    from mantis_agent.graph.enhancer import PlanEnhancer
+                    from mantis_agent.graph import GraphCompiler, PlanValidator
+                    from mantis_agent.graph.graph import WorkflowGraph
+                    from mantis_agent.verification.playbook import Playbook as _PB
+
+                    obj = _OS.from_dict(objective_data)
+                    if obj.start_url:
+                        logger.info("Baseten: probing %s inside container", obj.start_url)
+                        prober = SiteProber(env=env)
+                        probe = prober.probe(obj.start_url, obj)
+                        enhancer = PlanEnhancer()
+                        enhancement = enhancer.enhance(obj, probe)
+                        phases, edges = enhancer.build_enhanced_phases(obj, probe, enhancement)
+                        graph = WorkflowGraph(
+                            objective=obj, phases=phases, edges=edges,
+                            playbook=_PB(domain=obj.domains[0] if obj.domains else "", listings_per_page=probe.estimated_listings_per_page or 25),
+                            domain=obj.domains[0] if obj.domains else "",
+                            objective_hash=obj.objective_hash,
+                        )
+                        compiler = GraphCompiler()
+                        micro_plan = compiler.compile(graph)
+                        validator = PlanValidator()
+                        issues = validator.validate(micro_plan, objective=obj)
+                        if issues:
+                            micro_plan = validator.enhance(micro_plan, objective=obj)
+                        logger.info("Baseten: probe-enhanced plan: %d steps", len(micro_plan.steps))
+                except Exception as e:
+                    logger.warning("Baseten: probe enhancement failed: %s", e)
 
             grounding = ClaudeGrounding()
             schema = None
@@ -687,7 +794,7 @@ def models() -> dict[str, Any]:
     return {"data": [{"id": runtime.model_kind, "object": "model"}]}
 
 
-@app.post("/predict")
+@app.post("/predict", dependencies=[Depends(_require_mantis_token)])
 async def predict(request: Request) -> dict[str, Any]:
     try:
         payload = await request.json()
