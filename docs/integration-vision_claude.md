@@ -8,129 +8,23 @@ topology, and migration cost.
 
 ## A. Today — vision_claude with Claude CUA (in-process)
 
-```
-       ┌──────────────────────────────────────────────────────────────┐
-       │ 3p caller (orchestrator / tool_runner / scheduled job)       │
-       └──────────────────────────┬───────────────────────────────────┘
-                                  │  invoke VisionClaudeTool
-                                  ▼
-   ╔════════════════════════════════════════════════════════════════════╗
-   ║                       vision_claude pod (ECS)                      ║
-   ║                                                                    ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │ vision_claude_server (FastAPI / RPC entry)                 │   ║
-   ║   └────────────────┬───────────────────────────────────────────┘   ║
-   ║                    │                                               ║
-   ║                    ▼                                               ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │ ClaudeCUABackend.run_loop()                                │   ║
-   ║   │   • full plan as a single Claude prompt                    │   ║
-   ║   │   • Anthropic Computer-Use API does perception+reasoning   │   ║
-   ║   └─────┬───────────────────────────┬──────────────────────────┘   ║
-   ║         │ pyautogui / xdotool       │ HTTPS / image_url blocks     ║
-   ║         ▼                           ▼                              ║
-   ║   ┌──────────────────┐    ╔═════════════════════════╗              ║
-   ║   │  ActionExecutor  │    ║  Anthropic API          ║              ║
-   ║   │  ScreenStreamer  │    ║  (claude-sonnet-4)      ║              ║
-   ║   └────────┬─────────┘    ╚═════════════════════════╝              ║
-   ║            │                                                       ║
-   ║            ▼                                                       ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │  Xvfb display  ← Chrome (mounted profile, cookies, sessions)  ║
-   ║   └────────────────────────────────────────────────────────────┘   ║
-   ║            │                                                       ║
-   ║            ▼                                                       ║
-   ║   ┌──────────────────┐                                             ║
-   ║   │  EFS volume:     │                                             ║
-   ║   │  Chrome profile  │                                             ║
-   ║   └──────────────────┘                                             ║
-   ╚════════════════════════════════════════════════════════════════════╝
-                                  │
-                                  ▼
-                         Target site (StaffAI CRM, …)
-```
+Detailed view of what runs in production today. `agent_loop.py` calls Anthropic Computer Use, the tool dispatch covers `computer_tool` / `bash_tool` / `edit_tool` / `user_input_tool` / `correspondent_message_tool`, and the desktop stack is Xvfb → Chrome → mounted EFS profile. `ExecutionObserver` handles pause / resume / OTP flows.
 
-**Cost shape:** every screen pixel goes to Anthropic. Claude reasons through the
-whole plan ("login → find lead → edit industry"). Pricey per task, but
-reliable on multi-step plans because Claude has the reasoning depth.
+![Current state — vision_claude with Claude CUA](diagrams/current-state.png)
+
+[Edit in FigJam](https://www.figma.com/board/1MoQ7KJVM0a5GJQCWUTYpH)
+
+**Cost shape:** every screen pixel goes to Anthropic. Claude reasons through the whole plan ("login → find lead → edit industry"). Pricey per task, but reliable on multi-step plans because Claude has the reasoning depth.
 
 ---
 
 ## B. Path C — orchestrated Mantis (browser stays in vision_claude)
 
-```
-       ┌──────────────────────────────────────────────────────────────┐
-       │ 3p caller (unchanged)                                        │
-       └──────────────────────────┬───────────────────────────────────┘
-                                  │  invoke VisionClaudeTool
-                                  ▼
-   ╔════════════════════════════════════════════════════════════════════╗
-   ║                vision_claude pod (ECS, no GPU needed)              ║
-   ║                                                                    ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │ vision_claude_server                                       │   ║
-   ║   └────────────────┬───────────────────────────────────────────┘   ║
-   ║                    ▼                                               ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │ MantisOrchestratedBackend.run_loop()  (rewrite of          │   ║
-   ║   │  mantis_backend.py — uses MicroPlanRunner from the         │   ║
-   ║   │  imported `mantis-agent` library)                          │   ║
-   ║   └────────────────┬───────────────────────────────────────────┘   ║
-   ║                    ▼                                               ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │  MicroPlanRunner (imported, runs in-process)               │   ║
-   ║   │   • sections / gates / loops / scroll-fail-fallback        │   ║
-   ║   │   • per-step checkpoint                                    │   ║
-   ║   │                                                            │   ║
-   ║   │   ┌──────────┐  ┌──────────────┐  ┌────────────────────┐   │   ║
-   ║   │   │ BrainHolo3│  │ ClaudeExtractor│ ClaudeGrounding    │   │   ║
-   ║   │   │ Remote    │  │ (extract data) │ (refine click x,y) │   │   ║
-   ║   │   └─────┬─────┘  └──────┬───────┘ └──────┬─────────────┘   │   ║
-   ║   └─────────┼────────────────┼────────────────┼─────────────────┘  ║
-   ║             │ HTTPS          │ HTTPS          │ HTTPS              ║
-   ║             ▼                ▼                ▼                    ║
-   ║      (see Mantis svc)   ╔═══════════════════════════════╗          ║
-   ║                         ║ Anthropic API (gates,         ║          ║
-   ║                         ║   extract, grounding only —   ║          ║
-   ║                         ║   not perception)             ║          ║
-   ║                         ╚═══════════════════════════════╝          ║
-   ║                                                                    ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │ VisionClaudeGymEnv  (new ~120 LoC adapter implementing     │   ║
-   ║   │   mantis_agent.gym.GymEnvironment over the existing        │   ║
-   ║   │   desktop.py / computer_tool.py)                           │   ║
-   ║   └────────────────┬───────────────────────────────────────────┘   ║
-   ║                    │ pyautogui / xdotool / screenshots              ║
-   ║                    ▼                                               ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │  Xvfb display  ← Chrome (mounted profile, cookies, sessions)  ║
-   ║   └────────────────────────────────────────────────────────────┘   ║
-   ║            │                                                       ║
-   ║            ▼                                                       ║
-   ║   ┌──────────────────┐                                             ║
-   ║   │  EFS volume:     │                                             ║
-   ║   │  Chrome profile  │ ← unchanged                                 ║
-   ║   └──────────────────┘                                             ║
-   ╚════════════════════════════════════════════════════════════════════╝
+![Proposed state — Path C orchestrated Mantis](diagrams/proposed-state.png)
 
-           ╔════════════════════════════════════════════════════════╗
-           ║         Mantis Holo3 service (Baseten / EKS / Modal)   ║
-           ║                                                        ║
-           ║  ┌────────────────────────────────────────────────┐    ║
-           ║  │ FastAPI (baseten_server.py)                    │    ║
-           ║  │  • /predict             — full orchestrator    │    ║
-           ║  │  • /v1/chat/completions — Holo3 inference proxy│    ║
-           ║  │  • /v1/models           — list models          │    ║
-           ║  │  • auth: X-Mantis-Token + Api-Key gateway      │    ║
-           ║  └────────────────────┬───────────────────────────┘    ║
-           ║                       ▼                                ║
-           ║  ┌────────────────────────────────────────────────┐    ║
-           ║  │ llama.cpp server (port :18080, internal only)  │    ║
-           ║  │  • Holo3-35B-A3B GGUF Q8_0                     │    ║
-           ║  │  • CUDA on H100 / A100 / L40S                  │    ║
-           ║  └────────────────────────────────────────────────┘    ║
-           ╚════════════════════════════════════════════════════════╝
-```
+[Edit in FigJam](https://www.figma.com/board/zp00qbT3Be58laMFlHWomA)
+
+The skeleton matches the current-state diagram one-for-one — the same caller, server, handler, observer, desktop, Xvfb, Chrome, profile, and site sit in the same positions. **Green** highlights what's new or changed in Path C: `MantisOrchestratedBackend`, `MicroPlanRunner`, the three brain/Claude workers, the `VisionClaudeGymEnv` adapter, and the Mantis Holo3 service.
 
 **Cost shape:** Holo3 (cheap GPU) does click/scroll/type. Claude does only
 gate-verify + structured extraction + click grounding. Browser stays in
@@ -141,49 +35,9 @@ untouched.
 
 ## C. One micro-step — sequence diagram
 
-```
-  vision_claude pod                         Mantis service       Anthropic
-  ─────────────────                         ──────────────       ─────────
-                                                  │                  │
-  MicroPlanRunner.next_step()                     │                  │
-        │                                         │                  │
-        │ env.screenshot() ──────────────┐        │                  │
-        │                                ▼        │                  │
-        │                       Xvfb + Chrome     │                  │
-        │                                ▲        │                  │
-        │ ◄──────────────  PIL.Image  ───┘        │                  │
-        │                                         │                  │
-   step.type == "click"  (grounding=True)         │                  │
-        │                                         │                  │
-        │ BrainHolo3Remote.think(frame, intent) ──►──────────────────┐
-        │                                         │  POST /v1/chat   │
-        │                                         │    /completions  │
-        │                                         ▼                  │
-        │                                 llama.cpp(Holo3) ──────────►
-        │                                         │   action proposal│
-        │ ◄────────  Action(CLICK, {x:982, y:183}) ◄─────────────────┘
-        │                                                            │
-        │                                                            │
-        │ ClaudeGrounding.refine(frame, action) ─────────────────────►
-        │                                              POST /messages│
-        │ ◄────────  Action(CLICK, {x:976, y:188})  ◄────────────────┘
-        │                                                            │
-        │ env.step(action) ──────────────┐                           │
-        │                                ▼                           │
-        │                        xdotool click 976 188               │
-        │                       (in vision_claude pod)               │
-        │                                                            │
-                                                                     │
-   step.type == "extract_data"  (claude_only=True)                   │
-        │                                                            │
-        │ env.screenshot() → frame                                   │
-        │                                                            │
-        │ ClaudeExtractor.extract(frame, schema) ────────────────────►
-        │                                              POST /messages│
-        │ ◄──── ExtractionResult(year, make, phone, …) ◄─────────────┘
-        │                                                            │
-        │ runner accumulates lead → checkpoint → next step           │
-```
+![One micro-step — sequence flow (click + extract)](diagrams/sequence-one-step.png)
+
+[Edit in FigJam](https://www.figma.com/board/RDnyMSecbwTtu7W7CEdnZs)
 
 Note the screenshot bytes flow:
 - **Holo3 path:** screenshot bytes → Mantis service (own Baseten/EKS).

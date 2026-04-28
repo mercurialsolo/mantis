@@ -30,101 +30,25 @@ Both runs use Holo3 for clicks/scrolls and Claude only for gate/extract/groundin
 
 ---
 
-## Architecture today (Claude CUA in vision_claude)
+## Architecture comparison
 
-```
-       ┌──────────────────────────────────────────────────────────────┐
-       │ 3p caller (orchestrator / tool_runner / scheduled job)       │
-       └──────────────────────────┬───────────────────────────────────┘
-                                  ▼
-   ╔════════════════════════════════════════════════════════════════════╗
-   ║                       vision_claude pod (ECS)                      ║
-   ║                                                                    ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │ ClaudeCUABackend.run_loop()                                │   ║
-   ║   │   • full plan as a Claude prompt                           │   ║
-   ║   │   • Anthropic Computer-Use API: perception + reasoning +   │   ║
-   ║   │     action emission, all in one model                      │   ║
-   ║   └─────┬───────────────────────────┬──────────────────────────┘   ║
-   ║         │ pyautogui                 │ HTTPS                        ║
-   ║         ▼                           ▼                              ║
-   ║   ┌──────────────────┐    ╔═════════════════════════════╗          ║
-   ║   │  ActionExecutor  │    ║  Anthropic Computer Use API ║          ║
-   ║   │  ScreenStreamer  │    ║  (claude-sonnet-4)          ║          ║
-   ║   └────────┬─────────┘    ╚═════════════════════════════╝          ║
-   ║            ▼                                                       ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │  Xvfb display  ← Chrome ←─ EFS-mounted browser profile     │   ║
-   ║   └────────────────────────────────────────────────────────────┘   ║
-   ╚════════════════════════════════════════════════════════════════════╝
-                                  │
-                                  ▼
-                          Target site (StaffAI CRM, …)
-```
+The two diagrams below share the same skeleton (caller → server → handler → loop → backend → desktop → Xvfb → Chrome → profile → site) so unchanged components sit in the same positions. **Green = new or changed in Path C.** Everything else stays put — same pod boundary, same EFS-mounted profile, same `desktop.py`, same `ExecutionObserver` (pause / resume / OTP).
 
-**Pricing model:** every screen pixel goes to Anthropic, every step. Claude reasons through the whole plan. Reliable but expensive — particularly for high-volume, repetitive workflows.
+### Current state (production today)
 
----
+![Current state — vision_claude with Claude CUA](diagrams/current-state.png)
 
-## Architecture proposed (orchestrated Mantis, browser stays put)
+[Edit in FigJam](https://www.figma.com/board/1MoQ7KJVM0a5GJQCWUTYpH)
 
-```
-       ┌──────────────────────────────────────────────────────────────┐
-       │ 3p caller (unchanged)                                        │
-       └──────────────────────────┬───────────────────────────────────┘
-                                  ▼
-   ╔════════════════════════════════════════════════════════════════════╗
-   ║                vision_claude pod (ECS, no GPU needed)              ║
-   ║                                                                    ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │ MantisOrchestratedBackend.run_loop()                       │   ║
-   ║   │   uses MicroPlanRunner from imported `mantis-agent` lib    │   ║
-   ║   └────────────────────────────┬───────────────────────────────┘   ║
-   ║                                ▼                                   ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │  MicroPlanRunner (in-process)                              │   ║
-   ║   │   sections / gates / loops / scroll-fail fallback /        │   ║
-   ║   │   per-step checkpoint + state-key isolation                │   ║
-   ║   │                                                            │   ║
-   ║   │   ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐   │   ║
-   ║   │   │ BrainHolo3   │ │ ClaudeExtract│ │ ClaudeGrounding  │   │   ║
-   ║   │   │ Remote       │ │ (data)       │ │ (refine click)   │   │   ║
-   ║   │   └──────┬───────┘ └──────┬───────┘ └──────┬───────────┘   │   ║
-   ║   └──────────┼────────────────┼────────────────┼────────────────┘  ║
-   ║              │ HTTPS          │ HTTPS          │ HTTPS              ║
-   ║              ▼                ▼                ▼                    ║
-   ║         (Mantis svc      ╔══════════════════════════════════╗       ║
-   ║          below)          ║ Anthropic API (gates, extract,   ║       ║
-   ║                          ║  click grounding ONLY — never    ║       ║
-   ║                          ║  whole-plan perception)          ║       ║
-   ║                          ╚══════════════════════════════════╝       ║
-   ║                                                                    ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │ VisionClaudeGymEnv  (~120-LoC adapter, wraps existing      │   ║
-   ║   │   desktop.py / computer_tool.py)                           │   ║
-   ║   └────────────────────────────┬───────────────────────────────┘   ║
-   ║                                ▼                                   ║
-   ║   ┌────────────────────────────────────────────────────────────┐   ║
-   ║   │  Xvfb display  ← Chrome ←─ EFS-mounted browser profile     │   ║
-   ║   │                                          (UNCHANGED)       │   ║
-   ║   └────────────────────────────────────────────────────────────┘   ║
-   ╚════════════════════════════════════════════════════════════════════╝
+**How it works:** every screen pixel goes to Anthropic, every step. Claude reasons through the whole plan ("login → find lead → edit industry") and emits tool calls (`computer_tool`, `bash_tool`, `edit_tool`, `user_input_tool`, `correspondent_message_tool`). The tool dispatch executes against the in-pod Xvfb desktop. Reliable but expensive — particularly for high-volume, repetitive workflows.
 
-           ╔════════════════════════════════════════════════════════╗
-           ║         Mantis Holo3 service (Baseten / EKS / Modal)   ║
-           ║                                                        ║
-           ║  ┌────────────────────────────────────────────────┐    ║
-           ║  │ FastAPI                                        │    ║
-           ║  │  /v1/chat/completions   ← inference proxy      │    ║
-           ║  │  /predict               ← high-level orchestr. │    ║
-           ║  │  auth: X-Mantis-Token + Baseten Api-Key        │    ║
-           ║  └────────────────────┬───────────────────────────┘    ║
-           ║                       ▼                                ║
-           ║  ┌────────────────────────────────────────────────┐    ║
-           ║  │ llama.cpp + Holo3-35B-A3B (CUDA, H100/L40S)    │    ║
-           ║  └────────────────────────────────────────────────┘    ║
-           ╚════════════════════════════════════════════════════════╝
-```
+### Proposed state (Path C — orchestrated Mantis)
+
+![Proposed state — Path C orchestrated Mantis](diagrams/proposed-state.png)
+
+[Edit in FigJam](https://www.figma.com/board/zp00qbT3Be58laMFlHWomA)
+
+**How it works:** `MantisOrchestratedBackend` replaces `ClaudeCUABackend`. It runs `MicroPlanRunner` (an in-process library) which holds the structured plan and calls three workers per step: `BrainHolo3Remote` (clicks/scrolls/typing — goes to a remote Mantis service), `ClaudeGrounding` (refines click coordinates — goes to Anthropic), `ClaudeExtractor` (structured data extraction — goes to Anthropic). Actions go through `VisionClaudeGymEnv` (a thin adapter implementing `mantis_agent.gym.GymEnvironment`) into the same `desktop.py` that runs today. Browser, profile, and tool-dispatch stay where they are.
 
 **Key invariants:**
 - The mounted browser profile **never leaves the vision_claude pod**.
