@@ -101,17 +101,201 @@ serves all tenants. GPU cost amortizes across customers.
 
 ---
 
-## F. What blocks adoption
+## F. Concrete integration — code on the vision_claude side
+
+Now that the cua-agent server exposes `/v1/chat/completions` (auth-gated proxy to in-pod Holo3) the vision_claude integration is small. Two new modules + one rewrite of the existing `mantis_backend.py`:
+
+### F.1 `vision_claude/vision_claude_gym_env.py` (new, ~120 LoC)
+
+```python
+"""Adapter that lets mantis_agent.MicroPlanRunner drive vision_claude's
+existing Xvfb desktop. Implements GymEnvironment over desktop.py +
+computer_tool.py. Browser stays in vision_claude — only screenshots and
+xdotool actions cross the in-process boundary."""
+
+from PIL import Image
+from mantis_agent.actions import Action, ActionType
+from mantis_agent.gym.base import GymEnvironment, GymObservation, GymResult
+
+from .desktop import Desktop  # existing vision_claude module
+from .computer_tool import ComputerTool  # existing
+
+
+class VisionClaudeGymEnv(GymEnvironment):
+    def __init__(self, desktop: Desktop, computer_tool: ComputerTool):
+        self._desktop = desktop
+        self._computer = computer_tool
+        self._w, self._h = desktop.viewport_size  # (1280, 720) default
+
+    @property
+    def screen_size(self) -> tuple[int, int]:
+        return (self._w, self._h)
+
+    def screenshot(self) -> Image.Image:
+        return self._desktop.screenshot()
+
+    def reset(self, task: str, **kwargs) -> GymObservation:
+        start_url = kwargs.get("start_url")
+        if start_url:
+            self._desktop.navigate(start_url)
+        return GymObservation(screenshot=self.screenshot())
+
+    def step(self, action: Action) -> GymResult:
+        # Mantis Action -> vision_claude ComputerTool dispatch
+        params = action.params or {}
+        if action.action_type == ActionType.CLICK:
+            self._computer.click(params["x"], params["y"], button=params.get("button", "left"))
+        elif action.action_type == ActionType.TYPE:
+            self._computer.type_text(params["text"])
+        elif action.action_type == ActionType.KEY_PRESS:
+            self._computer.key_combo(params["keys"])
+        elif action.action_type == ActionType.SCROLL:
+            self._computer.scroll(params.get("direction", "down"), params.get("amount", 5))
+        elif action.action_type == ActionType.NAVIGATE:
+            self._desktop.navigate(params["url"])
+        elif action.action_type == ActionType.DONE:
+            return GymResult(GymObservation(screenshot=self.screenshot()), 1.0, True, {})
+        return GymResult(GymObservation(screenshot=self.screenshot()), 0.0, False, {})
+
+    def close(self) -> None:
+        pass  # Desktop lifecycle owned by vision_claude
+```
+
+### F.2 `vision_claude/mantis_backend.py` rewrite (~80 LoC change)
+
+```python
+"""MantisOrchestratedBackend — runs MicroPlanRunner locally, calls Mantis
+Holo3 inference + Anthropic only. Drop-in for ClaudeCUABackend behind
+VISION_CLAUDE_CUA_BACKEND=mantis-orchestrated."""
+
+import json
+from collections.abc import Callable
+from typing import Any
+
+from mantis_agent.brain_holo3 import BrainHolo3
+from mantis_agent.extraction import ClaudeExtractor
+from mantis_agent.grounding import ClaudeGrounding
+from mantis_agent.gym.micro_runner import MicroPlanRunner
+from mantis_agent.plan_decomposer import MicroPlan, PlanDecomposer
+
+from .cua_backend import CUABackend, CUALoopResult
+from .desktop import Desktop
+from .computer_tool import ComputerTool
+from .settings import VisionClaudeSettings
+from .vision_claude_gym_env import VisionClaudeGymEnv
+
+
+class MantisOrchestratedBackend(CUABackend):
+    def __init__(self, *, settings: VisionClaudeSettings,
+                 desktop: Desktop, computer_tool: ComputerTool) -> None:
+        self._s = settings
+        self._env = VisionClaudeGymEnv(desktop, computer_tool)
+
+    async def run_loop(self, *, messages, max_iterations=100, **kwargs) -> CUALoopResult:
+        prompt = self._extract_prompt(messages)
+
+        # Holo3 inference goes to OUR Mantis service via /v1/chat/completions.
+        # Anthropic auth headers (Api-Key + X-Mantis-Token) are added so the
+        # Baseten gateway and Mantis container both pass us through.
+        brain = BrainHolo3(
+            base_url=f"{self._s.mantis_holo3_endpoint}/v1",
+            extra_headers={
+                "Authorization": f"Api-Key {self._s.mantis_baseten_api_key}",
+                "X-Mantis-Token": self._s.mantis_api_token,
+            },
+            timeout=180,
+        )
+        # Claude helpers go DIRECT to Anthropic (vision_claude already has the key)
+        extractor = ClaudeExtractor(api_key=self._s.anthropic_api_key)
+        grounding = ClaudeGrounding(api_key=self._s.anthropic_api_key)
+
+        plan = self._build_plan(prompt, kwargs)
+        runner = MicroPlanRunner(
+            brain=brain,
+            env=self._env,
+            grounding=grounding,
+            extractor=extractor,
+            session_name=kwargs.get("session_name", "vision_claude"),
+            max_cost=kwargs.get("max_cost", 5.0),
+            max_time_minutes=kwargs.get("max_time_minutes", 30),
+        )
+        results = runner.run(plan)
+        return CUALoopResult(
+            messages=messages,
+            final_text=runner.summary_text(),
+            tool_calls_count=sum(r.steps_used or 0 for r in results),
+            execution_trace=self._trace(results),
+        )
+
+    def _build_plan(self, prompt: str, kw: dict[str, Any]) -> MicroPlan:
+        # If caller hands us a structured plan, use it. Otherwise decompose.
+        if "micro_plan" in kw:
+            return MicroPlan.from_dict(kw["micro_plan"])
+        return PlanDecomposer().decompose(prompt)
+
+    @staticmethod
+    def _extract_prompt(messages: list[dict[str, Any]]) -> str:
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                c = m.get("content", "")
+                if isinstance(c, str):
+                    return c
+                for block in c if isinstance(c, list) else []:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        return block.get("text", "")
+        return ""
+
+    @staticmethod
+    def _trace(results) -> list[dict[str, Any]]:
+        return [
+            {"tool_calls": [{
+                "tool": r.intent[:30],
+                "result": "success" if r.success else "failed",
+            }]}
+            for r in results
+        ]
+```
+
+### F.3 `vision_claude/settings.py` — three new fields
+
+```python
+mantis_holo3_endpoint: str = Field(
+    default="https://model-qvvgkneq.api.baseten.co/production",
+    description="Mantis Baseten / EKS / GKE endpoint (without /v1 suffix).",
+)
+mantis_baseten_api_key: str = Field(
+    default="", description="Baseten gateway Api-Key.",
+)
+mantis_api_token: str = Field(
+    default="", description="X-Mantis-Token for the Mantis container.",
+)
+```
+
+### F.4 `vision_claude/backend_factory.py` — register the new backend
+
+```python
+def make_backend(settings: VisionClaudeSettings, **kw) -> CUABackend:
+    backend = settings.cua_backend or "claude"
+    if backend == "claude":
+        return ClaudeCUABackend(settings=settings)
+    if backend == "mantis-orchestrated":
+        return MantisOrchestratedBackend(settings=settings, **kw)
+    raise ValueError(f"unknown CUA backend: {backend}")
+```
+
+### F.5 What blocks adoption (post-PR)
 
 | Blocker | Resolution |
 |---------|------------|
-| `mantis_agent` import surface today is monolithic (drags in xdotool, playwright, etc. via __init__.py) | Add `[orchestrator]` extras in `pyproject.toml` that pin only the runner + brain + extraction + grounding deps. ~30 LoC. |
-| `BrainHolo3` doesn't carry the `X-Mantis-Token` + `Api-Key` headers natively | New `BrainHolo3Remote(extra_headers=…)` subclass. ~30 LoC. |
-| Plan management — vision_claude callers send Claude messages today, not micro-plans | Two on-ramps:  (a) **plan_decomposer** auto-decomposes plain English into a micro-plan ($0.10 each, cached);  (b) hand-author a JSON micro-plan per recurring StaffAI workflow. |
-| `VisionClaudeGymEnv` doesn't exist yet | New ~120 LoC adapter wrapping `desktop.py` + `computer_tool.py` to satisfy `mantis_agent.gym.GymEnvironment`. |
+| `mantis_agent` import drags GPU deps via package `__init__` | Tier 1.5 follow-up: `[orchestrator]` extras in pyproject. Until then, tolerate the ~30MB image bloat. |
+| `BrainHolo3` constructor `extra_headers` parameter | Already supported. No change needed. |
+| `VisionClaudeGymEnv` doesn't exist yet | F.1 above — this is the bulk of the integration. |
+| Plan input — vision_claude callers send Claude messages today | F.2 falls back to `PlanDecomposer().decompose(prompt)` for plain text. Hand-author micro-plans for high-volume StaffAI workflows; auto-decompose for one-shots. |
 
-Total work to ship: ~290 LoC in cua-agent, ~335 LoC in vision_claude, plus
-~150 LoC of docs (this file).
+Total work to ship in vision_claude: ~260 LoC + ~50 LoC tests. The
+`mantis-agent` library now installs cleanly thanks to PR #62 (the
+`modal_runtime` extraction means GPU deps aren't dragged at import time
+for orchestrator-only use).
 
 ---
 
