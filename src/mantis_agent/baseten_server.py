@@ -25,8 +25,7 @@ import hmac
 import requests
 
 try:
-    from fastapi import Depends, FastAPI, HTTPException, Request
-    from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request
     from starlette.concurrency import run_in_threadpool
 except ImportError as exc:  # pragma: no cover - container-only deps
     raise ImportError(
@@ -69,24 +68,23 @@ SECRET_ENV_MAP = {
     "mantis_api_token": "MANTIS_API_TOKEN",
 }
 
-_bearer_scheme = HTTPBearer(auto_error=False)
-
-
-def _require_bearer_token(
-    creds: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+def _require_mantis_token(
+    x_mantis_token: str | None = Header(default=None, alias="X-Mantis-Token"),
 ) -> None:
+    """Container-level auth.
+
+    Uses a custom header (``X-Mantis-Token``) instead of ``Authorization: Bearer``
+    so it does not collide with Baseten's gateway auth, which sends
+    ``Authorization: Api-Key <baseten_key>`` to the container. Fails closed
+    if the deployment didn't provision the secret.
+    """
     expected = os.environ.get("MANTIS_API_TOKEN", "").strip()
     if not expected:
-        # Fail closed: refuse traffic if the deployment did not provision a token.
         raise HTTPException(status_code=503, detail="server auth not configured")
-    if creds is None or creds.scheme.lower() != "bearer":
-        raise HTTPException(
-            status_code=401,
-            detail="missing bearer token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    if not hmac.compare_digest(creds.credentials, expected):
-        raise HTTPException(status_code=401, detail="invalid bearer token")
+    if not x_mantis_token:
+        raise HTTPException(status_code=401, detail="missing X-Mantis-Token header")
+    if not hmac.compare_digest(x_mantis_token, expected):
+        raise HTTPException(status_code=401, detail="invalid X-Mantis-Token")
 
 
 def _read_secret(name: str) -> str:
@@ -796,7 +794,7 @@ def models() -> dict[str, Any]:
     return {"data": [{"id": runtime.model_kind, "object": "model"}]}
 
 
-@app.post("/predict", dependencies=[Depends(_require_bearer_token)])
+@app.post("/predict", dependencies=[Depends(_require_mantis_token)])
 async def predict(request: Request) -> dict[str, Any]:
     try:
         payload = await request.json()
