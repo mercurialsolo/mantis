@@ -25,7 +25,7 @@ import hmac
 import requests
 
 try:
-    from fastapi import Depends, FastAPI, Header, HTTPException, Request
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
     from fastapi.responses import JSONResponse
     from starlette.concurrency import run_in_threadpool
 except ImportError as exc:  # pragma: no cover - container-only deps
@@ -39,10 +39,15 @@ from mantis_agent.api_schemas import (
     MAX_COST_USD,
     MAX_RUNTIME_MINUTES,
     PredictRequest,
+    assert_hosts_allowed,
+    extract_navigate_hosts,
     validate_micro_steps,
 )
 from mantis_agent.gym.runner import GymRunner
 from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+from mantis_agent.idempotency import get_idempotency_cache
+from mantis_agent import metrics as mantis_metrics
+from mantis_agent.rate_limit import get_rate_limiter
 from mantis_agent.server_utils import (
     build_micro_result,
     build_micro_suite,
@@ -64,6 +69,7 @@ from mantis_agent.tenant_auth import (
     TenantConfig,
     get_key_store,
 )
+from mantis_agent.webhooks import WebhookPayload, deliver_webhook_async
 
 class _JsonLogFormatter(logging.Formatter):
     """One-line JSON-per-record formatter that attaches tenant_id and run_id
@@ -903,6 +909,20 @@ def health_v1() -> dict[str, Any]:
     return {"ok": runtime.loaded, "model": runtime.model_kind}
 
 
+@app.get("/metrics")
+def metrics_endpoint() -> Any:
+    """Prometheus scrape endpoint.
+
+    Returns 503 if prometheus_client isn't installed in the container.
+    """
+    if not mantis_metrics.is_available():
+        raise HTTPException(status_code=503, detail="prometheus_client not installed")
+    return Response(
+        content=mantis_metrics.render_text(),
+        media_type=mantis_metrics.CONTENT_TYPE_LATEST,
+    )
+
+
 @app.get("/v1/models")
 def models() -> dict[str, Any]:
     """OpenAI-compatible model listing.
@@ -981,8 +1001,16 @@ async def chat_completions_proxy(
             timeout=180,
         )
     except requests.RequestException as exc:
+        mantis_metrics.CHAT_COMPLETIONS.labels(
+            tenant_id=tenant.tenant_id, outcome="upstream_error"
+        ).inc()
         logger.exception("v1/chat/completions upstream error tenant=%s", tenant.tenant_id)
         raise HTTPException(status_code=502, detail=f"upstream error: {exc}") from exc
+
+    mantis_metrics.CHAT_COMPLETIONS.labels(
+        tenant_id=tenant.tenant_id,
+        outcome="ok" if 200 <= r.status_code < 300 else f"status_{r.status_code // 100}xx",
+    ).inc()
 
     try:
         payload = r.json()
@@ -1001,9 +1029,18 @@ async def _handle_predict(
 ) -> dict[str, Any]:
     """Shared handler for /predict and /v1/predict.
 
-    Validates the payload through Pydantic, enforces server-side caps,
-    namespaces state_key + chrome-profile per tenant, and threads the
-    tenant-resolved Anthropic key into the runtime context.
+    Tier-1 + Tier-2 pipeline:
+
+    1. Pydantic validation, global cap clamp.
+    2. Per-tenant cap clamp.
+    3. State-key + Chrome-profile namespacing per tenant.
+    4. Per-tenant Anthropic key resolution.
+    5. (Tier-2) URL allowlist enforcement on the plan.
+    6. (Tier-2) Idempotency-key cache lookup.
+    7. (Tier-2) Rate-limit token consumption.
+    8. (Tier-2) Concurrency-slot acquisition (released in finally).
+    9. (Tier-2) Webhook callback registered with the runtime if requested.
+    10. Forward to the runtime.
     """
     try:
         raw = await request.json()
@@ -1017,8 +1054,6 @@ async def _handle_predict(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid request: {exc}") from exc
 
-    # Per-tenant cap clamp (in addition to the global cap PredictRequest already
-    # applied). Tenant config is the most-specific limit.
     payload = req.model_dump(exclude_none=True)
     payload["max_cost"] = min(
         float(payload.get("max_cost", MAX_COST_USD)),
@@ -1028,32 +1063,151 @@ async def _handle_predict(
         int(payload.get("max_time_minutes", MAX_RUNTIME_MINUTES)),
         tenant.max_time_minutes_per_run,
     )
-
-    # State-key namespacing. Caller cannot override its tenant prefix.
     payload["state_key"] = _tenant_state_key(tenant, payload.get("state_key"))
 
-    # Per-tenant Anthropic key + chrome profile path are exposed via env so the
-    # runtime (and any in-process Claude clients) read them transparently.
     os.environ["ANTHROPIC_API_KEY"] = _resolve_anthropic_key(tenant)
     os.environ["MANTIS_TENANT_ID"] = tenant.tenant_id
     profile_dir = _tenant_chrome_profile(tenant, payload["state_key"])
     os.environ["MANTIS_CHROME_PROFILE_DIR"] = str(profile_dir)
 
+    is_run_mode = req.action is None
+
+    # ── Tier-2: URL allowlist ────────────────────────────────────────────
+    if is_run_mode and tenant.allowed_domains:
+        plan_obj: Any = None
+        if req.task_suite is not None:
+            plan_obj = req.task_suite
+        elif req.task_file_contents:
+            try:
+                plan_obj = json.loads(req.task_file_contents)
+            except json.JSONDecodeError:
+                plan_obj = None
+        if plan_obj is not None:
+            try:
+                hosts = extract_navigate_hosts(plan_obj)
+                assert_hosts_allowed(hosts, tenant.is_domain_allowed)
+            except PermissionError as exc:
+                mantis_metrics.PREDICT_REQUESTS.labels(
+                    tenant_id=tenant.tenant_id, mode="run", outcome="denied_allowlist"
+                ).inc()
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    # ── Tier-2: Idempotency-key cache ────────────────────────────────────
+    idempotency_key = request.headers.get("Idempotency-Key", "").strip()
+    if is_run_mode and idempotency_key:
+        cached = get_idempotency_cache().get(tenant.tenant_id, idempotency_key)
+        if cached is not None:
+            logger.info(
+                "predict idempotency-hit tenant=%s key=%s run_id=%s",
+                tenant.tenant_id, idempotency_key, cached.run_id,
+            )
+            mantis_metrics.PREDICT_REQUESTS.labels(
+                tenant_id=tenant.tenant_id, mode="run", outcome="idempotent_hit"
+            ).inc()
+            return cached.response
+
+    # ── Tier-2: Rate limit (token bucket) — applied to run-mode only ─────
+    limiter = get_rate_limiter()
+    if is_run_mode:
+        rate_decision = limiter.try_consume_rate_token(
+            tenant.tenant_id, tenant.rate_limit_per_minute
+        )
+        if not rate_decision.allowed:
+            mantis_metrics.RATE_LIMIT_REJECTIONS.labels(
+                tenant_id=tenant.tenant_id, kind="rate"
+            ).inc()
+            mantis_metrics.PREDICT_REQUESTS.labels(
+                tenant_id=tenant.tenant_id, mode="run", outcome="rate_limited"
+            ).inc()
+            raise HTTPException(
+                status_code=429,
+                detail=rate_decision.reason,
+                headers={"Retry-After": str(int(rate_decision.retry_after_seconds) + 1)},
+            )
+
+    # ── Tier-2: Concurrency slot ─────────────────────────────────────────
+    concurrency_acquired = False
+    if is_run_mode:
+        decision = limiter.try_acquire_concurrency_slot(
+            tenant.tenant_id, tenant.max_concurrent_runs
+        )
+        if not decision.allowed:
+            mantis_metrics.RATE_LIMIT_REJECTIONS.labels(
+                tenant_id=tenant.tenant_id, kind="concurrent"
+            ).inc()
+            mantis_metrics.PREDICT_REQUESTS.labels(
+                tenant_id=tenant.tenant_id, mode="run", outcome="rate_limited"
+            ).inc()
+            raise HTTPException(
+                status_code=429,
+                detail=decision.reason,
+                headers={"Retry-After": str(int(decision.retry_after_seconds) + 1)},
+            )
+        concurrency_acquired = True
+        mantis_metrics.CONCURRENT_RUNS.labels(tenant_id=tenant.tenant_id).set(
+            decision.concurrent
+        )
+
+    # ── Tier-2: Webhook URL — caller may override the tenant default ─────
+    webhook_url = (
+        raw.get("callback_url") or tenant.webhook_url or ""
+    ).strip()
+    if webhook_url:
+        payload["_webhook_url"] = webhook_url
+        payload["_webhook_secret_name"] = tenant.webhook_secret_name
+        payload["_tenant_id"] = tenant.tenant_id
+
     logger.info(
-        "predict tenant=%s scope=run state_key=%s detached=%s",
+        "predict tenant=%s scope=run state_key=%s detached=%s action=%s",
         tenant.tenant_id,
         payload["state_key"],
         payload.get("detached", True),
+        req.action or "run",
     )
 
     try:
-        return await run_in_threadpool(runtime.run, payload)
+        response = await run_in_threadpool(runtime.run, payload)
+        mode = req.action or "run"
+        mantis_metrics.PREDICT_REQUESTS.labels(
+            tenant_id=tenant.tenant_id, mode=mode, outcome="ok"
+        ).inc()
+        if is_run_mode and idempotency_key and isinstance(response, dict):
+            get_idempotency_cache().store(
+                tenant.tenant_id, idempotency_key, response.get("run_id", ""), response
+            )
+        if is_run_mode and webhook_url and isinstance(response, dict):
+            run_id = response.get("run_id", "")
+            if response.get("status") in {"succeeded", "failed", "cancelled"}:
+                deliver_webhook_async(
+                    webhook_url,
+                    WebhookPayload(
+                        run_id=run_id,
+                        tenant_id=tenant.tenant_id,
+                        status=str(response.get("status", "")),
+                        summary=response.get("summary") or {},
+                    ),
+                    secret_name=tenant.webhook_secret_name,
+                )
+        return response
     except ValueError as exc:
-        # Validation errors from the runner (bad plan shape, etc.)
+        mantis_metrics.PREDICT_REQUESTS.labels(
+            tenant_id=tenant.tenant_id, mode="run", outcome="bad_request"
+        ).inc()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
+        mantis_metrics.PREDICT_REQUESTS.labels(
+            tenant_id=tenant.tenant_id, mode="run", outcome="error"
+        ).inc()
         logger.exception("predict failed tenant=%s", tenant.tenant_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        if concurrency_acquired:
+            limiter.release_concurrency_slot(tenant.tenant_id)
+            mantis_metrics.CONCURRENT_RUNS.labels(tenant_id=tenant.tenant_id).set(
+                limiter.get_concurrent(tenant.tenant_id)
+            )
 
 
 @app.post("/v1/predict")

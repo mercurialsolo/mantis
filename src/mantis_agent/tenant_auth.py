@@ -49,8 +49,11 @@ class TenantConfig:
     max_concurrent_runs: int = 5
     max_cost_per_run: float = 25.0
     max_time_minutes_per_run: int = 60
+    rate_limit_per_minute: int = 30
     anthropic_secret_name: str = "anthropic_api_key"
     allowed_domains: tuple[str, ...] = ()  # empty = no allowlist (legacy)
+    webhook_url: str = ""  # if set, server POSTs run-completion notifications here
+    webhook_secret_name: str = ""  # secret name for HMAC-signing webhook bodies
 
     def has_scope(self, scope: str) -> bool:
         return scope in self.scopes
@@ -79,6 +82,7 @@ DEFAULT_TENANT = TenantConfig(
     max_concurrent_runs=5,
     max_cost_per_run=25.0,
     max_time_minutes_per_run=60,
+    rate_limit_per_minute=30,
     anthropic_secret_name="anthropic_api_key",
     allowed_domains=(),
 )
@@ -131,10 +135,15 @@ class TenantKeyStore:
                 max_time_minutes_per_run=int(
                     raw.get("max_time_minutes_per_run", DEFAULT_TENANT.max_time_minutes_per_run)
                 ),
+                rate_limit_per_minute=int(
+                    raw.get("rate_limit_per_minute", DEFAULT_TENANT.rate_limit_per_minute)
+                ),
                 anthropic_secret_name=str(
                     raw.get("anthropic_secret_name", DEFAULT_TENANT.anthropic_secret_name)
                 ),
                 allowed_domains=tuple(raw.get("allowed_domains") or ()),
+                webhook_url=str(raw.get("webhook_url") or ""),
+                webhook_secret_name=str(raw.get("webhook_secret_name") or ""),
             )
         return out
 

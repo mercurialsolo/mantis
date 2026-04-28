@@ -14,6 +14,7 @@ vision_claude integration walkthrough see
 | `POST /v1/chat/completions` | `X-Mantis-Token` (run scope) | OpenAI-compat reverse proxy to in-pod Holo3 (raw inference). |
 | `GET /v1/models` | open | OpenAI-compat model list. Returns `holo3`. |
 | `GET /v1/health`, `GET /health` | open | Liveness/readiness probe. |
+| `GET /metrics` | open | Prometheus scrape endpoint. Returns 503 if `prometheus_client` not installed. |
 
 When deployed behind Baseten, all requests must also carry
 `Authorization: Api-Key <BASETEN_API_KEY>` (gateway auth, separate from
@@ -373,11 +374,95 @@ For comparison, equivalent Claude-only CUA flow ~$0.50–$1.50 per listing.
 - **`/v1/chat/completions`** is unstreamed in v1. Streaming SSE is a Tier 2 follow-up.
 - **Single Anthropic-key per tenant** at request time (re-resolved on every call).
 
+## Tier 2 features (rate limits, idempotency, webhooks, allowlist, metrics)
+
+### Rate limits
+
+Two dimensions, both enforced per-tenant:
+
+| Dimension | Source | Behavior on exceed |
+|---|---|---|
+| **Concurrent runs** | `tenant.max_concurrent_runs` (default 5) | `429 Too Many Requests` with `Retry-After: 5` |
+| **Rate** (token bucket) | `tenant.rate_limit_per_minute` (default 30) | `429` with `Retry-After: <seconds-until-token>` |
+
+State is in-process per replica. Behind a load balancer with N replicas, the effective per-tenant cap is roughly `N × configured_cap`. For strict cluster-wide limits, deploy a single replica or swap to a Redis-backed limiter (planned Tier 2.5).
+
+### Idempotency keys
+
+Send `Idempotency-Key: <unique-string>` on `POST /v1/predict`. The server caches `(tenant_id, key) → run_id` with a 24-hour TTL. Subsequent retries with the same key return the original `run_id` without starting a new run.
+
+```bash
+curl -X POST "$ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BTKEY" \
+  -H "X-Mantis-Token: $TOK" \
+  -H "Idempotency-Key: order-7afc3b91" \
+  -H "Content-Type: application/json" \
+  -d '{...}'
+```
+
+The cache is sidecar-backed (`$MANTIS_DATA_DIR/idempotency/<tenant_id>/<key_hash>.json`) so a replica restart preserves it.
+
+### Webhook callbacks
+
+Two ways to receive run-completion notifications:
+
+1. **Per-tenant default** — set `webhook_url` and `webhook_secret_name` in the tenant keys file.
+2. **Per-request override** — pass `callback_url` in the `/v1/predict` body.
+
+When the run reaches a terminal state (`succeeded`, `failed`, `cancelled`), the server POSTs:
+
+```jsonc
+{
+  "run_id": "20260428_021432_076255ef",
+  "tenant_id": "vision_claude_prod",
+  "status": "succeeded",
+  "summary": { ... same shape as /v1/predict status response ... },
+  "delivered_at": "2026-04-28T02:24:01.648Z"
+}
+```
+
+With an HMAC-SHA256 signature in `X-Mantis-Signature: sha256=<hex>` (signed with the tenant's webhook secret). 3 retries with exponential backoff (1s, 5s, 30s) if the receiver returns non-2xx or fails to connect.
+
+Verify the signature on receipt:
+
+```python
+import hmac, hashlib
+def verify(body: bytes, header_sig: str, secret: str) -> bool:
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, header_sig)
+```
+
+### URL allowlist enforcement
+
+If a tenant has `allowed_domains` set in the keys file, every plan submitted via `/v1/predict` is scanned for `navigate`-type URLs and `task_suite.base_url` / `task.start_url`. Off-list hosts return `403 Forbidden` before any run starts:
+
+```jsonc
+{
+  "detail": "plan references host(s) not in tenant allowlist: evil.com"
+}
+```
+
+Wildcards: `*.boattrader.com` matches any subdomain but not `boattrader.com.evil.com`. Empty `allowed_domains` (the default) skips this check.
+
+### Prometheus metrics
+
+`GET /metrics` returns Prometheus text format. Metric names + labels:
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `mantis_predict_requests_total` | counter | `tenant_id`, `mode`, `outcome` | mode = `run\|status\|result\|logs\|cancel`; outcome = `ok\|bad_request\|rate_limited\|denied_allowlist\|idempotent_hit\|error` |
+| `mantis_chat_completions_total` | counter | `tenant_id`, `outcome` | outcome = `ok\|status_4xx\|status_5xx\|upstream_error` |
+| `mantis_run_duration_seconds` | histogram | `tenant_id`, `model`, `status` | Buckets: 10s … 3600s |
+| `mantis_run_cost_usd` | histogram | `tenant_id`, `model`, `status` | Buckets: $0.01 … $25 |
+| `mantis_concurrent_runs` | gauge | `tenant_id` | Currently in-flight runs |
+| `mantis_rate_limit_rejections_total` | counter | `tenant_id`, `kind` | kind = `rate\|concurrent` |
+
+If `prometheus_client` isn't installed in the container (e.g., orchestrator-only install), `/metrics` returns `503` and all metric calls become no-ops — the rest of the API is unaffected.
+
 ## Tier roadmap
 
-This API is at Tier 1 (multi-tenant safe). Upcoming:
+This API is at **Tier 2** — production-quality multi-tenant. Upcoming:
 
-- **Tier 2:** rate limits, idempotency keys, webhook callbacks, runtime URL allowlists, Prometheus/OTel metrics.
 - **Tier 3:** billing records, admin API, multi-region.
 
 See [`PROPOSAL-mantis-cua-replaces-vision_claude.md`](PROPOSAL-mantis-cua-replaces-vision_claude.md) for the bigger architectural picture and migration plan.
