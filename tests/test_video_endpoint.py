@@ -81,3 +81,54 @@ def test_video_requires_auth(client):
     cli, _data = client
     r = cli.get("/v1/runs/anything/video")
     assert r.status_code == 401
+
+
+def test_video_prefers_polished_over_raw(client):
+    """If both recording_polished.mp4 and recording.mp4 exist, polished wins."""
+    cli, data = client
+    runs_dir = data / "tenants" / "default" / "runs" / "20260428_polish"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    raw = runs_dir / "recording.mp4"
+    polished = runs_dir / "recording_polished.mp4"
+    raw.write_bytes(b"RAW____" + b"x" * 256)
+    polished.write_bytes(b"POLISHED" + b"y" * 256)
+
+    r = cli.get(
+        "/v1/runs/20260428_polish/video",
+        headers={"X-Mantis-Token": "test-token"},
+    )
+    assert r.status_code == 200
+    assert r.content == polished.read_bytes()
+
+
+def test_video_raw_query_param_skips_polished(client):
+    cli, data = client
+    runs_dir = data / "tenants" / "default" / "runs" / "20260428_raw_q"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    raw = runs_dir / "recording.mp4"
+    polished = runs_dir / "recording_polished.mp4"
+    raw.write_bytes(b"RAW____" + b"x" * 256)
+    polished.write_bytes(b"POLISHED" + b"y" * 256)
+
+    r = cli.get(
+        "/v1/runs/20260428_raw_q/video?raw=1",
+        headers={"X-Mantis-Token": "test-token"},
+    )
+    assert r.status_code == 200
+    assert r.content == raw.read_bytes()
+
+
+def test_video_falls_back_to_raw_when_polish_missing(client):
+    """Polish failed (e.g. ffmpeg compose error) — endpoint still serves raw."""
+    cli, data = client
+    runs_dir = data / "tenants" / "default" / "runs" / "20260428_fb"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    raw = runs_dir / "recording.mp4"
+    raw.write_bytes(b"RAW___" + b"x" * 256)
+
+    r = cli.get(
+        "/v1/runs/20260428_fb/video",
+        headers={"X-Mantis-Token": "test-token"},
+    )
+    assert r.status_code == 200
+    assert r.content == raw.read_bytes()

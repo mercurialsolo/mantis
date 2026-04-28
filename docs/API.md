@@ -380,7 +380,25 @@ For comparison, equivalent Claude-only CUA flow ~$0.50–$1.50 per listing.
 
 ## Screencast / video recording
 
-Send a plan with `record_video: true` and the runtime captures the Xvfb display while the agent loop runs. After the run terminates, fetch the screencast at `GET /v1/runs/{run_id}/video`.
+Send a plan with `record_video: true` and the runtime produces a feature-walkthrough video — title card → captioned run footage → outro card with the result summary. Fetch with `GET /v1/runs/{run_id}/video`. The raw screencast is preserved alongside; pass `?raw=1` to fetch it instead.
+
+The walkthrough has three segments:
+
+```
+┌─────────────────┐  ┌─────────────────────────┐  ┌─────────────────┐
+│  Title card     │→ │  Run footage (captions) │→ │  Outro card     │
+│  (3s)           │  │  per-step intent shown  │  │  (5s)           │
+│                 │  │  with [OK] / [FAIL]     │  │                 │
+│  Mantis CUA     │  │  in the bottom strip    │  │  Run complete   │
+│  ───            │  │  while the action plays │  │  ───            │
+│  <plan name>    │  │  on screen              │  │  3 viable leads │
+│  tenant: …      │  │                         │  │  1 with phone   │
+│  run: …         │  │                         │  │  17 steps · 9m  │
+│                 │  │                         │  │  cost: $0.42    │
+└─────────────────┘  └─────────────────────────┘  └─────────────────┘
+```
+
+Title and outro are rendered with PIL; captions are SRT cues burned in by ffmpeg's `subtitles=` filter (libass). The polish step is best-effort — if anything fails (PIL, ffmpeg, libass not built in the image), the raw recording is still saved and the endpoint serves it.
 
 ```bash
 # 1. Submit a recorded run
@@ -414,6 +432,7 @@ Result-side metadata (in the `summary` block):
 {
   "video": {
     "path": "/workspace/mantis-data/tenants/<tenant>/runs/<run_id>/recording.mp4",
+    "polished_path": "/workspace/mantis-data/tenants/<tenant>/runs/<run_id>/recording_polished.mp4",
     "format": "mp4",
     "duration_seconds": 567.3,
     "bytes": 31457280,
@@ -421,6 +440,15 @@ Result-side metadata (in the `summary` block):
   }
 }
 ```
+
+`polished_path` is set only when the post-process compose step succeeded; on failure it's omitted and the endpoint falls back to the raw recording.
+
+### Endpoint behavior
+
+| Request | Returns |
+|---|---|
+| `GET /v1/runs/{run_id}/video` | Polished mp4 (preferred) → raw mp4 (fallback) → 404 |
+| `GET /v1/runs/{run_id}/video?raw=1` | Raw mp4 only → 404 |
 
 ### Format tradeoffs
 

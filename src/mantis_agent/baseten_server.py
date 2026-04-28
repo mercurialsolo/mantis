@@ -787,6 +787,106 @@ class BasetenCUARuntime:
             "bytes": rec_result.bytes_written,
             "error": rec_result.error,
         }
+        # Polish the raw recording into a feature-walkthrough video.
+        if rec_result.succeeded and rec_result.output_path:
+            polished_path = self._polish_recording(
+                raw_video=rec_result.output_path,
+                result=result,
+                recorder=recorder,
+            )
+            if polished_path is not None:
+                result["video"]["polished_path"] = str(polished_path)
+
+    def _polish_recording(
+        self, raw_video: Any, result: dict[str, Any], recorder: Any,
+    ) -> Any:
+        """Compose title + raw-with-captions + outro into a polished video.
+
+        Always best-effort — if any step fails (PIL, ffmpeg, missing fonts),
+        the raw recording is preserved and the run still succeeds.
+        """
+        from mantis_agent import presentation
+
+        try:
+            tenant_id = os.environ.get("MANTIS_TENANT_ID", "default")
+            run_id = result.get("run_id") or "unknown"
+            session_name = result.get("session_name") or "run"
+            fmt = recorder._fmt if hasattr(recorder, "_fmt") else "mp4"
+            width = recorder._width if hasattr(recorder, "_width") else 1280
+            height = recorder._height if hasattr(recorder, "_height") else 720
+            run_dir = raw_video.parent
+            polished_path = run_dir / f"recording_polished.{fmt}"
+
+            title_card_cfg = presentation.title_card_for_run(
+                plan_label=session_name,
+                tenant_id=tenant_id,
+                run_id=run_id,
+            )
+            title_card_path = run_dir / "_title.png"
+            presentation.write_card(title_card_path, width, height, title_card_cfg)
+
+            summary = result.get("summary") or {}
+            outro_cfg = presentation.outro_card_from_summary(
+                summary=summary,
+                plan_label=session_name,
+                cost_total=result.get("cost_total"),
+                duration_seconds=result.get("elapsed_seconds"),
+            )
+            outro_card_path = run_dir / "_outro.png"
+            presentation.write_card(outro_card_path, width, height, outro_cfg)
+
+            srt_path = None
+            timings = self._collect_step_timings(result)
+            if timings:
+                # Title card runs for ~3s before the agent footage starts;
+                # offset captions accordingly.
+                captions = presentation.captions_from_step_timings(
+                    timings, title_offset=0.0,
+                )
+                srt_path = run_dir / "_captions.srt"
+                srt_path.write_text(presentation.captions_to_srt(captions), encoding="utf-8")
+
+            ok = presentation.compose_polished_video(
+                raw_video=raw_video,
+                title_card=title_card_path,
+                outro_card=outro_card_path,
+                subtitles_srt=srt_path,
+                output=polished_path,
+                width=width,
+                height=height,
+                fmt=fmt,
+            )
+            return polished_path if ok else None
+        except Exception as exc:  # noqa: BLE001 — polish is best-effort
+            logger.warning("polished video compose failed: %s", exc)
+            return None
+
+    @staticmethod
+    def _collect_step_timings(
+        result: dict[str, Any],
+    ) -> list[tuple[float, str, str]]:
+        """Pull (elapsed_seconds, intent, status) from a result for SRT.
+
+        Walks ``result["steps"]`` (micro-runner output). Each entry is
+        expected to expose ``intent``, ``success``, and a ``duration`` (or
+        ``elapsed``) float. Steps with no intent are skipped.
+        """
+        steps = result.get("steps") or []
+        if not isinstance(steps, list):
+            return []
+        timings: list[tuple[float, str, str]] = []
+        cum = 0.0
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            intent = (s.get("intent") or "").strip()
+            if not intent:
+                continue
+            duration = float(s.get("duration") or s.get("elapsed") or 0.0)
+            status = "completed" if s.get("success") else "failed"
+            timings.append((cum, intent, status))
+            cum += max(duration, 0.0)
+        return timings
 
     def _run_micro(
         self,
@@ -982,29 +1082,40 @@ def health_v1() -> dict[str, Any]:
 @app.get("/v1/runs/{run_id}/video")
 def get_run_video(
     run_id: str,
+    request: Request,
     tenant: TenantConfig = Depends(_require_mantis_token),
 ) -> Any:
     """Download the screencast for a run.
 
+    Default: serves the **polished** version (title card + captioned run
+    footage + outro card). Pass ``?raw=1`` to fetch the raw screencast
+    without overlays.
+
     Resolves to the per-tenant run dir; returns 404 if no recording exists
     (recording wasn't requested or ffmpeg failed). Auth requires a valid
-    token but not specifically the ``run`` scope — a read-only key is fine.
+    token but not specifically the ``run`` scope.
     """
     from fastapi.responses import FileResponse
     from mantis_agent.recorder import content_type_for
 
+    raw_only = request.query_params.get("raw", "").lower() in {"1", "true", "yes"}
+
     safe_run_id = safe_state_key(run_id)
     tenant_dir = _data_root() / "tenants" / safe_state_key(tenant.tenant_id)
     runs_dir = tenant_dir / "runs" / safe_run_id
-    # Match in priority order — the format used at recording time wins.
-    for fmt in ("mp4", "webm", "gif"):
-        candidate = runs_dir / f"recording.{fmt}"
-        if candidate.exists() and candidate.stat().st_size > 0:
-            return FileResponse(
-                candidate,
-                media_type=content_type_for(fmt),  # type: ignore[arg-type]
-                filename=f"{safe_run_id}.{fmt}",
-            )
+
+    # Prefer polished by default; fall back to raw if polished is missing
+    # (e.g., ffmpeg compose failed). ?raw=1 skips polished entirely.
+    prefixes = ("recording",) if raw_only else ("recording_polished", "recording")
+    for prefix in prefixes:
+        for fmt in ("mp4", "webm", "gif"):
+            candidate = runs_dir / f"{prefix}.{fmt}"
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return FileResponse(
+                    candidate,
+                    media_type=content_type_for(fmt),  # type: ignore[arg-type]
+                    filename=f"{safe_run_id}.{fmt}",
+                )
     raise HTTPException(
         status_code=404,
         detail="no recording for this run "
