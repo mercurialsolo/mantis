@@ -784,6 +784,13 @@ class BasetenCUARuntime:
         if not recorder:
             return
         rec_result = recorder.stop()
+        actions = {
+            "clicks": len(getattr(click_log, "clicks", []) if click_log else []),
+            "keys": len(getattr(click_log, "keys", []) if click_log else []),
+            "types": len(getattr(click_log, "types", []) if click_log else []),
+            "scrolls": len(getattr(click_log, "scrolls", []) if click_log else []),
+            "drags": len(getattr(click_log, "drags", []) if click_log else []),
+        }
         result["video"] = {
             "path": str(rec_result.output_path) if rec_result.output_path else None,
             "format": result.get("video_format")
@@ -791,7 +798,8 @@ class BasetenCUARuntime:
             "duration_seconds": round(rec_result.duration_seconds, 2),
             "bytes": rec_result.bytes_written,
             "error": rec_result.error,
-            "clicks": len(click_log) if click_log is not None else 0,
+            "actions": actions,
+            "clicks": actions["clicks"],  # backwards-compat field
         }
         # Polish the raw recording into a feature-walkthrough video.
         if rec_result.succeeded and rec_result.output_path:
@@ -854,25 +862,30 @@ class BasetenCUARuntime:
                 srt_path = run_dir / "_captions.srt"
                 srt_path.write_text(presentation.captions_to_srt(captions), encoding="utf-8")
 
-            # Click ripple overlay (works for any computer-use click —
+            # Action overlay (works for any computer-use action —
             # browser, file manager, terminal, dialog, anything visible
-            # on the Xvfb display).
+            # on the Xvfb display). Click ripples + keyboard chord
+            # badges + scroll arrows + type captions + drag trails all
+            # composite into the same PNG sequence.
             ripples_dir: Any = None
             if click_log is not None and len(click_log) > 0:
                 ripples_dir = run_dir / "_ripples"
-                # Recording duration tells us how many overlay frames to render.
                 duration = (
                     recorder.result.duration_seconds
                     if recorder.result and recorder.result.duration_seconds
                     else 60.0
                 )
-                ripples_dir = presentation.render_ripple_overlay_pngs(
+                ripples_dir = presentation.render_action_overlay_pngs(
                     ripples_dir,
                     duration_seconds=duration,
                     fps=30,
                     width=width,
                     height=height,
-                    clicks=click_log.events,
+                    clicks=getattr(click_log, "clicks", click_log.events),
+                    keys=getattr(click_log, "keys", []),
+                    types=getattr(click_log, "types", []),
+                    scrolls=getattr(click_log, "scrolls", []),
+                    drags=getattr(click_log, "drags", []),
                 )
 
             ok = presentation.compose_polished_video(

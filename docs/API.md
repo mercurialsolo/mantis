@@ -400,27 +400,37 @@ The walkthrough has three segments plus animated click ripples on top of the run
 
 Title and outro are rendered with PIL. Captions are SRT cues burned in by ffmpeg's `subtitles=` filter (libass). Click ripples are PNG-sequence overlay frames composited via ffmpeg's `overlay` filter. Polish is best-effort — if anything fails (PIL, ffmpeg, libass not built in the image), the raw recording is still saved and the endpoint serves it.
 
-### Click ripples — universal computer use
+### Action overlays — universal computer use
 
-Ripples render the same way regardless of *what* the agent clicks. The agent emits `Action(CLICK, {x, y})` with pixel coordinates on the Xvfb display; xdotool clicks the pixel; ffmpeg overlays the ripple at the same pixel. So the ripple looks identical when the agent clicks:
+Every kind of agent action gets a visual cue, regardless of what application is in focus (browser, file manager, terminal, dialogs, anything visible on the Xvfb display). The agent emits actions with pixel coordinates / key chords / text, and the overlay renderer composites the matching visual onto the recording.
 
-- a button on a Chrome web page
-- a file icon in a file manager (Nautilus, Files, etc.)
-- a row in a desktop database tool
-- a menu item in LibreOffice
-- a tab in a terminal multiplexer
-- a confirmation button in a system dialog
+| Agent action | Overlay |
+|---|---|
+| `CLICK` (single) | Sky-blue expanding ripple at (x, y), 0.6 s, fades out |
+| `DOUBLE_CLICK` | Same as click + a second offset ring 0.1 s later |
+| `KEY_PRESS` (e.g. `Ctrl+S`, `Tab`, `Enter`) | Slate badge in the bottom-right with the chord text, 1.5 s, slide-in then fade |
+| `TYPE` (typed text) | "⌨ Typing: \"…\"" caption near the top, 1.8 s, fades after text appears on screen |
+| `SCROLL` (`up` / `down` / `left` / `right`) | Sky-blue arrow at the matching screen edge, slides in the scroll direction, 0.8 s |
+| `DRAG` | Animated trail line from start to end with a moving head dot, 0.9 s |
+| `WAIT`, `NAVIGATE`, `DONE` | No overlay (no useful visual locus) |
 
-Anything visible on the Xvfb display works. The ripple is a 0.6-second expanding sky-blue circle (with a small white center dot at the click locus) that fades out over the animation. It's purposely minimal — visible but not visually disruptive.
+All overlays are deliberately minimal — visible without being disruptive. Sky-blue accent color across the set so they read as a single visual language.
 
-You'll see this as a `clicks` count in the result metadata:
+You'll see counts in the result metadata under `video.actions`:
 
 ```jsonc
 {
   "video": {
     "path": ".../recording.mp4",
     "polished_path": ".../recording_polished.mp4",
-    "clicks": 17,
+    "actions": {
+      "clicks": 17,
+      "keys":   3,
+      "types":  2,
+      "scrolls": 8,
+      "drags":  0
+    },
+    "clicks": 17,    // backwards-compat field
     ...
   }
 }

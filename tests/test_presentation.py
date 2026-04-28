@@ -302,9 +302,12 @@ def test_click_recording_env_intercepts_clicks():
     env.step(Action(action_type=ActionType.CLICK, params={"x": 50, "y": 60}))
     env.step(Action(action_type=ActionType.TYPE, params={"text": "hi"}))
     env.step(Action(action_type=ActionType.CLICK, params={"x": 200, "y": 300, "button": "right"}))
-    assert len(log) == 2  # only CLICK actions logged
-    assert log.events[0].x == 50
-    assert log.events[1].button == "right"
+    # Multi-event log records both CLICKs and the TYPE
+    assert len(log.clicks) == 2
+    assert len(log.types) == 1
+    assert log.clicks[0].x == 50
+    assert log.clicks[1].button == "right"
+    assert log.types[0].text == "hi"
 
 
 def test_click_recording_env_handles_bad_params():
@@ -359,6 +362,150 @@ def test_render_ripple_overlay_writes_png_sequence(tmp_path: Path):
     assert sizes[0] > blank_size  # first ripple visible
     assert sizes[10] > blank_size  # second ripple visible
     assert sizes[8] == blank_size  # no active ripple at t=0.8
+
+
+def test_action_event_log_records_each_type():
+    """ActionEventLog accepts every visually-relevant action and routes
+    to the right list."""
+    import time
+    from mantis_agent.presentation import ActionEventLog
+
+    log = ActionEventLog(anchor_time=time.time())
+    log.record_click(10, 20, button="left")
+    log.record_click(30, 40, button="right", double=True)
+    log.record_key("Ctrl+S")
+    log.record_key("Enter")
+    log.record_type("hello world")
+    log.record_scroll("down", 5)
+    log.record_drag(0, 0, 100, 100)
+
+    assert len(log.clicks) == 2
+    assert log.clicks[1].double is True
+    assert len(log.keys) == 2 and log.keys[0].keys == "Ctrl+S"
+    assert len(log.types) == 1 and log.types[0].text == "hello world"
+    assert len(log.scrolls) == 1 and log.scrolls[0].direction == "down"
+    assert len(log.drags) == 1 and log.drags[0].x2 == 100
+    assert log.total == 7
+
+
+def test_action_recording_env_routes_each_action_type():
+    import time
+    from mantis_agent.actions import Action, ActionType
+    from mantis_agent.gym.base import GymObservation, GymResult
+    from mantis_agent.presentation import ActionEventLog, ActionRecordingEnv
+
+    class FakeEnv:
+        screen_size = (1280, 720)
+        def reset(self, task, **kw): return GymObservation(screenshot=None)  # type: ignore
+        def step(self, action):
+            return GymResult(GymObservation(screenshot=None), 0.0, False, {})  # type: ignore
+        def close(self): pass
+
+    log = ActionEventLog(anchor_time=time.time())
+    env = ActionRecordingEnv(FakeEnv(), log)
+    env.step(Action(action_type=ActionType.CLICK, params={"x": 1, "y": 2}))
+    env.step(Action(action_type=ActionType.DOUBLE_CLICK, params={"x": 3, "y": 4}))
+    env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Tab"}))
+    env.step(Action(action_type=ActionType.TYPE, params={"text": "foo"}))
+    env.step(Action(action_type=ActionType.SCROLL, params={"direction": "up", "amount": 3}))
+    env.step(Action(action_type=ActionType.DRAG, params={"x1": 10, "y1": 20, "x2": 30, "y2": 40}))
+    env.step(Action(action_type=ActionType.WAIT, params={}))  # ignored
+
+    assert len(log.clicks) == 2
+    assert log.clicks[1].double is True
+    assert log.keys[0].keys == "Tab"
+    assert log.types[0].text == "foo"
+    assert log.scrolls[0].direction == "up"
+    assert log.drags[0].x2 == 30
+
+
+def test_render_action_overlay_returns_none_when_all_empty(tmp_path: Path):
+    from mantis_agent.presentation import render_action_overlay_pngs
+    out = render_action_overlay_pngs(
+        tmp_path / "ovl",
+        duration_seconds=2.0, fps=10, width=1280, height=720,
+        clicks=[], keys=[], types=[], scrolls=[], drags=[],
+    )
+    assert out is None
+
+
+def test_render_action_overlay_with_each_event_type(tmp_path: Path):
+    from mantis_agent.presentation import (
+        ClickEvent, DragEvent, KeyPressEvent, ScrollEvent, TypeEvent,
+        render_action_overlay_pngs,
+    )
+    out = render_action_overlay_pngs(
+        tmp_path / "ovl",
+        duration_seconds=3.0, fps=10, width=1280, height=720,
+        clicks=[ClickEvent(0.0, 100, 200)],
+        keys=[KeyPressEvent(0.5, "Ctrl+S")],
+        types=[TypeEvent(1.0, "hello")],
+        scrolls=[ScrollEvent(2.0, "down", 5)],
+        drags=[DragEvent(0.2, 0, 0, 200, 200)],
+    )
+    assert out is not None
+    frames = sorted(out.glob("frame_*.png"))
+    assert len(frames) == 30
+    sizes = [f.stat().st_size for f in frames]
+    # At least one frame should be substantially bigger than a blank frame.
+    blank_size = min(sizes)
+    assert max(sizes) > blank_size * 2
+
+
+def test_render_action_overlay_drag_only(tmp_path: Path):
+    from mantis_agent.presentation import (
+        DragEvent, render_action_overlay_pngs,
+    )
+    out = render_action_overlay_pngs(
+        tmp_path / "ovl",
+        duration_seconds=1.5, fps=20, width=640, height=480,
+        drags=[DragEvent(0.2, 50, 50, 600, 400)],
+    )
+    assert out is not None
+    frames = sorted(out.glob("frame_*.png"))
+    assert len(frames) == 30
+    sizes = [f.stat().st_size for f in frames]
+    nonblank = sum(1 for s in sizes if s > 200)
+    assert nonblank > 0
+
+
+def test_render_action_overlay_keys_only(tmp_path: Path):
+    """Keyboard chord badges should render even with no clicks/types."""
+    from mantis_agent.presentation import KeyPressEvent, render_action_overlay_pngs
+    out = render_action_overlay_pngs(
+        tmp_path / "ovl",
+        duration_seconds=2.0, fps=10, width=1280, height=720,
+        keys=[KeyPressEvent(0.5, "Ctrl+S"), KeyPressEvent(1.0, "Enter")],
+    )
+    assert out is not None
+
+
+def test_render_action_overlay_scroll_arrows(tmp_path: Path):
+    from mantis_agent.presentation import ScrollEvent, render_action_overlay_pngs
+    out = render_action_overlay_pngs(
+        tmp_path / "ovl",
+        duration_seconds=4.0, fps=10, width=1280, height=720,
+        scrolls=[
+            ScrollEvent(0.0, "down"),
+            ScrollEvent(1.0, "up"),
+            ScrollEvent(2.0, "left"),
+            ScrollEvent(3.0, "right"),
+        ],
+    )
+    assert out is not None
+
+
+def test_render_ripple_overlay_pngs_backwards_compat(tmp_path: Path):
+    """Old name still callable for any straggling callers."""
+    from mantis_agent.presentation import (
+        ClickEvent, render_ripple_overlay_pngs,
+    )
+    out = render_ripple_overlay_pngs(
+        tmp_path / "ovl",
+        duration_seconds=1.0, fps=10, width=640, height=360,
+        clicks=[ClickEvent(0.0, 100, 100)],
+    )
+    assert out is not None
 
 
 def test_compose_polished_video_threads_ripples_dir(tmp_path: Path):
