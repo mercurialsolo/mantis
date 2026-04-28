@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mantis-holo3-server
+  namespace: default
+  labels: { app: mantis-holo3-server }
+spec:
+  type: ClusterIP
+  selector:
+    app: mantis-holo3-server
+  ports:
+    - { name: http, port: 80, targetPort: 8000 }

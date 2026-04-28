@@ -287,10 +287,13 @@ plans/
 deploy/
   modal/                # Modal entrypoints (modal_cua_server.py, modal_osworld_*.py, ...)
   baseten/              # Baseten Truss deployments (holo3, gemma4, gemma4_26b)
+  aws/                  # EKS: Terraform + k8s manifests + runbook
+  gke/                  # GKE: Terraform + k8s manifests + runbook
 docker/
   cua.Dockerfile        # CUA container (Xvfb + xdotool + Chromium)
   hud.Dockerfile        # HUD environment container
   local.Dockerfile      # Local container with Playwright
+  server.Dockerfile     # Production FastAPI server (CUDA + llama.cpp + Holo3) for AWS/GKE
 scripts/
   run_osworld.py        # OSWorld benchmark runner
   run_gym_anything.py   # Generic gym environment runner

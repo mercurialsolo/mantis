@@ -1,0 +1,65 @@
+# PV + PVC → Filestore (replace IP/share from terraform output)
+# Plus a one-time job that downloads Holo3 weights from HF.
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mantis-holo3-models
+spec:
+  capacity:
+    storage: 64Gi
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    server: REPLACE_FILESTORE_IP        # terraform output: filestore_ip
+    path: /data/models                  # subdir under the Filestore share
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mantis-holo3-models
+  namespace: default
+spec:
+  volumeName: mantis-holo3-models
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 64Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: init-holo3-weights
+  namespace: default
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: mkdir
+          image: busybox
+          command: ["sh", "-c", "mkdir -p /models/holo3 && chmod 0777 /models/holo3"]
+          volumeMounts:
+            - { name: models, mountPath: /models }
+      containers:
+        - name: download
+          image: python:3.11-slim
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euxo pipefail
+              pip install --no-cache-dir 'huggingface-hub[cli]'
+              huggingface-cli download mradermacher/Holo3-35B-A3B-GGUF \
+                Holo3-35B-A3B.Q8_0.gguf \
+                Holo3-35B-A3B.mmproj-f16.gguf \
+                --local-dir /models/holo3
+              ls -lh /models/holo3
+          volumeMounts:
+            - { name: models, mountPath: /models }
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: mantis-holo3-models

@@ -1,0 +1,91 @@
+# EFS-backed run state PVC — shared across replicas (RWX)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mantis-holo3-data
+  namespace: default
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mantis-holo3-server
+  namespace: default
+  annotations:
+    # eks.amazonaws.com/role-arn: <terraform output: app_role_arn>
+    eks.amazonaws.com/role-arn: REPLACE_WITH_TERRAFORM_OUTPUT
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mantis-holo3-server
+  namespace: default
+  labels: { app: mantis-holo3-server }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mantis-holo3-server } }
+  template:
+    metadata:
+      labels: { app: mantis-holo3-server }
+    spec:
+      serviceAccountName: mantis-holo3-server
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      nodeSelector:
+        gpu: "true"
+      containers:
+        - name: server
+          # Replace ACCOUNT.dkr.ecr.REGION.amazonaws.com/mantis-prod-server:TAG
+          image: REPLACE_WITH_ECR_IMAGE_URI
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { containerPort: 8000, name: http }
+          env:
+            - { name: MANTIS_MODEL,      value: holo3 }
+            - { name: MANTIS_LLAMA_PORT, value: "18080" }
+            - { name: MANTIS_DATA_DIR,   value: /workspace/mantis-data }
+            - { name: MANTIS_HOLO3_MODEL_DIR, value: /models/holo3 }
+            - { name: LOG_LEVEL,         value: INFO }
+          envFrom:
+            - secretRef: { name: mantis-holo3-secrets }
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - { name: models,  mountPath: /models/holo3 }
+            - { name: data,    mountPath: /workspace/mantis-data }
+            - { name: dshm,    mountPath: /dev/shm }
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 600     # llama.cpp + Holo3 cold start can be slow
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: mantis-holo3-models
+        - name: data
+          persistentVolumeClaim:
+            claimName: mantis-holo3-data
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi

@@ -1,0 +1,114 @@
+# Filestore-backed run-state PV + PVC + KSA + Deployment.
+# Replace REPLACE_* placeholders before applying.
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mantis-holo3-data
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    server: REPLACE_FILESTORE_IP        # terraform output: filestore_ip
+    path: /data/runs
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mantis-holo3-data
+  namespace: default
+spec:
+  volumeName: mantis-holo3-data
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mantis-holo3-server
+  namespace: default
+  annotations:
+    # iam.gke.io/gcp-service-account: <terraform output: app_gsa_email>
+    iam.gke.io/gcp-service-account: REPLACE_GSA_EMAIL
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mantis-holo3-server
+  namespace: default
+  labels: { app: mantis-holo3-server }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mantis-holo3-server } }
+  template:
+    metadata:
+      labels: { app: mantis-holo3-server }
+    spec:
+      serviceAccountName: mantis-holo3-server
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      nodeSelector:
+        gpu: "true"
+      containers:
+        - name: server
+          image: REPLACE_AR_IMAGE_URI    # e.g. us-central1-docker.pkg.dev/PROJECT/mantis-prod/mantis-holo3-server:TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { containerPort: 8000, name: http }
+          env:
+            - { name: MANTIS_MODEL,           value: holo3 }
+            - { name: MANTIS_LLAMA_PORT,      value: "18080" }
+            - { name: MANTIS_DATA_DIR,        value: /workspace/mantis-data }
+            - { name: MANTIS_HOLO3_MODEL_DIR, value: /models/holo3 }
+            - { name: LOG_LEVEL,              value: INFO }
+          envFrom:
+            - secretRef: { name: mantis-holo3-secrets }   # populated by SecretProviderClass
+          resources:
+            requests:
+              cpu: "4"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+            limits:
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - { name: secrets-store, mountPath: /var/secrets, readOnly: true }
+            - { name: models,        mountPath: /models/holo3 }
+            - { name: data,          mountPath: /workspace/mantis-data }
+            - { name: dshm,          mountPath: /dev/shm }
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 600
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: mantis-holo3-secrets
+        - name: models
+          persistentVolumeClaim:
+            claimName: mantis-holo3-models
+        - name: data
+          persistentVolumeClaim:
+            claimName: mantis-holo3-data
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
