@@ -34,6 +34,12 @@ except ImportError as exc:  # pragma: no cover - container-only deps
         "Baseten Truss image, which provisions them in build_commands)."
     ) from exc
 
+from mantis_agent.api_schemas import (
+    MAX_COST_USD,
+    MAX_RUNTIME_MINUTES,
+    PredictRequest,
+    validate_micro_steps,
+)
 from mantis_agent.gym.runner import GymRunner
 from mantis_agent.gym.xdotool_env import XdotoolGymEnv
 from mantis_agent.server_utils import (
@@ -52,9 +58,50 @@ from mantis_agent.server_utils import (
     wait_for_openai_server,
     write_leads_csv,
 )
+from mantis_agent.tenant_auth import (
+    DEFAULT_TENANT,
+    TenantConfig,
+    get_key_store,
+)
 
+class _JsonLogFormatter(logging.Formatter):
+    """One-line JSON-per-record formatter that attaches tenant_id and run_id
+    when set in the process environment. Lets stdout consumers (Datadog,
+    CloudWatch, Stackdriver) parse logs without ad-hoc regexes.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        # Per-request tenant context, set by /predict handler; empty in startup.
+        tenant_id = os.environ.get("MANTIS_TENANT_ID")
+        if tenant_id:
+            payload["tenant_id"] = tenant_id
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, default=str)
+
+
+def _configure_logging() -> None:
+    """One-time logging setup. JSON to stdout, level from LOG_LEVEL env."""
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    if os.environ.get("MANTIS_LOG_FORMAT", "json").lower() == "json":
+        handler = logging.StreamHandler()
+        handler.setFormatter(_JsonLogFormatter())
+        root = logging.getLogger()
+        root.handlers[:] = [handler]
+        root.setLevel(level)
+    else:
+        logging.basicConfig(level=level)
+
+
+_configure_logging()
 logger = logging.getLogger("mantis_agent.baseten_server")
-logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 
 app = FastAPI(title="Mantis CUA Baseten Workload", docs_url=None, redoc_url=None)
 
@@ -70,21 +117,32 @@ SECRET_ENV_MAP = {
 
 def _require_mantis_token(
     x_mantis_token: str | None = Header(default=None, alias="X-Mantis-Token"),
-) -> None:
-    """Container-level auth.
+) -> TenantConfig:
+    """Container-level auth → resolved TenantConfig.
 
     Uses a custom header (``X-Mantis-Token``) instead of ``Authorization: Bearer``
     so it does not collide with Baseten's gateway auth, which sends
-    ``Authorization: Api-Key <baseten_key>`` to the container. Fails closed
-    if the deployment didn't provision the secret.
+    ``Authorization: Api-Key <baseten_key>`` to the container.
+
+    Backwards-compat: if MANTIS_TENANT_KEYS_PATH is unset and MANTIS_API_TOKEN
+    matches, returns DEFAULT_TENANT (single-tenant mode). Multi-tenant mode is
+    enabled by mounting a JSON keys file and setting MANTIS_TENANT_KEYS_PATH.
     """
-    expected = os.environ.get("MANTIS_API_TOKEN", "").strip()
-    if not expected:
+    store = get_key_store()
+    if not store.is_multi_tenant and not os.environ.get("MANTIS_API_TOKEN", "").strip():
         raise HTTPException(status_code=503, detail="server auth not configured")
     if not x_mantis_token:
         raise HTTPException(status_code=401, detail="missing X-Mantis-Token header")
-    if not hmac.compare_digest(x_mantis_token, expected):
+    tenant = store.resolve(x_mantis_token)
+    if tenant is None:
         raise HTTPException(status_code=401, detail="invalid X-Mantis-Token")
+    return tenant
+
+
+def _require_run_scope(tenant: TenantConfig = Depends(_require_mantis_token)) -> TenantConfig:
+    if not tenant.has_scope("run"):
+        raise HTTPException(status_code=403, detail="tenant lacks 'run' scope")
+    return tenant
 
 
 def _read_secret(name: str) -> str:
@@ -93,6 +151,21 @@ def _read_secret(name: str) -> str:
         return path.read_text().strip()
     except OSError:
         return ""
+
+
+def _resolve_anthropic_key(tenant: TenantConfig) -> str:
+    """Return the Anthropic key this tenant should use.
+
+    Reads from the secret named by the tenant's `anthropic_secret_name`
+    (each tenant can have its own Anthropic billing). Falls back to the
+    legacy ANTHROPIC_API_KEY env var if the per-tenant secret isn't present
+    on disk.
+    """
+    name = tenant.anthropic_secret_name or DEFAULT_TENANT.anthropic_secret_name
+    value = _read_secret(name)
+    if value:
+        return value
+    return os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
 
 def _load_secret_environment() -> None:
@@ -105,12 +178,42 @@ def _load_secret_environment() -> None:
 
 
 def _data_root() -> Path:
+    """Top-level data dir. Per-tenant subdirs live under this."""
     root = Path(os.environ.get("MANTIS_DATA_DIR", "/workspace/mantis-data"))
     root.mkdir(parents=True, exist_ok=True)
-    for child in ("results", "runs", "screenshots", "checkpoints", "chrome-profile"):
+    for child in ("results", "runs", "screenshots", "checkpoints", "chrome-profile", "tenants"):
         (root / child).mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MANTIS_DEBUG_DIR", str(root / "screenshots" / "claude_debug"))
     return root
+
+
+def _tenant_root(tenant: TenantConfig) -> Path:
+    """Per-tenant subtree of the data volume. Caller cannot escape this prefix.
+
+    Layout:
+      /workspace/mantis-data/tenants/<tenant_id>/
+        ├── runs/<run_id>/{status,result,leads,events}
+        ├── checkpoints/<state_key>.json
+        ├── chrome-profile/<state_key>/
+        └── screenshots/<run_id>/
+    """
+    root = _data_root() / "tenants" / safe_state_key(tenant.tenant_id)
+    for child in ("runs", "checkpoints", "chrome-profile", "screenshots"):
+        (root / child).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _tenant_state_key(tenant: TenantConfig, caller_state_key: str | None) -> str:
+    """Server-namespaced state key. Caller's value is sanitized + prefixed."""
+    base = safe_state_key(caller_state_key or "default")
+    return f"{safe_state_key(tenant.tenant_id)}__{base}"
+
+
+def _tenant_chrome_profile(tenant: TenantConfig, state_key: str) -> Path:
+    """Per-tenant, per-state-key Chrome profile dir."""
+    profile = _tenant_root(tenant) / "chrome-profile" / safe_state_key(state_key)
+    profile.mkdir(parents=True, exist_ok=True)
+    return profile
 
 
 def _repo_root() -> Path:
@@ -794,16 +897,83 @@ def models() -> dict[str, Any]:
     return {"data": [{"id": runtime.model_kind, "object": "model"}]}
 
 
-@app.post("/predict", dependencies=[Depends(_require_mantis_token)])
-async def predict(request: Request) -> dict[str, Any]:
+async def _handle_predict(
+    request: Request, tenant: TenantConfig
+) -> dict[str, Any]:
+    """Shared handler for /predict and /v1/predict.
+
+    Validates the payload through Pydantic, enforces server-side caps,
+    namespaces state_key + chrome-profile per tenant, and threads the
+    tenant-resolved Anthropic key into the runtime context.
+    """
     try:
-        payload = await request.json()
+        raw = await request.json()
     except Exception as exc:
         raise HTTPException(status_code=400, detail="request body must be JSON") from exc
-    if not isinstance(payload, dict):
+    if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="request body must be a JSON object")
+
+    try:
+        req = PredictRequest.model_validate(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid request: {exc}") from exc
+
+    # Per-tenant cap clamp (in addition to the global cap PredictRequest already
+    # applied). Tenant config is the most-specific limit.
+    payload = req.model_dump(exclude_none=True)
+    payload["max_cost"] = min(
+        float(payload.get("max_cost", MAX_COST_USD)),
+        tenant.max_cost_per_run,
+    )
+    payload["max_time_minutes"] = min(
+        int(payload.get("max_time_minutes", MAX_RUNTIME_MINUTES)),
+        tenant.max_time_minutes_per_run,
+    )
+
+    # State-key namespacing. Caller cannot override its tenant prefix.
+    payload["state_key"] = _tenant_state_key(tenant, payload.get("state_key"))
+
+    # Per-tenant Anthropic key + chrome profile path are exposed via env so the
+    # runtime (and any in-process Claude clients) read them transparently.
+    os.environ["ANTHROPIC_API_KEY"] = _resolve_anthropic_key(tenant)
+    os.environ["MANTIS_TENANT_ID"] = tenant.tenant_id
+    profile_dir = _tenant_chrome_profile(tenant, payload["state_key"])
+    os.environ["MANTIS_CHROME_PROFILE_DIR"] = str(profile_dir)
+
+    logger.info(
+        "predict tenant=%s scope=run state_key=%s detached=%s",
+        tenant.tenant_id,
+        payload["state_key"],
+        payload.get("detached", True),
+    )
+
     try:
         return await run_in_threadpool(runtime.run, payload)
+    except ValueError as exc:
+        # Validation errors from the runner (bad plan shape, etc.)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception("predict failed")
+        logger.exception("predict failed tenant=%s", tenant.tenant_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/v1/predict")
+async def predict_v1(
+    request: Request,
+    tenant: TenantConfig = Depends(_require_mantis_token),
+) -> dict[str, Any]:
+    """Tier-1 multi-tenant /predict. Validated, per-tenant capped and isolated."""
+    return await _handle_predict(request, tenant)
+
+
+@app.post("/predict")
+async def predict(
+    request: Request,
+    tenant: TenantConfig = Depends(_require_mantis_token),
+) -> dict[str, Any]:
+    """Backwards-compat alias for /v1/predict.
+
+    Kept indefinitely for callers built against the v1.0 deployment shape.
+    Identical behavior to /v1/predict.
+    """
+    return await _handle_predict(request, tenant)
