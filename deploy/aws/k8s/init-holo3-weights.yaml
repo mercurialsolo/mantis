@@ -1,0 +1,44 @@
+# One-time init job: download Holo3 GGUF (~34 GB) into the EFS-backed PVC.
+# Run before the Deployment so the model volume is ready.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mantis-holo3-models
+  namespace: default
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: efs-sc           # EFS CSI StorageClass
+  resources:
+    requests:
+      storage: 64Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: init-holo3-weights
+  namespace: default
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: download
+          image: python:3.11-slim
+          command: ["bash", "-lc"]
+          args:
+            - |
+              set -euxo pipefail
+              pip install --no-cache-dir 'huggingface-hub[cli]'
+              huggingface-cli download mradermacher/Holo3-35B-A3B-GGUF \
+                Holo3-35B-A3B.Q8_0.gguf \
+                Holo3-35B-A3B.mmproj-f16.gguf \
+                --local-dir /models/holo3
+              ls -lh /models/holo3
+          volumeMounts:
+            - { name: models, mountPath: /models/holo3 }
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: mantis-holo3-models

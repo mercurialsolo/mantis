@@ -1,0 +1,33 @@
+# GCLB ingress with Google-managed TLS certificate.
+# Replace the host before applying; the FQDN must be DNS-resolvable to the
+# ingress IP for managed cert provisioning to succeed.
+
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: mantis-holo3-cert
+  namespace: default
+spec:
+  domains:
+    - REPLACE_HOSTNAME       # e.g. mantis.example.com
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mantis-holo3-server
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: gce
+    networking.gke.io/managed-certificates: mantis-holo3-cert
+    kubernetes.io/ingress.allow-http: "false"
+spec:
+  rules:
+    - host: REPLACE_HOSTNAME
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mantis-holo3-server
+                port: { number: 80 }

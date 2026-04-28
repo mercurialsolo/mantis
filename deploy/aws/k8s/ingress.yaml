@@ -1,0 +1,29 @@
+# ALB ingress. Requires AWS Load Balancer Controller in the cluster.
+# Replace ACM cert ARN + host before applying.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mantis-holo3-server
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    alb.ingress.kubernetes.io/certificate-arn: REPLACE_WITH_ACM_CERT_ARN
+    # Long timeout — extraction runs are detached but the initial /predict
+    # response can still take a few seconds.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=300
+spec:
+  rules:
+    - host: REPLACE_WITH_HOSTNAME       # e.g. mantis.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mantis-holo3-server
+                port: { number: 80 }
