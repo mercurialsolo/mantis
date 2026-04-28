@@ -63,6 +63,13 @@ dev = [
     "ruff>=0.4",
     "httpx>=0.24",   # FastAPI TestClient
 ]
+# MkDocs site builder + plugins.
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocs-awesome-pages-plugin>=2.9",
+    "pymdown-extensions>=10.7",
+]
 # Convenience: install everything.
 full = [
     "mantis-agent[orchestrator,server,local-cua,viewer,gpu,hud]",
