@@ -149,6 +149,66 @@ def validate_micro_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return clamped
 
 
+_URL_RE = __import__("re").compile(r"https?://([^/\s\"'`)>]+)")
+
+
+def extract_navigate_hosts(plan: list[dict[str, Any]] | dict[str, Any]) -> list[str]:
+    """Pull all unique hostnames referenced by ``navigate``-type steps.
+
+    Used to enforce the per-tenant allowlist before the plan starts.
+    Inspects micro-plan step lists ({intent, type, ...}) and task-suite
+    dicts ({tasks: [{intent, start_url, ...}]}). Returns a sorted, unique
+    list of lowercase hosts.
+    """
+    hosts: set[str] = set()
+
+    def _add_url(url: str | None) -> None:
+        if not url:
+            return
+        m = _URL_RE.search(url)
+        if m:
+            hosts.add(m.group(1).lower())
+
+    def _scan_intent(text: str | None) -> None:
+        if not text:
+            return
+        for m in _URL_RE.finditer(text):
+            hosts.add(m.group(1).lower())
+
+    if isinstance(plan, dict):
+        # task-suite shape
+        _add_url(plan.get("base_url"))
+        for task in plan.get("tasks") or []:
+            if isinstance(task, dict):
+                _add_url(task.get("start_url"))
+                _scan_intent(task.get("intent"))
+    elif isinstance(plan, list):
+        # micro-plan shape
+        for step in plan:
+            if not isinstance(step, dict):
+                continue
+            _scan_intent(step.get("intent"))
+            _add_url(step.get("url"))
+
+    return sorted(hosts)
+
+
+def assert_hosts_allowed(
+    hosts: list[str],
+    allowed_predicate,
+) -> None:
+    """Raise ``PermissionError`` if any host fails ``allowed_predicate``.
+
+    ``allowed_predicate`` is typically ``tenant.is_domain_allowed``. Empty
+    ``hosts`` list is a no-op (e.g. a plan with no navigate URLs).
+    """
+    rejected = [h for h in hosts if not allowed_predicate(h)]
+    if rejected:
+        raise PermissionError(
+            f"plan references host(s) not in tenant allowlist: {', '.join(rejected)}"
+        )
+
+
 # ── Response payloads ───────────────────────────────────────────────────────
 class DetachedRunHandle(BaseModel):
     """Returned from /predict when detached=True."""

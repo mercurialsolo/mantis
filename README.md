@@ -143,22 +143,44 @@ Key fields: `section` (setup/extraction/pagination), `required` (retry then halt
 
 ## Quick Start
 
+The base install is intentionally slim. Pick the extras for your use case:
+
 ```bash
-# Install core
+# Slim base (~5 MB) — just enough to import mantis_agent.{actions, gym.base, site_config}
 pip install -e .
 
-# With viewer support
+# Orchestrator only — MicroPlanRunner + Claude clients + remote Holo3 over HTTP.
+# This is what callers like vision_claude install. No GPU, no torch.
+pip install -e ".[orchestrator]"
+
+# Self-hosted FastAPI server (Baseten / EKS / GKE)
+pip install -e ".[server]"
+
+# Local in-process CUA — pulls torch + transformers + pyautogui + mss
+pip install -e ".[local-cua]"
+
+# Live web viewer
 pip install -e ".[viewer]"
 
-# With GPU acceleration
-pip install -e ".[gpu]"
+# Everything (full development setup)
+pip install -e ".[full]"
 
-# Run locally
+# Run locally (requires [local-cua])
 mantis "Open Firefox and search for cats" --model google/gemma-4-E4B-it
 
 # Run with live viewer
 mantis --viewer "Open Firefox and search for cats"
 ```
+
+## Install footprint
+
+| Extras | What you get | Wheel size (approx.) |
+|---|---|---|
+| (none) | Pillow only | ~5 MB |
+| `[orchestrator]` | + requests + pydantic | ~10 MB |
+| `[server]` | + fastapi + uvicorn + pydantic + requests | ~15 MB |
+| `[local-cua]` | + torch + transformers + pyautogui + mss | ~2 GB |
+| `[full]` | All of the above | ~2.1 GB |
 
 ### Development
 
