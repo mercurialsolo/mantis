@@ -26,6 +26,7 @@ import requests
 
 try:
     from fastapi import Depends, FastAPI, Header, HTTPException, Request
+    from fastapi.responses import JSONResponse
     from starlette.concurrency import run_in_threadpool
 except ImportError as exc:  # pragma: no cover - container-only deps
     raise ImportError(
@@ -892,9 +893,107 @@ def health() -> dict[str, Any]:
     return {"ok": runtime.loaded, "model": runtime.model_kind}
 
 
+@app.get("/v1/health")
+def health_v1() -> dict[str, Any]:
+    """Versioned alias for /health.
+
+    The unversioned /health endpoint is what platform liveness probes target;
+    /v1/health is the same payload available under the public API path.
+    """
+    return {"ok": runtime.loaded, "model": runtime.model_kind}
+
+
 @app.get("/v1/models")
 def models() -> dict[str, Any]:
-    return {"data": [{"id": runtime.model_kind, "object": "model"}]}
+    """OpenAI-compatible model listing.
+
+    Public so clients can discover the model id before sending requests.
+    Auth is enforced on the inference path itself (/v1/chat/completions).
+    """
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": runtime.model_kind,
+                "object": "model",
+                "owned_by": "mantis",
+            }
+        ],
+    }
+
+
+# Sentinel headers the upstream llama.cpp shouldn't see. We strip them so the
+# Mantis-side auth credential never reaches the inference layer.
+_PROXY_DROP_HEADERS = {
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "x-mantis-token",
+    "authorization",
+    "cookie",
+}
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions_proxy(
+    request: Request,
+    tenant: TenantConfig = Depends(_require_run_scope),
+) -> Any:
+    """Auth-gated reverse proxy to the in-pod llama.cpp Holo3 server.
+
+    Designed for OpenAI-compat clients (vision_claude's BrainHolo3 client,
+    direct `openai.OpenAI(...)` callers) that want to use Holo3 inference
+    without the full /predict orchestrator.
+
+    What this endpoint does:
+      • Validates ``X-Mantis-Token`` and resolves the tenant (must have
+        ``run`` scope).
+      • Strips Mantis-side auth headers before forwarding so the upstream
+        llama.cpp never sees them.
+      • Forwards the JSON body verbatim to the in-pod llama.cpp server at
+        ``MANTIS_LLAMA_PORT``.
+      • Passes upstream status codes and JSON bodies through.
+    """
+    body = await request.body()
+    upstream_port = os.environ.get("MANTIS_LLAMA_PORT", "18080")
+    upstream = f"http://127.0.0.1:{upstream_port}/v1/chat/completions"
+
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in _PROXY_DROP_HEADERS
+    }
+    headers["Content-Type"] = "application/json"
+
+    logger.info(
+        "v1/chat/completions tenant=%s upstream=%s bytes=%d",
+        tenant.tenant_id,
+        upstream,
+        len(body),
+    )
+
+    try:
+        r = await run_in_threadpool(
+            requests.post,
+            upstream,
+            data=body,
+            headers=headers,
+            timeout=180,
+        )
+    except requests.RequestException as exc:
+        logger.exception("v1/chat/completions upstream error tenant=%s", tenant.tenant_id)
+        raise HTTPException(status_code=502, detail=f"upstream error: {exc}") from exc
+
+    try:
+        payload = r.json()
+    except ValueError:
+        # Upstream returned non-JSON (rare; usually means it crashed). Surface
+        # the raw text so callers can debug.
+        return JSONResponse(
+            content={"error": {"message": r.text[:1000], "type": "upstream_error"}},
+            status_code=r.status_code if r.status_code >= 400 else 502,
+        )
+    return JSONResponse(content=payload, status_code=r.status_code)
 
 
 async def _handle_predict(

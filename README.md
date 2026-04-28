@@ -305,9 +305,23 @@ scripts/
   baseten_workload.py   # Detached run/poll helper for Baseten
 tests/                  # pytest suite
 docs/
+  API.md                                       # HTTP API reference (any caller)
   ARCHITECTURE.md
+  PROPOSAL-mantis-cua-replaces-vision_claude.md  # stakeholder-shareable
+  integration-vision_claude.md                 # vision_claude integration spec
   learnings.md
+  diagrams/                                    # Figma renders
 ```
+
+## Using the deployed service
+
+If you just want to send plans to a deployed Mantis CUA service, see
+[`docs/API.md`](docs/API.md) for the HTTP API reference — auth, endpoints,
+plan shapes, errors, and end-to-end curl examples.
+
+If you're integrating from `vision_claude`, see
+[`docs/integration-vision_claude.md`](docs/integration-vision_claude.md)
+for the orchestrated-Mantis backend code and migration plan.
 
 ## License
 
