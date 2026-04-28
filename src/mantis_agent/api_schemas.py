@@ -86,6 +86,14 @@ class PredictRequest(BaseModel):
     graph_learn: bool = False
     graph_learn_only: bool = False
 
+    # Screencast recording (Tier 2 follow-up).
+    # When record_video=True, the runtime spawns ffmpeg x11grab against the
+    # Xvfb display while the agent loop runs and saves the output under
+    # the per-tenant per-run dir. Fetch via GET /v1/runs/{run_id}/video.
+    record_video: bool = False
+    video_format: Literal["mp4", "webm", "gif"] = "mp4"
+    video_fps: int = Field(default=5, ge=1, le=30)
+
     @model_validator(mode="after")
     def _clamp_caps_and_validate_action(self) -> "PredictRequest":
         # Hard caps — caller cannot exceed

@@ -738,6 +738,56 @@ class BasetenCUARuntime:
             save_screenshots_dir=str(data_root / "screenshots"),
         )
 
+    def _maybe_record(
+        self, payload: dict[str, Any], run_id: str
+    ) -> Any:
+        """Spawn a ScreenRecorder if payload.record_video is set.
+
+        Output path is namespaced by tenant id (read from MANTIS_TENANT_ID,
+        which the handler sets per request) so callers cannot read each
+        other's recordings via /v1/runs/<run_id>/video.
+
+        Returns the started recorder, or None if disabled / failed to start.
+        """
+        if not payload.get("record_video"):
+            return None
+        from mantis_agent.recorder import ScreenRecorder
+
+        tenant_id = safe_state_key(
+            os.environ.get("MANTIS_TENANT_ID", DEFAULT_TENANT.tenant_id)
+        )
+        runs_dir = _data_root() / "tenants" / tenant_id / "runs" / safe_state_key(run_id)
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        fmt = str(payload.get("video_format", "mp4"))
+        output = runs_dir / f"recording.{fmt}"
+        rec = ScreenRecorder(
+            output=output,
+            fps=int(payload.get("video_fps", 5)),
+            fmt=fmt,  # type: ignore[arg-type]
+        )
+        if not rec.start():
+            logger.warning(
+                "recorder requested but failed to start: %s",
+                rec.result.error if rec.result else "unknown",
+            )
+            return rec  # caller still records the error in result
+        return rec
+
+    def _attach_recording_metadata(
+        self, result: dict[str, Any], recorder: Any
+    ) -> None:
+        if not recorder:
+            return
+        rec_result = recorder.stop()
+        result["video"] = {
+            "path": str(rec_result.output_path) if rec_result.output_path else None,
+            "format": result.get("video_format")
+            or (recorder._fmt if hasattr(recorder, "_fmt") else "mp4"),
+            "duration_seconds": round(rec_result.duration_seconds, 2),
+            "bytes": rec_result.bytes_written,
+            "error": rec_result.error,
+        }
+
     def _run_micro(
         self,
         task_suite: dict[str, Any],
@@ -757,6 +807,7 @@ class BasetenCUARuntime:
             run_id,
             settle_time=4.0 if self.model_kind == "holo3" else 2.0,
         )
+        recorder = self._maybe_record(payload, run_id)
 
         try:
             micro_plan = MicroPlan(domain=session_name)
@@ -836,9 +887,19 @@ class BasetenCUARuntime:
                 plan_signature=task_suite.get("_plan_signature", ""),
                 resume_state=resume_state,
             )
+            self._attach_recording_metadata(result, recorder)
             self._save_result(result, prefix=self.model_kind.replace("-", "_"))
             return result
         finally:
+            # Stop the recorder BEFORE closing env so the final frames flush
+            # while the Xvfb display still exists. _attach_recording_metadata
+            # is idempotent (ScreenRecorder.stop() is locked) so calling it
+            # again here covers the exception path.
+            if recorder is not None and recorder.result is None:
+                try:
+                    recorder.stop()
+                except Exception:
+                    logger.exception("recorder stop in finally failed")
             env.close()
             if proxy_proc:
                 proxy_proc.terminate()
@@ -860,27 +921,36 @@ class BasetenCUARuntime:
             run_id,
             settle_time=4.0 if self.model_kind == "holo3" else 2.0,
         )
+        recorder = self._maybe_record(payload, run_id)
         grounding = ClaudeGrounding()
 
-        config = TaskLoopConfig(
-            run_id=run_id,
-            session_name=session_name,
-            model_name=self.model_kind,
-            results_prefix=self.model_kind.replace("-", "_"),
-            brain=self.brain,
-            env=env,
-            grounding=grounding,
-            max_steps=int(payload.get("max_steps", 30)),
-            frames_per_inference=1 if self.model_kind == "holo3" else 2,
-            results_dir=str(_data_root() / "results"),
-        )
-        result = run_executor_lifecycle(
-            task_suite, config,
-            proxy_proc=proxy_proc, t0=t0,
-        )
-        result["provider"] = "baseten"
-        self._save_result(result, prefix=self.model_kind.replace("-", "_"))
-        return result
+        try:
+            config = TaskLoopConfig(
+                run_id=run_id,
+                session_name=session_name,
+                model_name=self.model_kind,
+                results_prefix=self.model_kind.replace("-", "_"),
+                brain=self.brain,
+                env=env,
+                grounding=grounding,
+                max_steps=int(payload.get("max_steps", 30)),
+                frames_per_inference=1 if self.model_kind == "holo3" else 2,
+                results_dir=str(_data_root() / "results"),
+            )
+            result = run_executor_lifecycle(
+                task_suite, config,
+                proxy_proc=proxy_proc, t0=t0,
+            )
+            result["provider"] = "baseten"
+            self._attach_recording_metadata(result, recorder)
+            self._save_result(result, prefix=self.model_kind.replace("-", "_"))
+            return result
+        finally:
+            if recorder is not None and recorder.result is None:
+                try:
+                    recorder.stop()
+                except Exception:
+                    logger.exception("recorder stop in finally failed")
 
     def _save_result(self, result: dict[str, Any], prefix: str) -> None:
         save_result_json(result, _data_root() / "results", prefix)
@@ -907,6 +977,39 @@ def health_v1() -> dict[str, Any]:
     /v1/health is the same payload available under the public API path.
     """
     return {"ok": runtime.loaded, "model": runtime.model_kind}
+
+
+@app.get("/v1/runs/{run_id}/video")
+def get_run_video(
+    run_id: str,
+    tenant: TenantConfig = Depends(_require_mantis_token),
+) -> Any:
+    """Download the screencast for a run.
+
+    Resolves to the per-tenant run dir; returns 404 if no recording exists
+    (recording wasn't requested or ffmpeg failed). Auth requires a valid
+    token but not specifically the ``run`` scope — a read-only key is fine.
+    """
+    from fastapi.responses import FileResponse
+    from mantis_agent.recorder import content_type_for
+
+    safe_run_id = safe_state_key(run_id)
+    tenant_dir = _data_root() / "tenants" / safe_state_key(tenant.tenant_id)
+    runs_dir = tenant_dir / "runs" / safe_run_id
+    # Match in priority order — the format used at recording time wins.
+    for fmt in ("mp4", "webm", "gif"):
+        candidate = runs_dir / f"recording.{fmt}"
+        if candidate.exists() and candidate.stat().st_size > 0:
+            return FileResponse(
+                candidate,
+                media_type=content_type_for(fmt),  # type: ignore[arg-type]
+                filename=f"{safe_run_id}.{fmt}",
+            )
+    raise HTTPException(
+        status_code=404,
+        detail="no recording for this run "
+        "(record_video=true on /v1/predict required)",
+    )
 
 
 @app.get("/metrics")

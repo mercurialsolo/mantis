@@ -15,6 +15,7 @@ vision_claude integration walkthrough see
 | `GET /v1/models` | open | OpenAI-compat model list. Returns `holo3`. |
 | `GET /v1/health`, `GET /health` | open | Liveness/readiness probe. |
 | `GET /metrics` | open | Prometheus scrape endpoint. Returns 503 if `prometheus_client` not installed. |
+| `GET /v1/runs/{run_id}/video` | `X-Mantis-Token` | Download the screencast captured during a run. Returns 404 if `record_video` was not requested. |
 
 When deployed behind Baseten, all requests must also carry
 `Authorization: Api-Key <BASETEN_API_KEY>` (gateway auth, separate from
@@ -74,6 +75,9 @@ Plus the run options:
 | `max_cost` | `25.0` | Cap in USD; clamped against the tenant cap. |
 | `max_time_minutes` | `60` | Wall-clock cap; clamped against the tenant cap. |
 | `proxy_city`, `proxy_state` | unset | Optional IPRoyal geo overrides. Subject to allowlist. |
+| `record_video` | `false` | If true, captures the Xvfb display while the run executes and saves a screencast under the per-tenant run dir. Fetch via `GET /v1/runs/{run_id}/video`. |
+| `video_format` | `"mp4"` | One of `mp4`, `webm`, `gif`. |
+| `video_fps` | `5` | Capture rate; clamped to `[1, 30]`. Higher fps = larger file + more CPU. |
 
 #### Detached response
 
@@ -373,6 +377,67 @@ For comparison, equivalent Claude-only CUA flow ~$0.50–$1.50 per listing.
 - **Pause/resume for OTP** is not yet wired through `/v1/predict`. Today it works in the vision_claude integration path because the loop runs in the vision_claude pod.
 - **`/v1/chat/completions`** is unstreamed in v1. Streaming SSE is a Tier 2 follow-up.
 - **Single Anthropic-key per tenant** at request time (re-resolved on every call).
+
+## Screencast / video recording
+
+Send a plan with `record_video: true` and the runtime captures the Xvfb display while the agent loop runs. After the run terminates, fetch the screencast at `GET /v1/runs/{run_id}/video`.
+
+```bash
+# 1. Submit a recorded run
+RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BTKEY" \
+  -H "X-Mantis-Token: $TOK" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "detached": true,
+    "micro": "plans/boattrader/extract_url_filtered_3listings.json",
+    "state_key": "demo-recording",
+    "max_cost": 2,
+    "max_time_minutes": 20,
+    "record_video": true,
+    "video_format": "mp4",
+    "video_fps": 8
+  }')
+RUN_ID=$(echo "$RESP" | jq -r .run_id)
+
+# 2. Poll status until succeeded ... (same as the regular flow)
+
+# 3. Download the screencast
+curl -fsS -o demo.mp4 \
+  -H "X-Mantis-Token: $TOK" \
+  "$ENDPOINT/v1/runs/$RUN_ID/video"
+```
+
+Result-side metadata (in the `summary` block):
+
+```jsonc
+{
+  "video": {
+    "path": "/workspace/mantis-data/tenants/<tenant>/runs/<run_id>/recording.mp4",
+    "format": "mp4",
+    "duration_seconds": 567.3,
+    "bytes": 31457280,
+    "error": null
+  }
+}
+```
+
+### Format tradeoffs
+
+| Format | Container | Encode cost | Output size (typical 10-min run) | Best for |
+|---|---|---|---|---|
+| `mp4` | H.264 (libx264, `ultrafast` preset, CRF 28) | low | ~30–80 MB | sharing, downloads |
+| `webm` | VP9 (libvpx-vp9, cpu-used 5, CRF 32) | medium | ~25–60 MB | embedding in web pages |
+| `gif` | palettegen + paletteuse | high | ~50–200 MB | docs, Slack, animated thumbnails (lossy) |
+
+For long recordings or tight bandwidth, prefer `mp4` at 5 fps. The `gif` path uses a palette-aware filtergraph but file size grows fast — use only for short demos (< 60 s).
+
+### Operational caveats
+
+- The container image must have `ffmpeg` installed. Both `docker/server.Dockerfile` and `deploy/baseten/holo3/config.yaml` ship it; if you're rolling your own image, add `ffmpeg` to the apt deps. Without ffmpeg, `record_video: true` is a soft-fail — the run completes normally, and the response carries `video.error: "ffmpeg-not-installed"`.
+- Recordings live at `$MANTIS_DATA_DIR/tenants/<tenant_id>/runs/<run_id>/recording.<fmt>` so tenants cannot read each other's files. The download endpoint uses the authenticated tenant's dir; even if you guess another tenant's `run_id`, the file lookup is scoped.
+- `video_fps` is clamped to `[1, 30]`. Higher fps doesn't help much (UI rarely changes faster than 5–10 fps) and bloats the file.
+- Each second of recording is ~50 KB at 5 fps mp4. Multiply by your target run duration + tenant count to size the EFS / Filestore.
 
 ## Tier 2 features (rate limits, idempotency, webhooks, allowlist, metrics)
 
