@@ -37,6 +37,24 @@ uvx truss push deploy/baseten/gemma4_26b \
   --include-git-info
 ```
 
+### When to add `--no-cache`
+
+Truss caches built images by build-context hash. **Code that ships through
+`external_package_dirs` (`src/mantis_agent`, `plans/`) is not always part of
+that hash** — meaning if you only change `mantis_agent/baseten_server.py` (or
+any other shipped package code) and nothing in `build_commands` /
+`requirements` / `environment_variables`, Truss can skip the rebuild and the
+old code keeps running. Force a clean rebuild on the first push after such
+changes:
+
+```bash
+uvx truss push deploy/baseten/holo3 --no-cache \
+  --promote --wait --deployment-name baseten-holo3-workload --include-git-info
+```
+
+`--no-cache` was added in Truss 0.15.2; run `pip install --upgrade truss` if
+your client is older.
+
 ## Trigger A Workload Run
 
 The default request runs `plans/boattrader/extract_url_filtered.json`. For
