@@ -11,7 +11,6 @@ from pathlib import Path
 from mantis_agent.server_utils import (
     build_micro_result,
     build_micro_suite,
-    build_proxy_config,
     build_task_loop_result,
     micro_plan_steps_to_dicts,
     parse_lead_row,

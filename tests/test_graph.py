@@ -1,8 +1,6 @@
 """Tests for the graph learning package."""
 
-import json
 import tempfile
-from pathlib import Path
 
 from mantis_agent.graph import (
     CompletionCondition,
@@ -14,7 +12,6 @@ from mantis_agent.graph import (
     PhaseNode,
     PhaseRole,
     Postcondition,
-    Precondition,
     RepeatMode,
     WorkflowGraph,
 )

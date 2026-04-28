@@ -15,7 +15,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mantis_agent.recorder import (
-    RecorderResult,
     ScreenRecorder,
     _build_ffmpeg_cmd,
     content_type_for,

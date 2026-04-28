@@ -27,6 +27,7 @@ from .section_decomposer import SectionDecomposer, ExecutionSection
 
 __all__ = [
     "CompletionCondition",
+    "ExecutionSection",
     "GraphCompiler",
     "GraphLearner",
     "GraphStore",
@@ -35,8 +36,11 @@ __all__ = [
     "PhaseEdge",
     "PhaseNode",
     "PhaseRole",
+    "PlanEnhancer",
+    "PlanValidator",
     "Postcondition",
     "Precondition",
     "RepeatMode",
+    "SectionDecomposer",
     "WorkflowGraph",
 ]

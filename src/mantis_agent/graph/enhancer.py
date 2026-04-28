@@ -25,7 +25,6 @@ from .graph import (
     Postcondition,
     Precondition,
     RepeatMode,
-    WorkflowGraph,
 )
 from .objective import ObjectiveSpec
 from .probe import ProbeResult
@@ -249,7 +248,7 @@ class PlanEnhancer:
             filter_strategy.append({
                 "filter": filt,
                 "method": method,
-                "detail": f"Encoded in URL" if method == "url" else f"Apply {filt} via {method}",
+                "detail": "Encoded in URL" if method == "url" else f"Apply {filt} via {method}",
             })
 
         # Pagination detection
@@ -406,7 +405,6 @@ class PlanEnhancer:
             fid = f"filter_{i}"
             filter_ids.append(fid)
             method = filt.get("method", "unknown")
-            detail = filt.get("detail", "")
             filter_name = filt.get("filter", "")
 
             if method == "sidebar":
@@ -481,7 +479,6 @@ class PlanEnhancer:
 
         # Extraction with expand info
         expand_sections = enhancement.get("expandable_sections", [])
-        expand_controls = enhancement.get("expand_controls", [])
         phone_location = enhancement.get("phone_location", "")
         extract_detail = "inspect contact area, expand collapsed sections, then extract structured data"
         if expand_sections:

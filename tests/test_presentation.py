@@ -108,7 +108,7 @@ def test_wrap_for_srt_two_lines():
     assert "\n" in out
     lines = out.split("\n")
     assert len(lines) == 2
-    assert all(len(l) <= 31 for l in lines[:-1])
+    assert all(len(line) <= 31 for line in lines[:-1])
 
 
 def test_wrap_for_srt_truncates_with_ellipsis():
@@ -232,7 +232,9 @@ def test_compose_passes_subtitles_to_filter_when_present(tmp_path: Path):
         cmd = args[0] if args else kwargs.get("args", [])
         captured["cmd"] = cmd
         Path(cmd[-1]).write_bytes(b"video")
-        proc = MagicMock(); proc.returncode = 0; proc.stderr = b""
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stderr = b""
         return proc
 
     with patch("mantis_agent.presentation._ffmpeg_available", return_value=True), \
@@ -340,9 +342,8 @@ def test_render_ripple_overlay_returns_none_when_no_clicks(tmp_path: Path):
 
 
 def test_render_ripple_overlay_writes_png_sequence(tmp_path: Path):
-    import time
     from mantis_agent.presentation import (
-        ClickEvent, render_ripple_overlay_pngs, RIPPLE_DURATION_SECONDS,
+        ClickEvent, render_ripple_overlay_pngs,
     )
     clicks = [
         ClickEvent(t_seconds=0.0, x=100, y=200),
@@ -523,7 +524,9 @@ def test_compose_polished_video_threads_ripples_dir(tmp_path: Path):
         cmd = args[0] if args else kwargs.get("args", [])
         captured["cmd"] = cmd
         Path(cmd[-1]).write_bytes(b"v")
-        proc = MagicMock(); proc.returncode = 0; proc.stderr = b""
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.stderr = b""
         return proc
     with patch("mantis_agent.presentation._ffmpeg_available", return_value=True), \
          patch("mantis_agent.presentation.subprocess.run", side_effect=_capture):

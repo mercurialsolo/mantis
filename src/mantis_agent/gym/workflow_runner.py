@@ -933,11 +933,11 @@ class WorkflowRunner:
                     f"ONLY click result card titles, not social icons or footer links."
                 )
 
-        # External brand/dealer sites (default list kept as backup)
-        external_sites = getattr(self, '_external_sites', [
+        # External brand/dealer sites — static method, so no `self` to pull from.
+        external_sites = [
             "hanover yachts", "tige boats", "cobalt boats", "bayliner.com",
             "sea ray.com", "boston whaler.com", "grady-white.com",
-        ])
+        ]
         for site in external_sites:
             if site in all_thinking or site in data:
                 return (

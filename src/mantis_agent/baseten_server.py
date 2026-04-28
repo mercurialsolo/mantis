@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import subprocess
 import threading
 import time
@@ -20,7 +19,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import hmac
 
 import requests
 
@@ -41,9 +39,7 @@ from mantis_agent.api_schemas import (
     PredictRequest,
     assert_hosts_allowed,
     extract_navigate_hosts,
-    validate_micro_steps,
 )
-from mantis_agent.gym.runner import GymRunner
 from mantis_agent.gym.xdotool_env import XdotoolGymEnv
 from mantis_agent.idempotency import get_idempotency_cache
 from mantis_agent import metrics as mantis_metrics
@@ -55,7 +51,6 @@ from mantis_agent.server_utils import (
     micro_plan_steps_to_dicts,
     parse_lead_row,
     plan_signature_from_steps,
-    resolve_proxy_server,
     result_summary,
     safe_state_key,
     save_result_json,
@@ -647,7 +642,7 @@ class BasetenCUARuntime:
         return candidates[0]
 
     def _micro_suite_from_path(self, raw_path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        from mantis_agent.plan_decomposer import MicroPlan, PlanDecomposer
+        from mantis_agent.plan_decomposer import MicroIntent, MicroPlan, PlanDecomposer
 
         path = self._resolve_path(raw_path)
         if not path.exists():

@@ -1,7 +1,7 @@
 """Tests for schema-driven extraction (issue #45)."""
 
 from mantis_agent.extraction import ClaudeExtractor, ExtractionResult, ExtractionSchema
-from mantis_agent.graph.objective import CompletionCondition, ObjectiveSpec, OutputField
+from mantis_agent.graph.objective import ObjectiveSpec, OutputField
 
 
 # ── ExtractionSchema ──

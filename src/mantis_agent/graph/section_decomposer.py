@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
 
 from .graph import PhaseNode, PhaseRole, RepeatMode
 
@@ -42,7 +41,6 @@ class ExecutionSection:
         return sum(max(p.budget, 1) for p in self.phases)
 
     def summary(self) -> str:
-        phase_ids = [p.id for p in self.phases]
         deps = f" (depends: {', '.join(self.depends_on)})" if self.depends_on else ""
         loop = " [LOOP]" if self.is_loop else ""
         return f"  {self.id:20s} {len(self.phases)} phases, ~{self.step_count()} steps{loop}{deps}"
