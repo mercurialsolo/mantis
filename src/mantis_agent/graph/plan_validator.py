@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from ..plan_decomposer import MicroIntent, MicroPlan
@@ -283,12 +283,9 @@ class PlanValidator:
         """Section ordering should be setup → extraction → pagination."""
         issues = []
         seen_extraction = False
-        seen_pagination = False
         for idx, s in enumerate(steps):
             if s.section == "extraction":
                 seen_extraction = True
-            elif s.section == "pagination":
-                seen_pagination = True
             elif s.section == "setup" and seen_extraction:
                 issues.append(PlanIssue(
                     severity="warning", code="setup_after_extraction",

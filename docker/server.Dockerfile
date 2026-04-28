@@ -31,10 +31,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MANTIS_MODEL=holo3 \
     PYTHONPATH=/app/src
 
-# System deps: build chain for llama.cpp + Chrome + Xvfb + xdotool
+# System deps: build chain for llama.cpp + Chrome + Xvfb + xdotool + ffmpeg (screencast)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git build-essential cmake curl wget gnupg ca-certificates \
-        xvfb xdotool scrot \
+        xvfb xdotool scrot ffmpeg \
         fonts-liberation fonts-noto-color-emoji \
         libnss3 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 \
         libpango-1.0-0 libcairo2 libasound2 libxshmfence1 \

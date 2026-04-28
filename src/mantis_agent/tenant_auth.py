@@ -34,7 +34,6 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger("mantis_agent.tenant_auth")
 

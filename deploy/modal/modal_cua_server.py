@@ -34,7 +34,6 @@ from mantis_agent.server_utils import (
     build_proxy_config,
     micro_plan_steps_to_dicts,
     plan_signature_from_steps,
-    resolve_proxy_server,
     safe_state_key,
     save_result_json,
     start_local_proxy,
@@ -603,7 +602,7 @@ def _run_holo3_executor(
         if objective_data and env:
             try:
                 from mantis_agent.graph.objective import ObjectiveSpec as _OS
-                from mantis_agent.graph.probe import SiteProber, ProbeResult
+                from mantis_agent.graph.probe import SiteProber
                 from mantis_agent.graph.enhancer import PlanEnhancer
                 from mantis_agent.graph import GraphCompiler, PlanValidator
                 from mantis_agent.graph.graph import WorkflowGraph
@@ -611,7 +610,7 @@ def _run_holo3_executor(
 
                 obj = _OS.from_dict(objective_data)
                 if obj.start_url:
-                    print(f"\n  === SITE PROBE (inside container) ===")
+                    print("\n  === SITE PROBE (inside container) ===")
                     prober = SiteProber(env=env)
                     probe = prober.probe(obj.start_url, obj)
                     print(f"  Probe: {probe.page_type}, {len(probe.filters_detected)} filters, {probe.estimated_listings_per_page} listings/page")
@@ -1413,7 +1412,7 @@ def main(
             print(f"  Topo:  {graph.topological_order()}")
 
             if graph_learn_only:
-                print(f"\n  Graph saved. Use --graph-learn (without --only) to also execute.")
+                print("\n  Graph saved. Use --graph-learn (without --only) to also execute.")
                 print(json.dumps({"mode": "graph_learn", "phases": len(graph.phases), "domain": graph.domain}, indent=2))
                 return
 

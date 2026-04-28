@@ -1,0 +1,62 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dev + server extras
+        run: |
+          python -m pip install --upgrade pip
+          # We only need the orchestrator-side surface for the test suite —
+          # no torch / playwright. The server tests need fastapi + httpx.
+          pip install -e ".[dev,server,orchestrator,metrics]"
+
+      - name: Run pytest
+        run: pytest tests/ -q
+
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install "ruff>=0.4"
+      - name: Lint
+        run: ruff check .
+
+  mkdocs-strict:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: |
+          pip install \
+            "mkdocs>=1.6" \
+            "mkdocs-material>=9.5" \
+            "mkdocs-awesome-pages-plugin>=2.9" \
+            "pymdown-extensions>=10.7"
+      - name: Build site (strict)
+        run: mkdocs build --strict --site-dir /tmp/site

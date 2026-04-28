@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import subprocess
 import threading
 import time
@@ -20,7 +19,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import hmac
 
 import requests
 
@@ -41,9 +39,7 @@ from mantis_agent.api_schemas import (
     PredictRequest,
     assert_hosts_allowed,
     extract_navigate_hosts,
-    validate_micro_steps,
 )
-from mantis_agent.gym.runner import GymRunner
 from mantis_agent.gym.xdotool_env import XdotoolGymEnv
 from mantis_agent.idempotency import get_idempotency_cache
 from mantis_agent import metrics as mantis_metrics
@@ -55,7 +51,6 @@ from mantis_agent.server_utils import (
     micro_plan_steps_to_dicts,
     parse_lead_row,
     plan_signature_from_steps,
-    resolve_proxy_server,
     result_summary,
     safe_state_key,
     save_result_json,
@@ -647,7 +642,7 @@ class BasetenCUARuntime:
         return candidates[0]
 
     def _micro_suite_from_path(self, raw_path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        from mantis_agent.plan_decomposer import MicroPlan, PlanDecomposer
+        from mantis_agent.plan_decomposer import MicroIntent, MicroPlan, PlanDecomposer
 
         path = self._resolve_path(raw_path)
         if not path.exists():
@@ -738,6 +733,199 @@ class BasetenCUARuntime:
             save_screenshots_dir=str(data_root / "screenshots"),
         )
 
+    def _maybe_record(
+        self, payload: dict[str, Any], run_id: str
+    ) -> tuple[Any, Any]:
+        """Spawn a ScreenRecorder if payload.record_video is set.
+
+        Returns ``(recorder, click_log)`` so the caller can wrap the env
+        with a ``ClickRecordingEnv`` to capture click coordinates that
+        feed the polished video's ripple animations. Either may be None
+        when recording is disabled.
+        """
+        if not payload.get("record_video"):
+            return (None, None)
+        from mantis_agent.presentation import ClickEventLog
+        from mantis_agent.recorder import ScreenRecorder
+
+        tenant_id = safe_state_key(
+            os.environ.get("MANTIS_TENANT_ID", DEFAULT_TENANT.tenant_id)
+        )
+        runs_dir = _data_root() / "tenants" / tenant_id / "runs" / safe_state_key(run_id)
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        fmt = str(payload.get("video_format", "mp4"))
+        output = runs_dir / f"recording.{fmt}"
+        rec = ScreenRecorder(
+            output=output,
+            fps=int(payload.get("video_fps", 5)),
+            fmt=fmt,  # type: ignore[arg-type]
+        )
+        click_log = ClickEventLog()
+        if not rec.start():
+            logger.warning(
+                "recorder requested but failed to start: %s",
+                rec.result.error if rec.result else "unknown",
+            )
+            return (rec, click_log)
+        # Re-anchor the click log to the moment ffmpeg started capturing,
+        # so click timestamps align with the raw video timeline.
+        if hasattr(rec, "_started_at") and rec._started_at:
+            click_log._anchor = rec._started_at
+        return (rec, click_log)
+
+    def _attach_recording_metadata(
+        self, result: dict[str, Any], recorder: Any, click_log: Any = None,
+    ) -> None:
+        if not recorder:
+            return
+        rec_result = recorder.stop()
+        actions = {
+            "clicks": len(getattr(click_log, "clicks", []) if click_log else []),
+            "keys": len(getattr(click_log, "keys", []) if click_log else []),
+            "types": len(getattr(click_log, "types", []) if click_log else []),
+            "scrolls": len(getattr(click_log, "scrolls", []) if click_log else []),
+            "drags": len(getattr(click_log, "drags", []) if click_log else []),
+        }
+        result["video"] = {
+            "path": str(rec_result.output_path) if rec_result.output_path else None,
+            "format": result.get("video_format")
+            or (recorder._fmt if hasattr(recorder, "_fmt") else "mp4"),
+            "duration_seconds": round(rec_result.duration_seconds, 2),
+            "bytes": rec_result.bytes_written,
+            "error": rec_result.error,
+            "actions": actions,
+            "clicks": actions["clicks"],  # backwards-compat field
+        }
+        # Polish the raw recording into a feature-walkthrough video.
+        if rec_result.succeeded and rec_result.output_path:
+            polished_path = self._polish_recording(
+                raw_video=rec_result.output_path,
+                result=result,
+                recorder=recorder,
+                click_log=click_log,
+            )
+            if polished_path is not None:
+                result["video"]["polished_path"] = str(polished_path)
+
+    def _polish_recording(
+        self, raw_video: Any, result: dict[str, Any], recorder: Any,
+        click_log: Any = None,
+    ) -> Any:
+        """Compose title + raw-with-captions + outro into a polished video.
+
+        Always best-effort — if any step fails (PIL, ffmpeg, missing fonts),
+        the raw recording is preserved and the run still succeeds.
+        """
+        from mantis_agent import presentation
+
+        try:
+            tenant_id = os.environ.get("MANTIS_TENANT_ID", "default")
+            run_id = result.get("run_id") or "unknown"
+            session_name = result.get("session_name") or "run"
+            fmt = recorder._fmt if hasattr(recorder, "_fmt") else "mp4"
+            width = recorder._width if hasattr(recorder, "_width") else 1280
+            height = recorder._height if hasattr(recorder, "_height") else 720
+            run_dir = raw_video.parent
+            polished_path = run_dir / f"recording_polished.{fmt}"
+
+            title_card_cfg = presentation.title_card_for_run(
+                plan_label=session_name,
+                tenant_id=tenant_id,
+                run_id=run_id,
+            )
+            title_card_path = run_dir / "_title.png"
+            presentation.write_card(title_card_path, width, height, title_card_cfg)
+
+            summary = result.get("summary") or {}
+            outro_cfg = presentation.outro_card_from_summary(
+                summary=summary,
+                plan_label=session_name,
+                cost_total=result.get("cost_total"),
+                duration_seconds=result.get("elapsed_seconds"),
+            )
+            outro_card_path = run_dir / "_outro.png"
+            presentation.write_card(outro_card_path, width, height, outro_cfg)
+
+            srt_path = None
+            timings = self._collect_step_timings(result)
+            if timings:
+                # Title card runs for ~3s before the agent footage starts;
+                # offset captions accordingly.
+                captions = presentation.captions_from_step_timings(
+                    timings, title_offset=0.0,
+                )
+                srt_path = run_dir / "_captions.srt"
+                srt_path.write_text(presentation.captions_to_srt(captions), encoding="utf-8")
+
+            # Action overlay (works for any computer-use action —
+            # browser, file manager, terminal, dialog, anything visible
+            # on the Xvfb display). Click ripples + keyboard chord
+            # badges + scroll arrows + type captions + drag trails all
+            # composite into the same PNG sequence.
+            ripples_dir: Any = None
+            if click_log is not None and len(click_log) > 0:
+                ripples_dir = run_dir / "_ripples"
+                duration = (
+                    recorder.result.duration_seconds
+                    if recorder.result and recorder.result.duration_seconds
+                    else 60.0
+                )
+                ripples_dir = presentation.render_action_overlay_pngs(
+                    ripples_dir,
+                    duration_seconds=duration,
+                    fps=30,
+                    width=width,
+                    height=height,
+                    clicks=getattr(click_log, "clicks", click_log.events),
+                    keys=getattr(click_log, "keys", []),
+                    types=getattr(click_log, "types", []),
+                    scrolls=getattr(click_log, "scrolls", []),
+                    drags=getattr(click_log, "drags", []),
+                )
+
+            ok = presentation.compose_polished_video(
+                raw_video=raw_video,
+                title_card=title_card_path,
+                outro_card=outro_card_path,
+                subtitles_srt=srt_path,
+                ripples_dir=ripples_dir,
+                output=polished_path,
+                width=width,
+                height=height,
+                fmt=fmt,
+            )
+            return polished_path if ok else None
+        except Exception as exc:  # noqa: BLE001 — polish is best-effort
+            logger.warning("polished video compose failed: %s", exc)
+            return None
+
+    @staticmethod
+    def _collect_step_timings(
+        result: dict[str, Any],
+    ) -> list[tuple[float, str, str]]:
+        """Pull (elapsed_seconds, intent, status) from a result for SRT.
+
+        Walks ``result["steps"]`` (micro-runner output). Each entry is
+        expected to expose ``intent``, ``success``, and a ``duration`` (or
+        ``elapsed``) float. Steps with no intent are skipped.
+        """
+        steps = result.get("steps") or []
+        if not isinstance(steps, list):
+            return []
+        timings: list[tuple[float, str, str]] = []
+        cum = 0.0
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            intent = (s.get("intent") or "").strip()
+            if not intent:
+                continue
+            duration = float(s.get("duration") or s.get("elapsed") or 0.0)
+            status = "completed" if s.get("success") else "failed"
+            timings.append((cum, intent, status))
+            cum += max(duration, 0.0)
+        return timings
+
     def _run_micro(
         self,
         task_suite: dict[str, Any],
@@ -757,6 +945,10 @@ class BasetenCUARuntime:
             run_id,
             settle_time=4.0 if self.model_kind == "holo3" else 2.0,
         )
+        recorder, click_log = self._maybe_record(payload, run_id)
+        if click_log is not None:
+            from mantis_agent.presentation import ClickRecordingEnv
+            env = ClickRecordingEnv(env, click_log)
 
         try:
             micro_plan = MicroPlan(domain=session_name)
@@ -836,9 +1028,19 @@ class BasetenCUARuntime:
                 plan_signature=task_suite.get("_plan_signature", ""),
                 resume_state=resume_state,
             )
+            self._attach_recording_metadata(result, recorder, click_log=click_log)
             self._save_result(result, prefix=self.model_kind.replace("-", "_"))
             return result
         finally:
+            # Stop the recorder BEFORE closing env so the final frames flush
+            # while the Xvfb display still exists. _attach_recording_metadata
+            # is idempotent (ScreenRecorder.stop() is locked) so calling it
+            # again here covers the exception path.
+            if recorder is not None and recorder.result is None:
+                try:
+                    recorder.stop()
+                except Exception:
+                    logger.exception("recorder stop in finally failed")
             env.close()
             if proxy_proc:
                 proxy_proc.terminate()
@@ -860,27 +1062,39 @@ class BasetenCUARuntime:
             run_id,
             settle_time=4.0 if self.model_kind == "holo3" else 2.0,
         )
+        recorder, click_log = self._maybe_record(payload, run_id)
+        if click_log is not None:
+            from mantis_agent.presentation import ClickRecordingEnv
+            env = ClickRecordingEnv(env, click_log)
         grounding = ClaudeGrounding()
 
-        config = TaskLoopConfig(
-            run_id=run_id,
-            session_name=session_name,
-            model_name=self.model_kind,
-            results_prefix=self.model_kind.replace("-", "_"),
-            brain=self.brain,
-            env=env,
-            grounding=grounding,
-            max_steps=int(payload.get("max_steps", 30)),
-            frames_per_inference=1 if self.model_kind == "holo3" else 2,
-            results_dir=str(_data_root() / "results"),
-        )
-        result = run_executor_lifecycle(
-            task_suite, config,
-            proxy_proc=proxy_proc, t0=t0,
-        )
-        result["provider"] = "baseten"
-        self._save_result(result, prefix=self.model_kind.replace("-", "_"))
-        return result
+        try:
+            config = TaskLoopConfig(
+                run_id=run_id,
+                session_name=session_name,
+                model_name=self.model_kind,
+                results_prefix=self.model_kind.replace("-", "_"),
+                brain=self.brain,
+                env=env,
+                grounding=grounding,
+                max_steps=int(payload.get("max_steps", 30)),
+                frames_per_inference=1 if self.model_kind == "holo3" else 2,
+                results_dir=str(_data_root() / "results"),
+            )
+            result = run_executor_lifecycle(
+                task_suite, config,
+                proxy_proc=proxy_proc, t0=t0,
+            )
+            result["provider"] = "baseten"
+            self._attach_recording_metadata(result, recorder, click_log=click_log)
+            self._save_result(result, prefix=self.model_kind.replace("-", "_"))
+            return result
+        finally:
+            if recorder is not None and recorder.result is None:
+                try:
+                    recorder.stop()
+                except Exception:
+                    logger.exception("recorder stop in finally failed")
 
     def _save_result(self, result: dict[str, Any], prefix: str) -> None:
         save_result_json(result, _data_root() / "results", prefix)
@@ -907,6 +1121,50 @@ def health_v1() -> dict[str, Any]:
     /v1/health is the same payload available under the public API path.
     """
     return {"ok": runtime.loaded, "model": runtime.model_kind}
+
+
+@app.get("/v1/runs/{run_id}/video")
+def get_run_video(
+    run_id: str,
+    request: Request,
+    tenant: TenantConfig = Depends(_require_mantis_token),
+) -> Any:
+    """Download the screencast for a run.
+
+    Default: serves the **polished** version (title card + captioned run
+    footage + outro card). Pass ``?raw=1`` to fetch the raw screencast
+    without overlays.
+
+    Resolves to the per-tenant run dir; returns 404 if no recording exists
+    (recording wasn't requested or ffmpeg failed). Auth requires a valid
+    token but not specifically the ``run`` scope.
+    """
+    from fastapi.responses import FileResponse
+    from mantis_agent.recorder import content_type_for
+
+    raw_only = request.query_params.get("raw", "").lower() in {"1", "true", "yes"}
+
+    safe_run_id = safe_state_key(run_id)
+    tenant_dir = _data_root() / "tenants" / safe_state_key(tenant.tenant_id)
+    runs_dir = tenant_dir / "runs" / safe_run_id
+
+    # Prefer polished by default; fall back to raw if polished is missing
+    # (e.g., ffmpeg compose failed). ?raw=1 skips polished entirely.
+    prefixes = ("recording",) if raw_only else ("recording_polished", "recording")
+    for prefix in prefixes:
+        for fmt in ("mp4", "webm", "gif"):
+            candidate = runs_dir / f"{prefix}.{fmt}"
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return FileResponse(
+                    candidate,
+                    media_type=content_type_for(fmt),  # type: ignore[arg-type]
+                    filename=f"{safe_run_id}.{fmt}",
+                )
+    raise HTTPException(
+        status_code=404,
+        detail="no recording for this run "
+        "(record_video=true on /v1/predict required)",
+    )
 
 
 @app.get("/metrics")

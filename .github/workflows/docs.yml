@@ -1,0 +1,60 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'pyproject.toml'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# Allow only one concurrent deployment, skip queued runs.
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # mkdocs needs full history for last-modified plugins
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install docs deps
+        run: |
+          python -m pip install --upgrade pip
+          # Install only the [docs] extras — skip the heavy server / GPU groups
+          # so the docs build is fast.
+          pip install \
+            "mkdocs>=1.6" \
+            "mkdocs-material>=9.5" \
+            "mkdocs-awesome-pages-plugin>=2.9" \
+            "pymdown-extensions>=10.7"
+
+      - name: Build site (strict)
+        run: mkdocs build --strict --site-dir _site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

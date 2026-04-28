@@ -2,10 +2,10 @@
 
 from mantis_agent.graph import GraphCompiler, PlanValidator
 from mantis_agent.graph.enhancer import PlanEnhancer
-from mantis_agent.graph.section_decomposer import SectionDecomposer, ExecutionSection
-from mantis_agent.graph.objective import ObjectiveSpec, OutputField
+from mantis_agent.graph.section_decomposer import SectionDecomposer
+from mantis_agent.graph.objective import ObjectiveSpec
 from mantis_agent.graph.probe import ProbeResult
-from mantis_agent.graph.graph import WorkflowGraph, PhaseRole, RepeatMode
+from mantis_agent.graph.graph import WorkflowGraph
 from mantis_agent.verification.playbook import Playbook
 
 

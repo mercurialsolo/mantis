@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from typing import Any
 
 from ..plan_decomposer import MicroIntent, MicroPlan
 from .graph import PhaseNode, PhaseRole, RepeatMode, WorkflowGraph

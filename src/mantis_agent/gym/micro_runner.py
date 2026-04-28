@@ -1688,7 +1688,6 @@ class MicroPlanRunner:
                  in view. Claude finds Next button coordinates.
         Layer 3: Holo3 — simple 1-sentence task as last resort.
         """
-        import re as _re
 
         # Track current page number
         if not hasattr(self, '_current_page'):

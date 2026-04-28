@@ -15,6 +15,7 @@ vision_claude integration walkthrough see
 | `GET /v1/models` | open | OpenAI-compat model list. Returns `holo3`. |
 | `GET /v1/health`, `GET /health` | open | Liveness/readiness probe. |
 | `GET /metrics` | open | Prometheus scrape endpoint. Returns 503 if `prometheus_client` not installed. |
+| `GET /v1/runs/{run_id}/video` | `X-Mantis-Token` | Download the screencast captured during a run. Returns 404 if `record_video` was not requested. |
 
 When deployed behind Baseten, all requests must also carry
 `Authorization: Api-Key <BASETEN_API_KEY>` (gateway auth, separate from
@@ -74,6 +75,9 @@ Plus the run options:
 | `max_cost` | `25.0` | Cap in USD; clamped against the tenant cap. |
 | `max_time_minutes` | `60` | Wall-clock cap; clamped against the tenant cap. |
 | `proxy_city`, `proxy_state` | unset | Optional IPRoyal geo overrides. Subject to allowlist. |
+| `record_video` | `false` | If true, captures the Xvfb display while the run executes and saves a screencast under the per-tenant run dir. Fetch via `GET /v1/runs/{run_id}/video`. |
+| `video_format` | `"mp4"` | One of `mp4`, `webm`, `gif`. |
+| `video_fps` | `5` | Capture rate; clamped to `[1, 30]`. Higher fps = larger file + more CPU. |
 
 #### Detached response
 
@@ -373,6 +377,131 @@ For comparison, equivalent Claude-only CUA flow ~$0.50–$1.50 per listing.
 - **Pause/resume for OTP** is not yet wired through `/v1/predict`. Today it works in the vision_claude integration path because the loop runs in the vision_claude pod.
 - **`/v1/chat/completions`** is unstreamed in v1. Streaming SSE is a Tier 2 follow-up.
 - **Single Anthropic-key per tenant** at request time (re-resolved on every call).
+
+## Screencast / video recording
+
+Send a plan with `record_video: true` and the runtime produces a feature-walkthrough video — title card → captioned run footage → outro card with the result summary. Fetch with `GET /v1/runs/{run_id}/video`. The raw screencast is preserved alongside; pass `?raw=1` to fetch it instead.
+
+The walkthrough has three segments plus animated click ripples on top of the run footage:
+
+```
+┌─────────────────┐  ┌─────────────────────────┐  ┌─────────────────┐
+│  Title card     │→ │  Run footage (captions  │→ │  Outro card     │
+│  (3s)           │  │   + click ripples)      │  │  (5s)           │
+│                 │  │  per-step intent shown  │  │                 │
+│  Mantis CUA     │  │  with [OK] / [FAIL]     │  │  Run complete   │
+│  ───            │  │  in the bottom strip    │  │  ───            │
+│  <plan name>    │  │  while the action plays │  │  3 viable leads │
+│  tenant: …      │  │  + expanding sky-blue   │  │  1 with phone   │
+│  run: …         │  │  ripple at every click  │  │  17 steps · 9m  │
+│                 │  │                         │  │  cost: $0.42    │
+└─────────────────┘  └─────────────────────────┘  └─────────────────┘
+```
+
+Title and outro are rendered with PIL. Captions are SRT cues burned in by ffmpeg's `subtitles=` filter (libass). Click ripples are PNG-sequence overlay frames composited via ffmpeg's `overlay` filter. Polish is best-effort — if anything fails (PIL, ffmpeg, libass not built in the image), the raw recording is still saved and the endpoint serves it.
+
+### Action overlays — universal computer use
+
+Every kind of agent action gets a visual cue, regardless of what application is in focus (browser, file manager, terminal, dialogs, anything visible on the Xvfb display). The agent emits actions with pixel coordinates / key chords / text, and the overlay renderer composites the matching visual onto the recording.
+
+| Agent action | Overlay |
+|---|---|
+| `CLICK` (single) | Sky-blue expanding ripple at (x, y), 0.6 s, fades out |
+| `DOUBLE_CLICK` | Same as click + a second offset ring 0.1 s later |
+| `KEY_PRESS` (e.g. `Ctrl+S`, `Tab`, `Enter`) | Slate badge in the bottom-right with the chord text, 1.5 s, slide-in then fade |
+| `TYPE` (typed text) | "⌨ Typing: \"…\"" caption near the top, 1.8 s, fades after text appears on screen |
+| `SCROLL` (`up` / `down` / `left` / `right`) | Sky-blue arrow at the matching screen edge, slides in the scroll direction, 0.8 s |
+| `DRAG` | Animated trail line from start to end with a moving head dot, 0.9 s |
+| `WAIT`, `NAVIGATE`, `DONE` | No overlay (no useful visual locus) |
+
+All overlays are deliberately minimal — visible without being disruptive. Sky-blue accent color across the set so they read as a single visual language.
+
+You'll see counts in the result metadata under `video.actions`:
+
+```jsonc
+{
+  "video": {
+    "path": ".../recording.mp4",
+    "polished_path": ".../recording_polished.mp4",
+    "actions": {
+      "clicks": 17,
+      "keys":   3,
+      "types":  2,
+      "scrolls": 8,
+      "drags":  0
+    },
+    "clicks": 17,    // backwards-compat field
+    ...
+  }
+}
+```
+
+```bash
+# 1. Submit a recorded run
+RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BTKEY" \
+  -H "X-Mantis-Token: $TOK" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "detached": true,
+    "micro": "plans/boattrader/extract_url_filtered_3listings.json",
+    "state_key": "demo-recording",
+    "max_cost": 2,
+    "max_time_minutes": 20,
+    "record_video": true,
+    "video_format": "mp4",
+    "video_fps": 8
+  }')
+RUN_ID=$(echo "$RESP" | jq -r .run_id)
+
+# 2. Poll status until succeeded ... (same as the regular flow)
+
+# 3. Download the screencast
+curl -fsS -o demo.mp4 \
+  -H "X-Mantis-Token: $TOK" \
+  "$ENDPOINT/v1/runs/$RUN_ID/video"
+```
+
+Result-side metadata (in the `summary` block):
+
+```jsonc
+{
+  "video": {
+    "path": "/workspace/mantis-data/tenants/<tenant>/runs/<run_id>/recording.mp4",
+    "polished_path": "/workspace/mantis-data/tenants/<tenant>/runs/<run_id>/recording_polished.mp4",
+    "format": "mp4",
+    "duration_seconds": 567.3,
+    "bytes": 31457280,
+    "error": null
+  }
+}
+```
+
+`polished_path` is set only when the post-process compose step succeeded; on failure it's omitted and the endpoint falls back to the raw recording.
+
+### Endpoint behavior
+
+| Request | Returns |
+|---|---|
+| `GET /v1/runs/{run_id}/video` | Polished mp4 (preferred) → raw mp4 (fallback) → 404 |
+| `GET /v1/runs/{run_id}/video?raw=1` | Raw mp4 only → 404 |
+
+### Format tradeoffs
+
+| Format | Container | Encode cost | Output size (typical 10-min run) | Best for |
+|---|---|---|---|---|
+| `mp4` | H.264 (libx264, `ultrafast` preset, CRF 28) | low | ~30–80 MB | sharing, downloads |
+| `webm` | VP9 (libvpx-vp9, cpu-used 5, CRF 32) | medium | ~25–60 MB | embedding in web pages |
+| `gif` | palettegen + paletteuse | high | ~50–200 MB | docs, Slack, animated thumbnails (lossy) |
+
+For long recordings or tight bandwidth, prefer `mp4` at 5 fps. The `gif` path uses a palette-aware filtergraph but file size grows fast — use only for short demos (< 60 s).
+
+### Operational caveats
+
+- The container image must have `ffmpeg` installed. Both `docker/server.Dockerfile` and `deploy/baseten/holo3/config.yaml` ship it; if you're rolling your own image, add `ffmpeg` to the apt deps. Without ffmpeg, `record_video: true` is a soft-fail — the run completes normally, and the response carries `video.error: "ffmpeg-not-installed"`.
+- Recordings live at `$MANTIS_DATA_DIR/tenants/<tenant_id>/runs/<run_id>/recording.<fmt>` so tenants cannot read each other's files. The download endpoint uses the authenticated tenant's dir; even if you guess another tenant's `run_id`, the file lookup is scoped.
+- `video_fps` is clamped to `[1, 30]`. Higher fps doesn't help much (UI rarely changes faster than 5–10 fps) and bloats the file.
+- Each second of recording is ~50 KB at 5 fps mp4. Multiply by your target run duration + tenant count to size the EFS / Filestore.
 
 ## Tier 2 features (rate limits, idempotency, webhooks, allowlist, metrics)
 

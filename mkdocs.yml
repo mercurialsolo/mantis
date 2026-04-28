@@ -1,0 +1,128 @@
+site_name: Mantis CUA
+site_description: A unified perception-reasoning-action agent for computer use, hostable on Baseten / Modal / EKS / GKE.
+site_url: https://mercurialsolo.github.io/mantis/
+repo_url: https://github.com/mercurialsolo/mantis
+repo_name: mercurialsolo/mantis
+edit_uri: edit/main/docs/
+
+# Source files all live under docs/. Existing top-level docs (API.md,
+# ARCHITECTURE.md, learnings.md, PROPOSAL-*.md, integration-vision_claude.md)
+# stay where they are so direct-link-from-GitHub keeps working; the nav
+# below re-surfaces them under friendlier names.
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - navigation.tracking
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+
+plugins:
+  - search
+  - awesome-pages
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.smartsymbols
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/mercurialsolo/mantis
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - getting-started/index.md
+      - Quickstart: getting-started/quickstart.md
+      - Concepts: getting-started/concepts.md
+      - Plan formats: getting-started/plan-formats.md
+  - Hosting:
+      - hosting/index.md
+      - Baseten: hosting/baseten.md
+      - Modal: hosting/modal.md
+      - AWS (EKS): hosting/aws.md
+      - GKE: hosting/gke.md
+      - Local (Docker): hosting/local.md
+  - Client:
+      - client/index.md
+      - Authentication: client/auth.md
+      - Sending plans: client/plans.md
+      - Runs and polling: client/runs-and-polling.md
+      - Recordings: client/recordings.md
+      - Errors: client/errors.md
+  - Operations:
+      - operations/index.md
+      - Tenant keys: operations/tenant-keys.md
+      - Rate limits: operations/rate-limits.md
+      - Idempotency: operations/idempotency.md
+      - Webhooks: operations/webhooks.md
+      - URL allowlist: operations/allowlist.md
+      - Metrics: operations/metrics.md
+  - Integrations:
+      - integrations/index.md
+      - vision_claude: integration-vision_claude.md
+  - Reference:
+      - reference/index.md
+      - HTTP API: api.md
+      - Architecture: architecture.md
+      - Environment variables: reference/env-vars.md
+      - Glossary: reference/glossary.md
+  - Appendix:
+      - appendix/index.md
+      - Proposal: PROPOSAL-mantis-cua-replaces-vision_claude.md
+      - Learnings: learnings.md

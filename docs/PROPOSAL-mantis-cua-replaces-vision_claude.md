@@ -153,7 +153,7 @@ Approve Phase 1 (this `cua-agent` PR) so the proxy + library extras land. Phase 
 ## Appendix — references
 
 - Baseten production deployment: `qvvgkneq` (model) / `qelypnr` (active deployment)
-- This PR: `mercurialsolo/cua-agent#62`  (branch `repo-reorg`)
+- This PR: `mercurialsolo/mantis#62`  (branch `repo-reorg`)
 - Verified BoatTrader runs (this week):
   - Modal: `20260427_…` — 2/3 listings, $0.42, 13 min
   - Baseten: `20260428_021432_076255ef` — 3/3 listings, $0.42 budget, 9.5 min

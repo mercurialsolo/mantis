@@ -1,7 +1,7 @@
 """Tests for PlanValidator — structural checks on compiled MicroPlans."""
 
-from mantis_agent.graph.plan_validator import PlanValidator, PlanIssue
-from mantis_agent.graph.objective import ObjectiveSpec, OutputField
+from mantis_agent.graph.plan_validator import PlanValidator
+from mantis_agent.graph.objective import ObjectiveSpec
 from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
 
 

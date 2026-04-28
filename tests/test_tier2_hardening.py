@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
 import json
-import threading
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,9 +14,9 @@ from mantis_agent.api_schemas import (
     assert_hosts_allowed,
     extract_navigate_hosts,
 )
-from mantis_agent.idempotency import IdempotencyCache, reset_idempotency_cache
+from mantis_agent.idempotency import IdempotencyCache
 from mantis_agent import metrics as mantis_metrics
-from mantis_agent.rate_limit import TenantRateLimiter, reset_rate_limiter
+from mantis_agent.rate_limit import TenantRateLimiter
 from mantis_agent.tenant_auth import TenantConfig
 from mantis_agent.webhooks import WebhookPayload, deliver_webhook_sync, sign_body
 
