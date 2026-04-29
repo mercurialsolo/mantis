@@ -11,7 +11,9 @@ If someone has already deployed Mantis (or you're using the public Baseten refer
 ```bash
 export BASETEN_API_KEY="<your baseten api key>"
 export MANTIS_API_TOKEN="<your mantis tenant token>"
-export ENDPOINT="https://model-qvvgkneq.api.baseten.co/production"
+# Baseten forwards /sync/<any path> to the container's FastAPI app. The
+# legacy /predict route still works (gateway treats it as /sync/predict).
+export ENDPOINT="https://model-qvvgkneq.api.baseten.co/production/sync"
 ```
 
 ## 1. Submit the plan

@@ -288,8 +288,13 @@ mantis_endpoint: str = Field(
     default="",
     description=(
         "Base URL of the Mantis service (without /v1 suffix). "
-        "Same shape regardless of host — Baseten model URL, Modal web "
-        "endpoint, or your own ingress."
+        "Same shape regardless of host — Baseten gateway URL, Modal web "
+        "endpoint, or your own ingress. "
+        "On Baseten, append `/sync` to the model URL so the gateway "
+        "forwards /v1/chat/completions to the container — e.g. "
+        "https://model-qvvgkneq.api.baseten.co/production/sync. "
+        "Modal/EKS/GKE deployments expose the FastAPI app directly with "
+        "no /sync prefix."
     ),
 )
 mantis_api_token: SecretStr = Field(

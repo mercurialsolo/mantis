@@ -17,7 +17,7 @@ Looking for the full HTTP API surface? See [Reference / HTTP API](../api.md).
 ```python
 import os, time, requests
 
-ENDPOINT = os.environ["MANTIS_ENDPOINT"]      # e.g. https://model-qvvgkneq.api.baseten.co/production
+ENDPOINT = os.environ["MANTIS_ENDPOINT"]      # e.g. https://model-qvvgkneq.api.baseten.co/production/sync
 PLATFORM = os.environ["BASETEN_API_KEY"]
 TENANT   = os.environ["MANTIS_API_TOKEN"]
 
