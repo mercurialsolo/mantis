@@ -195,14 +195,19 @@ class MantisOrchestratedBackend(CUABackend):
         prompt = self._extract_prompt(messages)
 
         # Holo3 inference goes to OUR Mantis service via /v1/chat/completions.
-        # Anthropic auth headers (Api-Key + X-Mantis-Token) are added so the
-        # Baseten gateway and Mantis container both pass us through.
+        # Two host-neutral knobs:
+        #   - mantis_endpoint: where the deployment lives (Baseten/Modal/EKS/GKE — vision_claude
+        #     doesn't care which).
+        #   - mantis_api_token: the container-level X-Mantis-Token. Always required.
+        # Optional third knob — mantis_gateway_authorization — is only needed when an upstream
+        # gateway (e.g. Baseten) sits in front of the container and demands its own Authorization
+        # header. Self-hosted Modal/EKS/GKE deployments leave it empty.
+        headers: dict[str, str] = {"X-Mantis-Token": self._s.mantis_api_token}
+        if self._s.mantis_gateway_authorization:
+            headers["Authorization"] = self._s.mantis_gateway_authorization
         brain = BrainHolo3(
-            base_url=f"{self._s.mantis_holo3_endpoint}/v1",
-            extra_headers={
-                "Authorization": f"Api-Key {self._s.mantis_baseten_api_key}",
-                "X-Mantis-Token": self._s.mantis_api_token,
-            },
+            base_url=f"{self._s.mantis_endpoint}/v1",
+            extra_headers=headers,
             timeout=180,
         )
         # Claude helpers go DIRECT to Anthropic (vision_claude already has the key)
@@ -256,20 +261,42 @@ class MantisOrchestratedBackend(CUABackend):
         ]
 ```
 
-### F.3 `vision_claude/settings.py` — three new fields
+### F.3 `vision_claude/settings.py` — three host-neutral fields
+
+vision_claude does not need to know whether the Mantis service is hosted
+on Baseten, Modal, EKS, or GKE. The contract is just: a URL, a container
+auth token, and (optionally) an upstream gateway header.
 
 ```python
-mantis_holo3_endpoint: str = Field(
-    default="https://model-qvvgkneq.api.baseten.co/production",
-    description="Mantis Baseten / EKS / GKE endpoint (without /v1 suffix).",
+mantis_endpoint: str = Field(
+    default="",
+    description=(
+        "Base URL of the Mantis service (without /v1 suffix). "
+        "Same shape regardless of host — Baseten model URL, Modal web "
+        "endpoint, or your own ingress."
+    ),
 )
-mantis_baseten_api_key: str = Field(
-    default="", description="Baseten gateway Api-Key.",
+mantis_api_token: SecretStr = Field(
+    default=SecretStr(""),
+    description=(
+        "X-Mantis-Token for the Mantis container. Always required. "
+        "Mirrors the value of the container's MANTIS_API_TOKEN secret."
+    ),
 )
-mantis_api_token: str = Field(
-    default="", description="X-Mantis-Token for the Mantis container.",
+mantis_gateway_authorization: SecretStr | None = Field(
+    default=None,
+    description=(
+        "Optional Authorization header value for an upstream gateway. "
+        "Sent verbatim, e.g. 'Api-Key abc123' on Baseten. Leave empty "
+        "for Modal / EKS / GKE direct deployments that have no gateway."
+    ),
 )
 ```
+
+The two-or-three field split keeps the per-host secret naming inside the
+*deployment*'s configuration. Switching from Baseten to Modal swaps the
+endpoint and clears `mantis_gateway_authorization`; the staffai callsite
+doesn't change.
 
 ### F.4 `vision_claude/backend_factory.py` — register the new backend
 
