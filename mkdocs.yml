@@ -115,6 +115,8 @@ nav:
       - Metrics: operations/metrics.md
   - Integrations:
       - integrations/index.md
+      - Generic CUA over HTTP: integrations/generic-cua.md
+      - Recipes (jobs, e-commerce, news, real-estate): integrations/recipes.md
       - Embedding MicroPlanRunner: integrations/embedding-microplanrunner.md
       - vision_claude: integration-vision_claude.md
       - vision_claude — parity addendum: staffai-vision_claude-parity.md
