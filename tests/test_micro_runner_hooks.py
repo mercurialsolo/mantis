@@ -7,6 +7,7 @@ real Xvfb/Holo3 stack.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from PIL import Image
@@ -149,5 +150,54 @@ def test_run_with_status_returns_completed_runner_result():
     env = _FakeEnv()
     r = _runner(env)
     result = r.run_with_status(_trivial_plan())
+    assert result.status == "completed"
+    assert len(result.steps) == 3
+
+
+# ── #76 cancel_event ────────────────────────────────────────────────────
+
+
+def test_cancel_event_stops_run_at_step_boundary():
+    env = _FakeEnv()
+    cancel = threading.Event()
+    cb_calls: list[int] = []
+
+    def cb(idx: int, *_args: Any) -> None:
+        cb_calls.append(idx)
+        # Trip cancel after the first step boundary completes.
+        if idx == 0:
+            cancel.set()
+
+    r = _runner(env, step_callback=cb, cancel_event=cancel)
+    result = r.run_with_status(_trivial_plan())
+
+    assert result.cancelled is True
+    assert result.status == "cancelled"
+    # First step ran, second was preempted at the boundary.
+    assert len(result.steps) == 1
+
+
+def test_cancel_event_callable_is_supported():
+    env = _FakeEnv()
+    flips = {"hit": False}
+
+    def cancel_fn() -> bool:
+        return flips["hit"]
+
+    def cb(idx: int, *_args: Any) -> None:
+        if idx == 1:
+            flips["hit"] = True
+
+    r = _runner(env, step_callback=cb, cancel_event=cancel_fn)
+    result = r.run_with_status(_trivial_plan())
+    assert result.cancelled is True
+    assert len(result.steps) == 2
+
+
+def test_no_cancel_runs_all_steps():
+    env = _FakeEnv()
+    r = _runner(env)
+    result = r.run_with_status(_trivial_plan())
+    assert result.cancelled is False
     assert result.status == "completed"
     assert len(result.steps) == 3

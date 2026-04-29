@@ -147,7 +147,8 @@ class RunnerResult:
     that carries observability + (in later patches) cancellation / pause state.
     """
     steps: list[StepResult]
-    status: str = "completed"  # completed | halted (extended by #76/#73)
+    status: str = "completed"  # completed | halted | cancelled (extended by #73)
+    cancelled: bool = False
     halt_reason: str = ""
 
 
@@ -184,6 +185,7 @@ class MicroPlanRunner:
         site_config: SiteConfig | None = None,
         step_callback: Any = None,           # Callable[[int, str, Action|None, bool], None]
         keep_screenshots: int | None = None,  # cap on retained screenshot bytes (None=all)
+        cancel_event: Any = None,            # threading.Event-like (.is_set()) or callable for #76
     ):
         self.brain = brain
         self.env = env
@@ -218,6 +220,7 @@ class MicroPlanRunner:
         self.max_time = max_time_minutes * 60
         self.step_callback = step_callback
         self.keep_screenshots = keep_screenshots
+        self.cancel_event = cancel_event
 
         # Cost tracking
         self.costs = {
@@ -276,6 +279,20 @@ class MicroPlanRunner:
             cb(result.step_index, result.intent, result.last_action, result.success)
         except Exception as exc:  # noqa: BLE001 — observability must not break runs
             logger.warning("step_callback raised: %s", exc)
+
+    # ── #76 External cancellation ──────────────────────────────────────
+    def _is_cancelled(self) -> bool:
+        """True if external cancel hook fired (#76)."""
+        ev = self.cancel_event
+        if ev is None:
+            return False
+        # Support threading.Event-style and plain callables.
+        try:
+            if callable(ev):
+                return bool(ev())
+            return bool(ev.is_set())
+        except Exception:
+            return False
 
     @staticmethod
     def _compute_plan_signature(plan: MicroPlan) -> str:
@@ -650,6 +667,14 @@ class MicroPlanRunner:
             )
 
         while step_index < len(plan.steps):
+            # External cancellation (#76) — check at every step boundary.
+            if self._is_cancelled():
+                logger.info("  CANCEL_EVENT set — stopping at step %s", step_index)
+                print(f"  CANCEL: external cancel_event fired — stopping at step {step_index}")
+                persist(step_index, status="cancelled", halt_reason="cancel_event")
+                self._final_status = "cancelled"
+                break
+
             # Budget + time checks
             elapsed = time.time() - self._run_start
             _gpu_cost, _claude_cost, _proxy_cost, total_cost = self._cost_totals()
@@ -1007,13 +1032,14 @@ class MicroPlanRunner:
         """Same as ``run(plan)``, but returns the rich :class:`RunnerResult`.
 
         Used by hosts that need the run status alongside the step list.
-        Extended in subsequent patches with cancelled / paused state.
+        Extended in subsequent patches with paused state.
         """
         steps = self.run(plan, resume=resume)
         status = self._final_status or "completed"
         return RunnerResult(
             steps=steps,
             status=status,
+            cancelled=(status == "cancelled"),
             halt_reason="" if status == "completed" else status,
         )
 
