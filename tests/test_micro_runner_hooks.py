@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from PIL import Image
 
-from mantis_agent.actions import Action
+from mantis_agent.actions import Action, ActionType
 from mantis_agent.gym.base import GymEnvironment, GymObservation, GymResult
 from mantis_agent.gym.micro_runner import (
     MicroPlanRunner,
@@ -31,6 +31,7 @@ class _FakeEnv(GymEnvironment):
     def __init__(self, viewport: tuple[int, int] = (320, 200)):
         self._viewport = viewport
         self.actions: list[Action] = []
+        self.launch_calls: list[dict[str, Any]] = []
         self.reset_calls: list[dict[str, Any]] = []
 
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
@@ -39,6 +40,8 @@ class _FakeEnv(GymEnvironment):
 
     def step(self, action: Action) -> GymResult:
         self.actions.append(action)
+        if action.action_type == ActionType.LAUNCH_APP:
+            self.launch_calls.append(dict(action.params or {}))
         return GymResult(GymObservation(screenshot=self._image()), 0.0, False, {})
 
     def screenshot(self) -> Image.Image:
@@ -252,3 +255,22 @@ def test_invoke_tool_surfaces_handler_errors_as_data():
     ok, data = r._invoke_tool("kapow", {"x": 1})
     assert ok is False
     assert "RuntimeError" in data and "nope" in data
+
+
+# ── #72 launch_app dispatch ─────────────────────────────────────────────
+
+
+def test_launch_app_action_routes_through_env_step():
+    env = _FakeEnv()
+    env.step(Action(ActionType.LAUNCH_APP, {"name": "chromium", "args": ["--proxy-server=x"]}))
+    assert env.launch_calls == [{"name": "chromium", "args": ["--proxy-server=x"]}]
+
+
+def test_launch_app_in_xdotool_env_handles_missing_binary_gracefully():
+    """The env shouldn't crash when launch target doesn't exist."""
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+
+    env = XdotoolGymEnv(display=":dummy", viewport=(800, 600))
+    env._env = {"DISPLAY": ":dummy"}
+    # Binary that definitely doesn't exist; helper logs and returns.
+    env._launch_app({"name": "/nonexistent/mantis-test-binary-xyz"})

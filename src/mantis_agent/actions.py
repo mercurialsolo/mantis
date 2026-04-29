@@ -21,6 +21,9 @@ class ActionType(str, Enum):
     DRAG = "drag"
     WAIT = "wait"
     DONE = "done"
+    # Launch a binary on the desktop. Closes the symmetry gap with vision_claude
+    # whose Claude backend uses `bash` to start chromium. See issue #72.
+    LAUNCH_APP = "launch_app"
 
 
 @dataclass
@@ -171,6 +174,38 @@ TOOLS: list[dict] = [
                         "description": "Seconds to wait (default: 1.0)",
                     },
                 },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "launch_app",
+            "description": (
+                "Launch a desktop application by binary name. "
+                "Use this to start a browser (chromium / google-chrome) or any "
+                "other program the plan needs running before clicks/typing. "
+                "Failure to launch surfaces as a step error rather than a crash."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Binary or wrapper script to execute (e.g. 'chromium').",
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional CLI arguments for the binary.",
+                    },
+                    "env": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Optional extra environment variables.",
+                    },
+                },
+                "required": ["name"],
             },
         },
     },

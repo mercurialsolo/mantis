@@ -439,3 +439,44 @@ class XdotoolGymEnv(GymEnvironment):
 
             case ActionType.DONE:
                 pass
+
+            case ActionType.LAUNCH_APP:
+                self._launch_app(action.params)
+
+    # ── App launch (issue #72) ───────────────────────────────────────
+    def _launch_app(self, params: dict[str, Any]) -> None:
+        """Launch a desktop binary on the env's display.
+
+        Errors are logged + swallowed so the runner sees the action as a
+        no-op rather than crashing on bad params. The caller verifies launch
+        success by checking the next screenshot (same contract as a click).
+        """
+        name = str(params.get("name") or "").strip()
+        if not name:
+            logger.warning("launch_app missing 'name': %s", params)
+            return
+        args = params.get("args") or []
+        if not isinstance(args, (list, tuple)):
+            logger.warning("launch_app args must be a list: %s", params)
+            args = []
+        extra_env = params.get("env") or {}
+        if not isinstance(extra_env, dict):
+            logger.warning("launch_app env must be a dict: %s", params)
+            extra_env = {}
+
+        # Compose env: env's DISPLAY + caller's overrides.
+        proc_env = dict(self._env)
+        proc_env.update({str(k): str(v) for k, v in extra_env.items()})
+
+        try:
+            subprocess.Popen(
+                [name, *[str(a) for a in args]],
+                env=proc_env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("launch_app: started %s args=%s", name, list(args)[:6])
+        except FileNotFoundError:
+            logger.error("launch_app: binary not found on PATH: %s", name)
+        except Exception as exc:  # noqa: BLE001 — surface as no-op
+            logger.error("launch_app: failed to start %s: %s", name, exc)
