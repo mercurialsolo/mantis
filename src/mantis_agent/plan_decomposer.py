@@ -26,7 +26,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,42 @@ class MicroPlan:
             tag = "🤖" if not s.claude_only else "🧠"
             lines.append(f"  [{i:2d}] {tag} {s.type:15s} {s.intent[:60]}")
         return "\n".join(lines)
+
+    def to_dict(self) -> dict:
+        """Serializable form. Round-trips through JSON for callers that want
+        to ship a pre-built plan over the wire (e.g. vision_claude passing
+        a hand-authored micro_plan into MantisOrchestratedBackend)."""
+        return {
+            "steps": [
+                {
+                    f.name: getattr(s, f.name)
+                    for f in fields(MicroIntent)
+                }
+                for s in self.steps
+            ],
+            "source_plan": self.source_plan,
+            "domain": self.domain,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "MicroPlan":
+        """Construct a MicroPlan from a dict (typically a JSON payload).
+
+        Accepts both shapes: ``{"steps": [...]}`` (full ``to_dict()`` output)
+        and a bare list of step dicts at the top level.
+        """
+        if isinstance(payload, list):
+            steps_raw = payload
+            source_plan = ""
+            domain = ""
+        else:
+            steps_raw = payload.get("steps", [])
+            source_plan = payload.get("source_plan", "")
+            domain = payload.get("domain", "")
+        plan = cls(source_plan=source_plan, domain=domain)
+        for s in steps_raw:
+            plan.steps.append(PlanDecomposer._build_intent(s))
+        return plan
 
 
 DECOMPOSE_PROMPT = """\
@@ -158,14 +194,37 @@ class PlanDecomposer:
         Returns:
             MicroPlan with ordered list of MicroIntent steps.
         """
+        with open(plan_path) as f:
+            plan_text = f.read()
+        cache_path = plan_path.replace(".txt", "_micro_{hash}.json")
+        return self.decompose_text(plan_text, cache_path_template=cache_path)
+
+    def decompose_text(
+        self,
+        plan_text: str,
+        *,
+        cache_path_template: str | None = None,
+    ) -> MicroPlan:
+        """Decompose a free-text plan into micro-intents.
+
+        Used by callers (e.g. vision_claude's MantisOrchestratedBackend) that
+        receive a prompt string rather than a path on disk.
+
+        Args:
+            plan_text: The plan text to decompose.
+            cache_path_template: Optional path template containing ``{hash}``
+                — when provided, the decomposed plan is cached at
+                ``cache_path_template.replace("{hash}", <8-char-md5>)``.
+                Pass ``None`` to skip the cache (typical for ad-hoc prompts).
+
+        Returns:
+            MicroPlan with ordered list of MicroIntent steps.
+        """
         import hashlib
         import requests
 
         if not self.api_key:
             raise RuntimeError("ANTHROPIC_API_KEY not set")
-
-        with open(plan_path) as f:
-            plan_text = f.read()
 
         # Extract domain from plan text
         domain = ""
@@ -176,8 +235,12 @@ class PlanDecomposer:
         # Check cache — include prompt version in hash to invalidate on schema changes
         prompt_version = "v8_step_type_fix"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
-        cache_path = plan_path.replace(".txt", f"_micro_{plan_hash}.json")
-        if os.path.exists(cache_path):
+        cache_path = (
+            cache_path_template.replace("{hash}", plan_hash)
+            if cache_path_template
+            else None
+        )
+        if cache_path and os.path.exists(cache_path):
             try:
                 cached = json.loads(open(cache_path).read())
                 plan = MicroPlan(source_plan=plan_text, domain=domain)
@@ -189,7 +252,7 @@ class PlanDecomposer:
             except Exception:
                 pass
 
-        logger.info(f"Decomposing plan with {self.model}: {plan_path}")
+        logger.info(f"Decomposing plan with {self.model} ({len(plan_text)} chars)")
         prompt = DECOMPOSE_PROMPT.format(plan_text=plan_text)
 
         resp = requests.post(
@@ -233,12 +296,13 @@ class PlanDecomposer:
         self._fix_loop_targets(plan)
 
         # Cache
-        try:
-            with open(cache_path, "w") as f:
-                json.dump(steps_raw, f, indent=2)
-            logger.info(f"Cached micro-plan: {cache_path}")
-        except Exception:
-            pass
+        if cache_path:
+            try:
+                with open(cache_path, "w") as f:
+                    json.dump(steps_raw, f, indent=2)
+                logger.info(f"Cached micro-plan: {cache_path}")
+            except Exception:
+                pass
 
         tokens = resp.json().get("usage", {})
         cost = (tokens.get("input_tokens", 0) * 3 + tokens.get("output_tokens", 0) * 15) / 1_000_000

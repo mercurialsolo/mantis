@@ -115,13 +115,16 @@ nav:
       - Metrics: operations/metrics.md
   - Integrations:
       - integrations/index.md
+      - Embedding MicroPlanRunner: integrations/embedding-microplanrunner.md
       - vision_claude: integration-vision_claude.md
+      - vision_claude — parity addendum: staffai-vision_claude-parity.md
   - Reference:
       - reference/index.md
       - HTTP API: api.md
       - Architecture: architecture.md
       - Environment variables: reference/env-vars.md
       - Glossary: reference/glossary.md
+      - Coordinate spaces: reference/coordinate-spaces.md
   - Appendix:
       - appendix/index.md
       - Proposal: PROPOSAL-mantis-cua-replaces-vision_claude.md
