@@ -179,7 +179,17 @@ class Holo3Brain:
         screen_size: tuple[int, int] = (1280, 720),
         enable_thinking: bool = True,
         use_tool_calling: bool = False,  # llama.cpp often breaks with tools — text parsing is more reliable
+        extra_headers: dict[str, str] | None = None,
     ):
+        """Holo3 client.
+
+        Args:
+            extra_headers: Additional headers to send with every request
+                (e.g. ``{"X-Mantis-Token": "..."}``). When the caller's
+                ``Authorization`` value is also supplied here, it takes
+                precedence over the ``Bearer <api_key>`` default — useful
+                for gateways that expect ``Api-Key`` or other schemes.
+        """
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key or os.environ.get("HAI_API_KEY", "")
@@ -189,13 +199,24 @@ class Holo3Brain:
         self.temperature = temperature
         self.default_screen_size = screen_size
         self.enable_thinking = enable_thinking
+        self.extra_headers = dict(extra_headers or {})
 
     @property
     def _headers(self) -> dict:
-        """Auth headers for API requests."""
-        h = {"Content-Type": "application/json"}
+        """Auth headers for API requests.
+
+        Order of precedence (later overrides earlier):
+        1. ``Content-Type: application/json``
+        2. ``Authorization: Bearer <api_key>`` (when api_key is set)
+        3. Anything in ``extra_headers`` — including a custom Authorization
+           value, which lets a caller swap ``Bearer`` for ``Api-Key`` when
+           the deployment sits behind a gateway that expects it.
+        """
+        h: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             h["Authorization"] = f"Bearer {self.api_key}"
+        if self.extra_headers:
+            h.update(self.extra_headers)
         return h
 
     def load(self) -> None:

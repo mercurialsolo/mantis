@@ -333,11 +333,15 @@ change required.
 
 ### Library API summary (post-#71/#72/#73/#74/#75/#76)
 
-The runner now exposes everything the staffai-side patches above need:
+The runner now exposes everything the staffai-side patches above need.
+The orchestrator surface is re-exported at the top level so hosts don't
+need deep imports:
 
 ```python
-from mantis_agent.gym.micro_runner import (
+from mantis_agent import (
     MicroPlanRunner, PauseRequested, PauseState, RunnerResult,
+    StepResult, MicroPlan, MicroIntent, PlanDecomposer,
+    scale_brain_to_display,
 )
 
 runner = MicroPlanRunner(
