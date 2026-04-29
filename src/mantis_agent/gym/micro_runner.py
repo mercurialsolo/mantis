@@ -138,17 +138,69 @@ REVERSE_ACTIONS = {
 }
 
 
+class _PauseRequested(Exception):
+    """Raised by a registered tool handler to request runner pause (#73).
+
+    Hosts call ``raise PauseRequested(prompt=...)`` from inside a
+    ``request_user_input`` (or similar) handler. The runner catches it in
+    ``_invoke_tool`` and returns a serializable :class:`PauseState`.
+    """
+
+    def __init__(self, reason: str = "", prompt: str = "", **extras: Any):
+        super().__init__(reason or prompt or "pause requested")
+        self.reason = reason or "user_input"
+        self.prompt = prompt
+        self.extras = dict(extras)
+
+
+# Public alias so hosts don't depend on a leading underscore.
+PauseRequested = _PauseRequested
+
+
+@dataclass
+class PauseState:
+    """Serializable snapshot of a paused MicroPlanRunner (#73).
+
+    Round-trips through JSON so staffai can store it on
+    ``plan.agent_data["vision_claude_state"]``. Resume by calling
+    ``runner.resume(state, user_input=...)``.
+    """
+    version: int = 1
+    run_key: str = ""
+    plan_signature: str = ""
+    session_name: str = ""
+    step_index: int = 0
+    pending_tool: str = ""
+    pending_arguments: dict[str, Any] = field(default_factory=dict)
+    pending_reason: str = "user_input"
+    prompt: str = ""
+    step_results: list[dict[str, Any]] = field(default_factory=list)
+    loop_counters: dict[str, int] = field(default_factory=dict)
+    listings_on_page: int = 0
+    checkpoint_path: str = ""
+    timestamp: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> PauseState:
+        allowed = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in payload.items() if k in allowed})
+
+
 @dataclass
 class RunnerResult:
     """Public result of a MicroPlanRunner.run() / resume() call.
 
-    Backwards-compat: existing callers receive ``list[StepResult]`` from
-    ``run()`` (unchanged). ``run_with_status()`` returns this richer object
-    that carries observability + (in later patches) cancellation / pause state.
+    Carries cancellation / pause state alongside the step list so hosts wiring
+    the staffai backend don't have to read ``self._final_status``.
     """
     steps: list[StepResult]
-    status: str = "completed"  # completed | halted | cancelled (extended by #73)
+    status: str = "completed"  # completed | halted | cancelled | paused
     cancelled: bool = False
+    paused: bool = False
+    pause_state: PauseState | None = None
     halt_reason: str = ""
 
 
@@ -223,6 +275,8 @@ class MicroPlanRunner:
         self.cancel_event = cancel_event
         # Registered host tools (#71). Mutated via register_tool().
         self._tools: dict[str, dict[str, Any]] = {}
+        # Pending pause signal from a tool handler (#73).
+        self._pending_pause: dict[str, Any] | None = None
 
         # Cost tracking
         self.costs = {
@@ -272,6 +326,16 @@ class MicroPlanRunner:
         """Run a tool, returning ``(success, data_str)`` for the step result."""
         try:
             value = self.call_tool(name, arguments)
+        except _PauseRequested as exc:
+            # Tool requested pause (#73) — propagate so the run() loop can
+            # snapshot and return a PauseState. Don't treat as failure.
+            self._pending_pause = {
+                "tool": name,
+                "arguments": dict(arguments),
+                "reason": exc.reason,
+                "prompt": exc.prompt,
+            }
+            return True, f"tool:{name}:pause"
         except KeyError as exc:
             return False, f"tool:{name}:not_registered:{exc}"
         except Exception as exc:  # noqa: BLE001 — surface, never swallow
@@ -720,6 +784,13 @@ class MicroPlanRunner:
                 self._final_status = "cancelled"
                 break
 
+            # Pending pause (#73) — surface as paused, build PauseState in
+            # _build_runner_result.
+            if self._pending_pause is not None:
+                persist(step_index, status="paused", halt_reason="user_input")
+                self._final_status = "paused"
+                break
+
             # Budget + time checks
             elapsed = time.time() - self._run_start
             _gpu_cost, _claude_cost, _proxy_cost, total_cost = self._cost_totals()
@@ -1037,6 +1108,12 @@ class MicroPlanRunner:
             persist(step_index, status="halted", halt_reason="stopped")
             self._final_status = "halted"
 
+        # Stash final loop counters / progress so resume() / run_with_status()
+        # can reconstruct PauseState without re-walking the loop.
+        self._last_run_step_index = step_index
+        self._last_loop_counters = dict(loop_counters)
+        self._last_listings_on_page = listings_on_page
+
         gpu_cost, claude_cost, proxy_cost, total_cost = self._cost_totals()
         viable_count, phone_leads = self._lead_counts(results)
         elapsed = time.time() - self._run_start
@@ -1076,15 +1153,106 @@ class MicroPlanRunner:
     def run_with_status(self, plan: MicroPlan, resume: bool = False) -> RunnerResult:
         """Same as ``run(plan)``, but returns the rich :class:`RunnerResult`.
 
-        Used by hosts that need the run status alongside the step list.
-        Extended in subsequent patches with paused state.
+        Carries cancellation / pause state alongside the step list so callers
+        wiring the staffai backend don't have to read ``self._final_status``.
         """
         steps = self.run(plan, resume=resume)
+        return self._build_runner_result(plan, steps)
+
+    def resume(
+        self,
+        state: PauseState | dict[str, Any],
+        *,
+        user_input: Any = None,
+        plan: MicroPlan | None = None,
+    ) -> RunnerResult:
+        """Resume a paused run with the supplied user input.
+
+        ``state`` is the :class:`PauseState` previously returned via
+        ``RunnerResult.pause_state``. ``user_input`` is fed back to the paused
+        tool handler as its return value (the tool simulates re-invocation
+        and reads the staged value via :meth:`consume_pause_input`).
+        ``plan`` is required because the runner doesn't keep the plan around;
+        callers persist the plan alongside the PauseState.
+        """
+        if isinstance(state, dict):
+            state = PauseState.from_dict(state)
+        if plan is None:
+            raise ValueError("resume() requires the original plan; pass plan=...")
+        # Validate the plan matches the snapshot.
+        signature = self._compute_plan_signature(plan)
+        if state.plan_signature and state.plan_signature != signature:
+            raise ValueError(
+                "PauseState plan_signature mismatch — can't resume a different plan"
+            )
+
+        # Replay results from the snapshot so cost/lead totals stay continuous.
+        replayed = [StepResult.from_dict(d) for d in state.step_results]
+        self._pending_pause = None
+
+        # Rehydrate runner state. The simplest correct approach: load the
+        # checkpoint that the original run() persisted (state.checkpoint_path
+        # mirrors self.checkpoint_path) and ride the existing resume codepath.
+        self.checkpoint_path = state.checkpoint_path or self.checkpoint_path
+        self.run_key = state.run_key or self.run_key
+        self.session_name = state.session_name or self.session_name
+        self.plan_signature = signature
+        self.resume_state = True
+
+        # Inject the user-supplied value as the next return of the paused tool.
+        # The host's handler simply re-runs and reads the pre-injected value
+        # via runner.consume_pause_input(). One-shot — cleared after read.
+        self._pause_input = user_input
+        try:
+            steps_continued = self.run(plan, resume=True)
+        finally:
+            self._pause_input = None
+
+        all_steps = replayed + steps_continued[len(replayed):]
+        return self._build_runner_result(plan, all_steps)
+
+    def consume_pause_input(self, default: Any = None) -> Any:
+        """Read (and clear) the value supplied to the most recent ``resume()``.
+
+        Tools that previously called ``raise PauseRequested(...)`` should call
+        this on the next invocation to retrieve the user's input. Returns
+        ``default`` if no input is staged.
+        """
+        value = getattr(self, "_pause_input", None)
+        self._pause_input = None
+        return default if value is None else value
+
+    def _build_runner_result(
+        self, plan: MicroPlan, steps: list[StepResult]
+    ) -> RunnerResult:
         status = self._final_status or "completed"
+        cancelled = status == "cancelled"
+        paused = status == "paused" and self._pending_pause is not None
+        pause_state: PauseState | None = None
+        if paused:
+            pp = self._pending_pause or {}
+            pause_state = PauseState(
+                run_key=self.run_key,
+                plan_signature=self.plan_signature
+                or self._compute_plan_signature(plan),
+                session_name=self.session_name,
+                step_index=getattr(self, "_last_run_step_index", 0),
+                pending_tool=str(pp.get("tool", "")),
+                pending_arguments=dict(pp.get("arguments", {})),
+                pending_reason=str(pp.get("reason", "user_input")),
+                prompt=str(pp.get("prompt", "")),
+                step_results=[s.to_dict() for s in steps],
+                loop_counters={str(k): v for k, v in getattr(self, "_last_loop_counters", {}).items()},
+                listings_on_page=getattr(self, "_last_listings_on_page", 0),
+                checkpoint_path=self.checkpoint_path,
+                timestamp=time.time(),
+            )
         return RunnerResult(
             steps=steps,
             status=status,
-            cancelled=(status == "cancelled"),
+            cancelled=cancelled,
+            paused=paused,
+            pause_state=pause_state,
             halt_reason="" if status == "completed" else status,
         )
 

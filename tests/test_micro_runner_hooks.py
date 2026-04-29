@@ -17,6 +17,8 @@ from mantis_agent.actions import Action, ActionType
 from mantis_agent.gym.base import GymEnvironment, GymObservation, GymResult
 from mantis_agent.gym.micro_runner import (
     MicroPlanRunner,
+    PauseRequested,
+    PauseState,
     StepResult,
 )
 from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
@@ -274,3 +276,84 @@ def test_launch_app_in_xdotool_env_handles_missing_binary_gracefully():
     env._env = {"DISPLAY": ":dummy"}
     # Binary that definitely doesn't exist; helper logs and returns.
     env._launch_app({"name": "/nonexistent/mantis-test-binary-xyz"})
+
+
+# ── #73 pause / resume ──────────────────────────────────────────────────
+
+
+def test_pause_requested_yields_pause_state_via_tool_invocation():
+    env = _FakeEnv()
+    r = _runner(env)
+
+    def request_user_input(args: dict[str, Any]) -> Any:
+        # First call asks for input, second call (after resume) reads it.
+        staged = r.consume_pause_input(default=None)
+        if staged is None:
+            raise PauseRequested(reason="user_input", prompt=args.get("prompt", ""))
+        return staged
+
+    r.register_tool(
+        "request_user_input",
+        {"type": "object", "properties": {"prompt": {"type": "string"}}},
+        request_user_input,
+    )
+
+    # First invocation triggers a pause — `_invoke_tool` returns success but
+    # records the pending pause for the run loop to surface.
+    ok, data = r._invoke_tool("request_user_input", {"prompt": "MFA code?"})
+    assert ok is True
+    assert data.endswith(":pause")
+    assert r._pending_pause is not None
+    assert r._pending_pause["tool"] == "request_user_input"
+
+    # On resume, consume_pause_input returns the staged value.
+    r._pause_input = "123456"
+    second = r.call_tool("request_user_input", {"prompt": "MFA code?"})
+    assert second == "123456"
+
+
+def test_pause_state_round_trips_through_dict():
+    state = PauseState(
+        run_key="abc", plan_signature="xyz", session_name="test",
+        step_index=4, pending_tool="request_user_input",
+        pending_arguments={"prompt": "MFA?"}, prompt="MFA?",
+        step_results=[], loop_counters={"3": 1}, listings_on_page=2,
+        checkpoint_path="/tmp/x.json", timestamp=1234.5,
+    )
+    d = state.to_dict()
+    restored = PauseState.from_dict(d)
+    assert restored == state
+
+
+def test_resume_requires_plan_argument():
+    env = _FakeEnv()
+    r = _runner(env)
+    state = PauseState(plan_signature="abc")
+    with pytest.raises(ValueError):
+        r.resume(state, user_input="x")
+
+
+def test_resume_rejects_mismatched_plan_signature():
+    env = _FakeEnv()
+    r = _runner(env)
+    plan = _trivial_plan()
+    state = PauseState(plan_signature="not-the-real-sig")
+    with pytest.raises(ValueError):
+        r.resume(state, user_input="x", plan=plan)
+
+
+def test_pause_state_is_json_serializable():
+    """PauseState lives in a Postgres JSONB column on staffai — keep it pure."""
+    import json
+
+    state = PauseState(
+        run_key="abc", plan_signature="xyz", session_name="test",
+        step_index=4, pending_tool="request_user_input",
+        pending_arguments={"prompt": "MFA?"}, prompt="MFA?",
+        step_results=[StepResult(step_index=0, intent="x", success=True).to_dict()],
+        loop_counters={"3": 1}, listings_on_page=2,
+        checkpoint_path="/tmp/x.json", timestamp=1234.5,
+    )
+    encoded = json.dumps(state.to_dict())
+    decoded = json.loads(encoded)
+    assert PauseState.from_dict(decoded) == state

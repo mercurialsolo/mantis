@@ -116,6 +116,7 @@ nav:
   - Integrations:
       - integrations/index.md
       - vision_claude: integration-vision_claude.md
+      - vision_claude — parity addendum: staffai-vision_claude-parity.md
   - Reference:
       - reference/index.md
       - HTTP API: api.md
