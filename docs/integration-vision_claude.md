@@ -224,12 +224,22 @@ class MantisOrchestratedBackend(CUABackend):
             max_cost=kwargs.get("max_cost", 5.0),
             max_time_minutes=kwargs.get("max_time_minutes", 30),
         )
-        results = runner.run(plan)
+        result = runner.run_with_status(plan)  # RunnerResult dataclass
+        # The runner doesn't surface a single "final text" the way Claude does
+        # (it's a step-by-step plan, not a free-form chat). Synthesize one from
+        # the last successful extraction step's data, falling back to a step
+        # count summary. Customize as needed.
+        last_data = next(
+            (s.data for s in reversed(result.steps) if s.success and s.data),
+            f"Plan complete: {len(result.steps)} steps executed",
+        )
         return CUALoopResult(
             messages=messages,
-            final_text=runner.summary_text(),
-            tool_calls_count=sum(r.steps_used or 0 for r in results),
-            execution_trace=self._trace(results),
+            final_text=last_data,
+            tool_calls_count=sum(r.steps_used or 0 for r in result.steps),
+            execution_trace=self._trace(result.steps),
+            shutdown_requested=result.cancelled,  # #76 wiring
+            # pause_request would be populated from result.pause_state when paused (#73)
         )
 
     def _build_plan(self, prompt: str, kw: dict[str, Any]) -> MicroPlan:

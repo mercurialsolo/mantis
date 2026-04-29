@@ -402,3 +402,91 @@ library issues land. Phase 2 of the migration (canary tenant) needs §1 + §5
 at minimum so observability stays at parity; §2 + §3 + §4 are required
 before any plan that touches login / OTP / correspondents can flip to
 Mantis.
+
+---
+
+## Backwards-compatibility invariants
+
+**Goal of this section.** Anyone implementing the changes above on the
+staffai side must preserve current vision_claude behaviour exactly. No
+existing plan, env-var, or stored state shape should change for callers
+who don't opt in to the new backend.
+
+The following invariants are non-negotiable. If a patch breaks any of
+them, the patch is wrong — find a different shape.
+
+### What stays exactly the same
+
+- **`VISION_CLAUDE_CUA_BACKEND` defaults**: still `"claude"`. Nothing flips
+  the default. Existing fleets see no change without an explicit env-var
+  or per-plan override.
+- **`ClaudeCUABackend.run_loop` behaviour**: byte-for-byte identical.
+  No refactor inside it. Pass-through to `agent_loop.sampling_loop`
+  remains untouched.
+- **`MantisCUABackend` (streaming, today's `mantis_backend.py`)**: keep
+  it. Some operators may still flip to it for read-only plans. Don't
+  delete or rename the file in this PR.
+- **`VisionClaudeInputSchema` existing fields**: types and defaults
+  unchanged. New fields (`cua_backend`, `resume_state`) are optional with
+  default `None`.
+- **`vision_claude_state` blob shape for `claude` runs**: unchanged.
+  Mantis runs add a `backend_kind: "mantis-orchestrated"` discriminator
+  alongside the existing keys; absence of the key means Claude (current
+  shape).
+- **`_handle_user_input_resume` / `_handle_deploy_restart` Claude path**:
+  unchanged. Mantis path branches *before* the existing logic; if
+  `backend_kind` is missing or `"claude"`, fall through.
+- **`extract_browser_contexts(messages, vision_model=...)`**: keep the
+  existing signature. Add a new entry point (e.g.
+  `extract_browser_contexts_from_images(images, ...)`) for the Mantis
+  path. Both share the inner extraction prompt.
+- **`Desktop.size` / Xvfb resolution defaults** (`1280×800`): unchanged.
+  No new requirements on the desktop layer for the Mantis backend.
+- **`ComputerTool` and `agent_loop.py`**: untouched. The Mantis backend
+  uses `xdotool` directly via `VisionClaudeGymEnv` and never goes
+  through `ComputerTool` — so its scaling, screenshot path, and output
+  format stay isolated.
+- **SQS queues, MessageCorrelate shape, Plan status transitions**:
+  unchanged. The Mantis backend produces the same `CUALoopResult` shape
+  as Claude; the handler routing logic doesn't see a new code path.
+
+### Pre-flight checks before merging
+
+For each patch:
+
+1. Run `pytest` on the existing `claude` backend tests — they must pass
+   without modification.
+2. Search for all `cua_backend` literal sites with
+   `rg "cua_backend\s*[=:]"` — every one must still accept `"claude"` as
+   a valid value with no behaviour change.
+3. Load a stored `vision_claude_state` blob from a Claude run *before*
+   the patch and a Claude run *after* the patch. The dicts must be
+   bit-identical (same keys, same types).
+4. Confirm `mantis-agent[orchestrator]` does not pull GPU dependencies
+   on import. Run `python -c "import mantis_agent.gym.micro_runner"` in
+   a clean venv with only the `[orchestrator]` extra; the import must
+   succeed without `torch`, `vllm`, or any CUDA libs available.
+
+### What does change (acceptable)
+
+These changes are additive and only affect the new code paths:
+
+- New `"mantis-orchestrated"` literal value (extends, doesn't remove).
+- New optional fields on `VisionClaudeInputSchema` (`cua_backend`,
+  `resume_state`).
+- New `mantis_endpoint`, `mantis_api_token`, `mantis_gateway_authorization`
+  settings (default empty / None).
+- New `backend_kind` key inside `vision_claude_state`. Code that reads
+  the blob must `.get("backend_kind", "claude")` so old blobs still work.
+- New file `vision_claude_gym_env.py` (no edits to existing files
+  except `vision_claude_tools.py` for tool registration in
+  `MantisOrchestrated`'s branch).
+- New file `mantis_orchestrated_backend.py` alongside the existing
+  `mantis_backend.py`. Old streaming path keeps working.
+
+### Migration is an env-var flip, not a data migration
+
+No backfill, no schema migration, no Plan status sweep. Setting
+`VISION_CLAUDE_CUA_BACKEND=mantis-orchestrated` (or the per-plan field
+from §1) on a fresh plan opts that plan into the new path. Plans
+already mid-flight on Claude continue on Claude until they finish.
