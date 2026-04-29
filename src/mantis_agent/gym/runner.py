@@ -62,6 +62,7 @@ class TrajectoryStep:
     inference_time: float
     feedback: str = ""
     timestamp: float = field(default_factory=time.time)
+    reward_components: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -76,6 +77,8 @@ class RunResult:
     total_time: float
     trajectory: list[TrajectoryStep]
     termination_reason: str  # "done", "max_steps", "loop", "env_done"
+    terminal_reward: float = 0.0
+    reward_components: dict[str, float] = field(default_factory=dict)
 
 
 class GymRunner:
@@ -131,6 +134,9 @@ class GymRunner:
         plan: Any = None,
         plan_inputs: dict[str, str] | None = None,
         start_url: str | None = None,
+        reward_fn: Any = None,
+        ground_truth: dict[str, Any] | None = None,
+        capture_dir: Any = None,
     ) -> RunResult:
         """Execute a task with plan persistence, feedback, and context.
 
@@ -146,15 +152,44 @@ class GymRunner:
             plan_steps: Pre-defined numbered plan steps (text).
             plan: Plan object with structured steps for direct execution.
             plan_inputs: Resolved input values for plan {{variables}}.
+            reward_fn: Optional RewardFn (see mantis_agent.rewards). When set,
+                each brain-driven step gets a per-step reward and the episode
+                gets a terminal reward; both are recorded on the trajectory.
+            ground_truth: Optional dict of task-specific expected values
+                (e.g. {"min_price": 35000}) passed into reward_fn.episode().
+            capture_dir: Optional Path. If set, each post-step screenshot is
+                written as `<capture_dir>/<NNNN>.png` for offline use (e.g.
+                rollout collection for SFT). The reset frame is `0000.png`.
         """
         logger.info(f"Starting task: {task!r} (id={task_id})")
         t0 = time.time()
+
+        # Screenshot capture (opt-in, e.g. rollout collection).
+        capture_path = None
+        if capture_dir is not None:
+            from pathlib import Path as _Path
+            capture_path = _Path(capture_dir)
+            capture_path.mkdir(parents=True, exist_ok=True)
+
+        def _save_frame(img: Any, step: int) -> None:
+            if capture_path is None or img is None:
+                return
+            try:
+                img.save(capture_path / f"{step:04d}.png", format="PNG")
+            except Exception as e:
+                logger.warning("frame save failed at step %d: %s", step, e)
 
         frame_history: list[Image.Image] = []
         action_history: list[Action] = []
         trajectory: list[TrajectoryStep] = []
         total_reward = 0.0
         plan_inputs = dict(plan_inputs or {})
+
+        # Reward state — only populated when reward_fn is provided.
+        episode_state: Any = None
+        if reward_fn is not None:
+            from ..rewards import EpisodeState
+            episode_state = EpisodeState()
 
         # Plan state — resolve all inputs including defaults
         if plan:
@@ -185,6 +220,7 @@ class GymRunner:
 
         obs = self.env.reset(task, **reset_kwargs)
         frame_history.append(obs.screenshot)
+        _save_frame(obs.screenshot, 0)
         last_url = obs.extras.get("url", "")
         last_title = obs.extras.get("title", "")
 
@@ -390,7 +426,21 @@ class GymRunner:
                 gym_result = self.env.step(action)
                 action_history.append(action)
                 frame_history.append(gym_result.observation.screenshot)
-                total_reward += gym_result.reward
+                _save_frame(gym_result.observation.screenshot, step_num)
+
+                # Reward — apply before mutating step_reward / components so the
+                # signal includes this step's action in any history-based terms.
+                step_reward = gym_result.reward
+                step_components: dict[str, float] = {}
+                if reward_fn is not None and episode_state is not None:
+                    signal = reward_fn.step(
+                        action=action, gym_result=gym_result, state=episode_state,
+                    )
+                    step_reward = float(signal) + gym_result.reward
+                    step_components = dict(signal.components)
+                    episode_state.action_history.append(action)
+                    episode_state.info_history.append(dict(gym_result.info))
+                total_reward += step_reward
 
                 feedback = self._build_feedback(
                     action=action, gym_result=gym_result,
@@ -410,8 +460,9 @@ class GymRunner:
 
                 trajectory.append(TrajectoryStep(
                     step=step_num, action=action, thinking=thinking,
-                    reward=gym_result.reward, done=gym_result.done,
+                    reward=step_reward, done=gym_result.done,
                     inference_time=inference_time, feedback=feedback,
+                    reward_components=step_components,
                 ))
 
                 logger.info(f"Feedback: {feedback}")
@@ -438,12 +489,28 @@ class GymRunner:
             total_steps=len(trajectory), total_time=round(total_time, 1),
         )
 
-        return RunResult(
+        result = RunResult(
             task=task, task_id=task_id, success=success,
             total_reward=total_reward, total_steps=len(trajectory),
             total_time=total_time, trajectory=trajectory,
             termination_reason=termination_reason,
         )
+
+        # Terminal reward — applied last so episode() can read the full
+        # trajectory (including the final DONE action's params).
+        if reward_fn is not None and episode_state is not None:
+            # Sync plan progress into state for episode()
+            if plan is not None:
+                episode_state.plan_step_idx = plan_step_idx
+                episode_state.plan_steps_total = len(plan.steps)
+            terminal = reward_fn.episode(
+                run_result=result, state=episode_state, ground_truth=ground_truth,
+            )
+            result.terminal_reward = float(terminal)
+            result.reward_components = dict(terminal.components)
+            result.total_reward += float(terminal)
+
+        return result
 
     # ── Prompt construction ──────────────────────────────────────────────
 
