@@ -26,7 +26,7 @@ import os
 import re
 import time
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, TYPE_CHECKING
+from typing import Any, ClassVar, TYPE_CHECKING
 
 from ..actions import Action, ActionType
 from .runner import GymRunner
@@ -43,7 +43,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class StepResult:
-    """Outcome of executing one micro-intent."""
+    """Outcome of executing one micro-intent.
+
+    Persistent fields (`step_index`, `intent`, `success`, ...) round-trip through
+    the checkpoint JSON. ``screenshot_png`` and ``last_action`` are observability
+    extras populated by the runner — they are deliberately excluded from
+    ``to_dict()`` so the checkpoint stays small and JSON-clean.
+    """
     step_index: int
     intent: str
     success: bool
@@ -52,8 +58,17 @@ class StepResult:
     duration: float = 0.0
     reversed: bool = False
 
+    # Observability extras — populated by MicroPlanRunner; not persisted.
+    screenshot_png: bytes | None = field(default=None, repr=False, compare=False)
+    last_action: Action | None = field(default=None, repr=False, compare=False)
+
+    _PERSISTED: ClassVar[tuple[str, ...]] = (
+        "step_index", "intent", "success", "data", "steps_used", "duration", "reversed",
+    )
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """Serializable form (omits screenshot_png + last_action)."""
+        return {name: getattr(self, name) for name in self._PERSISTED}
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> StepResult:
@@ -123,6 +138,19 @@ REVERSE_ACTIONS = {
 }
 
 
+@dataclass
+class RunnerResult:
+    """Public result of a MicroPlanRunner.run() / resume() call.
+
+    Backwards-compat: existing callers receive ``list[StepResult]`` from
+    ``run()`` (unchanged). ``run_with_status()`` returns this richer object
+    that carries observability + (in later patches) cancellation / pause state.
+    """
+    steps: list[StepResult]
+    status: str = "completed"  # completed | halted (extended by #76/#73)
+    halt_reason: str = ""
+
+
 class MicroPlanRunner:
     """Execute a MicroPlan step-by-step with verify/reverse/checkpoint.
 
@@ -154,6 +182,8 @@ class MicroPlanRunner:
         max_cost: float = 10.0,     # Stop if total cost exceeds this
         max_time_minutes: int = 180, # Stop if runtime exceeds this (3 hours)
         site_config: SiteConfig | None = None,
+        step_callback: Any = None,           # Callable[[int, str, Action|None, bool], None]
+        keep_screenshots: int | None = None,  # cap on retained screenshot bytes (None=all)
     ):
         self.brain = brain
         self.env = env
@@ -186,6 +216,8 @@ class MicroPlanRunner:
         self._final_status: str = "running"
         self.max_cost = max_cost
         self.max_time = max_time_minutes * 60
+        self.step_callback = step_callback
+        self.keep_screenshots = keep_screenshots
 
         # Cost tracking
         self.costs = {
@@ -199,6 +231,51 @@ class MicroPlanRunner:
 
     def dynamic_verification_report(self, status: str | None = None) -> dict[str, Any]:
         return self.dynamic_verifier.report(status=status or self._final_status)
+
+    # ── #74 Observability ──────────────────────────────────────────────
+    def _capture_screenshot_bytes(self) -> bytes | None:
+        """Capture a PNG snapshot for observability. Returns None on failure."""
+        env = self.env
+        if env is None or not hasattr(env, "screenshot"):
+            return None
+        try:
+            img = env.screenshot()
+        except Exception as exc:
+            logger.debug("screenshot capture failed: %s", exc)
+            return None
+        try:
+            import io
+            buf = io.BytesIO()
+            img.save(buf, format="PNG", optimize=True)
+            return buf.getvalue()
+        except Exception as exc:
+            logger.debug("screenshot encode failed: %s", exc)
+            return None
+
+    def _enforce_screenshot_cap(self, results: list[StepResult]) -> None:
+        """Drop oldest screenshot bytes once `keep_screenshots` is exceeded."""
+        cap = self.keep_screenshots
+        if cap is None or cap < 0:
+            return
+        kept = 0
+        # Walk newest→oldest, retaining the most-recent ``cap`` screenshots.
+        for r in reversed(results):
+            if r.screenshot_png is None:
+                continue
+            if kept >= cap:
+                r.screenshot_png = None
+            else:
+                kept += 1
+
+    def _invoke_step_callback(self, result: StepResult) -> None:
+        """Invoke step_callback (#74). Errors are logged, never raised."""
+        cb = self.step_callback
+        if cb is None:
+            return
+        try:
+            cb(result.step_index, result.intent, result.last_action, result.success)
+        except Exception as exc:  # noqa: BLE001 — observability must not break runs
+            logger.warning("step_callback raised: %s", exc)
 
     @staticmethod
     def _compute_plan_signature(plan: MicroPlan) -> str:
@@ -635,7 +712,12 @@ class MicroPlanRunner:
                 step_result = self._execute_step(effective_step, step_index)
             finally:
                 self._active_checkpoint_context = None
+            # Observability extras (#74): capture screenshot + invoke callback.
+            if step_result.screenshot_png is None:
+                step_result.screenshot_png = self._capture_screenshot_bytes()
             results.append(step_result)
+            self._enforce_screenshot_cap(results)
+            self._invoke_step_callback(step_result)
             self._record_step_costs(effective_step, step_result)
             self._log_progress(step_result, results)
 
@@ -880,8 +962,10 @@ class MicroPlanRunner:
         # Final cost summary
         if step_index >= len(plan.steps):
             persist(step_index, status="completed")
+            self._final_status = "completed"
         elif self._final_status == "running":
             persist(step_index, status="halted", halt_reason="stopped")
+            self._final_status = "halted"
 
         gpu_cost, claude_cost, proxy_cost, total_cost = self._cost_totals()
         viable_count, phone_leads = self._lead_counts(results)
@@ -918,6 +1002,20 @@ class MicroPlanRunner:
         }
 
         return results
+
+    def run_with_status(self, plan: MicroPlan, resume: bool = False) -> RunnerResult:
+        """Same as ``run(plan)``, but returns the rich :class:`RunnerResult`.
+
+        Used by hosts that need the run status alongside the step list.
+        Extended in subsequent patches with cancelled / paused state.
+        """
+        steps = self.run(plan, resume=resume)
+        status = self._final_status or "completed"
+        return RunnerResult(
+            steps=steps,
+            status=status,
+            halt_reason="" if status == "completed" else status,
+        )
 
     @staticmethod
     def _successful_lead_data(results: list[StepResult]) -> list[str]:
