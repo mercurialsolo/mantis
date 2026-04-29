@@ -101,6 +101,10 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `training/` holds standalone scripts (rollout_collector.py, convert_rollouts.py)
+# that the test suite imports via `from training.X import ...`. Adding the repo
+# root puts them on sys.path without forcing `training/` to become a package.
+pythonpath = ["."]
 norecursedirs = [
     ".claude",
     "OSWorld",

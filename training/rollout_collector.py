@@ -24,12 +24,10 @@ in a `modal.App.function` that takes a task slice per worker.
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import time
 from dataclasses import asdict, dataclass, field
-from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 

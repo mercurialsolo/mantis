@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
 from PIL import Image
 
 from mantis_agent.actions import Action, ActionType
@@ -73,7 +72,7 @@ def _seed(tmp_path: Path, summary: str = GOOD, success: bool = True,
 
 def test_rollout_to_samples_emits_one_per_action_step(tmp_path: Path) -> None:
     out = _seed(tmp_path)
-    rollouts = [json.loads(l) for l in (out / "rollouts.jsonl").read_text().splitlines()]
+    rollouts = [json.loads(line) for line in (out / "rollouts.jsonl").read_text().splitlines()]
     samples = rollout_to_samples(rollouts[0], screenshots_root=out)
 
     # 3 trajectory steps, all with valid actions and screenshots → 3 samples
@@ -89,7 +88,7 @@ def test_rollout_to_samples_emits_one_per_action_step(tmp_path: Path) -> None:
 def test_rollout_to_samples_skips_missing_screenshots(tmp_path: Path) -> None:
     out = _seed(tmp_path)
     # Delete one screenshot from the first rollout.
-    rollouts = [json.loads(l) for l in (out / "rollouts.jsonl").read_text().splitlines()]
+    rollouts = [json.loads(line) for line in (out / "rollouts.jsonl").read_text().splitlines()]
     first = rollouts[0]
     target = out / first["trajectory"][0]["screenshot_path"]
     target.unlink()

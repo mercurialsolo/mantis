@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
 from PIL import Image
 
 from mantis_agent.actions import Action, ActionType
