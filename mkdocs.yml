@@ -115,6 +115,7 @@ nav:
       - Metrics: operations/metrics.md
   - Integrations:
       - integrations/index.md
+      - Embedding MicroPlanRunner: integrations/embedding-microplanrunner.md
       - vision_claude: integration-vision_claude.md
       - vision_claude — parity addendum: staffai-vision_claude-parity.md
   - Reference:

@@ -1,6 +1,8 @@
 # vision_claude / staffai — integration parity addendum
 
-Companion to [`integration-vision_claude.md`](./integration-vision_claude.md) and
+Companion to [`integration-vision_claude.md`](./integration-vision_claude.md),
+[`integrations/embedding-microplanrunner.md`](./integrations/embedding-microplanrunner.md)
+(the host-agnostic API reference), and
 [`PROPOSAL-mantis-cua-replaces-vision_claude.md`](./PROPOSAL-mantis-cua-replaces-vision_claude.md).
 The existing docs cover the **bring-up** shape (`VisionClaudeGymEnv`,
 `MantisOrchestratedBackend`, settings, factory). This doc captures the

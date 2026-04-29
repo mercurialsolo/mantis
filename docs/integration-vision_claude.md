@@ -4,6 +4,12 @@ How vision_claude consumes Mantis without giving up the Xvfb + mounted-browser
 desktop it owns today. Side-by-side architecture, sequence flow, deployment
 topology, and migration cost.
 
+> **For the host-agnostic API reference** (what to import, the four
+> integration knobs, backwards-compat invariants), see
+> [`integrations/embedding-microplanrunner.md`](./integrations/embedding-microplanrunner.md).
+> This doc is the vision_claude-specific narrative; the embedding doc is
+> what every host integration ends up consulting.
+
 ---
 
 ## A. Today — vision_claude with Claude CUA (in-process)
