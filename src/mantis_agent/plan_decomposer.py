@@ -116,16 +116,22 @@ Your job: break a human plan into SECTIONS of atomic steps with DEPENDENCIES bet
 
 TWO PLAN SHAPES — pick the right step types:
 
-A) LISTINGS / EXTRACTION FLOWS — search → click result → extract → loop
-   Use: navigate, filter, click, scroll, extract_url, extract_data, navigate_back, paginate, loop.
-   Example: "Find boats on BoatTrader", "Extract 10 jobs from Greenhouse".
+A) LISTINGS / EXTRACTION FLOWS — search → click result → extract → loop.
+   Use: navigate, filter, click, scroll, extract_url, extract_data, navigate_back,
+   paginate, loop.
+   Recognise this shape when the source says: "find/extract/list N items
+   matching <criteria>", "go through each result", "scrape/collect data
+   from the search results page", or describes pagination.
 
-B) FORM-DRIVEN FLOWS — login, edit pages, settings, dropdowns, single-button clicks
+B) FORM-DRIVEN FLOWS — login, edit pages, settings panels, dropdowns,
+   single labelled buttons.
    Use: navigate, fill_field, submit, select_option, extract_data (for verification).
-   Example: "Log in with credentials", "Update the Industry Vertical to X then Save",
-            "Open the dropdown and pick the third option".
+   Recognise this shape when the source says: "log in / sign in",
+   "enter/type/fill X into the Y field", "set Y to X", "choose/select/pick X
+   from Y", "click the {Save|Submit|Update|Continue|Login} button".
 
-A single plan can mix both shapes (e.g. log in, navigate, then extract listings).
+A single plan can mix both shapes (e.g. log in, navigate, then extract a list).
+Decide step-by-step — DO NOT force a whole plan into one shape.
 
 SECTIONS AND DEPENDENCIES — THIS IS CRITICAL:
 Plans MUST be organized into sections. Each section has a purpose and a gate:
@@ -133,19 +139,24 @@ Plans MUST be organized into sections. Each section has a purpose and a gate:
 1. SETUP section (required=true): Navigate + login + apply filters + VERIFY
    - Every filter / fill_field / submit step has required=true (default)
    - For listings flows, the LAST setup step is a GATE: Claude verifies filters applied
-   - For form-only flows, end with an extract_data step that verifies the right page/state
+   - For form-only flows, end with an extract_data step that verifies the right
+     page/state was reached (URL, header, and any read-back of the values just set)
    - If the gate FAILS, the entire pipeline HALTS — do not proceed
-   - Example listings gate: "Verify page heading shows expected filters and result count is reasonable"
-   - Example form gate: "Verify the Edit Lead page is shown for the correct lead"
+   - Example listings gate: "Verify page heading shows the expected filters and a
+     reasonable result count"
+   - Example form gate: "Verify the page shows the just-saved record with the
+     updated values"
 
 2. EXTRACTION section (listings flows only — depends on setup gate passing):
    - Click → URL → scroll → extract → re-navigate or back → loop
-   - Click only organic target result cards. Skip sponsored, paid, or off-topic cards.
-   - Extraction must inspect both contact areas AND expanded text sections.
-   - Extraction must reject off-topic or spam listings even if data is visible.
+   - Click only organic target result items. Skip sponsored, paid, or
+     off-topic cards.
+   - Extraction must inspect both summary regions AND any expanded detail
+     sections.
+   - Extraction must reject off-topic or spam items even if data is visible.
    - If any content section is collapsed, the extraction step must expand it first.
-   - Prefer safe reveal controls such as Show more, Read more, See more, Show phone,
-     View phone, or Call. Never use generic contact forms or lead-generation buttons.
+   - Prefer safe reveal controls (Show more, Read more, See details, View …,
+     Expand). Never use generic contact / lead-generation forms.
 
 3. PAGINATION section (listings flows only — depends on extraction):
    - Paginate → loop back to extraction
@@ -168,28 +179,36 @@ other repeated page items, structure the plan so the runtime can prove coverage:
 VERB → STEP-TYPE MAPPING (FORM FLOWS):
    "log in", "sign in", "authenticate"
        → fill_field for each credential, then submit for the login button.
-   "enter X in the Y field", "type X into Y", "fill in Y with X", "set Y to X"
+   "enter X in the Y field", "type X into Y", "fill in Y with X", "set Y to X",
+   "input X for Y"
        → fill_field with params={"label": "Y", "value": "X"}.
-   "click the Submit button", "click Save", "click Update Lead", "press Continue",
-   "submit the form"
+   "click {labelled button}", "press {labelled button}", "submit the form"
        → submit with params={"label": "<button text>"}.
-   "select X from the Y dropdown", "choose X under Y", "pick X in the Y selector"
+       Common button labels include Submit, Save, Update, Continue, Login,
+       Sign In, Apply, Confirm, Next, OK, Done — but use whatever text the
+       source plan names.
+   "select X from the Y dropdown", "choose X under Y", "pick X from Y",
+   "set the Y dropdown to X"
        → select_option with params={"dropdown_label": "Y", "option_label": "X"}.
-   "click the first / next / nth result/row/listing/card/job/product/property"
+   "click the first / next / nth result/row/item/card"
        → click (this IS a listings click, keep it).
 
-When the source text says "Click the user ID field and enter sarah.connor", emit
-a SINGLE fill_field step (with label="User ID", value="sarah.connor") — NOT a
-click step. The runner clicks the field as part of fill_field.
+When the source text says "Click the {field-name} field and enter {value}", emit
+a SINGLE fill_field step (label={field-name}, value={value}) — NOT a click step.
+The runner clicks the field as part of fill_field.
 
 RULES:
 - Each step: ONE action, ONE sentence, under 20 words
-- POSITIVE framing only: "Click the blue title text" (not "Don't click the photo")
-- Include WHAT + WHERE: "Click Private Seller text in left sidebar"
+- POSITIVE framing only: state what to click/type, never what to avoid
+- Include WHAT + WHERE: name the visible label of the target AND the
+  region of the page (e.g. left sidebar, top header, modal dialog,
+  results card) when it disambiguates. Use the labels the source plan
+  itself names — never invent application-specific filter names.
 - For navigate steps: include the FULL URL in the intent
 - Extraction steps (reading screen) use claude_only=true
-- For fill_field / submit / select_option, ALWAYS populate `params` (label/value/...)
-  even if the same info is in `intent`. The runner trusts `params` over the prose.
+- For fill_field / submit / select_option, ALWAYS populate `params`
+  (label/value/dropdown_label/option_label) using the labels the source
+  plan provides. The runner trusts `params` over the prose.
 - The "reverse" field must be a CUA-executable instruction
 - Set section="setup", section="extraction", or section="pagination"
 - Set required=true for all setup/filter/form steps (this is the default)
@@ -281,7 +300,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v9_form_vocab"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v10_generic_form_vocab"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
