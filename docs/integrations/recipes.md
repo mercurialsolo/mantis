@@ -1,12 +1,15 @@
 # Recipes — copy-paste plans for common patterns
 
-Working starting points for the four extraction patterns most teams
-onboard with. Each recipe is a complete `/v1/predict` request body —
-swap the URL and the schema fields and you have a working pipeline.
+Working starting points for the most common extraction and form-driven
+patterns. Each recipe is a complete `/v1/predict` request body — swap
+the URL and the schema fields and you have a working pipeline.
 
-> Same pattern across all four: **navigate → gate → click → extract_url
-> → scroll → extract_data → re-navigate → loop**. The structure is
-> universal; what changes is the schema and the start URL.
+> Two structural shapes:
+>
+> - **Listings flows** (recipes 1–4): `navigate → gate → click → extract_url
+>   → scroll → extract_data → re-navigate → loop`.
+> - **Form flows** (recipe 5): `navigate → fill_field → fill_field → submit
+>   → select_option → submit`. No looping; each step is a labelled action.
 
 For the full request envelope (auth, polling, results), see
 [Generic CUA usage](generic-cua.md). For when each piece kicks in, see
@@ -257,6 +260,113 @@ JSON
 Real estate sites are aggressive about Cloudflare; if you see `gate_failed`
 in the result, increase `proxy_city` / `proxy_state` to a residential
 target close to the listing geography.
+
+---
+
+## Recipe 5 — CRM-style form flow (login → edit → save)
+
+**Best for:** admin consoles, CRM record updates, settings pages — anywhere
+the workflow is "fill these fields and click Save", not "scrape these listings."
+
+This recipe uses the form-shaped step types (`fill_field`, `submit`,
+`select_option`) introduced in [issue #80](https://github.com/mercurialsolo/mantis/issues/80).
+They route through a single labelled-element grounder (no listings
+extraction), so login pages and edit forms work the same as search-result
+extraction works for boats.
+
+```bash
+curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "detached": true,
+  "state_key": "crm-edit-lead-industry",
+  "max_cost": 2,
+  "max_time_minutes": 15,
+  "micro": [
+    {"intent": "Go to https://staffai-test-crm.exe.xyz",
+     "type": "navigate", "budget": 3, "section": "setup", "required": true},
+    {"intent": "Enter user ID",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "User ID", "value": "sarah.connor"}},
+    {"intent": "Enter password",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Password", "value": "skynet99"}},
+    {"intent": "Click Login",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Login"}},
+    {"intent": "Verify dashboard or home page is shown",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page is the post-login dashboard for sarah.connor"},
+    {"intent": "Go to the Leads page",
+     "type": "navigate", "budget": 3, "section": "setup", "required": true,
+     "params": {"label": "Leads"}},
+    {"intent": "Click the first lead row with Qualified status",
+     "type": "click", "budget": 8, "grounding": true, "section": "setup",
+     "required": true},
+    {"intent": "Click Edit Lead",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Edit Lead"}},
+    {"intent": "Set Industry Vertical to Space Exploration",
+     "type": "select_option", "budget": 6, "section": "setup", "required": true,
+     "params": {"dropdown_label": "Industry Vertical", "option_label": "Space Exploration"}},
+    {"intent": "Click Update Lead to save changes",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Update Lead"}},
+    {"intent": "Verify the Update succeeded (toast / redirect to lead view)",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page shows confirmation that the lead was updated; Industry Vertical now reads Space Exploration"}
+  ]
+}
+JSON
+```
+
+Notes on the form-flow shape:
+
+- **No `loop` step** — form flows are linear. Each step does one thing.
+- **`required: true` everywhere** — failing a `fill_field` or `submit` is
+  fatal. You can't extract a lead's data if login failed.
+- **`params` is the source of truth** — the runner uses `params["label"]`
+  to locate the element via Claude vision, not the prose `intent`. The
+  prose is just for logs and traces.
+- **`gate` steps frame the workflow** — one after login, one after save.
+  Either gate failing halts the run before damage propagates.
+- **`select_option` is a two-phase step** — the runner first clicks the
+  dropdown to open it, screenshots the open menu, then clicks the option.
+  Both phases use Claude grounding; if either fails the whole step fails.
+
+The exact same pattern works for any admin console: replace the URL,
+the field labels, the dropdown labels, and the button labels.
+
+### `plan_text` variant for ad-hoc form flows
+
+You can also let the decomposer figure out the form structure from
+free-text. It now recognizes verbs like *enter, type, fill, set, choose,
+select, pick, click {Submit|Save|Update|Login}* and emits the right step
+types automatically:
+
+```bash
+curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "detached": true,
+    "plan_text": "1. Go to https://staffai-test-crm.exe.xyz\n2. Log in with user ID sarah.connor password skynet99\n3. Go to the Leads Page\n4. Select the first lead with the \"Qualified\" status\n5. Go to the Edit Lead page for this lead\n6. Update the Industry Vertical to \"Space Exploration\"\n7. Click \"Update Lead\"",
+    "state_key": "crm-edit-lead-text",
+    "max_cost": 2,
+    "max_time_minutes": 15
+  }'
+```
+
+The decomposer will emit `fill_field` / `submit` / `select_option` steps
+with structured `params`. For high-volume / production use, prefer the
+hand-authored `micro` form (above) — it skips the decompose step's $0.02
+Claude call and bakes in your exact field labels.
 
 ---
 

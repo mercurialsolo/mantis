@@ -1465,6 +1465,13 @@ class MicroPlanRunner:
             time.sleep(3)  # Longer wait — page filters may lazy-load
             return self._execute_claude_guided_filter(step, index)
 
+        # Form-shaped steps (issue #80): login forms, edit pages, dropdowns,
+        # single labelled buttons. Use find_form_target instead of find_all_listings
+        # so non-listings pages don't return "0 cards".
+        if step.type in ("fill_field", "submit", "select_option") and self.extractor:
+            time.sleep(2)  # form pages may finish hydrating
+            return self._execute_claude_guided_form(step, index)
+
         if step.type == "navigate_back" and self._opened_detail_in_new_tab:
             return self._execute_close_detail_tab(step, index)
 
@@ -2014,6 +2021,170 @@ class MicroPlanRunner:
             step_index=index, intent=step.intent, success=True,
             steps_used=1, duration=3.0,
         )
+
+    # ── Form-shaped step types (issue #80) ────────────────────────────
+    def _execute_claude_guided_form(self, step: MicroIntent, index: int) -> StepResult:
+        """Form-shaped dispatch: fill_field, submit, select_option.
+
+        Uses ``ClaudeExtractor.find_form_target`` (single labelled element)
+        instead of ``find_all_listings`` (the listings extractor that returns
+        zero cards on a login form). Operates on whatever page is currently
+        loaded — does not assume listings/results semantics, does not call
+        ``_ensure_results_filters``.
+
+        ``MicroIntent.params`` carries the structured payload:
+        - fill_field    : {"label", "value"}
+        - submit        : {"label"}
+        - select_option : {"dropdown_label", "option_label"}
+
+        The runner trusts ``params`` over the prose ``intent`` when both are
+        present.
+        """
+        import random
+
+        params = dict(getattr(step, "params", {}) or {})
+        # Brief settle — form pages frequently finish hydrating after the
+        # navigate that brought us here.
+        time.sleep(2)
+        screenshot = self.env.screenshot()
+
+        if step.type == "fill_field":
+            label = str(params.get("label") or "").strip()
+            value = str(params.get("value") or "").strip()
+            search_intent = (
+                f"Click the input field labelled '{label}' so we can type into it"
+                if label
+                else step.intent
+            )
+            target = self.extractor.find_form_target(
+                screenshot,
+                search_intent,
+                target_label=label,
+                target_value=value,
+            )
+            self.costs["claude_extract"] += 1
+            if not target:
+                logger.warning(f"  [claude-form] fill_field: target '{label}' not found")
+                return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
+            x, y = target["x"], target["y"]
+            type_value = value or target.get("value") or ""
+            try:
+                # Click the field, clear any pre-filled value, then type.
+                time.sleep(random.uniform(0.3, 0.8))
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                self.costs["gpu_steps"] += 1
+                time.sleep(0.4)
+                # Triple-click to select existing text (more reliable than ctrl+a in some inputs)
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                time.sleep(0.05)
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                time.sleep(0.2)
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+a"}))
+                time.sleep(0.15)
+                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Delete"}))
+                time.sleep(0.2)
+                if type_value:
+                    self.env.step(Action(action_type=ActionType.TYPE, params={"text": type_value}))
+                    time.sleep(0.4)
+                logger.info(f"  [claude-form] fill_field '{label[:40]}' = '{type_value[:30]}'")
+                return StepResult(
+                    step_index=index, intent=step.intent, success=True,
+                    steps_used=2, duration=2.0,
+                    data=f"fill:{label[:40]}",
+                )
+            except Exception as e:
+                logger.warning(f"  [claude-form] fill_field failed: {e}")
+                return StepResult(step_index=index, intent=step.intent, success=False, data=f"fill_error:{e}")
+
+        if step.type == "submit":
+            label = str(params.get("label") or "").strip()
+            search_intent = (
+                f"Click the '{label}' button to submit the form" if label else step.intent
+            )
+            target = self.extractor.find_form_target(
+                screenshot, search_intent, target_label=label,
+            )
+            self.costs["claude_extract"] += 1
+            if not target:
+                logger.warning(f"  [claude-form] submit: button '{label}' not found")
+                return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
+            x, y = target["x"], target["y"]
+            try:
+                time.sleep(random.uniform(0.4, 0.9))
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                self.costs["gpu_steps"] += 1
+                # Submit usually triggers navigation / save — wait longer.
+                time.sleep(2.5)
+                logger.info(f"  [claude-form] submit '{label[:40]}'")
+                return StepResult(
+                    step_index=index, intent=step.intent, success=True,
+                    steps_used=1, duration=3.0,
+                    data=f"submit:{label[:40]}",
+                )
+            except Exception as e:
+                logger.warning(f"  [claude-form] submit failed: {e}")
+                return StepResult(step_index=index, intent=step.intent, success=False, data=f"submit_error:{e}")
+
+        if step.type == "select_option":
+            dropdown = str(params.get("dropdown_label") or params.get("label") or "").strip()
+            option = str(params.get("option_label") or params.get("value") or "").strip()
+            # Phase 1: open the dropdown.
+            open_intent = (
+                f"Click the '{dropdown}' dropdown to open its option list"
+                if dropdown else step.intent
+            )
+            target = self.extractor.find_form_target(
+                screenshot, open_intent, target_label=dropdown,
+            )
+            self.costs["claude_extract"] += 1
+            if not target:
+                logger.warning(f"  [claude-form] select_option: dropdown '{dropdown}' not found")
+                return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
+            try:
+                time.sleep(random.uniform(0.3, 0.8))
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": target["x"], "y": target["y"]}))
+                self.costs["gpu_steps"] += 1
+                time.sleep(1.5)  # Allow option list to render
+            except Exception as e:
+                logger.warning(f"  [claude-form] select_option open failed: {e}")
+                return StepResult(step_index=index, intent=step.intent, success=False, data=f"select_open_error:{e}")
+
+            # Phase 2: pick the option. Re-screenshot so Claude sees the open menu.
+            opened_shot = self.env.screenshot()
+            pick_intent = (
+                f"Click the '{option}' option in the open dropdown menu"
+                if option else step.intent
+            )
+            option_target = self.extractor.find_form_target(
+                opened_shot, pick_intent, target_label=option,
+            )
+            self.costs["claude_extract"] += 1
+            if not option_target:
+                # Close the dropdown to keep the page in a clean state.
+                try:
+                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+                except Exception:
+                    pass
+                logger.warning(f"  [claude-form] select_option: option '{option}' not found in open menu")
+                return StepResult(step_index=index, intent=step.intent, success=False, data="option_not_found")
+            try:
+                time.sleep(random.uniform(0.2, 0.6))
+                self.env.step(Action(action_type=ActionType.CLICK, params={"x": option_target["x"], "y": option_target["y"]}))
+                self.costs["gpu_steps"] += 1
+                time.sleep(1.5)
+                logger.info(f"  [claude-form] select_option '{dropdown[:30]}' = '{option[:30]}'")
+                return StepResult(
+                    step_index=index, intent=step.intent, success=True,
+                    steps_used=2, duration=4.0,
+                    data=f"select:{dropdown[:30]}={option[:30]}",
+                )
+            except Exception as e:
+                logger.warning(f"  [claude-form] select_option pick failed: {e}")
+                return StepResult(step_index=index, intent=step.intent, success=False, data=f"select_pick_error:{e}")
+
+        # Unknown form type — shouldn't reach here.
+        logger.warning(f"  [claude-form] unsupported form step type: {step.type}")
+        return StepResult(step_index=index, intent=step.intent, success=False)
 
     def _execute_paginate_layered(self, step: MicroIntent, index: int) -> StepResult:
         """Layered pagination: URL-based → Claude-guided → Holo3 fallback.

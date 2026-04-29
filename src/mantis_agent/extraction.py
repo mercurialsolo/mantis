@@ -1270,3 +1270,116 @@ class ClaudeExtractor:
         }
         logger.info(f"  [claude-filter] '{result['label'][:40]}' at ({x},{y}) action={result['action']}")
         return result
+
+    def find_form_target(
+        self,
+        screenshot: Image.Image,
+        intent: str,
+        *,
+        target_label: str = "",
+        target_value: str = "",
+    ) -> dict | None:
+        """Find a labelled form element (input / button / dropdown / option) on any page.
+
+        The non-listings counterpart to ``find_filter_target``. Used by the
+        runner's ``fill_field`` / ``submit`` / ``select_option`` step types
+        for login forms, edit forms, settings panels — anywhere the page has
+        named fields-and-buttons rather than a listings grid.
+
+        Args:
+            screenshot: Current page screenshot.
+            intent: Free-text description: "Click the user ID input field and
+                enter sarah.connor", "Click the Login button", "Click the
+                Industry Vertical dropdown".
+            target_label: Optional structured label from
+                ``MicroIntent.params["label"]`` (preferred — more reliable
+                than parsing free text).
+            target_value: Optional value to type / option to select. The
+                runner re-reads this from ``params`` for the actual typing,
+                but providing it here helps Claude disambiguate.
+
+        Returns:
+            dict with keys: ``x``, ``y``, ``action`` ("click" | "type" |
+            "select"), ``value`` (text to type / option to pick), ``label``
+            (what was found). None on failure.
+        """
+        target_clause = (
+            f"\nThe target element label/text is: \"{target_label}\""
+            if target_label else ""
+        )
+        value_clause = (
+            f"\nThe value to type or option to select is: \"{target_value}\""
+            if target_value else ""
+        )
+        prompt = (
+            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"TASK: {intent}"
+            f"{target_clause}{value_clause}\n\n"
+            f"This page is NOT a listings/search-results grid. It is a form, "
+            f"login screen, edit page, settings panel, or similar. There is "
+            f"exactly ONE element matching the task — find it.\n\n"
+            f"Common patterns:\n"
+            f"- Text input field with a visible label nearby (above, to the left, or as placeholder text inside).\n"
+            f"- Button with visible text (Login, Sign In, Submit, Save, Update, Continue, …).\n"
+            f"- Dropdown / <select> showing the current value with a chevron.\n"
+            f"- Option inside an opened dropdown menu (overlay over the rest of the page).\n"
+            f"- Checkbox / radio with a label to its right.\n\n"
+            f"Determine the interaction:\n"
+            f"- \"click\" for buttons, links, checkbox/radio/toggle, or to OPEN a dropdown.\n"
+            f"- \"type\" for text inputs (the runner will click the field, clear, then type).\n"
+            f"- \"select\" for picking an option from a dropdown that is already open "
+            f"(if the dropdown is closed, return action=click on the dropdown control first).\n\n"
+            f"Return the CENTER coordinates of the target element. Output ONLY valid JSON:\n"
+            f"{{\"x\": N, \"y\": N, \"action\": \"click|type|select\", "
+            f"\"value\": \"text to type or option to select or empty\", "
+            f"\"label\": \"what element you found\"}}\n"
+            f"If the target is not visible anywhere on the page:\n"
+            f"{{\"x\": 0, \"y\": 0, \"action\": \"not_found\", "
+            f"\"value\": \"\", \"label\": \"describe what you see instead\"}}"
+        )
+
+        debug_stem = "claude_form"
+        try:
+            screenshot.save(self._debug_path(debug_stem, ".png"))
+        except Exception:
+            pass
+        try:
+            with open(self._debug_path(debug_stem, "_prompt.txt"), "w") as f:
+                f.write(prompt)
+        except Exception:
+            pass
+
+        text = self._call(screenshot, prompt)
+
+        try:
+            with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
+                f.write(text)
+        except Exception:
+            pass
+
+        parsed = self._parse_json(text)
+        if not parsed:
+            logger.warning(f"  [claude-form] parse failed: {text[:200]}")
+            return None
+
+        if parsed.get("action") == "not_found":
+            label = parsed.get("label", "unknown")
+            logger.info(f"  [claude-form] target not visible: {intent[:60]}")
+            logger.info(f"  [claude-form] What Claude sees: {label[:120]}")
+            return None
+
+        x = int(parsed.get("x", 0))
+        y = int(parsed.get("y", 0))
+        if x == 0 and y == 0:
+            logger.warning("  [claude-form] zero coordinates")
+            return None
+
+        result = {
+            "x": x,
+            "y": y,
+            "action": str(parsed.get("action", "click")),
+            "value": str(parsed.get("value", target_value or "")),
+            "label": str(parsed.get("label", target_label or "")),
+        }
+        logger.info(f"  [claude-form] '{result['label'][:40]}' at ({x},{y}) action={result['action']}")
+        return result

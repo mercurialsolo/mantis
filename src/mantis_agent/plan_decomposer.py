@@ -27,6 +27,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field, fields
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 class MicroIntent:
     """A single atomic instruction for the CUA executor."""
     intent: str             # 1 sentence for Holo3: "Click the blue title text below the photo"
-    type: str               # click, scroll, navigate, extract_url, extract_data, filter, paginate, loop, navigate_back
+    type: str               # click, scroll, navigate, extract_url, extract_data, filter, paginate, loop, navigate_back, fill_field, submit, select_option
     verify: str = ""        # Expected outcome: "URL contains boattrader.com/boat/"
     budget: int = 5         # Max Holo3 steps
     reverse: str = ""       # How to undo: "Press Alt+Left"
@@ -46,6 +47,12 @@ class MicroIntent:
     claude_only: bool = False  # No Holo3 steps — Claude reads screenshot
     loop_target: int = -1   # For loop type: jump back to this step index
     loop_count: int = 0     # For loop type: how many times to repeat
+    # Structured payload for form-shaped step types (#80). Keys vary by type:
+    #   fill_field    : {"label": str, "value": str}
+    #   submit        : {"label": str}
+    #   select_option : {"dropdown_label": str, "option_label": str}
+    # Empty for everything else; the runner falls back to parsing `intent`.
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -107,18 +114,32 @@ The executing model (Holo3, 3B params) can ONLY handle 1-sentence instructions w
 3-8 actions. It passes 100% on isolated tasks but fails when instructions are combined. \
 Your job: break a human plan into SECTIONS of atomic steps with DEPENDENCIES between sections.
 
+TWO PLAN SHAPES — pick the right step types:
+
+A) LISTINGS / EXTRACTION FLOWS — search → click result → extract → loop
+   Use: navigate, filter, click, scroll, extract_url, extract_data, navigate_back, paginate, loop.
+   Example: "Find boats on BoatTrader", "Extract 10 jobs from Greenhouse".
+
+B) FORM-DRIVEN FLOWS — login, edit pages, settings, dropdowns, single-button clicks
+   Use: navigate, fill_field, submit, select_option, extract_data (for verification).
+   Example: "Log in with credentials", "Update the Industry Vertical to X then Save",
+            "Open the dropdown and pick the third option".
+
+A single plan can mix both shapes (e.g. log in, navigate, then extract listings).
+
 SECTIONS AND DEPENDENCIES — THIS IS CRITICAL:
 Plans MUST be organized into sections. Each section has a purpose and a gate:
 
-1. SETUP section (required=true): Navigate + apply filters + VERIFY
-   - Every filter step has required=true
-   - The LAST step in setup is a GATE (gate=true): Claude verifies filters applied
-   - If the gate FAILS, the entire pipeline HALTS — do not extract from wrong page
-   - Example gate: "Verify page heading shows expected filters and result count is reasonable"
+1. SETUP section (required=true): Navigate + login + apply filters + VERIFY
+   - Every filter / fill_field / submit step has required=true (default)
+   - For listings flows, the LAST setup step is a GATE: Claude verifies filters applied
+   - For form-only flows, end with an extract_data step that verifies the right page/state
+   - If the gate FAILS, the entire pipeline HALTS — do not proceed
+   - Example listings gate: "Verify page heading shows expected filters and result count is reasonable"
+   - Example form gate: "Verify the Edit Lead page is shown for the correct lead"
 
-2. EXTRACTION section (depends on setup gate passing):
-   - Click → URL → scroll → extract → back → loop
-   - Only runs if setup gate passed
+2. EXTRACTION section (listings flows only — depends on setup gate passing):
+   - Click → URL → scroll → extract → re-navigate or back → loop
    - Click only organic target result cards. Skip sponsored, paid, or off-topic cards.
    - Extraction must inspect both contact areas AND expanded text sections.
    - Extraction must reject off-topic or spam listings even if data is visible.
@@ -126,11 +147,11 @@ Plans MUST be organized into sections. Each section has a purpose and a gate:
    - Prefer safe reveal controls such as Show more, Read more, See more, Show phone,
      View phone, or Call. Never use generic contact forms or lead-generation buttons.
 
-3. PAGINATION section (depends on extraction):
+3. PAGINATION section (listings flows only — depends on extraction):
    - Paginate → loop back to extraction
    - Only runs after extraction exhausts current page
 
-DYNAMIC PLAN VERIFICATION CONTRACT:
+DYNAMIC PLAN VERIFICATION CONTRACT (listings flows):
 For any plan that browses search results, listings, products, profiles, rows, or
 other repeated page items, structure the plan so the runtime can prove coverage:
    - The setup gate must state the required page/filter/search state.
@@ -144,21 +165,41 @@ other repeated page items, structure the plan so the runtime can prove coverage:
    - Do not hardcode a fixed item count unless the user explicitly provides one;
      use a bounded loop with runtime exhaustion checks.
 
+VERB → STEP-TYPE MAPPING (FORM FLOWS):
+   "log in", "sign in", "authenticate"
+       → fill_field for each credential, then submit for the login button.
+   "enter X in the Y field", "type X into Y", "fill in Y with X", "set Y to X"
+       → fill_field with params={"label": "Y", "value": "X"}.
+   "click the Submit button", "click Save", "click Update Lead", "press Continue",
+   "submit the form"
+       → submit with params={"label": "<button text>"}.
+   "select X from the Y dropdown", "choose X under Y", "pick X in the Y selector"
+       → select_option with params={"dropdown_label": "Y", "option_label": "X"}.
+   "click the first / next / nth result/row/listing/card/job/product/property"
+       → click (this IS a listings click, keep it).
+
+When the source text says "Click the user ID field and enter sarah.connor", emit
+a SINGLE fill_field step (with label="User ID", value="sarah.connor") — NOT a
+click step. The runner clicks the field as part of fill_field.
+
 RULES:
 - Each step: ONE action, ONE sentence, under 20 words
 - POSITIVE framing only: "Click the blue title text" (not "Don't click the photo")
 - Include WHAT + WHERE: "Click Private Seller text in left sidebar"
 - For navigate steps: include the FULL URL in the intent
 - Extraction steps (reading screen) use claude_only=true
+- For fill_field / submit / select_option, ALWAYS populate `params` (label/value/...)
+  even if the same info is in `intent`. The runner trusts `params` over the prose.
 - The "reverse" field must be a CUA-executable instruction
 - Set section="setup", section="extraction", or section="pagination"
-- Set required=true for all setup/filter steps
+- Set required=true for all setup/filter/form steps (this is the default)
 - Set gate=true for the verification step at the end of setup
 
 LOOP STRUCTURE:
   Extraction loop: click → URL → scroll → extract → back → loop(target=click, count=N)
   Pagination loop: paginate → loop(target=click, count=pages)
   The listing loop runs INSIDE the pagination loop.
+  Form-only flows do not need loops.
 
 PLAIN TEXT PLAN:
 {plan_text}
@@ -166,13 +207,20 @@ PLAIN TEXT PLAN:
 STEP TYPES:
 - navigate: Go to a URL — include full URL in intent (budget=3)
 - filter: Click a filter option (budget=8, grounding=true, required=true, section="setup")
-- click: Click a specific element (budget=8, grounding=true, section="extraction")
+- click: Click an element on a listings/results page (budget=8, grounding=true)
 - scroll: Scroll until target content visible (budget=10, section="extraction")
 - extract_url: Read URL from address bar (claude_only=true, budget=0, section="extraction")
-- extract_data: Inspect contact area and expanded description/details, then read structured data (claude_only=true, budget=0)
+- extract_data: Inspect page and read structured data or verify state (claude_only=true, budget=0)
 - navigate_back: Go back (budget=3, section="extraction")
 - paginate: Click Next page (budget=10, grounding=true, section="pagination")
 - loop: Jump back to step index (loop_target=N, loop_count=max)
+- fill_field: Click a labelled input and type a value
+              (budget=4, params={"label": "<visible field label>", "value": "<text to type>"})
+- submit: Click a labelled button — Login / Save / Submit / Update / Continue / etc.
+          (budget=4, params={"label": "<visible button text>"})
+- select_option: Open a dropdown and pick an option by visible text
+                 (budget=6, params={"dropdown_label": "<dropdown name>",
+                                    "option_label": "<option text>"})
 
 Output ONLY valid JSON array of steps.
 """
@@ -233,7 +281,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v8_step_type_fix"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v9_form_vocab"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -311,6 +359,10 @@ class PlanDecomposer:
 
         return plan
 
+    # Step types that interact with form-shaped UIs (login, edit, settings).
+    # Always claude-grounded; no listings find_all. See issue #80.
+    FORM_STEP_TYPES = ("fill_field", "submit", "select_option")
+
     @staticmethod
     def _build_intent(s: dict) -> MicroIntent:
         """Build a MicroIntent from a raw dict — used by both cache and fresh paths."""
@@ -326,6 +378,17 @@ class PlanDecomposer:
                 section = "pagination"
             elif step_type in ("click", "scroll", "extract_url", "extract_data", "navigate_back"):
                 section = "extraction"
+            elif step_type in PlanDecomposer.FORM_STEP_TYPES:
+                # Form steps default to "setup" — login + form-fill happens before extraction.
+                section = "setup"
+
+        # Form steps default to required=True — failing to fill a login field
+        # or click Submit is fatal to the rest of the plan.
+        default_required = step_type == "filter" or step_type in PlanDecomposer.FORM_STEP_TYPES
+
+        params = s.get("params") or {}
+        if not isinstance(params, dict):
+            params = {}
 
         return MicroIntent(
             intent=s.get("intent", ""),
@@ -333,13 +396,17 @@ class PlanDecomposer:
             verify=s.get("verify", s.get("expected_outcome", "")),
             budget=s.get("budget", 5),
             reverse=reverse,
-            grounding=s.get("grounding", step_type in ("click", "filter", "paginate")),
+            grounding=s.get(
+                "grounding",
+                step_type in ("click", "filter", "paginate") + PlanDecomposer.FORM_STEP_TYPES,
+            ),
             claude_only=s.get("claude_only", step_type in ("extract_url", "extract_data")),
             loop_target=s.get("loop_target", -1),
             loop_count=s.get("loop_count", 0),
             section=section,
-            required=s.get("required", step_type == "filter"),
+            required=s.get("required", default_required),
             gate=s.get("gate", False),
+            params=params,
         )
 
     @staticmethod
