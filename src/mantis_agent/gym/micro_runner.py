@@ -221,6 +221,8 @@ class MicroPlanRunner:
         self.step_callback = step_callback
         self.keep_screenshots = keep_screenshots
         self.cancel_event = cancel_event
+        # Registered host tools (#71). Mutated via register_tool().
+        self._tools: dict[str, dict[str, Any]] = {}
 
         # Cost tracking
         self.costs = {
@@ -234,6 +236,49 @@ class MicroPlanRunner:
 
     def dynamic_verification_report(self, status: str | None = None) -> dict[str, Any]:
         return self.dynamic_verifier.report(status=status or self._final_status)
+
+    # ── #71 Tool channel ────────────────────────────────────────────────
+    def register_tool(self, name: str, schema: dict[str, Any], handler: Any) -> None:
+        """Register a host-provided tool callable mid-plan.
+
+        Args:
+            name: Tool name (matches what the brain emits in its tool_use blocks).
+            schema: JSON-schema input definition. Compatible with
+                ``GenericToolAdapter.to_params()`` on the staffai side.
+            handler: ``Callable[[dict[str, Any]], Any]``. Invoked with the
+                kwargs the brain supplied. Return value is surfaced into the
+                step ``data`` field; raised exceptions are caught and surfaced
+                as ``success=False`` step results, never silently swallowed.
+        """
+        if not callable(handler):
+            raise TypeError(f"register_tool handler for {name!r} must be callable")
+        self._tools[name] = {"schema": dict(schema or {}), "handler": handler}
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        """Return registered tools as ``[{"name", "schema"}]`` (for brain prompts)."""
+        return [{"name": n, "schema": t["schema"]} for n, t in self._tools.items()]
+
+    def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        """Invoke a registered tool. Raises KeyError if not registered.
+
+        Errors from the handler propagate to the caller; `_invoke_tool` is the
+        loop-internal wrapper that converts errors into StepResult failures.
+        """
+        if name not in self._tools:
+            raise KeyError(f"tool not registered: {name}")
+        return self._tools[name]["handler"](arguments or {})
+
+    def _invoke_tool(self, name: str, arguments: dict[str, Any]) -> tuple[bool, str]:
+        """Run a tool, returning ``(success, data_str)`` for the step result."""
+        try:
+            value = self.call_tool(name, arguments)
+        except KeyError as exc:
+            return False, f"tool:{name}:not_registered:{exc}"
+        except Exception as exc:  # noqa: BLE001 — surface, never swallow
+            logger.exception("tool %s raised", name)
+            return False, f"tool:{name}:error:{type(exc).__name__}:{exc}"
+        rendered = "" if value is None else str(value)
+        return True, f"tool:{name}:ok:{rendered[:200]}"
 
     # ── #74 Observability ──────────────────────────────────────────────
     def _capture_screenshot_bytes(self) -> bytes | None:

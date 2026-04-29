@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+import pytest
 from PIL import Image
 
 from mantis_agent.actions import Action
@@ -201,3 +202,53 @@ def test_no_cancel_runs_all_steps():
     assert result.cancelled is False
     assert result.status == "completed"
     assert len(result.steps) == 3
+
+
+# ── #71 register_tool ───────────────────────────────────────────────────
+
+
+def test_register_tool_and_call_tool():
+    env = _FakeEnv()
+    r = _runner(env)
+    captured: dict[str, Any] = {}
+
+    def handler(args: dict[str, Any]) -> str:
+        captured.update(args)
+        return f"hi {args.get('name', 'anon')}"
+
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+    r.register_tool(name="greet", schema=schema, handler=handler)
+
+    listed = r.list_tools()
+    assert listed == [{"name": "greet", "schema": schema}]
+
+    out = r.call_tool("greet", {"name": "Mantis"})
+    assert out == "hi Mantis"
+    assert captured == {"name": "Mantis"}
+
+
+def test_register_tool_rejects_non_callable():
+    env = _FakeEnv()
+    r = _runner(env)
+    with pytest.raises(TypeError):
+        r.register_tool("bad", schema={}, handler="not-callable")  # type: ignore[arg-type]
+
+
+def test_call_tool_unknown_raises_keyerror():
+    env = _FakeEnv()
+    r = _runner(env)
+    with pytest.raises(KeyError):
+        r.call_tool("missing")
+
+
+def test_invoke_tool_surfaces_handler_errors_as_data():
+    env = _FakeEnv()
+    r = _runner(env)
+
+    def handler(_args: dict[str, Any]) -> None:
+        raise RuntimeError("nope")
+
+    r.register_tool("kapow", {}, handler)
+    ok, data = r._invoke_tool("kapow", {"x": 1})
+    assert ok is False
+    assert "RuntimeError" in data and "nope" in data
