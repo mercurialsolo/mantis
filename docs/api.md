@@ -159,7 +159,7 @@ last `tail` events written by the runner (default 200, max 10000).
 OpenAI-compatible reverse proxy to the in-pod Holo3 server. **For raw inference only** — no plan orchestration, no Claude grounding, no checkpointing. Designed for clients that want to run their own perception-action loop and use Holo3 as the brain.
 
 ```bash
-curl -X POST "https://model-qvvgkneq.api.baseten.co/production/v1/chat/completions" \
+curl -X POST "https://model-qvvgkneq.api.baseten.co/production/sync/v1/chat/completions" \
   -H "Authorization: Api-Key $BASETEN_API_KEY" \
   -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
   -H "Content-Type: application/json" \
@@ -201,7 +201,9 @@ OpenAI-compatible model listing.
 ```bash
 TOKEN=$(read -srp "MANTIS_API_TOKEN: " v && echo "$v")
 BTKEY="$BASETEN_API_KEY"
-ENDPOINT="https://model-qvvgkneq.api.baseten.co/production"
+# Baseten gateway forwards /sync/<any path> to the container. /predict is
+# the legacy default route (equivalent to /sync/predict).
+ENDPOINT="https://model-qvvgkneq.api.baseten.co/production/sync"
 
 # 1. Launch detached run
 RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \

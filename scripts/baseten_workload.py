@@ -39,6 +39,13 @@ def baseten_api_key() -> str:
     raise SystemExit("Missing BASETEN_API_KEY, BASETEN_KEY, or HAI_API_KEY in environment/.env")
 
 
+def mantis_api_token() -> str:
+    value = os.environ.get("MANTIS_API_TOKEN", "").strip()
+    if not value:
+        raise SystemExit("Missing MANTIS_API_TOKEN in environment/.env (set on container's Baseten secrets).")
+    return value
+
+
 def endpoint(args: argparse.Namespace) -> str:
     if getattr(args, "endpoint", None):
         return args.endpoint
@@ -60,6 +67,7 @@ def post_json(args: argparse.Namespace, payload: dict[str, Any]) -> dict[str, An
         data=body,
         headers={
             "Authorization": f"Api-Key {baseten_api_key()}",
+            "X-Mantis-Token": mantis_api_token(),
             "Content-Type": "application/json",
         },
         method="POST",
