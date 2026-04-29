@@ -422,6 +422,7 @@ def build_micro_suite(
     checkpoint_dir: str = "/data/checkpoints",
     proxy_city: str = "",
     proxy_state: str = "",
+    proxy_disabled: bool = False,
     objective: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
@@ -447,6 +448,7 @@ def build_micro_suite(
         "_plan_signature": signature,
         "_proxy_city": proxy_city,
         "_proxy_state": proxy_state,
+        "_proxy_disabled": bool(proxy_disabled),
         "_micro_plan": micro_plan_steps,
         "tasks": [],
     }

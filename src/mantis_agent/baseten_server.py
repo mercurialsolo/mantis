@@ -712,6 +712,7 @@ class BasetenCUARuntime:
             checkpoint_dir=str(data_root / "checkpoints"),
             proxy_city=str(payload.get("proxy_city") or os.environ.get("MANTIS_PROXY_CITY", "")),
             proxy_state=str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
+            proxy_disabled=bool(payload.get("proxy_disabled", False)),
             objective=objective_dict,
         )
         return suite
@@ -728,6 +729,7 @@ class BasetenCUARuntime:
             settle_time=settle_time,
             proxy_city=str(task_suite.get("_proxy_city") or ""),
             proxy_state=str(task_suite.get("_proxy_state") or ""),
+            proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
             browser=os.environ.get("MANTIS_BROWSER", "google-chrome"),
             profile_dir=str(data_root / "chrome-profile"),
             save_screenshots_dir=str(data_root / "screenshots"),
