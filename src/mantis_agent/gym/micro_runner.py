@@ -819,6 +819,7 @@ class MicroPlanRunner:
                 claude_only=step.claude_only, loop_target=step.loop_target,
                 loop_count=step.loop_count,
                 section=step.section, required=step.required, gate=step.gate,
+                params=dict(step.params or {}),  # form-vocab fill_field/submit/select_option payload
             )
 
             logger.info(f"  [{step_index:2d}] {step.type:15s} {dynamic_intent[:60]}")

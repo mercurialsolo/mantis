@@ -301,3 +301,45 @@ def test_execute_step_routes_fill_field_to_form_dispatch():
 
     runner._execute_claude_guided_form.assert_called_once()
     assert result.success is True
+
+
+def test_run_loop_preserves_params_on_effective_step():
+    """Regression: the run loop builds an `effective_step` per iteration that
+    only copies a subset of MicroIntent fields. ``params`` must be in that
+    subset — without it, every form step lands at the dispatch with an empty
+    params dict and no value to type / button label to find. Caught in
+    production E2E against staffai-test-crm where login fired but typed empty
+    strings into the User ID and Password fields.
+    """
+    env = _FakeEnv()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {
+        "x": 100, "y": 50, "action": "click", "value": "", "label": "User ID",
+    }
+    runner = _runner_with_extractor(env, extractor)
+
+    # Capture every dispatch invocation so we can inspect the effective_step.
+    dispatched: list[MicroIntent] = []
+
+    def spy(step: MicroIntent, index: int) -> StepResult:
+        dispatched.append(step)
+        return StepResult(step_index=index, intent=step.intent, success=True)
+
+    runner._execute_claude_guided_form = spy  # type: ignore[method-assign]
+
+    plan = MicroPlan(domain="test")
+    plan.steps.append(
+        MicroIntent(
+            intent="Enter the user ID",
+            type="fill_field",
+            section="setup",
+            required=False,  # avoid required-retry path
+            params={"label": "User ID", "value": "sarah.connor"},
+        )
+    )
+
+    runner.run(plan)
+
+    assert len(dispatched) == 1
+    effective = dispatched[0]
+    assert effective.params == {"label": "User ID", "value": "sarah.connor"}
