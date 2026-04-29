@@ -122,6 +122,7 @@ nav:
       - Architecture: architecture.md
       - Environment variables: reference/env-vars.md
       - Glossary: reference/glossary.md
+      - Coordinate spaces: reference/coordinate-spaces.md
   - Appendix:
       - appendix/index.md
       - Proposal: PROPOSAL-mantis-cua-replaces-vision_claude.md

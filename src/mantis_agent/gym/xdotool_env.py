@@ -36,6 +36,26 @@ from .base import GymEnvironment, GymObservation, GymResult
 logger = logging.getLogger(__name__)
 
 
+def scale_brain_to_display(
+    x_brain: int | float,
+    y_brain: int | float,
+    brain_size: tuple[int, int],
+    display_size: tuple[int, int],
+) -> tuple[int, int]:
+    """Scale (x, y) from brain-image pixel space to display pixel space.
+
+    See docs/reference/coordinate-spaces.md for the full contract.
+    Returns the rounded display-space integer (x, y).
+    """
+    bw, bh = brain_size
+    dw, dh = display_size
+    if bw <= 0 or bh <= 0:
+        raise ValueError(f"brain_size must be positive: got {brain_size}")
+    if dw <= 0 or dh <= 0:
+        raise ValueError(f"display_size must be positive: got {display_size}")
+    return round(x_brain * dw / bw), round(y_brain * dh / bh)
+
+
 class XdotoolGymEnv(GymEnvironment):
     """Pure screen-level environment — Xvfb + xdotool + mss.
 
