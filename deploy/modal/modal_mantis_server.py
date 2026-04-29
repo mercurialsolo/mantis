@@ -28,19 +28,15 @@ Modal volume. Subsequent containers reuse it — typical warm cold-start is
 
 ## Secrets
 
-Create a Modal Secret named ``mantis-server-secrets`` with:
+Reads from the local ``.env`` file at deploy time (same shape as
+``deploy/modal/modal_cua_server.py``). The ``.env`` MUST include:
+
   - MANTIS_API_TOKEN   (X-Mantis-Token enforced by baseten_server.py)
   - ANTHROPIC_API_KEY  (used by ClaudeGrounding / ClaudeExtractor)
   - PROXY_URL / PROXY_USER / PROXY_PASS (optional IPRoyal residential proxy)
 
-```bash
-modal secret create mantis-server-secrets \\
-  MANTIS_API_TOKEN=mantis_xxx \\
-  ANTHROPIC_API_KEY=sk-ant-xxx \\
-  PROXY_URL=http://geo.iproyal.com:12321 \\
-  PROXY_USER=... \\
-  PROXY_PASS=...
-```
+If you need a managed Modal Secret instead, swap
+``modal.Secret.from_dotenv()`` below for ``modal.Secret.from_name(...)``.
 
 ## Configure for vision_claude / staffai
 
@@ -154,7 +150,7 @@ def _start_llama_server() -> subprocess.Popen:
 @app.function(
     gpu="H100",
     volumes={"/data": vol},
-    secrets=[modal.Secret.from_name("mantis-server-secrets")],
+    secrets=[modal.Secret.from_dotenv()],
     timeout=86400,
     memory=65536,
     cpu=8,
