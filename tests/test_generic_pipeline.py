@@ -225,16 +225,22 @@ def test_boattrader_pipeline_unchanged():
     assert schema.required_fields == ["year", "make"]
     assert len(plan.steps) == 11  # same as extract_url_filtered.json
 
-    # Default (no schema) extractor still uses BoatTrader prompts
-    legacy = ClaudeExtractor()
-    assert "boat listing" in legacy._get_extract_prompt().lower()
+    # When the schema-driven path is used, BoatTrader vocabulary appears.
+    boat_extractor = ClaudeExtractor(schema=schema)
+    assert "boat listing" in boat_extractor._get_extract_prompt().lower()
 
 
 def test_no_schema_default_extractor():
-    """ClaudeExtractor() with no args is backward compatible."""
+    """ClaudeExtractor() with no args is domain-neutral.
+
+    The default prompt MUST NOT carry BoatTrader (or any application)
+    strings. Domain context is only injected via ExtractionSchema.
+    """
     ext = ClaudeExtractor()
     assert ext.schema is None
-    prompt = ext._get_extract_prompt()
-    assert "boat listing" in prompt.lower()
-    multi = ext._get_multi_extract_prompt()
-    assert "BoatTrader" in multi
+    prompt = ext._get_extract_prompt().lower()
+    for forbidden in ("boat listing", "boattrader", "dealer"):
+        assert forbidden not in prompt
+    multi = ext._get_multi_extract_prompt().lower()
+    for forbidden in ("boat listing", "boattrader", "dealer"):
+        assert forbidden not in multi
