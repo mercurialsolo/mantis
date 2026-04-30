@@ -622,12 +622,46 @@ class BasetenCUARuntime:
         if "task_file" in payload:
             path = self._resolve_path(payload["task_file"])
             return json.loads(path.read_text())
+        # plan_text: free-text → PlanDecomposer.decompose_text → micro suite.
+        # Documented in onboarding docs as the one-shot ad-hoc shape; build the
+        # suite here so callers get the same dispatch as the file-based path.
+        plan_text = payload.get("plan_text")
+        if plan_text:
+            return self._micro_suite_from_text(str(plan_text), payload)
 
         micro_path = payload.get("micro") or payload.get("micro_path") or os.environ.get(
             "MANTIS_DEFAULT_MICRO",
             "plans/boattrader/extract_url_filtered.json",
         )
         return self._micro_suite_from_path(str(micro_path), payload)
+
+    def _micro_suite_from_text(self, plan_text: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Decompose free-text → MicroPlan → suite. Used by the plan_text shape."""
+        from mantis_agent.plan_decomposer import PlanDecomposer
+
+        cache_dir = _data_root() / "plan_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_template = str(cache_dir / "decomposed_{hash}.json")
+
+        decomposer = PlanDecomposer()
+        micro_plan = decomposer.decompose_text(
+            plan_text, cache_path_template=cache_template,
+        )
+
+        steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
+        data_root = _data_root()
+        return build_micro_suite(
+            steps_dicts,
+            micro_plan.domain or "plan_text",
+            max_cost=float(payload.get("max_cost", 10.0)),
+            max_time_minutes=int(payload.get("max_time_minutes", 180)),
+            resume_state=bool(payload.get("resume_state", False)),
+            state_key=str(payload.get("state_key") or ""),
+            checkpoint_dir=str(data_root / "checkpoints"),
+            proxy_city=str(payload.get("proxy_city") or os.environ.get("MANTIS_PROXY_CITY", "")),
+            proxy_state=str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
+            proxy_disabled=bool(payload.get("proxy_disabled", False)),
+        )
 
     def _resolve_path(self, raw_path: str) -> Path:
         path = Path(raw_path)
