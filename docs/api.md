@@ -197,23 +197,23 @@ OpenAI-compatible model listing.
 
 ---
 
-## End-to-end example: 3-listing BoatTrader extraction
+## End-to-end example: 3-listing extraction
 
 ```bash
 TOKEN=$(read -srp "MANTIS_API_TOKEN: " v && echo "$v")
 BTKEY="$BASETEN_API_KEY"
 # Baseten gateway forwards /sync/<any path> to the container. /predict is
 # the legacy default route (equivalent to /sync/predict).
-ENDPOINT="https://model-qvvgkneq.api.baseten.co/production/sync"
+ENDPOINT="https://your-model.api.baseten.co/production/sync"
 
-# 1. Launch detached run
+# 1. Launch detached run — supply your own plan_text or a micro-plan.
 RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -H "Authorization: Api-Key $BTKEY" \
   -H "X-Mantis-Token: $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "detached": true,
-    "micro": "plans/boattrader/extract_url_filtered_3listings.json",
+    "plan_text": "Extract the first 3 listings from <your URL>: year, make, model, price, phone, url.",
     "state_key": "smoke-test",
     "resume_state": false,
     "max_cost": 2,
@@ -243,12 +243,12 @@ curl -fsS -X POST "$ENDPOINT/v1/predict" \
   | jq .result.leads
 ```
 
-Real result from the verification run on this branch:
+Result shape (one row per successfully extracted listing):
 
 ```
-1997 Caroff CHATAM 52       — $254,000 — phone +596696520959
-1987 Beneteau Idylle 15.50  — $130,000
-2006 Luhrs 41 Convertible   — $235,000 (Private Seller)
+<year> <make> <model>  — <price> — phone <phone or 'none'>
+<year> <make> <model>  — <price>
+<year> <make> <model>  — <price>
 ```
 
 ## Plan shapes — when to use which

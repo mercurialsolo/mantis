@@ -21,13 +21,13 @@ Architecture (qemu mode):
 
 Usage:
     # Playwright mode (default, fast)
-    modal run deploy/modal/modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json
+    modal run deploy/modal/modal_web_tasks.py --task-file tasks/crm/sample.json
 
     # QEMU VM mode (full desktop)
-    modal run deploy/modal/modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json --mode qemu
+    modal run deploy/modal/modal_web_tasks.py --task-file tasks/crm/sample.json --mode qemu
 
     # Detached
-    modal run --detach modal_web_tasks.py --task-file tasks/crm/staffai_tasks.json
+    modal run --detach modal_web_tasks.py --task-file tasks/crm/sample.json
 """
 
 import json
@@ -702,7 +702,7 @@ def _verify_task(env, verify_config: dict) -> bool:
 
 @app.local_entrypoint()
 def main(
-    task_file: str = "tasks/crm/staffai_tasks.json",
+    task_file: str = "tasks/crm/sample.json",
     plan_dir: str = "plans/crm",
     mode: str = "playwright",
     max_steps: int = 30,
@@ -718,7 +718,7 @@ def main(
         mode: "playwright" (headless, fast) or "qemu" (full desktop VM).
         max_steps: Max steps per task.
         inputs: Comma-separated key=value pairs for plan inputs.
-            Example: "password=skynet99,industry_value=Space Exploration"
+            Example: "password=<password>,industry_value=Space Exploration"
     """
     import glob
 

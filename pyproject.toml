@@ -14,7 +14,7 @@ dependencies = [
 # Orchestrator-only — for callers that run MicroPlanRunner in their own
 # process and talk to a remote Mantis Holo3 service over /v1/chat/completions
 # plus Anthropic over /v1/messages. No GPU, no in-process llama.cpp, no
-# browser. This is what vision_claude installs.
+# browser. This is what library-embedded host integrations install.
 orchestrator = [
     "requests>=2.28",
     "pydantic>=2",

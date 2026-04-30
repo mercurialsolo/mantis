@@ -73,9 +73,9 @@ def test_lead_counts_split_phone_leads_from_total_leads():
             intent="extract",
             success=True,
             data=(
-                "VIABLE | Year: 1997 | Make: Caroff | Model: CHATAM 52 | "
-                "Price: $254,000 | Phone: +596696520959 | "
-                "URL: boattrader.com/boat/1997-caroff-chatam-52-10130796/"
+                "VIABLE | Year: 1997 | Make: AcmeBoats | Model: Sample 52 | "
+                "Price: $254,000 | Phone: +1-415-555-0123 | "
+                "URL: example.com/boat/sample-52-1001/"
             ),
         ),
         StepResult(
@@ -83,9 +83,9 @@ def test_lead_counts_split_phone_leads_from_total_leads():
             intent="extract",
             success=True,
             data=(
-                "VIABLE | Year: 1987 | Make: Beneteau | Model: Idylle 15.50 | "
+                "VIABLE | Year: 1987 | Make: AcmeBoats | Model: Idylle | "
                 "Price: $130,000 | Phone: none | "
-                "URL: boattrader.com/boat/1987-beneteau-idylle-15-50-10139990/"
+                "URL: example.com/boat/idylle-1002/"
             ),
         ),
     ]
@@ -109,15 +109,15 @@ def test_filter_tokens_require_boattrader_private_seller_filters():
         "https://www.boattrader.com/boats/state-fl/city-miami/zip-33101/price-35000/"
     )
     assert not runner._url_has_required_filters(
-        "https://www.boattrader.com/boat/1997-caroff-chatam-52-10130796/"
+        "https://www.boattrader.com/boat/sample-listing-1001/"
     )
 
 
 def test_checkpoint_roundtrip_preserves_resume_state(tmp_path):
     path = tmp_path / "state.json"
     lead = (
-        "VIABLE | Year: 1997 | Make: Caroff | Model: CHATAM 52 | "
-        "Phone: +596696520959 | URL: boattrader.com/boat/10130796/"
+        "VIABLE | Year: 1997 | Make: AcmeBoats | Model: Sample 52 | "
+        "Phone: +1-415-555-0123 | URL: example.com/boat/1001/"
     )
     checkpoint = RunCheckpoint(
         run_key="boattrader-miami",

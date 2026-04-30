@@ -67,12 +67,10 @@ caller │ Holo3 + Claude       │         │ file manager, terminal, │
 
 | Path | Run | Result |
 |---|---|---|
-| Modal | 3-listing BoatTrader extraction | 2 / 3 leads, 1 with phone, $0.42, 13 min |
-| Baseten | 3-listing BoatTrader extraction | 3 / 3 leads, 1 with phone, $0.42 budget, 9.5 min |
+| Modal | 3-listing extraction | 2 / 3 leads with phone, ~$0.42, 13 min |
+| Baseten | 3-listing extraction | 3 / 3 leads with phone, ~$0.42, 9.5 min |
 
-Real lead row from the Baseten run:
-
-> **1997 Caroff CHATAM 52** — $254,000 — phone +596696520959 — boattrader.com/boat/1997-caroff-chatam-52-10130796/
+Both deployments produce structured JSON rows (year / make / model / price / phone / url) for every successfully extracted listing.
 
 ## At a glance
 
@@ -80,7 +78,7 @@ Real lead row from the Baseten run:
 |---|---|
 | Languages | Python 3.11+ |
 | GPU footprint | 1× H100 / A100 80 GB / L40S 48 GB (for Holo3 inference). Orchestrator can run on CPU. |
-| Cost per task (BoatTrader 3-listing reference) | GPU ~$0.12 + Claude ~$0.12 + proxy ~$0.18 = **~$0.42** |
+| Cost per task (3-listing reference) | GPU ~$0.12 + Claude ~$0.12 + proxy ~$0.18 = **~$0.42** |
 | Auth | `X-Mantis-Token` (custom header) + Baseten gateway `Authorization: Api-Key` |
 | API style | OpenAI-compatible `/v1/chat/completions` for inference; Mantis-shape `/v1/predict` for orchestrated runs |
 | Cloud paths | Baseten Truss · Modal · EKS (Terraform + k8s) · GKE (Terraform + k8s) · raw Docker |

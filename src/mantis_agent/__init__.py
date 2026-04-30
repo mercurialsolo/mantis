@@ -1,6 +1,6 @@
 """Mantis agent — world-class vision, patient observation, precise action.
 
-The orchestrator surface — what hosts (e.g. vision_claude) need to drive
+The orchestrator surface — what hosts (e.g. the host integration) need to drive
 ``MicroPlanRunner`` against a remote Mantis service — is re-exported at the
 top level. Heavyweight subpackages (gym envs, brains, extraction, grounding)
 remain available via deep imports for callers that want them.
@@ -15,7 +15,7 @@ Public orchestrator surface:
 
 Top-level imports here only pull modules listed in the ``[orchestrator]``
 extra (``requests``, ``pydantic``). They do not import torch / vLLM /
-playwright / pyautogui — keep it that way so vision_claude can install
+playwright / pyautogui — keep it that way so the host integration can install
 ``mantis-agent[orchestrator]`` without dragging GPU deps.
 """
 

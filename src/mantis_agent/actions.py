@@ -21,7 +21,7 @@ class ActionType(str, Enum):
     DRAG = "drag"
     WAIT = "wait"
     DONE = "done"
-    # Launch a binary on the desktop. Closes the symmetry gap with vision_claude
+    # Launch a binary on the desktop. Closes the symmetry gap with the host integration
     # whose Claude backend uses `bash` to start chromium. See issue #72.
     LAUNCH_APP = "launch_app"
 

@@ -16,7 +16,7 @@ Architecture:
 
 Usage:
     from mantis_agent.opus_planner import plan_with_opus
-    task_suite = plan_with_opus("plans/boattrader/extract_only.txt")
+    task_suite = plan_with_opus("path/to/plan.txt")
     # Returns JSON task suite ready for deploy/modal/modal_cua_server.py
 """
 
@@ -165,7 +165,7 @@ PHONE NUMBER EXTRACTION RULES:
 - If Description, Seller Notes, More Details, or Additional Equipment is collapsed, click \
   a safe expander such as "Show more", "Read more", "See more", or a section chevron before reading
 - Also inspect safe phone reveal controls such as "Show phone", "View phone", or "Call"
-- Phone formats to look for: (305)555-1234, 786-555-1234, 305.555.5678, +507 6615-9404, +596696520959, 10+ digit numbers
+- Phone formats to look for: (305)555-1234, 786-555-1234, 305.555.5678, +1-555-0123, +44 20 7946 0958, 10+ digit numbers
 - NOT phone numbers: prices ($45,000), years (2020), zip codes (33101), model numbers
 - Do NOT click "Contact Seller" or "Request Info" buttons — they open popup forms, not phone numbers
 - If only a generic "Contact Seller" form is visible after checking expanded text and safe phone \

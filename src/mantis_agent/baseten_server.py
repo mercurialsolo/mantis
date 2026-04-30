@@ -629,10 +629,17 @@ class BasetenCUARuntime:
         if plan_text:
             return self._micro_suite_from_text(str(plan_text), payload)
 
-        micro_path = payload.get("micro") or payload.get("micro_path") or os.environ.get(
-            "MANTIS_DEFAULT_MICRO",
-            "plans/boattrader/extract_url_filtered.json",
+        micro_path = (
+            payload.get("micro")
+            or payload.get("micro_path")
+            or os.environ.get("MANTIS_DEFAULT_MICRO", "")
         )
+        if not micro_path:
+            raise ValueError(
+                "Request must provide one of: 'plan_text', 'micro', "
+                "'micro_path', or set MANTIS_DEFAULT_MICRO on the deployment. "
+                "No default plan ships with the public image."
+            )
         return self._micro_suite_from_path(str(micro_path), payload)
 
     def _micro_suite_from_text(self, plan_text: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -704,13 +711,15 @@ class BasetenCUARuntime:
                 objective_dict["_plan_path"] = str(path)
             except Exception:
                 pass
-            # Use the default filtered JSON plan as a safe fallback.
-            # The detached thread will replace it with an enhanced plan via graph learning.
-            fallback_candidates = [
-                self._resolve_path("plans/boattrader/extract_url_filtered.json"),
-                self._resolve_path("boattrader/extract_url_filtered.json"),
-                Path(os.environ.get("MANTIS_DEFAULT_MICRO", "plans/boattrader/extract_url_filtered.json")),
-            ]
+            # When the deployment ships with a baked-in default plan, prefer
+            # it as a starting point — the detached thread will replace it
+            # with an enhanced plan via graph learning. When no default is
+            # configured, the minimal navigate-only fallback below kicks in.
+            default_micro = os.environ.get("MANTIS_DEFAULT_MICRO", "")
+            fallback_candidates: list[Path] = []
+            if default_micro:
+                fallback_candidates.append(self._resolve_path(default_micro))
+                fallback_candidates.append(Path(default_micro))
             fallback_loaded = False
             for fallback_path in fallback_candidates:
                 if fallback_path.exists():
@@ -1256,7 +1265,7 @@ async def chat_completions_proxy(
 ) -> Any:
     """Auth-gated reverse proxy to the in-pod llama.cpp Holo3 server.
 
-    Designed for OpenAI-compat clients (vision_claude's BrainHolo3 client,
+    Designed for OpenAI-compat clients (the host integration's BrainHolo3 client,
     direct `openai.OpenAI(...)` callers) that want to use Holo3 inference
     without the full /predict orchestrator.
 

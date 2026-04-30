@@ -289,7 +289,7 @@ class PlaywrightGymEnv(GymEnvironment):
         """Return the file path where a named session would be stored.
 
         Args:
-            name: Session name (e.g., "staffai_crm", "classifieds").
+            name: Session name (e.g., "crm_demo", "classifieds").
                   Used as the filename stem.
         """
         self._session_dir.mkdir(parents=True, exist_ok=True)
@@ -302,7 +302,7 @@ class PlaywrightGymEnv(GymEnvironment):
         as storage_state to skip login on subsequent tasks.
 
         Args:
-            name: Session name for the file (e.g., "staffai_crm").
+            name: Session name for the file (e.g., "crm_demo").
 
         Returns:
             Path to the saved state file.

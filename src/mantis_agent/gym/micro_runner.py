@@ -12,7 +12,7 @@ Usage:
     from mantis_agent.plan_decomposer import PlanDecomposer
     from mantis_agent.gym.micro_runner import MicroPlanRunner
 
-    plan = PlanDecomposer().decompose("plans/boattrader/extract_only.txt")
+    plan = PlanDecomposer().decompose_text("Extract jobs from ...")
     runner = MicroPlanRunner(brain=brain, env=env, ...)
     results = runner.run(plan)
 """
@@ -161,8 +161,8 @@ PauseRequested = _PauseRequested
 class PauseState:
     """Serializable snapshot of a paused MicroPlanRunner (#73).
 
-    Round-trips through JSON so staffai can store it on
-    ``plan.agent_data["vision_claude_state"]``. Resume by calling
+    Round-trips through JSON so host can store it on
+    ``plan.agent_data["host_state"]``. Resume by calling
     ``runner.resume(state, user_input=...)``.
     """
     version: int = 1
@@ -194,7 +194,7 @@ class RunnerResult:
     """Public result of a MicroPlanRunner.run() / resume() call.
 
     Carries cancellation / pause state alongside the step list so hosts wiring
-    the staffai backend don't have to read ``self._final_status``.
+    the host backend don't have to read ``self._final_status``.
     """
     steps: list[StepResult]
     status: str = "completed"  # completed | halted | cancelled | paused
@@ -298,7 +298,7 @@ class MicroPlanRunner:
         Args:
             name: Tool name (matches what the brain emits in its tool_use blocks).
             schema: JSON-schema input definition. Compatible with
-                ``GenericToolAdapter.to_params()`` on the staffai side.
+                ``GenericToolAdapter.to_params()`` on the host side.
             handler: ``Callable[[dict[str, Any]], Any]``. Invoked with the
                 kwargs the brain supplied. Return value is surfaced into the
                 step ``data`` field; raised exceptions are caught and surfaced
@@ -1156,7 +1156,7 @@ class MicroPlanRunner:
         """Same as ``run(plan)``, but returns the rich :class:`RunnerResult`.
 
         Carries cancellation / pause state alongside the step list so callers
-        wiring the staffai backend don't have to read ``self._final_status``.
+        wiring the host backend don't have to read ``self._final_status``.
         """
         steps = self.run(plan, resume=resume)
         return self._build_runner_result(plan, steps)
@@ -1540,7 +1540,7 @@ class MicroPlanRunner:
 
         Diagnostic logging: the path taken (cdp / ocr) is logged at INFO so
         run traces show which source produced the URL — needed because
-        post-PR-90 the staffai canary still showed ``(url=)`` empty and we
+        post-PR-90 the host canary still showed ``(url=)`` empty and we
         couldn't tell whether CDP was unreachable or returned empty itself.
         Also handles the case where ``env.current_url`` is a *method*
         instead of a property (a common integration mistake) by calling

@@ -8,12 +8,12 @@ Plans are YAML files that define multi-step browser workflows. They can be:
 
 Plan format:
     name: login_crm
-    description: Log in to StaffAI CRM
-    url: https://staffai-test-crm.exe.xyz
+    description: Log in to host platform CRM
+    url: https://crm.example.com
     inputs:
       user_id:
         description: "CRM user ID"
-        default: "sarah.connor"
+        default: "alice"
       password:
         description: "CRM password"
         required: true

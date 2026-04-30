@@ -3,7 +3,7 @@
 # Usage: ./check_web_tasks.sh [session_name]
 # Examples:
 #   ./check_web_tasks.sh                    # latest boattrader result
-#   ./check_web_tasks.sh staffai_crm        # CRM results
+#   ./check_web_tasks.sh crm_demo        # CRM results
 #   ./check_web_tasks.sh bt_full_prod       # specific session
 #   ./check_web_tasks.sh boattrader         # any boattrader result
 

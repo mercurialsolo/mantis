@@ -1155,7 +1155,7 @@ class WorkflowRunner:
     def _validate_viable(self, data: str, listing_url: str | None = None) -> bool:
         """A listing is viable if we extracted ANY useful boat data.
 
-        Per spec: fill PopYachts form with whatever we have —
+        Per spec: fill the lead entry form with whatever we have —
         Year, Make, Model, Type, Price, URL are always present.
         Phone and Seller Name are optional bonus fields.
 

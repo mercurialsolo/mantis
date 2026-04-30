@@ -7,16 +7,16 @@ subsequent tasks reuse automatically.
 
 Usage:
     # Run all tasks in a task file (login first, then authenticated tasks)
-    python run_web_tasks.py --tasks tasks/crm/staffai_tasks.json
+    python run_web_tasks.py --tasks tasks/crm/sample.json
 
     # Run a single task by ID
-    python run_web_tasks.py --tasks tasks/crm/staffai_tasks.json --task-id update_lead_industry
+    python run_web_tasks.py --tasks tasks/crm/sample.json --task-id update_lead_industry
 
     # Run with visible browser (non-headless)
-    python run_web_tasks.py --tasks tasks/crm/staffai_tasks.json --headed
+    python run_web_tasks.py --tasks tasks/crm/sample.json --headed
 
     # Override backend
-    python run_web_tasks.py --tasks tasks/crm/staffai_tasks.json --backend llamacpp --model-url http://localhost:8080/v1
+    python run_web_tasks.py --tasks tasks/crm/sample.json --backend llamacpp --model-url http://localhost:8080/v1
 """
 
 from __future__ import annotations

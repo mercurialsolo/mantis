@@ -19,12 +19,12 @@ from mantis_agent.tenant_auth import (
 def test_empty_allowlist_allows_any_domain():
     t = TenantConfig(tenant_id="t1", allowed_domains=())
     assert t.is_domain_allowed("example.com")
-    assert t.is_domain_allowed("internal.staffai-test-crm.exe.xyz")
+    assert t.is_domain_allowed("internal.crm.example.com")
 
 
 def test_exact_domain_match():
-    t = TenantConfig(tenant_id="t1", allowed_domains=("staffai-test-crm.exe.xyz",))
-    assert t.is_domain_allowed("staffai-test-crm.exe.xyz")
+    t = TenantConfig(tenant_id="t1", allowed_domains=("crm.example.com",))
+    assert t.is_domain_allowed("crm.example.com")
     assert not t.is_domain_allowed("evil.example.com")
 
 
@@ -66,13 +66,13 @@ def test_multi_tenant_keys_file(tmp_path: Path, monkeypatch):
     keys_file.write_text(json.dumps({
         "tenant_keys": {
             "tok-vc-prod": {
-                "tenant_id": "vision_claude_prod",
+                "tenant_id": "tenant_a",
                 "scopes": ["run", "status", "result"],
                 "max_concurrent_runs": 3,
                 "max_cost_per_run": 5.0,
                 "max_time_minutes_per_run": 30,
-                "anthropic_secret_name": "anthropic_api_key_vision_claude",
-                "allowed_domains": ["*.boattrader.com", "staffai-test-crm.exe.xyz"],
+                "anthropic_secret_name": "anthropic_api_key_tenant_a",
+                "allowed_domains": ["*.boattrader.com", "crm.example.com"],
             },
             "tok-readonly": {
                 "tenant_id": "readonly_consumer",
@@ -88,7 +88,7 @@ def test_multi_tenant_keys_file(tmp_path: Path, monkeypatch):
 
     cfg_run = store.resolve("tok-vc-prod")
     assert cfg_run is not None
-    assert cfg_run.tenant_id == "vision_claude_prod"
+    assert cfg_run.tenant_id == "tenant_a"
     assert cfg_run.has_scope("run")
     assert cfg_run.max_cost_per_run == 5.0
     assert cfg_run.is_domain_allowed("api.boattrader.com")

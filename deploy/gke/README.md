@@ -133,7 +133,7 @@ curl -fsS -X POST "https://$HOST/predict" \
   -H "Content-Type: application/json" \
   -d '{
     "detached": true,
-    "micro": "plans/boattrader/extract_url_filtered_3listings.json",
+    "micro": "plans/example/extract_listings.json",
     "state_key": "gke-smoke",
     "resume_state": false,
     "max_cost": 2,
