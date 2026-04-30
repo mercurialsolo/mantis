@@ -94,3 +94,47 @@ def test_xdotool_env_screen_size_matches_viewport():
     """The promise of screen_size: it's the dispatch-side display size."""
     env = _XdotoolRecorder(viewport=(1920, 1080))
     assert env.screen_size == (1920, 1080)
+
+
+def test_xdotool_env_current_url_returns_empty_when_cdp_unreachable():
+    """Issue #89 §1: when Chrome isn't running on the CDP port (unit-test
+    environment, container without --remote-debugging-port), current_url
+    must return empty string so callers fall back to screenshot OCR.
+    Pins the silent-fallback contract — no exceptions escape."""
+    env = _XdotoolRecorder(viewport=(1280, 720))
+    # Nothing listening on 9222 in unit tests — must not raise.
+    assert env.current_url == ""
+
+
+def test_xdotool_env_current_url_reads_active_tab(monkeypatch):
+    """When CDP is reachable, current_url returns the first non-internal
+    tab's URL. Mirrors Chrome's /json/list response shape."""
+    import io
+    import json
+
+    env = _XdotoolRecorder(viewport=(1280, 720))
+
+    fake_payload = json.dumps([
+        {"type": "background_page", "url": "chrome-extension://x/_generated.html"},
+        {"type": "page", "url": "chrome://newtab/"},
+        {"type": "page", "url": "https://crm.example.com/leads/42"},
+        {"type": "page", "url": "https://stale.example.com/"},
+    ]).encode()
+
+    class _FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return fake_payload
+
+    def fake_urlopen(req, timeout=None):
+        return _FakeResp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    # First non-internal tab wins; chrome:// URLs are filtered.
+    assert env.current_url == "https://crm.example.com/leads/42"
