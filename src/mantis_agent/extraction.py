@@ -63,7 +63,13 @@ class ExtractionSchema:
 
     @classmethod
     def from_objective(cls, objective: Any) -> ExtractionSchema:
-        """Build from an ObjectiveSpec."""
+        """Build from an ObjectiveSpec.
+
+        All domain-specific signals (spam indicators, allowed reveal
+        controls, forbidden lead-form labels) come from the objective. No
+        hardcoded application-specific defaults are injected — callers that
+        want them must specify them on the ObjectiveSpec.
+        """
         fields = [
             {"name": f.name, "type": f.type, "required": f.required, "example": f.example}
             for f in getattr(objective, "output_schema", [])
@@ -71,21 +77,19 @@ class ExtractionSchema:
         required = [f["name"] for f in fields if f.get("required", True)]
         forbidden = list(getattr(objective, "forbidden_actions", []))
         allowed = list(getattr(objective, "allowed_reveal_actions", []))
+        spam_text = list(getattr(objective, "spam_text_indicators", []))
+        spam_seller = list(getattr(objective, "spam_seller_indicators", []))
+        spam_label = str(getattr(objective, "spam_label", "") or "non-organic")
 
         return cls(
-            entity_name=getattr(objective, "target_entity", "listing") or "listing",
+            entity_name=getattr(objective, "target_entity", "item") or "item",
             fields=fields or cls._default_fields(),
             required_fields=required or ["url"],
-            spam_indicators=list(DEALER_TEXT_INDICATORS),
-            spam_seller_indicators=list(DEALER_SELLER_INDICATORS),
-            forbidden_controls=forbidden or [
-                "Contact Seller", "Request Info", "Email Seller",
-                "Get Pre-Qualified", "loan", "financing",
-            ],
-            allowed_controls=allowed or [
-                "Show more", "Read more", "See more", "Show phone",
-                "View phone", "Call",
-            ],
+            spam_indicators=spam_text,
+            spam_seller_indicators=spam_seller,
+            spam_label=spam_label,
+            forbidden_controls=forbidden,
+            allowed_controls=allowed,
         )
 
     @classmethod
@@ -160,7 +164,13 @@ class ExtractionSchema:
         return any(ind in seller_lower for ind in self.spam_seller_indicators)
 
 
-DEALER_TEXT_INDICATORS = (
+# Spam indicator constants. Kept for ExtractionSchema.default_boattrader()
+# which is now the only opt-in pathway that wires them in. Generic callers
+# get an empty spam list and rely on their own ExtractionSchema to inject
+# domain-specific indicators (recruiter spam for jobs, broker spam for
+# real estate, etc.). Nothing here is referenced as an implicit default
+# anywhere else in the file.
+_LEGACY_BOATTRADER_TEXT_INDICATORS = (
     "dealername-",
     "dealer website",
     "view dealer website",
@@ -174,7 +184,7 @@ DEALER_TEXT_INDICATORS = (
     "marinemax",
 )
 
-DEALER_SELLER_INDICATORS = (
+_LEGACY_BOATTRADER_SELLER_INDICATORS = (
     "marine",
     "marinemax",
     "yacht",
@@ -187,13 +197,18 @@ DEALER_SELLER_INDICATORS = (
     "llc",
 )
 
+# Deprecated public aliases — read by ExtractionSchema.default_boattrader()
+# only. New callers should populate ExtractionSchema fields explicitly.
+DEALER_TEXT_INDICATORS = _LEGACY_BOATTRADER_TEXT_INDICATORS
+DEALER_SELLER_INDICATORS = _LEGACY_BOATTRADER_SELLER_INDICATORS
+
 
 def _parse_bool(value: object) -> bool:
     """Parse API booleans that may arrive as strings."""
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.strip().lower() in {"true", "yes", "1", "dealer"}
+        return value.strip().lower() in {"true", "yes", "1"}
     return bool(value)
 
 
@@ -326,108 +341,65 @@ class ExtractionResult:
         return bool(self.year and self.make and self.is_private_seller())
 
 
+# Generic fallback prompts used when ClaudeExtractor is constructed without
+# a schema. They describe the extractor's job in entity-neutral language and
+# rely on the caller's plan/intent to provide context. Application-specific
+# behaviour (boat listings, job postings, real-estate) MUST come through an
+# explicit ExtractionSchema — the prompts below contain no hardcoded labels,
+# field names, or industry verbs.
+
 EXTRACT_PROMPT = """\
-Look at this screenshot of a boat listing page.
+Look at this screenshot of a detail page.
 
-Extract ALL of the following data visible on the page:
+Extract the structured data the page exposes. Read the browser URL bar,
+the page heading, and the most prominent labelled fields. Where you see
+clear key-value pairs (label : value, label \u2014 value, or stacked
+label/value rows), return them.
 
-1. URL: Read the browser address bar at the TOP of the screen
-2. Year: The model year (4-digit number like 2018)
-3. Make: The manufacturer (e.g. Sea Ray, Grady-White, Boston Whaler)
-4. Model: The model name (e.g. 240 Sundeck, Freedom 235)
-5. Price: The asking price (e.g. $42,500)
-6. Phone: Any phone number visible (10+ digits, format like 305-555-1234)
-7. Seller: The seller name if shown
-8. Is this a dealer/sponsored listing? Mark true for dealer inventory, broker listings,
-   company sellers, "Request a Price", "View Dealer Website", "More From This Dealer",
-   "MarineMax", sponsored ads, or new-boat/dealer inventory.
+Output ONLY valid JSON. The shape is open \u2014 use the field names
+you see on the page. Always include "url" with the address-bar value:
 
-For phone numbers: look in Description, Seller Notes, or contact sections.
-If no seller phone is visible, return phone as "".
-NOT phone numbers: prices, years, zip codes, model numbers, HP ratings.
-
-Output ONLY valid JSON:
-{"year": "", "make": "", "model": "", "price": "", "phone": "", "url": "", "seller": "", "is_dealer": false}
+{"url": "", "extracted": {"<field-name-as-shown>": "<value>", ...}}
 """
 
 EXTRACT_SCROLLED_PROMPT = """\
-Look at this screenshot. You have scrolled down on a boat listing page.
+Look at this screenshot. You have scrolled down on a detail page.
 
-Look for:
-1. Phone number in the Description or Seller Notes section (format: 305-555-1234, 10+ digits)
-2. Seller name
-3. Any additional details not captured from the top of the page
-
-NOT phone numbers: prices ($45,000), years (2020), zip codes (33101), HP ratings.
+Read any newly-visible labelled fields, free-text description content,
+and contact information. Don't repeat what was clearly visible at the
+top of the page \u2014 focus on what's revealed by the scroll.
 
 Output ONLY valid JSON:
-{"phone": "", "seller": "", "additional_info": ""}
+{"extracted": {"<field-name>": "<value>", ...}, "additional_info": ""}
 """
 
 EXTRACT_MULTI_SCREENSHOT_PROMPT = """\
-You are looking at multiple screenshots from the SAME BoatTrader listing page.
-They were captured at the top/contact area, description area, after any visible
-"Show more" expansion, and lower details sections.
+You are looking at multiple screenshots from the SAME detail page,
+captured at different scroll positions.
 
-Extract ALL fields visible across ALL screenshots:
-
-1. URL: Browser address bar from any screenshot
-2. Year: The model year
-3. Make: The boat manufacturer
-4. Model: The model name
-5. Price: The asking price
-6. Phone: First valid seller phone number visible anywhere
-7. Seller: Seller name if shown
-8. Is this a dealer/sponsored listing?
-
-Phone search priority:
-- Description text, Seller Notes, More Details, Additional Equipment
-- Contact/Call/phone reveal areas if visible
-- International numbers are valid, including +507 6615-9404 or +596696520959
-- Plain 10 digit numbers are valid, including 7863462333
-
-Phone reporting:
-- A visible seller phone number makes the lead higher value.
-- If no phone is visible, return phone as "" so metrics can separate phone leads
-  from private-seller leads without phone.
-
-Dealer/sponsored detection:
-- is_dealer=true for dealer inventory, broker listings, company sellers, sponsored ads,
-  "Request a Price", "View Dealer Website", "More From This Dealer", "MarineMax",
-  dealerName URLs, condition-new URLs, or new-boat/dealer inventory.
-- Private-seller/person-name listings should use is_dealer=false.
-
-NOT phone numbers: prices, years, zip codes, engine hours, horsepower, model
-numbers, HIN/serial numbers, dimensions, fuel capacities, or loan terms.
-
-If a screenshot only shows a generic "Contact Seller" form button but no phone,
-do not invent a phone number. If no phone is visible, use "".
+Extract every labelled field visible across all screenshots. Combine
+them into one record. Always include "url" with the address-bar value
+from whichever screenshot shows it.
 
 Output ONLY valid JSON:
-{"year": "", "make": "", "model": "", "price": "", "phone": "", "url": "", "seller": "", "is_dealer": false}
+{"url": "", "extracted": {"<field-name>": "<value>", ...}}
 """
 
 FIND_LISTING_CONTENT_CONTROL_PROMPT = """\
-Look at this BoatTrader listing screenshot.
+Look at this detail-page screenshot.
 
-Find ONE visible control that should be clicked to reveal more seller-supplied
-listing text or a seller phone number.
+Find ONE visible control that should be clicked to reveal more
+content the page is hiding behind a collapse/expand toggle. Typical
+targets are "Show more", "Read more", "See more", "Expand", or any
+visible chevron next to a collapsed section.
 
-Prefer these safe targets:
-- "Show more", "Read more", "See more", "More", "Expand", or a chevron for a
-  collapsed Description, Seller Notes, More Details, or Additional Equipment
-  section.
-- "Show phone", "View phone", "Call", or a phone-number reveal button.
-
-Do NOT choose generic lead-form or financing controls:
-- Do not click "Contact Seller", "Request Info", "Email Seller",
-  "Get Pre-Qualified", loan calculator, financing, report-it, social links,
-  nav links, or ads.
+Avoid controls that submit forms, send messages, navigate away, or
+trigger modals \u2014 only pick a control that expands content in place.
 
 Return the center of the best target. Output ONLY valid JSON:
-{"x": N, "y": N, "action": "expand_description|show_phone|none", "label": "visible text", "reason": "brief reason"}
+{"x": N, "y": N, "action": "expand|none", "label": "visible text", "reason": "brief reason"}
 
-If no safe reveal/expand control is visible, output:
+If no expand control is visible, output:
 {"x": 0, "y": 0, "action": "none", "label": "", "reason": "none visible"}
 """
 
@@ -899,18 +871,22 @@ class ClaudeExtractor:
                 + "\nFind a DIFFERENT listing that is NOT in the skip list."
             )
 
-        entity = self.schema.entity_name if self.schema else "boat listing"
+        entity = self.schema.entity_name if self.schema else "item"
         prompt = (
             f"Look at this search-results screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"The top of the screenshot may show the page header, search controls, and filters. "
-            f"Result cards may start only in the LOWER part of the screenshot, and the bottom-most card may be only partially visible.\n\n"
-            f"Find the first unprocessed {entity} card visible in this screenshot. "
-            f"Ignore the page header, filters, sort controls, ads, and footer links."
+            f"The top of the screenshot may show page header, search controls, "
+            f"and filters. Result entries may start only in the LOWER part of "
+            f"the screenshot; the bottom-most entry may be partially visible.\n\n"
+            f"Find the first unprocessed {entity} entry — could be a card, "
+            f"table row, list item, or any repeated clickable UI element. "
+            f"Ignore page headers, filters, sort controls, ads, and footer links."
             f"{skip_section}\n\n"
-            f"Return the CENTER coordinates of the clickable TITLE TEXT, NOT any image.\n"
-            f"If the exact title text is hard to read, return approximate coordinates for the title-text region and use \"unknown\" for the title.\n\n"
+            f"Return the CENTER coordinates of the entry's primary clickable "
+            f"area (title text or main link, NOT any image).\n"
+            f"If the exact title is hard to read, return approximate coordinates "
+            f"and use \"unknown\" for the title.\n\n"
             f"Output ONLY valid JSON: {{\"x\": N, \"y\": N, \"title\": \"the title text or unknown\"}}\n"
-            f"If no {entity} card is visible anywhere in the screenshot, output: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
+            f"If no {entity} entry is visible anywhere in the screenshot, output: {{\"x\": 0, \"y\": 0, \"title\": \"none\"}}"
         )
 
         debug_stem = f"claude_click_skip{skip_count}"
@@ -973,35 +949,39 @@ class ClaudeExtractor:
         The caller clicks each sequentially without calling Claude again.
         """
         debug_stem = "claude_find_all"
-        entity = self.schema.entity_name if self.schema else "boat listing"
-        spam_label = self.schema.spam_label if self.schema else "dealer"
-        spam_examples = ""
+        # All entity / spam / layout context comes from the schema. When no
+        # schema is provided, the prompt stays entity-neutral — it asks for
+        # "the items the user wants to click" without naming a domain.
+        entity = self.schema.entity_name if self.schema else "item"
+        spam_label = self.schema.spam_label if self.schema else "non-organic"
+        spam_examples_clause = ""
         if self.schema and self.schema.spam_indicators:
-            spam_examples = ", ".join(f'"{s}"' for s in self.schema.spam_indicators[:6])
-        else:
-            spam_examples = '"sponsored", "advertisement", "dealer inventory", "Request a Price"'
+            examples = ", ".join(f'"{s}"' for s in self.schema.spam_indicators[:6])
+            spam_examples_clause = (
+                f"\nSpam signals to filter (caller-provided): {examples}."
+            )
         prompt = (
             f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"Find ALL eligible {entity} cards visible anywhere in this screenshot. "
-            f"Result cards may start in the LOWER part of the screenshot. "
-            f"The bottom-most card may be only partially visible — include it.\n\n"
-            f"STRICT FILTER: only return organic result cards. "
-            f"Do NOT return {spam_label} cards, sponsored content, advertisements, "
-            f"or items matching these signals: {spam_examples}.\n\n"
-            f"If the screenshot shows an error page, rate limit, bot check, CAPTCHA, sign-in wall, "
-            f"or a message like 'Something went wrong' or 'Error 418', mark it as blocked.\n\n"
-            f"Return the CENTER coordinates of each card's TITLE TEXT area "
-            f"(not any image). "
+            f"Find ALL eligible {entity} entries visible in this screenshot. "
+            f"Entries may be cards-with-photos, table rows, list items, profile "
+            f"rows, panel sections, or any repeated UI element on a results "
+            f"page. Include the bottom-most entry even if partially visible.\n\n"
+            f"STRICT FILTER: only return organic entries the user can click. "
+            f"Skip {spam_label} content, sponsored ads, navigation tabs, "
+            f"sort/filter controls, headers, footers, and pagination bars."
+            f"{spam_examples_clause}\n\n"
+            f"If the screenshot shows an error page, rate limit, bot check, "
+            f"CAPTCHA, or sign-in wall, mark it as blocked.\n\n"
+            f"Return the CENTER coordinates of each entry's primary clickable "
+            f"area (the title text or the row's main link, not any image). "
             f"If a title is hard to read, use \"unknown\".\n\n"
-            f"For each card include seller text if visible and whether it is organic or {spam_label}/sponsored.\n\n"
-            f"Also check: is there a pagination bar (page numbers like 1, 2, 3... or a Next button) "
-            f"visible at the bottom? If so, note its Y coordinate.\n\n"
+            f"Also check: is there a pagination control (page numbers or a "
+            f"Next button) visible at the bottom? Note its Y coordinate.\n\n"
             f"Output ONLY valid JSON:\n"
             f"{{\"status\": \"ok\", \"listings\": [{{\"x\": N, \"y\": N, \"title\": \"text or unknown\", "
-            f"\"seller\": \"seller text or empty\", \"is_private_seller\": true/false, "
-            f"\"is_dealer\": true/false, \"is_sponsored\": true/false, \"reason\": \"brief\"}}, ...], "
+            f"\"is_organic\": true/false, \"reason\": \"brief\"}}, ...], "
             f"\"pagination_y\": N_or_null}}\n"
-            f"If this looks like a normal page but no listings are visible in this screenshot, output:\n"
+            f"If this looks like a normal page but no entries are visible, output:\n"
             f"{{\"status\": \"empty\", \"listings\": []}}\n"
             f"If the screenshot appears blocked or errored, output:\n"
             f"{{\"status\": \"blocked\", \"listings\": []}}"

@@ -820,6 +820,7 @@ class MicroPlanRunner:
                 loop_count=step.loop_count,
                 section=step.section, required=step.required, gate=step.gate,
                 params=dict(step.params or {}),  # form-vocab fill_field/submit/select_option payload
+                hints=dict(getattr(step, "hints", {}) or {}),  # plan-driven grounding hints
             )
 
             logger.info(f"  [{step_index:2d}] {step.type:15s} {dynamic_intent[:60]}")
@@ -1418,16 +1419,36 @@ class MicroPlanRunner:
         if step.type == "navigate":
             return self._execute_navigate(step, index)
 
-        # Click steps: Claude finds target → Holo3 clicks coordinates
+        # Click steps: dispatch by hints["layout"] (plan-driven, see issue #86).
+        # Default for click in an "extraction" section = listings click. Pages
+        # outside the extraction section, or steps that explicitly hint
+        # layout="single", route through find_form_target instead.
         if step.type == "click" and self.extractor:
-            if not self._ensure_results_filters(index):
-                return StepResult(
-                    step_index=index, intent=step.intent, success=False,
-                    data="filters_not_applied",
-                )
-            # Brief settle — page may still be loading after navigate/paginate
+            layout_hint = (step.hints or {}).get("layout", "")
+            is_listings = (
+                layout_hint == "listings"
+                or (not layout_hint and step.section == "extraction")
+            )
+            if is_listings:
+                if not self._ensure_results_filters(index):
+                    return StepResult(
+                        step_index=index, intent=step.intent, success=False,
+                        data="filters_not_applied",
+                    )
+                # Brief settle — page may still be loading after navigate/paginate
+                time.sleep(2)
+                return self._execute_claude_guided_click(step, index)
+            # Single-element click (nav link, button, anything labelled).
             time.sleep(2)
-            return self._execute_claude_guided_click(step, index)
+            return self._execute_claude_guided_form(
+                MicroIntent(
+                    intent=step.intent, type="submit",  # reuse submit dispatch
+                    budget=step.budget, section=step.section,
+                    required=step.required,
+                    params={"label": (step.params or {}).get("label", "")},
+                ),
+                index,
+            )
 
         # Gate steps: dedicated verifier (not extract_data)
         if step.gate and self.extractor:
@@ -1577,21 +1598,53 @@ class MicroPlanRunner:
                 if isinstance(scan_result, tuple):
                     status = scan_result[0]
                     if status == "blocked":
-                        logger.warning(f"  [claude-click] Viewport {self._viewport_stage}: blocked/error page")
-                        self.dynamic_verifier.record_viewport_scan(
-                            page=self._current_page,
-                            viewport_stage=self._viewport_stage,
-                            cards=[],
-                            new_cards=[],
-                            status="blocked",
-                            url=self._current_results_page_url() or self._last_known_url,
-                        )
-                        return StepResult(
-                            step_index=index,
-                            intent=step.intent,
-                            success=False,
-                            data="page_blocked",
-                        )
+                        # Could be a real error/anti-bot page OR a transient
+                        # proxy/CDN loading splash. Wait + re-scan the SAME
+                        # viewport once before giving up — proxy-loading
+                        # screens typically resolve in 5-15s. Caught when
+                        # Chromium's first-paint splash misled find_all_listings
+                        # into reporting blocked on a CRM that loaded fine
+                        # 30s later.
+                        already_retried = getattr(self, "_blocked_retry_done", False)
+                        if not already_retried:
+                            logger.warning(
+                                f"  [claude-click] Viewport {self._viewport_stage}: "
+                                f"blocked/error page — waiting 12s and rescanning"
+                            )
+                            self._blocked_retry_done = True
+                            time.sleep(12)
+                            screenshot = self.env.screenshot()
+                            scan_result = self.extractor.find_all_listings(screenshot)
+                            self.costs["claude_extract"] += 1
+                            if isinstance(scan_result, tuple) and scan_result[0] == "blocked":
+                                logger.warning(
+                                    f"  [claude-click] Viewport {self._viewport_stage}: "
+                                    f"still blocked after rescan — halting"
+                                )
+                            else:
+                                # Recovered — fall through to normal processing.
+                                self._blocked_retry_done = False
+                                if isinstance(scan_result, tuple):
+                                    status = scan_result[0]
+                                else:
+                                    status = "ok"
+                        if status == "blocked":
+                            self._blocked_retry_done = False
+                            logger.warning(f"  [claude-click] Viewport {self._viewport_stage}: blocked/error page")
+                            self.dynamic_verifier.record_viewport_scan(
+                                page=self._current_page,
+                                viewport_stage=self._viewport_stage,
+                                cards=[],
+                                new_cards=[],
+                                status="blocked",
+                                url=self._current_results_page_url() or self._last_known_url,
+                            )
+                            return StepResult(
+                                step_index=index,
+                                intent=step.intent,
+                                success=False,
+                                data="page_blocked",
+                            )
                     if status == "error":
                         logger.warning(f"  [claude-click] Viewport {self._viewport_stage}: parse/API failure")
                         self.dynamic_verifier.record_viewport_scan(

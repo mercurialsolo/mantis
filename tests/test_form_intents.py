@@ -303,6 +303,80 @@ def test_execute_step_routes_fill_field_to_form_dispatch():
     assert result.success is True
 
 
+def test_microintent_hints_round_trip_through_build_intent():
+    """hints is a free-form per-step grounding context the plan supplies to
+    the runner. Used to drive the click-dispatch decision without baking
+    any layout assumption into the runner. Defaults to {}."""
+    default = PlanDecomposer._build_intent({"intent": "x", "type": "click"})
+    assert default.hints == {}
+
+    hinted = PlanDecomposer._build_intent({
+        "intent": "Click the next lead row",
+        "type": "click",
+        "hints": {"layout": "listings", "spam_label": "broker"},
+    })
+    assert hinted.hints == {"layout": "listings", "spam_label": "broker"}
+
+
+def test_microintent_hints_rejects_non_dict():
+    """A misshapen `hints` (string from a buggy decomposer) drops to {}."""
+    intent = PlanDecomposer._build_intent({
+        "intent": "x", "type": "click", "hints": "not-a-dict",
+    })
+    assert intent.hints == {}
+
+
+def test_click_with_layout_single_routes_to_form_dispatch():
+    """A click step with hints={"layout": "single"} must NOT use
+    find_all_listings (the listings extractor) — it must go through
+    find_form_target instead. This is the plan-driven dispatch contract."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {
+        "x": 100, "y": 50, "action": "click", "value": "", "label": "Save Settings",
+    }
+    runner = _runner_with_extractor(env, extractor)
+    runner._ensure_results_filters = MagicMock(return_value=True)  # type: ignore[method-assign]
+
+    intent = MicroIntent(
+        intent="Click the Save Settings button",
+        type="click",
+        budget=4,
+        section="setup",  # would normally NOT route to form, but layout hint overrides
+        params={"label": "Save Settings"},
+        hints={"layout": "single"},
+    )
+    result = runner._execute_step(intent, index=0)
+
+    assert result.success is True
+    extractor.find_form_target.assert_called()
+    extractor.find_all_listings.assert_not_called()
+
+
+def test_click_with_no_hint_in_extraction_section_uses_listings_dispatch():
+    """A click step with no layout hint in section=extraction is the
+    canonical listings-flow case and must keep routing through
+    find_all_listings — no regression on existing BoatTrader-style plans."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    runner = _runner_with_extractor(env, extractor)
+    runner._ensure_results_filters = MagicMock(return_value=True)  # type: ignore[method-assign]
+    runner._execute_claude_guided_click = MagicMock(  # type: ignore[method-assign]
+        return_value=StepResult(step_index=0, intent="x", success=True),
+    )
+
+    intent = MicroIntent(
+        intent="Click the next un-extracted listing",
+        type="click",
+        budget=8,
+        section="extraction",
+    )
+    result = runner._execute_step(intent, index=0)
+
+    runner._execute_claude_guided_click.assert_called_once()
+    assert result.success is True
+
+
 def test_decompose_prompt_template_substitutes_without_format_keyerror():
     """The DECOMPOSE_PROMPT contains literal `params={"label": ...}` JSON
     examples. ``str.format()`` would interpret those `{` as field

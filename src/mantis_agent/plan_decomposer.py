@@ -53,6 +53,18 @@ class MicroIntent:
     #   select_option : {"dropdown_label": str, "option_label": str}
     # Empty for everything else; the runner falls back to parsing `intent`.
     params: dict[str, Any] = field(default_factory=dict)
+    # Per-step grounding hints for the runner. Free-form, plan-driven —
+    # never inferred from the runner's domain assumptions. Recognised keys:
+    #   layout: "listings" | "single"
+    #     "listings"  → use ClaudeExtractor.find_all_listings (results-page click)
+    #     "single"    → use ClaudeExtractor.find_form_target (one labelled element)
+    #     missing     → runner picks based on step.type and step.section
+    #   spam_indicators: list[str] — domain-specific spam strings to filter
+    #   spam_label: str — what to call spam in prompts (e.g. "recruiter", "broker")
+    #   entity_name: str — what the items are called on this page (job, lead, property)
+    # Anything that used to be hardcoded in the extractor should now flow
+    # through this field. See issue #86 for the redesign.
+    hints: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -402,6 +414,9 @@ class PlanDecomposer:
         params = s.get("params") or {}
         if not isinstance(params, dict):
             params = {}
+        hints = s.get("hints") or {}
+        if not isinstance(hints, dict):
+            hints = {}
 
         return MicroIntent(
             intent=s.get("intent", ""),
@@ -420,6 +435,7 @@ class PlanDecomposer:
             required=s.get("required", default_required),
             gate=s.get("gate", False),
             params=params,
+            hints=hints,
         )
 
     @staticmethod
