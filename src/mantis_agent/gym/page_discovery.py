@@ -235,7 +235,7 @@ Which element number [N] should I interact with to accomplish this action?
 Reply with ONLY the element number. For example: 1
 
 If the action requires typing text, reply with the element number followed by the text.
-For example: 2 sarah.connor
+For example: 2 alice
 
 If no element matches, reply: NONE"""
         return prompt
@@ -316,7 +316,7 @@ def parse_brain_choice(response: str) -> tuple[int | None, str | None]:
 
     Handles:
         "3"          → (3, None)
-        "2 sarah.connor"  → (2, "sarah.connor")
+        "2 alice"  → (2, "alice")
         "NONE"       → (None, None)
 
     Returns:

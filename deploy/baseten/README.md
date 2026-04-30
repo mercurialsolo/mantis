@@ -81,13 +81,13 @@ Keys-file shape:
 {
   "tenant_keys": {
     "<x-mantis-token-value>": {
-      "tenant_id": "vision_claude_prod",
+      "tenant_id": "tenant_a",
       "scopes": ["run", "status", "result", "logs"],
       "max_concurrent_runs": 3,
       "max_cost_per_run": 5.0,
       "max_time_minutes_per_run": 30,
-      "anthropic_secret_name": "anthropic_api_key_vision_claude",
-      "allowed_domains": ["*.boattrader.com", "staffai-test-crm.exe.xyz"]
+      "anthropic_secret_name": "anthropic_api_key_tenant_a",
+      "allowed_domains": ["*.boattrader.com", "crm.example.com"]
     }
   }
 }
@@ -130,7 +130,7 @@ backwards-compat with the v1 deployment.
 
 ## Trigger A Workload Run
 
-The default request runs `plans/boattrader/extract_url_filtered.json`. For
+The default request runs `plans/example/extract_listings.json`. For
 Modal-like behavior, set `detached: true`; the Baseten server returns a
 `run_id` immediately, continues work in the replica, and writes status, results,
 and lead CSV files under `$MANTIS_DATA_DIR/runs/<run_id>/`.
@@ -138,7 +138,7 @@ and lead CSV files under `$MANTIS_DATA_DIR/runs/<run_id>/`.
 ```json
 {
   "detached": true,
-  "micro": "plans/boattrader/extract_url_filtered.json",
+  "micro": "plans/example/extract_listings.json",
   "state_key": "boattrader-miami-private-v1",
   "resume_state": false,
   "max_cost": 10.0,
@@ -170,7 +170,7 @@ the Baseten API key from `.env`:
 
 ```bash
 uv run python scripts/baseten_workload.py run \
-  --micro plans/boattrader/extract_url_filtered.json \
+  --micro plans/example/extract_listings.json \
   --state-key boattrader-miami-private-v1 \
   --max-cost 10 \
   --max-time-minutes 180

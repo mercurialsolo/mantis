@@ -10,9 +10,9 @@ Usage:
 
     # Run from a free-text plan (Gemma4 preprocesses → EvoCUA executes):
     uv run modal run deploy/modal/modal_cua_server.py \
-        --plan-file plans/boattrader/full_spec.txt \
+        --plan-file plans/example/full_spec.txt \
         --model evocua-8b \
-        --inputs "pop_password=SelfService38#,zip_code=33101,search_radius=35"
+        --inputs "admin_password=SelfService38#,zip_code=33101,search_radius=35"
 
     # Run from a pre-built task suite (bypasses planner):
     uv run modal run deploy/modal/modal_cua_server.py \
@@ -1292,10 +1292,10 @@ def main(
 
     Modes:
       --task-file tasks/boattrader/dynamic.json     (direct execution)
-      --plan-file plans/boattrader/full_spec.txt    (Gemma4 preprocesses → execute)
+      --plan-file plans/example/full_spec.txt    (Gemma4 preprocesses → execute)
       --learn --task-file tasks/...                 (learning phase: build playbook)
       --verify --task-file tasks/...                (execution with step verification)
-      --micro plans/boattrader/extract_only.txt     (micro-intent decompose + execute)
+      --micro plans/example/extract_only.txt     (micro-intent decompose + execute)
       --graph-learn --micro plan.txt                (probe site + generate dependency graph + execute)
       --graph-learn-only --micro plan.txt           (probe site + generate graph, no execution)
 

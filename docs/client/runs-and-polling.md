@@ -92,9 +92,9 @@ The `summary.dynamic_verification_summary` block contains the per-page health ch
 {
   "result": {
     "leads": [
-      "VIABLE | Year: 1997 | Make: Caroff | Model: CHATAM 52 | Price: $254,000 | Phone: +596696520959",
-      "VIABLE | Year: 1987 | Make: Beneteau | Model: Idylle 15.50 | ...",
-      "VIABLE | Year: 2006 | Make: Luhrs | Model: 41 Convertible | ..."
+      "VIABLE | Year: <YYYY> | Make: <Make> | Model: <Model> | Price: <Price> | Phone: <Phone or 'none'>",
+      "VIABLE | Year: <YYYY> | Make: <Make> | Model: <Model> | ...",
+      "VIABLE | Year: <YYYY> | Make: <Make> | Model: <Model> | ..."
     ],
     "steps": [
       { "intent": "Navigate to ...", "type": "navigate", "success": true, "duration": 1.2, ... },

@@ -32,12 +32,10 @@ caller │ Holo3 + Claude       │         │ file manager, terminal, │
 
 | Path | Run | Result |
 |---|---|---|
-| Modal | 3-listing BoatTrader extraction | 2 / 3 leads, 1 with phone, $0.42, 13 min |
-| Baseten | 3-listing BoatTrader extraction | 3 / 3 leads, 1 with phone, $0.42 budget, 9.5 min |
+| Modal | 3-listing extraction | 2 / 3 leads with phone, ~$0.42, 13 min |
+| Baseten | 3-listing extraction | 3 / 3 leads with phone, ~$0.42, 9.5 min |
 
-Real lead row from the Baseten run:
-
-> **1997 Caroff CHATAM 52** — $254,000 — phone +596696520959 — boattrader.com/boat/1997-caroff-chatam-52-10130796/
+Both deployments produce structured JSON rows (year / make / model / price / phone / url) for every successfully extracted listing.
 
 ## Documentation
 
@@ -51,7 +49,7 @@ The full docs site is at **[mercurialsolo.github.io/mantis](https://mercurialsol
 | Integrate from your app | [Client](docs/client/index.md) — auth, plans, polling, recordings |
 | Run a multi-tenant fleet | [Operations](docs/operations/index.md) — tenant keys, rate limits, webhooks, metrics |
 | Look up an HTTP endpoint | [API reference](docs/api.md) |
-| Replace a Claude-CUA-style backend | [vision_claude integration](docs/integration-vision_claude.md) |
+| Replace a Claude-CUA-style backend | [the host integration integration](docs/integration-the host integration.md) |
 
 ## Quick start (no deploy needed)
 
@@ -68,7 +66,7 @@ curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -H "Content-Type: application/json" \
   -d '{
     "detached": true,
-    "micro": "plans/boattrader/extract_url_filtered_3listings.json",
+    "micro": "plans/example/extract_listings.json",
     "state_key": "first-run",
     "max_cost": 2,
     "max_time_minutes": 20,

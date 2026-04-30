@@ -52,9 +52,9 @@ def test_build_intent_params_round_trip():
     intent = PlanDecomposer._build_intent({
         "intent": "Enter the user ID",
         "type": "fill_field",
-        "params": {"label": "User ID", "value": "sarah.connor"},
+        "params": {"label": "User ID", "value": "alice"},
     })
-    assert intent.params == {"label": "User ID", "value": "sarah.connor"}
+    assert intent.params == {"label": "User ID", "value": "alice"}
 
 
 def test_build_intent_params_rejects_non_dict():
@@ -85,7 +85,7 @@ def test_microplan_round_trip_preserves_form_params():
                 section="setup",
                 required=True,
                 grounding=True,
-                params={"label": "User ID", "value": "sarah.connor"},
+                params={"label": "User ID", "value": "alice"},
             ),
             MicroIntent(
                 intent="Submit the form",
@@ -97,14 +97,14 @@ def test_microplan_round_trip_preserves_form_params():
                 params={"label": "Login"},
             ),
         ],
-        domain="staffai-test-crm.exe.xyz",
+        domain="crm.example.com",
     )
     encoded = plan.to_dict()
     restored = MicroPlan.from_dict(encoded)
 
     assert len(restored.steps) == 3
     assert restored.steps[1].type == "fill_field"
-    assert restored.steps[1].params == {"label": "User ID", "value": "sarah.connor"}
+    assert restored.steps[1].params == {"label": "User ID", "value": "alice"}
     assert restored.steps[2].type == "submit"
     assert restored.steps[2].params == {"label": "Login"}
 
@@ -160,7 +160,7 @@ def test_fill_field_calls_find_form_target_not_find_all_listings():
         section="setup",
         required=True,
         grounding=True,
-        params={"label": "User ID", "value": "sarah.connor"},
+        params={"label": "User ID", "value": "alice"},
     )
     result = runner._execute_claude_guided_form(intent, index=0)
 
@@ -535,8 +535,8 @@ def test_read_current_url_calls_method_property_for_buggy_envs():
     access then returns the bound method, which is truthy — without this
     guard the helper would return a method object as the URL.
 
-    Regression: post-PR-90 the staffai trace still showed ``(url=)`` empty;
-    one viable cause was their VisionClaudeGymEnv defining current_url as
+    Regression: post-PR-90 the host trace still showed ``(url=)`` empty;
+    one viable cause was their HostGymEnv defining current_url as
     a method, which short-circuits the truthy check on the bound method.
     """
     env = _FakeEnv()
@@ -598,7 +598,7 @@ def test_navigate_wait_override_via_params(monkeypatch: pytest.MonkeyPatch):
 def test_navigate_wait_override_via_env(monkeypatch: pytest.MonkeyPatch):
     """MANTIS_NAV_WAIT_SECONDS bumps every navigate when no per-step param.
 
-    Useful for the staffai canary's proxied-CRM cold-start where the splash
+    Useful for the host canary's proxied-CRM cold-start where the splash
     runs longer than 18s. Set once at deploy time, takes effect everywhere.
     """
     env = _FakeEnv()
@@ -665,7 +665,7 @@ def test_run_loop_preserves_params_on_effective_step():
     only copies a subset of MicroIntent fields. ``params`` must be in that
     subset — without it, every form step lands at the dispatch with an empty
     params dict and no value to type / button label to find. Caught in
-    production E2E against staffai-test-crm where login fired but typed empty
+    production E2E against host-test-crm where login fired but typed empty
     strings into the User ID and Password fields.
     """
     env = _FakeEnv()
@@ -691,7 +691,7 @@ def test_run_loop_preserves_params_on_effective_step():
             type="fill_field",
             section="setup",
             required=False,  # avoid required-retry path
-            params={"label": "User ID", "value": "sarah.connor"},
+            params={"label": "User ID", "value": "alice"},
         )
     )
 
@@ -699,4 +699,4 @@ def test_run_loop_preserves_params_on_effective_step():
 
     assert len(dispatched) == 1
     effective = dispatched[0]
-    assert effective.params == {"label": "User ID", "value": "sarah.connor"}
+    assert effective.params == {"label": "User ID", "value": "alice"}

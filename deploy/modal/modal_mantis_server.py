@@ -8,15 +8,15 @@ exposes the same FastAPI surface as the Baseten deployment:
   - POST /v1/chat/completions — OpenAI-compatible Holo3 inference proxy
   - GET  /v1/models / /health  — readiness + auth gate
 
-vision_claude swaps from Baseten to Modal by changing one setting:
+A host integration swaps from Baseten to Modal by changing one setting
+on its side:
 
-  VISION_CLAUDE_MANTIS_ENDPOINT=https://<workspace>--mantis-server-api.modal.run
+  MANTIS_ENDPOINT=https://<workspace>--mantis-server-api.modal.run
 
 Modal endpoints are publicly addressable but auth is still enforced by
 ``baseten_server.py`` via ``X-Mantis-Token`` — the platform-level
 ``Authorization: Api-Key …`` header that Baseten requires is NOT needed
-here, so leave ``VISION_CLAUDE_MANTIS_GATEWAY_AUTHORIZATION`` empty for
-this host.
+here, so any host-side gateway-auth setting can be left empty.
 
 ## Deploy
 
@@ -38,14 +38,14 @@ Reads from the local ``.env`` file at deploy time (same shape as
 If you need a managed Modal Secret instead, swap
 ``modal.Secret.from_dotenv()`` below for ``modal.Secret.from_name(...)``.
 
-## Configure for vision_claude / staffai
+## Configure for a host integration
 
-After deploy, the app URL is printed by Modal. Set on staffai side:
+After deploy, the app URL is printed by Modal. Set on the host side:
 
 ```bash
-VISION_CLAUDE_MANTIS_ENDPOINT=<the-modal-app-url>
-VISION_CLAUDE_MANTIS_API_TOKEN=<MANTIS_API_TOKEN-from-the-secret>
-# Modal needs no gateway auth — leave VISION_CLAUDE_MANTIS_GATEWAY_AUTHORIZATION unset.
+MANTIS_ENDPOINT=<the-modal-app-url>
+MANTIS_API_TOKEN=<MANTIS_API_TOKEN-from-the-secret>
+# Modal needs no gateway auth — leave any gateway-auth setting unset.
 ```
 """
 
@@ -103,7 +103,6 @@ image = (
         "&& cmake --build build --target llama-server --config Release -j$(nproc)",
     )
     .add_local_python_source("mantis_agent")
-    .add_local_dir("plans", "/packages/plans")
 )
 
 app = modal.App(APP_NAME, image=image)

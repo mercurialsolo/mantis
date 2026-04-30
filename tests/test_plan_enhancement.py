@@ -168,10 +168,17 @@ def test_extraction_section_is_loop():
 # ── Full pipeline validation ──
 
 
-def test_boattrader_enhanced_plan_validates_clean():
-    text = open("plans/boattrader/extract_only.txt").read()
+_LISTINGS_PROMPT = (
+    "Extract listings from the search results page. "
+    "Filter to private sellers near a target zip code, sorted by recently updated. "
+    "For each listing on the first page, open the detail page and extract "
+    "year, make, model, price, phone, and seller name. Loop until done."
+)
+
+
+def test_listings_enhanced_plan_validates_clean():
     spec, plan, phases = _build_enhanced_plan(
-        text, "boattrader.com",
+        _LISTINGS_PROMPT, "boattrader.com",
         ["private seller", "by owner", "zip", "price", "location"],
         probe=_boattrader_probe(),
     )
@@ -181,9 +188,8 @@ def test_boattrader_enhanced_plan_validates_clean():
 
 
 def test_enhanced_plan_has_correct_structure():
-    text = open("plans/boattrader/extract_only.txt").read()
     spec, plan, _ = _build_enhanced_plan(
-        text, "boattrader.com",
+        _LISTINGS_PROMPT, "boattrader.com",
         ["private seller", "by owner", "zip", "price", "location"],
         probe=_boattrader_probe(),
     )

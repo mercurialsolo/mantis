@@ -16,8 +16,8 @@ Architecture:
 
 Usage:
     decomposer = PlanDecomposer()
-    micro_plan = decomposer.decompose("plans/boattrader/extract_only.txt")
-    # Returns list of MicroIntent
+    micro_plan = decomposer.decompose_text("Extract jobs from ...")
+    # Returns a MicroPlan with an ordered list of MicroIntent steps
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ class MicroPlan:
 
     def to_dict(self) -> dict:
         """Serializable form. Round-trips through JSON for callers that want
-        to ship a pre-built plan over the wire (e.g. vision_claude passing
+        to ship a pre-built plan over the wire (e.g. the host integration passing
         a hand-authored micro_plan into MantisOrchestratedBackend)."""
         return {
             "steps": [
@@ -308,7 +308,7 @@ class PlanDecomposer:
     ) -> MicroPlan:
         """Decompose a free-text plan into micro-intents.
 
-        Used by callers (e.g. vision_claude's MantisOrchestratedBackend) that
+        Used by callers (e.g. the host integration's MantisOrchestratedBackend) that
         receive a prompt string rather than a path on disk.
 
         Args:

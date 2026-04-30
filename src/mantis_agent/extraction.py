@@ -1270,7 +1270,7 @@ class ClaudeExtractor:
         Args:
             screenshot: Current page screenshot.
             intent: Free-text description: "Click the user ID input field and
-                enter sarah.connor", "Click the Login button", "Click the
+                enter alice", "Click the Login button", "Click the
                 Industry Vertical dropdown".
             target_label: Optional structured label from
                 ``MicroIntent.params["label"]`` (preferred — more reliable

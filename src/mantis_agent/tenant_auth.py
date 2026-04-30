@@ -9,13 +9,13 @@ JSON shape (cleartext token → tenant config):
     {
       "tenant_keys": {
         "<x-mantis-token-value>": {
-          "tenant_id": "vision_claude_prod",
+          "tenant_id": "tenant_a",
           "scope": ["run", "status"],
           "max_concurrent_runs": 3,
           "max_cost_per_run": 5.0,
           "max_time_minutes_per_run": 30,
-          "anthropic_secret_name": "anthropic_api_key_vision_claude",
-          "allowed_domains": ["*.boattrader.com", "staffai-test-crm.exe.xyz"]
+          "anthropic_secret_name": "anthropic_api_key_tenant_a",
+          "allowed_domains": ["*.boattrader.com", "crm.example.com"]
         }
       }
     }

@@ -1,7 +1,6 @@
 model_name: mantis-holo3-cua-workload
 external_package_dirs:
   - ../../../src
-  - ../../../plans
 base_image:
   image: pytorch/pytorch:2.7.0-cuda12.8-cudnn9-devel
 build_commands:

@@ -205,14 +205,14 @@ def test_extract_hosts_from_micro_plan():
 
 def test_extract_hosts_from_task_suite():
     suite = {
-        "base_url": "https://staffai-test-crm.exe.xyz",
+        "base_url": "https://crm.example.com",
         "tasks": [
-            {"task_id": "login", "intent": "Go to https://staffai-test-crm.exe.xyz",
-             "start_url": "https://staffai-test-crm.exe.xyz"},
+            {"task_id": "login", "intent": "Go to https://crm.example.com",
+             "start_url": "https://crm.example.com"},
         ],
     }
     hosts = extract_navigate_hosts(suite)
-    assert "staffai-test-crm.exe.xyz" in hosts
+    assert "crm.example.com" in hosts
 
 
 def test_assert_hosts_allowed_passes_when_all_match():

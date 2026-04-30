@@ -1,4 +1,4 @@
-"""Lock the public orchestrator surface that vision_claude (and other hosts)
+"""Lock the public orchestrator surface that the host integration (and other hosts)
 import from ``mantis_agent``.
 
 These tests fail loudly if a refactor breaks the integration spec contract.
@@ -65,7 +65,7 @@ def test_microplan_from_dict_accepts_bare_step_list():
 
 
 def test_holo3_brain_accepts_extra_headers_and_overrides_authorization():
-    """vision_claude ships X-Mantis-Token and (sometimes) Api-Key auth."""
+    """the host integration ships X-Mantis-Token and (sometimes) Api-Key auth."""
     from mantis_agent.brain_holo3 import Holo3Brain
 
     brain = Holo3Brain(
@@ -95,10 +95,10 @@ def test_holo3_brain_default_headers_unchanged_without_extra():
 def test_orchestrator_surface_imports_no_heavy_deps():
     """Importing `mantis_agent` must not pull torch / vllm / pyautogui.
 
-    vision_claude installs ``mantis-agent[orchestrator]`` which lists only
+    the host integration installs ``mantis-agent[orchestrator]`` which lists only
     requests + pydantic. If a refactor sneaks a torch import into the
     transitive import chain, this test fails loudly so we catch it before
-    a vision_claude pip install starts dragging GPU deps.
+    a the host integration pip install starts dragging GPU deps.
 
     Runs in a subprocess so it gets a fresh interpreter — wiping
     ``sys.modules`` in-process polluted other tests that imported

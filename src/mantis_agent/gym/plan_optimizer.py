@@ -22,14 +22,14 @@ Usage:
     from mantis_agent.gym.plan_optimizer import optimize_plan
 
     task_suite = optimize_plan(
-        plan_text=open("plans/boattrader/spec.md").read(),
-        inputs={"zip_code": "33101", "pop_password": "xyz"},
+        plan_text=open("plans/example/spec.md").read(),
+        inputs={"zip_code": "33101", "admin_password": "xyz"},
     )
     # Returns a task suite JSON ready for modal_web_tasks_opencua.py
 
     # Or via CLI:
-    python -m mantis_agent.gym.plan_optimizer plans/boattrader/spec.md \
-        --inputs "zip_code=33101,pop_password=xyz" \
+    python -m mantis_agent.gym.plan_optimizer plans/example/spec.md \
+        --inputs "zip_code=33101,admin_password=xyz" \
         --output tasks/boattrader/optimized.json
 """
 
@@ -314,7 +314,7 @@ def _generate_sections(
         auth_root = re.match(r'(https?://[^/]+)', auth_url).group(1) if auth_url else ""
 
         email = _extract_credential(text, "email")
-        password = _extract_credential(text, "password") or inputs.get("pop_password", "")
+        password = _extract_credential(text, "password") or inputs.get("admin_password", "")
 
         # Login section
         login_intent = _build_auth_intent(text, auth_root, email, password)
@@ -398,7 +398,7 @@ def _generate_sections(
                 require_session=True,
                 start_url=entry_url,
                 verify_type="url_contains",
-                verify_value="popyachts" if "popyachts" in entry_url else "",
+                verify_value="admin" if "admin" in entry_url else "",
             ))
 
     return sections

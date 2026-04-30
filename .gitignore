@@ -48,3 +48,10 @@ screenshots/
 # Claude
 .claude/
 site/
+
+# Customer-specific plan / task files — never commit. The generic recipes
+# in docs/integrations/recipes.md are the public surface; customer-specific
+# workflow JSON belongs in private operator storage, not in this repo.
+plans/
+tasks/
+internal-docs/

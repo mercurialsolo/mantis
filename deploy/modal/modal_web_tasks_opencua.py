@@ -149,7 +149,7 @@ def start_vllm_server(model_dir: str, port: int = 8000, tp: int = 4) -> subproce
     gpu=CUA_CONFIG["gpus"],
     image=image,
     volumes={"/data": vol},
-    secrets=[modal.Secret.from_dotenv()],  # Load .env (PROXY_URL, PROXY_USER, PROXY_PASS, POP_PASSWORD)
+    secrets=[modal.Secret.from_dotenv()],  # Load .env (PROXY_URL, PROXY_USER, PROXY_PASS, ADMIN_PASSWORD)
     timeout=7200,
     memory=65536,
     cpu=16,

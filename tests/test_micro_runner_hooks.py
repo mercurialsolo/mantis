@@ -343,7 +343,7 @@ def test_resume_rejects_mismatched_plan_signature():
 
 
 def test_pause_state_is_json_serializable():
-    """PauseState lives in a Postgres JSONB column on staffai — keep it pure."""
+    """PauseState lives in a Postgres JSONB column on host — keep it pure."""
     import json
 
     state = PauseState(

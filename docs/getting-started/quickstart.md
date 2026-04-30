@@ -81,11 +81,14 @@ You should see something like:
 
 ```jsonc
 [
-  "VIABLE | Year: 1997 | Make: Caroff | Model: CHATAM 52 | Price: $254,000 | Phone: +596696520959",
-  "VIABLE | Year: 1987 | Make: Beneteau | Model: Idylle 15.50 | Price: $130,000 | Phone: none",
-  "VIABLE | Year: 2006 | Make: Luhrs | Model: 41 Convertible | Price: $235,000 | Phone: none"
+  "VIABLE | Year: <YYYY> | Make: <Make> | Model: <Model> | Price: <Price> | Phone: <Phone or 'none'>",
+  "VIABLE | Year: <YYYY> | Make: <Make> | Model: <Model> | Price: <Price> | Phone: none",
+  "VIABLE | Year: <YYYY> | Make: <Make> | Model: <Model> | Price: <Price> | Phone: none"
 ]
 ```
+
+The exact field set depends on the `extraction_schema` you submit
+([see ExtractionSchema in the recipes](../integrations/recipes.md)).
 
 ## 4. Download the screencast
 

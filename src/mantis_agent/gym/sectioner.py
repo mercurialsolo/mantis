@@ -15,7 +15,7 @@ Usage:
     from mantis_agent.gym.sectioner import section_workflow
 
     sections = section_workflow(
-        plan_text=open("plans/boattrader/spec.md").read(),
+        plan_text=open("plans/example/spec.md").read(),
         inputs={"zip_code": "33101", "search_radius": "35"},
     )
     # Returns a task suite JSON (same format as sectioned_workflow.json)

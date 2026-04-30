@@ -17,7 +17,7 @@ from typing import Any
 
 DEFAULT_MODEL_ID = "qvvgkneq"
 DEFAULT_ENVIRONMENT = "production"
-DEFAULT_MICRO = "plans/boattrader/extract_url_filtered.json"
+DEFAULT_MICRO = "plans/example/extract_listings.json"
 
 
 def load_dotenv(path: Path) -> None:
