@@ -120,14 +120,22 @@ class _FakePopen:
             self._output_path.write_bytes(self._output_bytes)
 
 
-def test_recorder_no_ffmpeg_returns_clean_failure(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr("mantis_agent.recorder.ffmpeg_available", lambda: False)
-    rec = ScreenRecorder(tmp_path / "vid.mp4")
-    started = rec.start()
-    assert not started
-    assert rec.result is not None
-    assert rec.result.error == "ffmpeg-not-installed"
-    assert not rec.result.succeeded
+def test_recorder_no_ffmpeg_returns_clean_failure(tmp_path: Path):
+    """When ffmpeg_available() returns False, ScreenRecorder.start() must
+    short-circuit with a clean error rather than attempting to spawn ffmpeg.
+
+    Uses ``with patch(...)`` (matching every other test in this file)
+    rather than the monkeypatch fixture, because monkeypatch interacts
+    poorly with later tests that ``import ScreenRecorder`` at module load
+    time and snapshot the ``ffmpeg_available`` reference inside the closure.
+    """
+    with patch("mantis_agent.recorder.ffmpeg_available", return_value=False):
+        rec = ScreenRecorder(tmp_path / "vid.mp4")
+        started = rec.start()
+        assert not started
+        assert rec.result is not None
+        assert rec.result.error == "ffmpeg-not-installed"
+        assert not rec.result.succeeded
 
 
 def test_recorder_happy_path(tmp_path: Path):
