@@ -90,7 +90,6 @@ line-length = 100
 target-version = "py311"
 extend-exclude = [
     "OSWorld",
-    "VWA_configs",
     "outputs",
     "screenshots",
 ]
@@ -108,7 +107,6 @@ pythonpath = ["."]
 norecursedirs = [
     ".claude",
     "OSWorld",
-    "VWA_configs",
     "outputs",
     "screenshots",
 ]
