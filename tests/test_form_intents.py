@@ -301,3 +301,26 @@ def test_execute_step_routes_fill_field_to_form_dispatch():
 
     runner._execute_claude_guided_form.assert_called_once()
     assert result.success is True
+
+
+def test_decompose_prompt_template_substitutes_without_format_keyerror():
+    """The DECOMPOSE_PROMPT contains literal `params={"label": ...}` JSON
+    examples. ``str.format()`` would interpret those `{` as field
+    placeholders and raise KeyError on every decompose call. The decomposer
+    uses ``str.replace()`` instead.
+
+    This test pins the contract: building the prompt via the documented
+    mechanism (replace ``{plan_text}``) must produce the complete prompt
+    with the user's plan substituted, AND ``str.format()`` would have
+    crashed if used. Caught when a CRM canary failed with
+    ``KeyError: '"label"'`` against the deployed v10 decomposer.
+    """
+    from mantis_agent.plan_decomposer import DECOMPOSE_PROMPT
+
+    plan = "Step 1: do a thing\nStep 2: do another thing"
+    rendered = DECOMPOSE_PROMPT.replace("{plan_text}", plan)
+    assert plan in rendered
+    assert "{plan_text}" not in rendered
+
+    with pytest.raises(KeyError):
+        DECOMPOSE_PROMPT.format(plan_text=plan)

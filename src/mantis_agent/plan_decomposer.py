@@ -301,7 +301,9 @@ class PlanDecomposer:
                 pass
 
         logger.info(f"Decomposing plan with {self.model} ({len(plan_text)} chars)")
-        prompt = DECOMPOSE_PROMPT.format(plan_text=plan_text)
+        # Use replace() instead of format() — the prompt has literal `{...}`
+        # JSON examples (params={"label": ...}) that confuse str.format.
+        prompt = DECOMPOSE_PROMPT.replace("{plan_text}", plan_text)
 
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
