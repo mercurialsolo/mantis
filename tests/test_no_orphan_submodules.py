@@ -7,11 +7,11 @@ unconditionally on git+ URLs, and bail with
 
     fatal: no submodule mapping found in .gitmodules for path '<path>'
 
-That bug bit the original repo when an old ``VWA_configs`` gitlink stuck
-around without a ``.gitmodules`` entry — every downstream consumer
-(staffai's vision_claude container being the canonical example) had to
-work around it by cloning + ``--no-recurse-submodules`` + ``pip install
-/local/path``, which is fragile and surprising.
+This bug previously bit the repo when an unused benchmarking-config
+gitlink stuck around without a ``.gitmodules`` mapping — every
+downstream consumer of ``pip install git+https://.../mantis@<sha>``
+had to work around it by cloning ``--no-recurse-submodules`` and then
+``pip install /local/path``, which is fragile and surprising.
 
 The guard:
   - Greps the index for mode-160000 entries.
