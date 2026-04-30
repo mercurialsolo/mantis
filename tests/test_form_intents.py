@@ -301,3 +301,233 @@ def test_execute_step_routes_fill_field_to_form_dispatch():
 
     runner._execute_claude_guided_form.assert_called_once()
     assert result.success is True
+
+
+def test_microintent_hints_round_trip_through_build_intent():
+    """hints is a free-form per-step grounding context the plan supplies to
+    the runner. Used to drive the click-dispatch decision without baking
+    any layout assumption into the runner. Defaults to {}."""
+    default = PlanDecomposer._build_intent({"intent": "x", "type": "click"})
+    assert default.hints == {}
+
+    hinted = PlanDecomposer._build_intent({
+        "intent": "Click the next lead row",
+        "type": "click",
+        "hints": {"layout": "listings", "spam_label": "broker"},
+    })
+    assert hinted.hints == {"layout": "listings", "spam_label": "broker"}
+
+
+def test_microintent_hints_rejects_non_dict():
+    """A misshapen `hints` (string from a buggy decomposer) drops to {}."""
+    intent = PlanDecomposer._build_intent({
+        "intent": "x", "type": "click", "hints": "not-a-dict",
+    })
+    assert intent.hints == {}
+
+
+def test_click_with_layout_single_routes_to_form_dispatch():
+    """A click step with hints={"layout": "single"} must NOT use
+    find_all_listings (the listings extractor) — it must go through
+    find_form_target instead. This is the plan-driven dispatch contract."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {
+        "x": 100, "y": 50, "action": "click", "value": "", "label": "Save Settings",
+    }
+    runner = _runner_with_extractor(env, extractor)
+    runner._ensure_results_filters = MagicMock(return_value=True)  # type: ignore[method-assign]
+
+    intent = MicroIntent(
+        intent="Click the Save Settings button",
+        type="click",
+        budget=4,
+        section="setup",  # would normally NOT route to form, but layout hint overrides
+        params={"label": "Save Settings"},
+        hints={"layout": "single"},
+    )
+    result = runner._execute_step(intent, index=0)
+
+    assert result.success is True
+    extractor.find_form_target.assert_called()
+    extractor.find_all_listings.assert_not_called()
+
+
+def test_click_with_no_hint_in_extraction_section_uses_listings_dispatch():
+    """A click step with no layout hint in section=extraction is the
+    canonical listings-flow case and must keep routing through
+    find_all_listings — no regression on existing BoatTrader-style plans."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    runner = _runner_with_extractor(env, extractor)
+    runner._ensure_results_filters = MagicMock(return_value=True)  # type: ignore[method-assign]
+    runner._execute_claude_guided_click = MagicMock(  # type: ignore[method-assign]
+        return_value=StepResult(step_index=0, intent="x", success=True),
+    )
+
+    intent = MicroIntent(
+        intent="Click the next un-extracted listing",
+        type="click",
+        budget=8,
+        section="extraction",
+    )
+    result = runner._execute_step(intent, index=0)
+
+    runner._execute_claude_guided_click.assert_called_once()
+    assert result.success is True
+
+
+def test_decompose_prompt_template_substitutes_without_format_keyerror():
+    """The DECOMPOSE_PROMPT contains literal `params={"label": ...}` JSON
+    examples. ``str.format()`` would interpret those `{` as field
+    placeholders and raise KeyError on every decompose call. The decomposer
+    uses ``str.replace()`` instead.
+
+    This test pins the contract: building the prompt via the documented
+    mechanism (replace ``{plan_text}``) must produce the complete prompt
+    with the user's plan substituted, AND ``str.format()`` would have
+    crashed if used. Caught when a CRM canary failed with
+    ``KeyError: '"label"'`` against the deployed v10 decomposer.
+    """
+    from mantis_agent.plan_decomposer import DECOMPOSE_PROMPT
+
+    plan = "Step 1: do a thing\nStep 2: do another thing"
+    rendered = DECOMPOSE_PROMPT.replace("{plan_text}", plan)
+    assert plan in rendered
+    assert "{plan_text}" not in rendered
+
+    with pytest.raises(KeyError):
+        DECOMPOSE_PROMPT.format(plan_text=plan)
+
+
+def test_navigate_wait_override_via_params(monkeypatch: pytest.MonkeyPatch):
+    """Per-step params["wait_after_load_seconds"] beats the env override.
+
+    Lets a plan say "this navigate hits a slow proxied SPA, wait 35s before
+    Holo3 reads the page" without globally bumping the deployment-wide wait.
+    """
+    env = _FakeEnv()
+    runner = _runner_with_extractor(env, extractor=MagicMock())
+
+    captured: list[float] = []
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+    # Env override would push to 60 if param were ignored.
+    monkeypatch.setenv("MANTIS_NAV_WAIT_SECONDS", "60")
+
+    intent = MicroIntent(
+        intent="Go to https://example.com",
+        type="navigate",
+        params={"wait_after_load_seconds": 35},
+    )
+    result = runner._execute_navigate(intent, index=0)
+
+    assert result.success is True
+    # First sleep is the first-paint wait. Param=35 wins over env=60.
+    assert captured[0] == 35.0
+
+
+def test_navigate_wait_override_via_env(monkeypatch: pytest.MonkeyPatch):
+    """MANTIS_NAV_WAIT_SECONDS bumps every navigate when no per-step param.
+
+    Useful for the staffai canary's proxied-CRM cold-start where the splash
+    runs longer than 18s. Set once at deploy time, takes effect everywhere.
+    """
+    env = _FakeEnv()
+    runner = _runner_with_extractor(env, extractor=MagicMock())
+
+    captured: list[float] = []
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+    monkeypatch.setenv("MANTIS_NAV_WAIT_SECONDS", "30")
+
+    intent = MicroIntent(intent="Go to https://example.com", type="navigate")
+    result = runner._execute_navigate(intent, index=0)
+
+    assert result.success is True
+    assert captured[0] == 30.0
+
+
+def test_navigate_wait_default_unchanged(monkeypatch: pytest.MonkeyPatch):
+    """No param + no env override → 18s default. Pins the BoatTrader pipeline
+    timing so the new override knob doesn't silently shift existing flows."""
+    env = _FakeEnv()
+    runner = _runner_with_extractor(env, extractor=MagicMock())
+
+    captured: list[float] = []
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+    monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
+
+    intent = MicroIntent(intent="Go to https://example.com", type="navigate")
+    result = runner._execute_navigate(intent, index=0)
+
+    assert result.success is True
+    assert captured[0] == 18.0
+
+
+def test_navigate_wait_clamped_to_safe_range(monkeypatch: pytest.MonkeyPatch):
+    """Garbage / extreme values clamp to [0, 120] — no infinite hang from a
+    typo'd plan, no zero-wait race from a negative number."""
+    env = _FakeEnv()
+    runner = _runner_with_extractor(env, extractor=MagicMock())
+
+    captured: list[float] = []
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+    monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
+
+    intent = MicroIntent(
+        intent="Go to https://example.com",
+        type="navigate",
+        params={"wait_after_load_seconds": 999},
+    )
+    runner._execute_navigate(intent, index=0)
+    assert captured[0] == 120.0
+
+    captured.clear()
+    intent = MicroIntent(
+        intent="Go to https://example.com",
+        type="navigate",
+        params={"wait_after_load_seconds": -5},
+    )
+    runner._execute_navigate(intent, index=0)
+    assert captured[0] == 0.0
+
+
+def test_run_loop_preserves_params_on_effective_step():
+    """Regression: the run loop builds an `effective_step` per iteration that
+    only copies a subset of MicroIntent fields. ``params`` must be in that
+    subset — without it, every form step lands at the dispatch with an empty
+    params dict and no value to type / button label to find. Caught in
+    production E2E against staffai-test-crm where login fired but typed empty
+    strings into the User ID and Password fields.
+    """
+    env = _FakeEnv()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {
+        "x": 100, "y": 50, "action": "click", "value": "", "label": "User ID",
+    }
+    runner = _runner_with_extractor(env, extractor)
+
+    # Capture every dispatch invocation so we can inspect the effective_step.
+    dispatched: list[MicroIntent] = []
+
+    def spy(step: MicroIntent, index: int) -> StepResult:
+        dispatched.append(step)
+        return StepResult(step_index=index, intent=step.intent, success=True)
+
+    runner._execute_claude_guided_form = spy  # type: ignore[method-assign]
+
+    plan = MicroPlan(domain="test")
+    plan.steps.append(
+        MicroIntent(
+            intent="Enter the user ID",
+            type="fill_field",
+            section="setup",
+            required=False,  # avoid required-retry path
+            params={"label": "User ID", "value": "sarah.connor"},
+        )
+    )
+
+    runner.run(plan)
+
+    assert len(dispatched) == 1
+    effective = dispatched[0]
+    assert effective.params == {"label": "User ID", "value": "sarah.connor"}

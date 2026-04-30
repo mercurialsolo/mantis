@@ -166,6 +166,11 @@ def api():
     os.environ.setdefault("MANTIS_LLAMA_PORT", str(LLAMA_PORT))
     os.environ.setdefault("MANTIS_DATA_DIR", "/data/mantis-runs")
     os.environ.setdefault("MANTIS_REPO_ROOT", "/packages")
+    # baseten_server._find_gguf defaults to /models/holo3 (Baseten Truss path).
+    # Tell it where Modal actually puts the GGUF.
+    os.environ.setdefault("MANTIS_HOLO3_MODEL_DIR", MODEL_DIR)
+    os.environ.setdefault("MANTIS_HOLO3_GGUF", os.path.join(MODEL_DIR, HOLO3_GGUF))
+    os.environ.setdefault("MANTIS_HOLO3_MMPROJ", os.path.join(MODEL_DIR, HOLO3_MMPROJ))
 
     # Start llama-server alongside the FastAPI app. baseten_server's
     # /v1/chat/completions proxies to http://127.0.0.1:$MANTIS_LLAMA_PORT.

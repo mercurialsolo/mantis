@@ -57,10 +57,28 @@ def test_from_objective_indeed():
 
 
 def test_from_objective_no_output_schema():
+    """Without an objective.target_entity, the schema falls back to the
+    domain-neutral 'item' label — NOT 'boat listing' or any other
+    application-specific default. (Per the no-hardcoded-strings principle.)"""
     objective = ObjectiveSpec(raw_text="Search for items", domains=["example.com"])
     schema = ExtractionSchema.from_objective(objective)
-    assert schema.entity_name == "listing"
+    assert schema.entity_name == "item"
     assert "url" in [f["name"] for f in schema.fields]
+
+
+def test_from_objective_no_implicit_spam_indicators():
+    """from_objective must NOT silently inject BoatTrader-shaped spam
+    indicators when the objective doesn't specify any. Callers in other
+    domains (jobs, real-estate, CRM) must populate spam_indicators
+    themselves via ObjectiveSpec.spam_text_indicators."""
+    objective = ObjectiveSpec(raw_text="Search for items", domains=["example.com"])
+    schema = ExtractionSchema.from_objective(objective)
+    assert schema.spam_indicators == []
+    assert schema.spam_seller_indicators == []
+    # No "dealer" or "boatsgroup" sneaking in via the legacy default.
+    for indicator in schema.spam_indicators:
+        assert "dealer" not in indicator.lower()
+        assert "boats" not in indicator.lower()
 
 
 def test_schema_field_names():
@@ -184,10 +202,19 @@ def test_result_without_schema_not_viable():
 # ── ClaudeExtractor with schema ──
 
 
-def test_extractor_no_schema_uses_legacy_prompt():
+def test_extractor_no_schema_uses_generic_prompt():
+    """ClaudeExtractor() with no schema must produce a domain-neutral
+    extraction prompt. No BoatTrader (or any other application) strings
+    in the default. Schemas are the only sanctioned way to inject
+    domain context."""
     extractor = ClaudeExtractor()
     prompt = extractor._get_extract_prompt()
-    assert "boat listing" in prompt.lower()
+    p = prompt.lower()
+    # Generic — describes the extractor's job in entity-neutral terms.
+    assert "detail page" in p or "structured data" in p
+    # No application-specific strings.
+    for forbidden in ("boat", "dealer", "marinemax", "private seller"):
+        assert forbidden not in p, f"hardcoded {forbidden!r} in default prompt"
 
 
 def test_extractor_with_schema_uses_dynamic_prompt():

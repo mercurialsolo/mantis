@@ -87,6 +87,7 @@ def setup_env(
     settle_time: float = 2.0,
     proxy_city: str = "miami",
     proxy_state: str = "",
+    proxy_disabled: bool = False,
     display: str | None = None,
     start_xvfb: bool = False,
     browser: str = "google-chrome",
@@ -96,18 +97,28 @@ def setup_env(
 ) -> tuple[Any, Any]:
     """Set up proxy + XdotoolGymEnv.
 
+    Args:
+        proxy_disabled: When True, skip the upstream proxy entirely. Use for
+            test/internal sites that don't need bot-detection bypass and
+            shouldn't depend on the residential proxy's availability.
+
     Returns (env, proxy_proc_or_None).
     """
     from .gym.xdotool_env import XdotoolGymEnv
 
-    proxy = build_proxy_config(
-        city=proxy_city,
-        state=proxy_state,
-        session_id=f"mantis{run_id.replace('_', '')}",
-    )
-    proxy_server, proxy_proc = resolve_proxy_server(proxy)
-    if proxy:
-        print(f"  Proxy: {proxy.get('server', '')}")
+    if proxy_disabled:
+        proxy = None
+        proxy_server, proxy_proc = "", None
+        print("  Proxy: DISABLED (proxy_disabled=true)")
+    else:
+        proxy = build_proxy_config(
+            city=proxy_city,
+            state=proxy_state,
+            session_id=f"mantis{run_id.replace('_', '')}",
+        )
+        proxy_server, proxy_proc = resolve_proxy_server(proxy)
+        if proxy:
+            print(f"  Proxy: {proxy.get('server', '')}")
 
     if start_xvfb and display:
         subprocess.Popen(

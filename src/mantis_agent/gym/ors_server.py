@@ -276,7 +276,12 @@ def make_app(
             "blocks": prefix + [{"type": "text", "text": s.task}] + s.last_blocks,
         }
 
-    @app.post("/sessions/{sid}/tools/{name}")
+    # response_model=None skips pydantic 2.13's TypeAdapter introspection of
+    # the ToolOutput dataclass — FastAPI still serialises the return value via
+    # the default jsonable_encoder, but doesn't try to build a forward-ref-aware
+    # response schema (which fails on pydantic 2.13 for nested
+    # `list[dict[str, Any]]` fields on a dataclass).
+    @app.post("/sessions/{sid}/tools/{name}", response_model=None)
     def call_tool(sid: str, name: str, body: ToolCallReq) -> ToolOutput:
         s = sessions.get(sid)
         if not s:

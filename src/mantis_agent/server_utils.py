@@ -42,8 +42,13 @@ def build_proxy_config(
     IPRoyal residential proxy supports geo-targeting via password suffixes:
       _country-us          -> US IPs (default in .env)
       _city-miami          -> Miami residential IP
-      _state-florida       -> Florida state
+      _state-<full-name>   -> e.g. _state-florida (NOT _state-fl)
       _session-{id}        -> sticky session (same IP across requests)
+
+    The two-letter state abbreviation form (`_state-fl`) is rejected by
+    IPRoyal with a 503 on CONNECT — verified empirically. Pass the full
+    lowercase name (`_state-florida`) or omit the state entirely (city +
+    country alone is plenty of geo-targeting for most use cases).
     """
     proxy_url = os.environ.get("PROXY_URL", "")
     if not proxy_url:
@@ -55,8 +60,10 @@ def build_proxy_config(
     if proxy_user:
         if city and "_city-" not in proxy_pass:
             proxy_pass = f"{proxy_pass}_city-{city}"
-        if state and "_state-" not in proxy_pass:
-            proxy_pass = f"{proxy_pass}_state-{state}"
+        # Skip _state- when state looks like a 2-letter abbreviation —
+        # IPRoyal rejects those and the CONNECT fails with 503.
+        if state and "_state-" not in proxy_pass and len(state) > 2:
+            proxy_pass = f"{proxy_pass}_state-{state.lower()}"
         if session_id and "_session-" not in proxy_pass:
             proxy_pass = f"{proxy_pass}_session-{session_id}"
         proxy["username"] = proxy_user
@@ -422,6 +429,7 @@ def build_micro_suite(
     checkpoint_dir: str = "/data/checkpoints",
     proxy_city: str = "",
     proxy_state: str = "",
+    proxy_disabled: bool = False,
     objective: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
@@ -447,6 +455,7 @@ def build_micro_suite(
         "_plan_signature": signature,
         "_proxy_city": proxy_city,
         "_proxy_state": proxy_state,
+        "_proxy_disabled": bool(proxy_disabled),
         "_micro_plan": micro_plan_steps,
         "tasks": [],
     }

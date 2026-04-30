@@ -99,22 +99,32 @@ def test_orchestrator_surface_imports_no_heavy_deps():
     requests + pydantic. If a refactor sneaks a torch import into the
     transitive import chain, this test fails loudly so we catch it before
     a vision_claude pip install starts dragging GPU deps.
+
+    Runs in a subprocess so it gets a fresh interpreter — wiping
+    ``sys.modules`` in-process polluted other tests that imported
+    ``mantis_agent.*`` symbols at module load time.
     """
-    # Force a fresh import — drop anything we may have pulled earlier.
-    for mod in list(sys.modules):
-        if mod == "mantis_agent" or mod.startswith("mantis_agent."):
-            del sys.modules[mod]
+    import subprocess
 
-    import mantis_agent  # noqa: F401 — side-effect: populate sys.modules
-
-    # Trigger lazy attribute loads — these populate the orchestrator surface.
-    _ = mantis_agent.MicroPlanRunner
-    _ = mantis_agent.MicroPlan
-    _ = mantis_agent.scale_brain_to_display
-
-    forbidden = {"torch", "vllm", "pyautogui", "transformers", "playwright"}
-    leaked = forbidden & set(sys.modules)
-    assert not leaked, (
-        f"mantis_agent transitively imported heavy deps: {leaked}. "
+    forbidden = ["torch", "vllm", "pyautogui", "transformers", "playwright"]
+    script = (
+        "import sys\n"
+        "import mantis_agent\n"
+        # Trigger lazy attribute loads — these populate the orchestrator surface.
+        "_ = mantis_agent.MicroPlanRunner\n"
+        "_ = mantis_agent.MicroPlan\n"
+        "_ = mantis_agent.scale_brain_to_display\n"
+        f"forbidden = {forbidden!r}\n"
+        "leaked = [m for m in forbidden if m in sys.modules]\n"
+        "if leaked:\n"
+        "    sys.exit(f'leaked:{leaked}')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"mantis_agent transitively imported heavy deps "
+        f"(stderr={result.stderr!r}, stdout={result.stdout!r}). "
         "Move the offending import behind a function-local import or extras gate."
     )

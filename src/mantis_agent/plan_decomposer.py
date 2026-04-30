@@ -53,6 +53,18 @@ class MicroIntent:
     #   select_option : {"dropdown_label": str, "option_label": str}
     # Empty for everything else; the runner falls back to parsing `intent`.
     params: dict[str, Any] = field(default_factory=dict)
+    # Per-step grounding hints for the runner. Free-form, plan-driven —
+    # never inferred from the runner's domain assumptions. Recognised keys:
+    #   layout: "listings" | "single"
+    #     "listings"  → use ClaudeExtractor.find_all_listings (results-page click)
+    #     "single"    → use ClaudeExtractor.find_form_target (one labelled element)
+    #     missing     → runner picks based on step.type and step.section
+    #   spam_indicators: list[str] — domain-specific spam strings to filter
+    #   spam_label: str — what to call spam in prompts (e.g. "recruiter", "broker")
+    #   entity_name: str — what the items are called on this page (job, lead, property)
+    # Anything that used to be hardcoded in the extractor should now flow
+    # through this field. See issue #86 for the redesign.
+    hints: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -182,16 +194,21 @@ VERB → STEP-TYPE MAPPING (FORM FLOWS):
    "enter X in the Y field", "type X into Y", "fill in Y with X", "set Y to X",
    "input X for Y"
        → fill_field with params={"label": "Y", "value": "X"}.
-   "click {labelled button}", "press {labelled button}", "submit the form"
-       → submit with params={"label": "<button text>"}.
-       Common button labels include Submit, Save, Update, Continue, Login,
-       Sign In, Apply, Confirm, Next, OK, Done — but use whatever text the
-       source plan names.
-   "select X from the Y dropdown", "choose X under Y", "pick X from Y",
-   "set the Y dropdown to X"
+   "click the Submit button", "click Save", "click Update Lead", "press Continue",
+   "submit the form", "click the {Leads/Settings/etc} navigation link",
+   "click the {Edit Lead/Cancel} button", "go to the {Y} page"
+   (when {Y} is a tab/nav/menu item, NOT a URL)
+       → submit with params={"label": "<button or link text>"}.
+       Use submit for any SINGLE LABELLED CLICKABLE on a non-listings page —
+       buttons, nav links, tab items, menu items, dock icons, inline
+       action links. The runner uses find_form_target which locates one
+       labelled element by visible text, no listings-grid assumption.
+   "select X from the Y dropdown", "choose X under Y", "pick X in the Y selector"
        → select_option with params={"dropdown_label": "Y", "option_label": "X"}.
-   "click the first / next / nth result/row/item/card"
-       → click (this IS a listings click, keep it).
+   "click the first / next / nth result/row/listing/card/job/product/property"
+       → click (this IS a listings click — many similar items on one page,
+       runner picks the next un-extracted one). DO NOT use click for nav
+       links, buttons, or any single-element clickable.
 
 When the source text says "Click the {field-name} field and enter {value}", emit
 a SINGLE fill_field step (label={field-name}, value={value}) — NOT a click step.
@@ -224,7 +241,11 @@ PLAIN TEXT PLAN:
 {plan_text}
 
 STEP TYPES:
-- navigate: Go to a URL — include full URL in intent (budget=3)
+- navigate: Go to a URL — include full URL in intent (budget=3).
+            Optional params={"wait_after_load_seconds": <int>} when the page
+            needs a longer first-paint wait (e.g. proxied SPA cold-start,
+            heavy CRM splash). Default is 18s; use the param only when the
+            source plan explicitly says the page is slow to load.
 - filter: Click a filter option (budget=8, grounding=true, required=true, section="setup")
 - click: Click an element on a listings/results page (budget=8, grounding=true)
 - scroll: Scroll until target content visible (budget=10, section="extraction")
@@ -235,8 +256,11 @@ STEP TYPES:
 - loop: Jump back to step index (loop_target=N, loop_count=max)
 - fill_field: Click a labelled input and type a value
               (budget=4, params={"label": "<visible field label>", "value": "<text to type>"})
-- submit: Click a labelled button — Login / Save / Submit / Update / Continue / etc.
-          (budget=4, params={"label": "<visible button text>"})
+- submit: Click a SINGLE LABELLED CLICKABLE on a non-listings page — buttons
+          (Login / Save / Submit / Update / Continue), navigation links,
+          tab items, menu items, dock icons, action links.
+          NOT for "click the next listing/result" — use `click` for that.
+          (budget=4, params={"label": "<visible button or link text>"})
 - select_option: Open a dropdown and pick an option by visible text
                  (budget=6, params={"dropdown_label": "<dropdown name>",
                                     "option_label": "<option text>"})
@@ -300,7 +324,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v10_generic_form_vocab"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v12_navigate_wait_param"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -320,7 +344,9 @@ class PlanDecomposer:
                 pass
 
         logger.info(f"Decomposing plan with {self.model} ({len(plan_text)} chars)")
-        prompt = DECOMPOSE_PROMPT.format(plan_text=plan_text)
+        # Use replace() instead of format() — the prompt has literal `{...}`
+        # JSON examples (params={"label": ...}) that confuse str.format.
+        prompt = DECOMPOSE_PROMPT.replace("{plan_text}", plan_text)
 
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -408,6 +434,9 @@ class PlanDecomposer:
         params = s.get("params") or {}
         if not isinstance(params, dict):
             params = {}
+        hints = s.get("hints") or {}
+        if not isinstance(hints, dict):
+            hints = {}
 
         return MicroIntent(
             intent=s.get("intent", ""),
@@ -426,6 +455,7 @@ class PlanDecomposer:
             required=s.get("required", default_required),
             gate=s.get("gate", False),
             params=params,
+            hints=hints,
         )
 
     @staticmethod
