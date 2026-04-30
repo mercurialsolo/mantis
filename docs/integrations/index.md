@@ -20,6 +20,7 @@ Need to call Mantis from your existing app?
 | **Generic CUA over HTTP** — your own domain, your own ExtractionSchema, all via `/v1/predict` | Building an extraction pipeline for any site (jobs, products, listings, profiles, etc.) without writing Python or hosting Mantis | [Generic CUA usage](generic-cua.md) |
 | **Recipes** — copy-paste micro-plans for common patterns (jobs, e-commerce, news, real-estate) | You want a working starting point for a typical pattern, not theory | [Recipes](recipes.md) |
 | **Library embedding** — `MicroPlanRunner` in your own Python process, your own `GymEnvironment` | You already own a desktop / Xvfb / Chrome stack and want Mantis as the brain | [Embedding MicroPlanRunner](embedding-microplanrunner.md) |
+| **Any-agent integration checklist** — runtime contract, diagnostic log lines, the five integration mistakes that produce silent halts | You're plugging a third-party agent (OpenAI CUA, Anthropic CUA, Voyager, custom) into Mantis and want to avoid rediscovering known failure modes | [Integrating any agent](any-agent.md) |
 | **vision_claude / staffai** — the canonical parity-layer integration | Replacing Anthropic Computer Use in StaffAI's vision_claude. Specific patches in `staffai_tools/vision_claude/`. | [vision_claude integration](../integration-vision_claude.md) + [parity addendum](../staffai-vision_claude-parity.md) |
 
 ## What's host-agnostic vs. host-specific
