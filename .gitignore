@@ -55,3 +55,8 @@ site/
 plans/
 tasks/
 internal-docs/
+
+# VisualWebArena upstream — clone next to the repo when running the
+# benchmarking conversion script. Never commit; would re-introduce the
+# orphan-submodule pip-install bug.
+VWA_configs/

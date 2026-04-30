@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """Convert VisualWebArena task configs to gym-anything environment format.
 
-Reads the raw VWA JSON configs (from VWA_configs/config_files/) and produces
-gym-anything-compatible environment directories.
+Reads the raw VWA JSON configs and produces gym-anything-compatible
+environment directories. The configs come from the VisualWebArena
+upstream repo:
 
-Usage:
+    https://github.com/web-arena-x/visualwebarena
+
+Clone it next to this repo (or anywhere) and point ``--vwa-config-dir``
+at the cloned ``config_files/vwa/`` directory:
+
+    git clone https://github.com/web-arena-x/visualwebarena ../vwa
     python scripts/convert_vwa_to_gym.py \
-        --input VWA_configs/config_files/vwa/test_classifieds.raw.json \
+        --input ../vwa/config_files/vwa/test_classifieds.raw.json \
         --output environments/vwa_classifieds \
         --site-url http://localhost:9980
 
     # Convert all VWA sites
     python scripts/convert_vwa_to_gym.py --all \
+        --vwa-config-dir ../vwa/config_files/vwa \
         --classifieds-url http://localhost:9980 \
         --shopping-url http://localhost:7770 \
         --reddit-url http://localhost:9999 \
@@ -280,8 +287,10 @@ def main():
     parser.add_argument("--site-name", help="Site name (auto-detected from filename if omitted)")
 
     parser.add_argument("--all", action="store_true", help="Convert all VWA sites")
-    parser.add_argument("--vwa-config-dir", default="VWA_configs/config_files/vwa",
-                        help="Directory containing VWA raw JSON configs")
+    parser.add_argument("--vwa-config-dir", default="",
+                        help="Directory containing VWA raw JSON configs "
+                             "(clone https://github.com/web-arena-x/visualwebarena "
+                             "and point at its config_files/vwa/)")
     parser.add_argument("--output-base", default="environments",
                         help="Base output directory for all environments")
 
