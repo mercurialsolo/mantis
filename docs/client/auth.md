@@ -81,16 +81,16 @@ Once the server validates your token, it resolves a `TenantConfig` with these fi
 
 ```python
 TenantConfig(
-    tenant_id="vision_claude_prod",
+    tenant_id="tenant_a",
     scopes=("run", "status", "result", "logs"),
     max_concurrent_runs=3,
     max_cost_per_run=5.0,
     max_time_minutes_per_run=30,
     rate_limit_per_minute=60,
-    anthropic_secret_name="anthropic_api_key_vision_claude",
-    allowed_domains=("*.boattrader.com", "staffai-test-crm.exe.xyz"),
+    anthropic_secret_name="anthropic_api_key_tenant_a",
+    allowed_domains=("*.boattrader.com", "crm.example.com"),
     webhook_url="https://callbacks.example.com/mantis",
-    webhook_secret_name="webhook_secret_vision_claude",
+    webhook_secret_name="webhook_secret_tenant_a",
 )
 ```
 

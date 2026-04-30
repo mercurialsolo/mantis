@@ -6,7 +6,7 @@ Once you have an authenticated session, every plan submission lands on `POST /v1
 {
   "detached": true,                                  // (default) async with run_id
   "task_suite":  { ... },                            // OR
-  "task_file":   "tasks/crm/staffai_tasks.json",     // OR
+  "task_file":   "tasks/crm/crm_tasks.json",     // OR
   "micro":       "plans/boattrader/...json",         // OR
   "plan_text":   "Plain English description",        //
 
@@ -32,7 +32,7 @@ Have a stable workflow you'll run many times?
   ├─ yes → micro-plan via `micro: "plans/<domain>/<workflow>.json"`
   └─ no  → one-shot or rapidly-changing?
             ├─ yes → `plan_text` — server decomposes via Claude
-            └─ no  → StaffAI / Claude-CUA-per-task style?
+            └─ no  → multi-task suite style?
                      ├─ yes → `task_suite` (multi-task dict)
                      └─ no  → `task_suite` with a flat micro-plan list
 ```
@@ -80,8 +80,8 @@ Have a stable workflow you'll run many times?
       -d "$(cat <<JSON
     {
       "detached": true,
-      "task_suite": $(cat tasks/crm/staffai_tasks.json),
-      "state_key": "staffai-crm-$(date +%s)",
+      "task_suite": $(cat tasks/crm/crm_tasks.json),
+      "state_key": "crm-$(date +%s)",
       "max_cost": 5,
       "max_time_minutes": 30
     }
@@ -98,8 +98,8 @@ Have a stable workflow you'll run many times?
       -H "Content-Type: application/json" \
       -d '{
         "detached": true,
-        "task_file": "tasks/crm/staffai_tasks.json",
-        "state_key": "staffai-prod"
+        "task_file": "tasks/crm/crm_tasks.json",
+        "state_key": "crm-prod"
       }'
     ```
 
@@ -116,7 +116,7 @@ The effective value is `min(server_cap, tenant_cap, request_value)`. If you ask 
 
 ## URL allowlist
 
-If your tenant has `allowed_domains` configured, the server scans your plan's `navigate` steps + `task_suite.base_url` + each `task.start_url` and rejects 403 if any host is off-list. Wildcards like `*.boattrader.com` work; exact matches like `staffai-test-crm.exe.xyz` work.
+If your tenant has `allowed_domains` configured, the server scans your plan's `navigate` steps + `task_suite.base_url` + each `task.start_url` and rejects 403 if any host is off-list. Wildcards like `*.boattrader.com` work; exact matches like `crm.example.com` work.
 
 If you need to add a domain, ask your operator to update your tenant config — see [URL allowlist](../operations/allowlist.md).
 

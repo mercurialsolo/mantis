@@ -7,8 +7,7 @@
 
 A `GymEnvironment` subclass that misinterprets the click coordinate space will
 produce silent off-target clicks that look like "the model is bad". This
-document is the source of truth that integrators (e.g. `VisionClaudeGymEnv` on
-the StaffAI side) must follow.
+document is the source of truth that any host's env adapter must follow.
 
 ---
 
@@ -99,18 +98,19 @@ with an adapter that does). `XdotoolGymEnv` itself is a pure passthrough.
 
 ---
 
-## What `VisionClaudeGymEnv` (StaffAI) needs to do
+## What a host's `GymEnvironment` adapter needs to do
 
-`VisionClaudeGymEnv` adapts the StaffAI Xvfb desktop to Mantis. The contract
-to implement:
+Any host wrapper that drives a brain-screenshot → action loop on an Xvfb
+desktop must implement this contract:
 
-1. Set `screen_size` to whatever `Desktop.viewport_size` reports — the *real*
-   Xvfb framebuffer size. **Do not** report the resized brain-image size here.
+1. Set `screen_size` to whatever the host's desktop reports as its real
+   viewport — the *real* Xvfb framebuffer size. **Do not** report the
+   resized brain-image size here.
 2. Inside `step()`, compute the scale from the brain image's `.size` (the one
    passed to inference) to `screen_size`, then apply it before dispatching
-   to `ComputerTool.click(x, y)`.
+   to the host's click primitive.
 3. Add a unit test mirroring `tests/test_gym_coordinates.py` in this repo,
-   using `Desktop.viewport_size = (1280, 720)`. Feed an action with
+   using viewport `(1280, 720)`. Feed an action with
    `x=640, y=360`, mock `Brain.last_image_size = (768, 432)`, and assert
    `ComputerTool.click` is invoked with `(1067, 600)` (within ±1 px for
    rounding).

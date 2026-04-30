@@ -22,16 +22,16 @@ If `MANTIS_TENANT_KEYS_PATH` is not set, the server falls back to single-tenant 
 {
   "tenant_keys": {
     "<x-mantis-token-value-1>": {
-      "tenant_id": "vision_claude_prod",
+      "tenant_id": "tenant_a",
       "scopes": ["run", "status", "result", "logs"],
       "max_concurrent_runs": 3,
       "max_cost_per_run": 5.0,
       "max_time_minutes_per_run": 30,
       "rate_limit_per_minute": 60,
-      "anthropic_secret_name": "anthropic_api_key_vision_claude",
-      "allowed_domains": ["*.boattrader.com", "staffai-test-crm.exe.xyz"],
+      "anthropic_secret_name": "anthropic_api_key_tenant_a",
+      "allowed_domains": ["*.boattrader.com", "crm.example.com"],
       "webhook_url": "https://callbacks.example.com/mantis",
-      "webhook_secret_name": "webhook_secret_vision_claude"
+      "webhook_secret_name": "webhook_secret_tenant_a"
     },
     "<x-mantis-token-value-2>": {
       "tenant_id": "readonly_dashboard",
@@ -60,7 +60,7 @@ Every field except `tenant_id` is optional and falls back to the `DEFAULT_TENANT
 
 ## Issuing a new tenant token
 
-1. **Pick a tenant_id.** Stable, human-readable. Used in metrics labels, log lines, and the data-volume directory layout. `vision_claude_prod`, `customer_acme`, `internal_ops_team`. Avoid spaces, slashes, or anything URL-unsafe.
+1. **Pick a tenant_id.** Stable, human-readable. Used in metrics labels, log lines, and the data-volume directory layout. `tenant_a`, `customer_acme`, `internal_ops_team`. Avoid spaces, slashes, or anything URL-unsafe.
 
 2. **Generate a token.** Hex-encoded 256 bits is plenty:
    ```bash
@@ -218,8 +218,8 @@ The runtime never logs tokens, only `tenant_id`. Every request emits:
   "ts": "2026-04-28T02:14:32Z",
   "level": "INFO",
   "logger": "mantis_agent.baseten_server",
-  "msg": "predict tenant=vision_claude_prod scope=run state_key=… detached=true action=run",
-  "tenant_id": "vision_claude_prod"
+  "msg": "predict tenant=tenant_a scope=run state_key=… detached=true action=run",
+  "tenant_id": "tenant_a"
 }
 ```
 

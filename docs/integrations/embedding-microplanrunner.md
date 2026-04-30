@@ -1,14 +1,13 @@
 # Embedding `MicroPlanRunner` in a host application
 
 This is the reference for **hosts that import the `mantis-agent` library and
-drive `MicroPlanRunner` in their own process** — vision_claude is the
-canonical example. If you only call the HTTP `/v1/predict` endpoint, you
-don't need this doc; see [Sending plans](../client/plans.md) instead.
+drive `MicroPlanRunner` in their own process**. If you only call the HTTP
+`/v1/predict` endpoint, you don't need this doc; see [Sending plans](../client/plans.md)
+instead.
 
-> Companion reading: [Integration: vision_claude → Mantis](../integration-vision_claude.md)
-> (the architectural narrative + sample wiring) and [vision_claude parity
-> addendum](../staffai-vision_claude-parity.md) (the seven staffai-side
-> patches needed for full parity).
+> Companion reading: the [any-agent integration playbook](any-agent.md)
+> covers the runtime contract and pre-flight checklist your host's env
+> wrapper must satisfy.
 
 ---
 
@@ -93,8 +92,8 @@ result = runner.run_with_status(plan)
 
 ## The four host-integration knobs
 
-These are the four primitives the staffai integration relies on. Each is
-opt-in — runs that don't set them see no change in behaviour.
+These are the four primitives a host integration typically reaches for.
+Each is opt-in — runs that don't set them see no change in behaviour.
 
 ### 1. `step_callback` — per-step observability ([#74](https://github.com/mercurialsolo/mantis/issues/74))
 
@@ -233,22 +232,24 @@ invariants are non-negotiable:
   unchanged. Use `run_with_status(plan)` only when you need the
   `RunnerResult` shape.
 
-For the staffai-side invariants (don't refactor `ClaudeCUABackend`, don't
-change `vision_claude_state` shape for Claude runs, etc.) see the
-[parity addendum](../staffai-vision_claude-parity.md#backwards-compatibility-invariants).
+When your host carries an existing CUA backend that you want to keep
+working alongside Mantis, the typical invariants to preserve are:
+
+- Don't refactor your existing backend's class — add Mantis as a sibling
+  selected by an env flag.
+- Don't change the agent-state blob shape for the existing backend's
+  runs; just add a new key for Mantis runs alongside.
+- Default the env flag to the existing backend so nothing flips without
+  an explicit opt-in.
 
 ## Sharing this with another host
 
-If you're integrating Mantis into a host besides vision_claude, the
-relevant docs in pull-this-order are:
+If you're integrating Mantis into a fresh host, the relevant docs in
+pull-this-order are:
 
-1. This doc — what to import + the four host-integration knobs.
-2. [`integration-vision_claude.md`](../integration-vision_claude.md) — the architectural narrative; replace "vision_claude" with your host.
+1. [Integrating any agent](any-agent.md) — runtime contract + pre-flight
+   checklist + the integration mistakes to avoid.
+2. This doc — what to import + the four host-integration knobs.
 3. [`reference/coordinate-spaces.md`](../reference/coordinate-spaces.md) — required reading before you write a `step()` method.
 4. [`reference/glossary.md`](../reference/glossary.md) — quick definitions for terms used throughout.
 5. [`reference/env-vars.md`](../reference/env-vars.md) — server-side env vars (only relevant if you self-host the Mantis service rather than calling Baseten).
-
-The `staffai-vision_claude-parity.md` doc is staffai-specific — file paths
-and line numbers reference vision_claude internals — but the *shapes* of
-the seven sections (per-plan flag, tool layer, browser launch, pause/resume,
-observability, SIGTERM, coords) generalize to any host.
