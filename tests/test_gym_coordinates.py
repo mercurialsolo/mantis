@@ -109,7 +109,6 @@ def test_xdotool_env_current_url_returns_empty_when_cdp_unreachable():
 def test_xdotool_env_current_url_reads_active_tab(monkeypatch):
     """When CDP is reachable, current_url returns the first non-internal
     tab's URL. Mirrors Chrome's /json/list response shape."""
-    import io
     import json
 
     env = _XdotoolRecorder(viewport=(1280, 720))
