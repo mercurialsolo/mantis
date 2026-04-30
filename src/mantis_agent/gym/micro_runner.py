@@ -1537,20 +1537,47 @@ class MicroPlanRunner:
         Falls back to ``ClaudeExtractor.extract`` when CDP is unreachable
         (Modal hosts where the port wasn't bound, older Truss images, etc.)
         so existing screenshot-based behaviour still works.
+
+        Diagnostic logging: the path taken (cdp / ocr) is logged at INFO so
+        run traces show which source produced the URL — needed because
+        post-PR-90 the staffai canary still showed ``(url=)`` empty and we
+        couldn't tell whether CDP was unreachable or returned empty itself.
+        Also handles the case where ``env.current_url`` is a *method*
+        instead of a property (a common integration mistake) by calling
+        it when callable.
         """
+        cdp_url = ""
+        cdp_error: Exception | None = None
         try:
-            url = self.env.current_url or ""
-        except Exception:
-            url = ""
-        if url:
-            return url
+            raw = getattr(self.env, "current_url", "")
+            # Tolerate integrations that defined current_url() as a method
+            # rather than a @property — call it instead of returning the
+            # bound-method object (which would be truthy and short-circuit).
+            if callable(raw):
+                raw = raw()
+            cdp_url = (raw or "").strip() if isinstance(raw, str) else ""
+        except Exception as exc:
+            cdp_error = exc
+
+        if cdp_url:
+            logger.info(f"  [url] cdp={cdp_url[:80]}")
+            return cdp_url
+
+        if cdp_error is not None:
+            logger.info(f"  [url] cdp unavailable ({type(cdp_error).__name__}); falling back to OCR")
+        elif screenshot is not None:
+            logger.info("  [url] cdp empty; falling back to OCR")
+
         if screenshot is not None and self.extractor:
             try:
                 verify_data = self.extractor.extract(screenshot)
-            except Exception:
+            except Exception as exc:
+                logger.info(f"  [url] ocr extract failed: {exc}")
                 return ""
             self.costs["claude_extract"] += 1
-            return verify_data.url if verify_data else ""
+            ocr_url = (verify_data.url or "") if verify_data else ""
+            logger.info(f"  [url] ocr={ocr_url[:80] or '<empty>'}")
+            return ocr_url
         return ""
 
     def _execute_navigate(self, step: MicroIntent, index: int) -> StepResult:

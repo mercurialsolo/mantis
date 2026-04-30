@@ -529,6 +529,28 @@ def test_read_current_url_prefers_cdp_over_screenshot():
     extractor.extract.assert_not_called()
 
 
+def test_read_current_url_calls_method_property_for_buggy_envs():
+    """Some integrations define current_url as a method instead of a
+    @property (e.g. ``def current_url(self): return ...``). Attribute
+    access then returns the bound method, which is truthy — without this
+    guard the helper would return a method object as the URL.
+
+    Regression: post-PR-90 the staffai trace still showed ``(url=)`` empty;
+    one viable cause was their VisionClaudeGymEnv defining current_url as
+    a method, which short-circuits the truthy check on the bound method.
+    """
+    env = _FakeEnv()
+    runner = _runner_with_extractor(env, extractor=MagicMock())
+
+    # Define current_url as a callable on the env instance.
+    def fake_method():
+        return "https://example.com/leads/42"
+
+    type(env).current_url = property(lambda self: fake_method)
+    url = runner._read_current_url()
+    assert url == "https://example.com/leads/42"
+
+
 def test_read_current_url_falls_back_to_screenshot_when_cdp_empty():
     """When CDP returns empty (port not bound, container without
     --remote-debugging-port), fall back to the existing screenshot-based
