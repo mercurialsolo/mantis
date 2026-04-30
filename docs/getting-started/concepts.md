@@ -32,7 +32,7 @@ A plan is a structured description of what the agent should do. Three shapes are
 | Shape | Field | When to use |
 |---|---|---|
 | Inline task suite | `task_suite: { ... }` | You have arbitrary task data and don't want to bake it into the container image |
-| Pre-baked path | `task_file: "tasks/crm/staffai_tasks.json"` | The plan ships in the container image |
+| Pre-baked path | `task_file: "tasks/crm/crm_tasks.json"` | The plan ships in the container image |
 | Micro-plan | `micro: "plans/boattrader/...json"` (path) or inline list | High-reliability extraction with sections / gates / loops |
 | Plain text | `plan_text: "Extract the first 3 boat listings from BoatTrader Miami"` | One-shot ad-hoc; server decomposes via Claude (cached after first call) |
 
@@ -91,7 +91,7 @@ Plans submitted by tenant A cannot read tenant B's checkpoints, profiles, or rec
 | Checkpoint resume | The runner saves progress to `tenants/<tenant_id>/checkpoints/<state_key>.json`. Pass `resume_state: true` to pick up where the last run left off. |
 | Idempotency | (Not the same as `Idempotency-Key` header) — `state_key` is the *workflow* identity, the header is the *request* identity. |
 
-Pick `state_key` to match the conceptual workflow: `boattrader-miami-private-v1`, `staffai-crm-prod`, `customer-12345-onboarding`. Reuse the same key across runs of the same workflow; pick a new key when the workflow definition changes.
+Pick `state_key` to match the conceptual workflow: `boattrader-miami-private-v1`, `crm-prod`, `customer-12345-onboarding`. Reuse the same key across runs of the same workflow; pick a new key when the workflow definition changes.
 
 ## The cost meter
 

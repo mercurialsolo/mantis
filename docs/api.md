@@ -1,9 +1,10 @@
 # Mantis CUA HTTP API
 
 Reference for callers who want to use the Mantis CUA service directly —
-without going through vision_claude or another wrapper. For the
-vision_claude integration walkthrough see
-[`integration-vision_claude.md`](integration-vision_claude.md).
+without going through a host wrapper. For library-shaped integrations
+where you drive `MicroPlanRunner` in your own process, see
+[Embedding MicroPlanRunner](integrations/embedding-microplanrunner.md)
+and the [any-agent integration playbook](integrations/any-agent.md).
 
 ## Endpoints
 
@@ -61,7 +62,7 @@ The request body must contain **exactly one** of these plan-shape fields, in pri
 |---|---|---|
 | `task_suite` | object | Inline task-suite dict. Use this for arbitrary plans where you don't want to bake them into the container image. |
 | `task_file_contents` | string | JSON-as-string. Same shape as `task_suite` but pre-serialized. |
-| `task_file` | string | Path inside the container image (e.g. `tasks/crm/staffai_tasks.json`). |
+| `task_file` | string | Path inside the container image (e.g. `tasks/crm/crm_tasks.json`). |
 | `micro` | string | Path to a micro-plan JSON or plain-text plan inside the image (e.g. `plans/boattrader/extract_url_filtered.json`). |
 | `plan_text` | string | Inline plain-English plan. Decomposed via Claude on the server side. |
 
@@ -257,7 +258,7 @@ Real result from the verification run on this branch:
 | Recurring high-volume workflow with predictable steps | Hand-author a **micro-plan** JSON, ship it in the image at `plans/<domain>/<workflow>.json`, reference via `micro` |
 | Arbitrary plain-English request | `plan_text` — server decomposes it via Claude (cached after first run) |
 | Ad-hoc plan you don't want baked into the image | `task_suite` (inline JSON dict) |
-| StaffAI-style multi-task suite with `task_id` + `verify` clauses | `task_suite` or `task_file` |
+| Multi-task suite with `task_id` + `verify` clauses | `task_suite` or `task_file` |
 
 ## Plan formats
 
@@ -306,12 +307,12 @@ Key fields:
 ### `task_suite` — multi-task JSON
 
 For Claude-CUA-style autonomous-per-task workflows (the existing
-`tasks/crm/staffai_tasks.json` is this shape):
+`tasks/crm/crm_tasks.json` is this shape):
 
 ```jsonc
 {
-  "session_name": "staffai_crm",
-  "base_url": "https://staffai-test-crm.exe.xyz",
+  "session_name": "crm_demo",
+  "base_url": "https://crm.example.com",
   "auth": { "user_id": "...", "password": "..." },
   "tasks": [
     {
@@ -376,7 +377,7 @@ For comparison, equivalent Claude-only CUA flow ~$0.50–$1.50 per listing.
 ## Limits / caveats
 
 - **Detached runs survive replica restart** (state on the data volume) but only on the same Baseten model. Cross-region failover not supported.
-- **Pause/resume for OTP** is not yet wired through `/v1/predict`. Today it works in the vision_claude integration path because the loop runs in the vision_claude pod.
+- **Pause/resume for OTP** is not yet wired through `/v1/predict`. It works today in library-embedded integrations because the loop runs in the host's own process — see [Embedding MicroPlanRunner](integrations/embedding-microplanrunner.md).
 - **`/v1/chat/completions`** is unstreamed in v1. Streaming SSE is a Tier 2 follow-up.
 - **Single Anthropic-key per tenant** at request time (re-resolved on every call).
 
@@ -545,7 +546,7 @@ When the run reaches a terminal state (`succeeded`, `failed`, `cancelled`), the 
 ```jsonc
 {
   "run_id": "20260428_021432_076255ef",
-  "tenant_id": "vision_claude_prod",
+  "tenant_id": "tenant_a",
   "status": "succeeded",
   "summary": { ... same shape as /v1/predict status response ... },
   "delivered_at": "2026-04-28T02:24:01.648Z"
@@ -596,4 +597,4 @@ This API is at **Tier 2** — production-quality multi-tenant. Upcoming:
 
 - **Tier 3:** billing records, admin API, multi-region.
 
-See [`PROPOSAL-mantis-cua-replaces-vision_claude.md`](PROPOSAL-mantis-cua-replaces-vision_claude.md) for the bigger architectural picture and migration plan.
+See [Architecture](architecture.md) for the bigger architectural picture.

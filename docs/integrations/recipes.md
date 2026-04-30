@@ -286,21 +286,21 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   "max_cost": 2,
   "max_time_minutes": 15,
   "micro": [
-    {"intent": "Go to https://staffai-test-crm.exe.xyz",
+    {"intent": "Go to https://crm.example.com",
      "type": "navigate", "budget": 3, "section": "setup", "required": true},
     {"intent": "Enter user ID",
      "type": "fill_field", "budget": 4, "section": "setup", "required": true,
-     "params": {"label": "User ID", "value": "sarah.connor"}},
+     "params": {"label": "User ID", "value": "alice"}},
     {"intent": "Enter password",
      "type": "fill_field", "budget": 4, "section": "setup", "required": true,
-     "params": {"label": "Password", "value": "skynet99"}},
+     "params": {"label": "Password", "value": "<password>"}},
     {"intent": "Click Login",
      "type": "submit", "budget": 4, "section": "setup", "required": true,
      "params": {"label": "Login"}},
     {"intent": "Verify dashboard or home page is shown",
      "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
      "gate": true,
-     "verify": "Page is the post-login dashboard for sarah.connor"},
+     "verify": "Page is the post-login dashboard for alice"},
     {"intent": "Go to the Leads page",
      "type": "navigate", "budget": 3, "section": "setup", "required": true,
      "params": {"label": "Leads"}},
@@ -356,7 +356,7 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -H "Content-Type: application/json" \
   -d '{
     "detached": true,
-    "plan_text": "1. Go to https://staffai-test-crm.exe.xyz\n2. Log in with user ID sarah.connor password skynet99\n3. Go to the Leads Page\n4. Select the first lead with the \"Qualified\" status\n5. Go to the Edit Lead page for this lead\n6. Update the Industry Vertical to \"Space Exploration\"\n7. Click \"Update Lead\"",
+    "plan_text": "1. Go to https://crm.example.com\n2. Log in with user ID alice password <password>\n3. Go to the Leads Page\n4. Select the first lead with the \"Qualified\" status\n5. Go to the Edit Lead page for this lead\n6. Update the Industry Vertical to \"Space Exploration\"\n7. Click \"Update Lead\"",
     "state_key": "crm-edit-lead-text",
     "max_cost": 2,
     "max_time_minutes": 15
@@ -367,6 +367,441 @@ The decomposer will emit `fill_field` / `submit` / `select_option` steps
 with structured `params`. For high-volume / production use, prefer the
 hand-authored `micro` form (above) — it skips the decompose step's $0.02
 Claude call and bakes in your exact field labels.
+
+---
+
+## Action recipes — post, read, write, refund
+
+The five recipes above cover **read** flows (extract listings) and the
+canonical **write** flow (CRM edit + save). The recipes below extend the
+form-flow shape to the most-asked **action** patterns: posting content on
+social platforms, fetching a single user's profile, pushing data into a
+CRM, and processing a refund through a payments dashboard.
+
+> All six work against any site that follows the same UI pattern — replace
+> the URL, the field labels, and the button labels. Auth is plan-driven:
+> the `fill_field` / `submit` chain logs in just like any human does.
+
+### Recipe 6 — Post on LinkedIn
+
+**Best for:** automating routine company updates, employee announcements,
+or weekly newsletters that go through a real LinkedIn account.
+
+```bash
+curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "detached": true,
+  "state_key": "linkedin-post-weekly",
+  "max_cost": 2,
+  "max_time_minutes": 15,
+  "micro": [
+    {"intent": "Go to https://www.linkedin.com/login",
+     "type": "navigate", "budget": 3, "section": "setup", "required": true,
+     "params": {"wait_after_load_seconds": 25}},
+    {"intent": "Enter the email address",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Email or phone", "value": "alice@example.com"}},
+    {"intent": "Enter the password",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Password", "value": "<password>"}},
+    {"intent": "Click Sign in",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Sign in", "aliases": ["Log in", "Continue"]}},
+    {"intent": "Verify the LinkedIn home feed loaded",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page shows the LinkedIn home feed with the 'Start a post' composer visible"},
+    {"intent": "Click 'Start a post'",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Start a post"}},
+    {"intent": "Type the post body",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "What do you want to talk about?",
+                "value": "Excited to share this week's product update — new structured-extraction features now in beta. Drop a comment if you want early access."}},
+    {"intent": "Click Post to publish",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Post", "aliases": ["Publish", "Share"]}},
+    {"intent": "Verify the post landed on the feed",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Confirmation toast or the post is now visible at the top of the feed with the body text we typed"}
+  ]
+}
+JSON
+```
+
+Notes:
+
+- The `wait_after_load_seconds: 25` on the navigate covers LinkedIn's
+  proxied login splash. Lower it once you confirm the page loads faster.
+- `aliases` on the two `submit` steps absorbs LinkedIn's frequent button
+  copy A/B tests (`Sign in` vs `Log in`, `Post` vs `Publish` vs `Share`).
+- For posting an image too, add a `submit` step with
+  `params={"label": "Add a photo"}` between the composer-open and the
+  text-fill, then a second `submit` for the file picker. Mantis can drive
+  the file-picker dialog if your env supplies a `LAUNCH_APP` / file-upload
+  primitive (see [issue #72](https://github.com/mercurialsolo/mantis/issues/72)).
+
+### Recipe 7 — Post on Reddit (subreddit text post)
+
+**Best for:** community announcements, weekly digests, AMA invitations.
+
+```bash
+curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "detached": true,
+  "state_key": "reddit-post-r-mysub",
+  "max_cost": 1.5,
+  "max_time_minutes": 12,
+  "micro": [
+    {"intent": "Go to https://www.reddit.com/login",
+     "type": "navigate", "budget": 3, "section": "setup", "required": true,
+     "params": {"wait_after_load_seconds": 20}},
+    {"intent": "Enter the username",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Username", "value": "alice"}},
+    {"intent": "Enter the password",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Password", "value": "<password>"}},
+    {"intent": "Click Log In",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Log In", "aliases": ["Sign In", "Continue"]}},
+    {"intent": "Go to the target subreddit submit page",
+     "type": "navigate", "budget": 3, "section": "setup", "required": true,
+     "params": {"wait_after_load_seconds": 15}},
+    {"intent": "Click the Post tab",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Post", "aliases": ["Text"]}},
+    {"intent": "Type the post title",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Title",
+                "value": "Weekly digest: what shipped this week"}},
+    {"intent": "Type the post body",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Text (optional)",
+                "value": "Three things shipped: 1) generic CUA over HTTP. 2) form-flow vocab. 3) any-agent integration playbook. Comments welcome."}},
+    {"intent": "Click Post to submit",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Post", "aliases": ["Submit", "Publish"]}},
+    {"intent": "Verify the post landed",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page shows the new post with our title, on the subreddit's frontpage or in our profile"}
+  ]
+}
+JSON
+```
+
+Replace the navigate URL with `https://www.reddit.com/r/<your-sub>/submit`.
+Reddit's submit-page UI varies between old.reddit / new.reddit / sh — the
+`label` strings work across the new UI (the most common landing).
+
+### Recipe 8 — Post on Instagram (caption + tag)
+
+**Best for:** scheduled feed posts. Instagram's feed-post composer is
+behind a login wall and behind a click-to-open camera dialog, so this
+recipe shows the multi-modal-button shape:
+
+```bash
+curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "detached": true,
+  "state_key": "instagram-post-feed",
+  "max_cost": 2.5,
+  "max_time_minutes": 18,
+  "micro": [
+    {"intent": "Go to https://www.instagram.com/accounts/login/",
+     "type": "navigate", "budget": 3, "section": "setup", "required": true,
+     "params": {"wait_after_load_seconds": 25}},
+    {"intent": "Enter the username",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Phone number, username, or email", "value": "alice"}},
+    {"intent": "Enter the password",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Password", "value": "<password>"}},
+    {"intent": "Click Log in",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Log in"}},
+    {"intent": "Verify the Instagram home feed loaded",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page is the Instagram home feed; left sidebar shows Home / Search / Explore / Reels / Messages / Notifications / Create"},
+    {"intent": "Click Create in the sidebar to open the post composer",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Create", "aliases": ["New post", "+"]}},
+    {"intent": "Click Select from computer to attach an image",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Select from computer", "aliases": ["Choose file", "Upload"]}},
+    {"intent": "Click Next to advance from filter selection",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Next"}},
+    {"intent": "Click Next again to advance to caption",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Next"}},
+    {"intent": "Type the caption",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Write a caption...",
+                "value": "Sunset in Lisbon — week of off-sites done right. #travel #lisbon #productteam"}},
+    {"intent": "Click Share to publish",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Share", "aliases": ["Post", "Publish"]}},
+    {"intent": "Verify the post is published",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Toast or modal confirms the post was shared, OR the composer dialog closed and we are back on the home feed"}
+  ]
+}
+JSON
+```
+
+Notes:
+
+- Image upload requires either (a) a desktop file already on the runner's
+  Xvfb container at a known path, OR (b) the `LAUNCH_APP` action plus a
+  small file-picker driver in your `GymEnvironment`. Without that the
+  `Select from computer` button opens the OS dialog and the runner
+  can't navigate it via screen pixels alone.
+- The two consecutive `Next` clicks are intentional — IG's composer has
+  a Crop step then a Filter step before the caption.
+
+### Recipe 9 — Fetch user details from an admin console
+
+**Best for:** support workflows where you need to read a single user's
+record (email, plan, last-login, billing status) from an internal admin
+UI. This is a **mixed read/extract** flow: log in, search by email,
+extract the profile fields, no looping.
+
+```bash
+curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "detached": true,
+  "state_key": "admin-fetch-user-by-email",
+  "max_cost": 1.5,
+  "max_time_minutes": 10,
+  "extraction_schema": {
+    "entity_name": "user profile",
+    "fields": [
+      {"name": "email",         "type": "str", "required": true,  "example": "alice@example.com"},
+      {"name": "full_name",     "type": "str", "required": true,  "example": "Alice Anderson"},
+      {"name": "plan",          "type": "str", "required": false, "example": "Pro"},
+      {"name": "signup_date",   "type": "str", "required": false, "example": "2024-08-12"},
+      {"name": "last_login_at", "type": "str", "required": false, "example": "2026-04-29T11:42:00Z"},
+      {"name": "billing_status","type": "str", "required": false, "example": "active"},
+      {"name": "url",           "type": "str", "required": true,  "example": "https://admin.example.com/users/9123"}
+    ],
+    "required_fields": ["email", "full_name", "url"]
+  },
+  "micro": [
+    {"intent": "Go to https://admin.example.com",
+     "type": "navigate", "budget": 3, "section": "setup", "required": true,
+     "params": {"wait_after_load_seconds": 20}},
+    {"intent": "Enter the email",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Email", "value": "ops@example.com"}},
+    {"intent": "Enter the password",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Password", "value": "<password>"}},
+    {"intent": "Click Sign in",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Sign in"}},
+    {"intent": "Verify admin console loaded",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page shows the admin console with a top-nav 'Users' link"},
+    {"intent": "Click Users in the navigation",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Users"}},
+    {"intent": "Type the email in the search box",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Search users", "value": "alice@example.com"}},
+    {"intent": "Click the matching user row to open their profile",
+     "type": "click", "budget": 8, "grounding": true, "section": "setup",
+     "required": true,
+     "hints": {"layout": "single"}},
+    {"intent": "Verify the profile page loaded for alice",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page shows the user profile with the email alice@example.com visible"},
+    {"intent": "Read the URL for the profile",
+     "type": "extract_url", "claude_only": true, "budget": 0, "section": "extraction"},
+    {"intent": "Scroll down to expose plan / signup / last-login / billing fields",
+     "type": "scroll", "budget": 5, "section": "extraction"},
+    {"intent": "Read the structured profile fields from the screen",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "extraction"}
+  ]
+}
+JSON
+```
+
+The `hints: {"layout": "single"}` on the click tells the runner this is
+a single labelled element (one user matched the search) — it routes to
+`find_form_target` instead of `find_all_listings`. Without that hint
+the runner would try to scan a listings grid and fail on this single-row
+search-result UI.
+
+### Recipe 10 — Push data into a CRM (create or update a contact)
+
+**Best for:** webhook → CRM sync. Take a payload from your own system,
+log into the CRM, search for the contact, create-or-update.
+
+```bash
+curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "detached": true,
+  "state_key": "crm-upsert-contact-bob",
+  "max_cost": 2,
+  "max_time_minutes": 15,
+  "micro": [
+    {"intent": "Go to https://crm.example.com",
+     "type": "navigate", "budget": 3, "section": "setup", "required": true,
+     "params": {"wait_after_load_seconds": 25}},
+    {"intent": "Enter the user ID",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "User ID", "value": "ops"}},
+    {"intent": "Enter the password",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Password", "value": "<password>"}},
+    {"intent": "Click Sign in",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Sign in"}},
+    {"intent": "Click Contacts in the navigation",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Contacts"}},
+    {"intent": "Click New Contact to open the create form",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "New Contact", "aliases": ["+ Contact", "Add Contact"]}},
+    {"intent": "Enter the first name",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "First Name", "value": "Bob"}},
+    {"intent": "Enter the last name",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Last Name", "value": "Patel"}},
+    {"intent": "Enter the email",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Email", "value": "bob.patel@example.com"}},
+    {"intent": "Enter the phone",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": false,
+     "params": {"label": "Phone", "value": "+1-555-0142"}},
+    {"intent": "Set the contact owner",
+     "type": "select_option", "budget": 6, "section": "setup", "required": true,
+     "params": {"dropdown_label": "Contact Owner", "option_label": "Alice Anderson"}},
+    {"intent": "Click Save to create the contact",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Save", "aliases": ["Save Contact", "Create"]}},
+    {"intent": "Verify the contact was created",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page shows the new contact's profile with email bob.patel@example.com visible; toast or breadcrumb confirms creation"}
+  ]
+}
+JSON
+```
+
+For an **update** rather than a create, swap the `New Contact` click for
+a search-and-open click (see Recipe 9) and skip the fields the upstream
+payload didn't provide. The form-finder's scroll-and-rescan handles
+buttons below the fold; `aliases` covers `Save` / `Save Contact` / `Create`
+copy variation across CRM products.
+
+### Recipe 11 — Process a refund through a payments dashboard
+
+**Best for:** customer-support refund automation. Stripe / Shopify /
+Square / similar dashboards all follow the same pattern: search by order
+ID → open the payment → click Refund → confirm amount → verify.
+
+```bash
+curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @- <<'JSON'
+{
+  "detached": true,
+  "state_key": "refund-order-ord-91234",
+  "max_cost": 2,
+  "max_time_minutes": 15,
+  "micro": [
+    {"intent": "Go to https://payments.example.com/login",
+     "type": "navigate", "budget": 3, "section": "setup", "required": true,
+     "params": {"wait_after_load_seconds": 20}},
+    {"intent": "Enter the email",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Email", "value": "ops@example.com"}},
+    {"intent": "Enter the password",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Password", "value": "<password>"}},
+    {"intent": "Click Sign in",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Sign in"}},
+    {"intent": "Verify the dashboard loaded",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page shows the payments dashboard with a top-nav 'Payments' link"},
+    {"intent": "Click Payments in the navigation",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Payments"}},
+    {"intent": "Type the order ID in the search box",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Search by order, payment, or customer", "value": "ord_91234"}},
+    {"intent": "Click the matching payment row to open it",
+     "type": "click", "budget": 8, "grounding": true, "section": "setup",
+     "required": true,
+     "hints": {"layout": "single"}},
+    {"intent": "Verify the payment detail loaded",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page shows the payment detail for ord_91234, including amount and customer"},
+    {"intent": "Click Refund to open the refund dialog",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Refund", "aliases": ["Issue refund", "Refund payment"]}},
+    {"intent": "Enter the refund amount",
+     "type": "fill_field", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Refund amount", "value": "29.99"}},
+    {"intent": "Set the reason",
+     "type": "select_option", "budget": 6, "section": "setup", "required": false,
+     "params": {"dropdown_label": "Reason", "option_label": "Requested by customer"}},
+    {"intent": "Click Confirm refund",
+     "type": "submit", "budget": 4, "section": "setup", "required": true,
+     "params": {"label": "Refund", "aliases": ["Confirm refund", "Issue refund"]}},
+    {"intent": "Verify the refund posted",
+     "type": "extract_data", "claude_only": true, "budget": 0, "section": "setup",
+     "gate": true,
+     "verify": "Page shows a refund confirmation: status reads Refunded or a refund event appears in the payment timeline with amount $29.99"}
+  ]
+}
+JSON
+```
+
+> **A note on action recipes vs. read recipes.**  Action recipes
+> (post / write / refund) carry real-world consequences — a successful
+> run mutates state on a third-party system. Two safety practices:
+>
+> 1. Set `max_cost` low (≤ $2.50) and `max_time_minutes` tight (≤ 15)
+>    so a runaway run can't burn the whole budget on one mistake.
+> 2. Always include a final `gate: true` `extract_data` step that
+>    verifies the action actually happened (toast, redirect, status
+>    change). Without that gate, a run can succeed (no error thrown)
+>    while the underlying action silently failed.
 
 ---
 

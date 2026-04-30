@@ -95,26 +95,26 @@ The server validates and **clamps** every plan against:
 
 ## Task suite (Claude-CUA-style autonomous-per-task)
 
-Used by the StaffAI CRM workflow. Each task is given to the runner with its own `max_steps` budget and a `verify` clause; Claude decides what to do per task.
+Used by a multi-task CRM workflow. Each task is given to the runner with its own `max_steps` budget and a `verify` clause; Claude decides what to do per task.
 
 ```jsonc
 {
-  "session_name": "staffai_crm",
-  "base_url": "https://staffai-test-crm.exe.xyz",
+  "session_name": "crm_demo",
+  "base_url": "https://crm.example.com",
   "auth": { "user_id": "...", "password": "..." },
   "tasks": [
     {
       "task_id": "login",
       "intent": "Go to https://... and log in with user X and password Y",
       "save_session": true,
-      "start_url": "https://staffai-test-crm.exe.xyz",
+      "start_url": "https://crm.example.com",
       "verify": { "type": "url_not_contains", "value": "login" }
     },
     {
       "task_id": "update_lead_industry",
       "intent": "Go to the Leads Page. Update industry of qualified lead to 'Space Exploration'.",
       "require_session": true,
-      "start_url": "https://staffai-test-crm.exe.xyz",
+      "start_url": "https://crm.example.com",
       "verify": { "type": "page_contains_text", "value": "Space Exploration" }
     }
   ]
@@ -135,7 +135,7 @@ Submit:
 ```jsonc
 { "task_suite": { ... full dict ... } }
 // or
-{ "task_file": "tasks/crm/staffai_tasks.json" }
+{ "task_file": "tasks/crm/crm_tasks.json" }
 ```
 
 ## plan_text (auto-decompose)
@@ -157,7 +157,7 @@ Have a stable workflow you'll run many times?
   ├─ yes → write a micro-plan once and submit via `micro`
   └─ no  → is it a one-shot or rapidly-changing?
             ├─ yes → submit as `plan_text`, server decomposes via Claude
-            └─ no  → is it the StaffAI / Claude-CUA-per-task style?
+            └─ no  → is it a multi-task suite?
                      ├─ yes → submit as `task_suite`
                      └─ no  → micro-plan inline via `task_suite` field
 ```

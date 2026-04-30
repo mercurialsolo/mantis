@@ -5,10 +5,11 @@ repo_url: https://github.com/mercurialsolo/mantis
 repo_name: mercurialsolo/mantis
 edit_uri: edit/main/docs/
 
-# Source files all live under docs/. Existing top-level docs (API.md,
-# ARCHITECTURE.md, learnings.md, PROPOSAL-*.md, integration-vision_claude.md)
-# stay where they are so direct-link-from-GitHub keeps working; the nav
-# below re-surfaces them under friendlier names.
+# Source files all live under docs/. Existing top-level docs (api.md,
+# architecture.md, learnings.md) stay where they are so direct-link-from-GitHub
+# keeps working; the nav below re-surfaces them under friendlier names.
+# Client-specific docs live in a separate directory and are NOT part of
+# this site — see the README at the repo root for the policy.
 docs_dir: docs
 
 theme:
@@ -118,8 +119,7 @@ nav:
       - Generic CUA over HTTP: integrations/generic-cua.md
       - Recipes (jobs, e-commerce, news, real-estate): integrations/recipes.md
       - Embedding MicroPlanRunner: integrations/embedding-microplanrunner.md
-      - vision_claude: integration-vision_claude.md
-      - vision_claude — parity addendum: staffai-vision_claude-parity.md
+      - Integrating any agent: integrations/any-agent.md
   - Reference:
       - reference/index.md
       - HTTP API: api.md
@@ -129,5 +129,4 @@ nav:
       - Coordinate spaces: reference/coordinate-spaces.md
   - Appendix:
       - appendix/index.md
-      - Proposal: PROPOSAL-mantis-cua-replaces-vision_claude.md
       - Learnings: learnings.md

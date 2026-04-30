@@ -115,7 +115,7 @@ pip install -e '.[orchestrator]'
 # remote BrainHolo3 client. See the integration docs.
 ```
 
-This is exactly the path vision_claude takes — see [Integrations / vision_claude](../integration-vision_claude.md).
+This is the typical library-embedded path — see [Embedding MicroPlanRunner](../integrations/embedding-microplanrunner.md) and the [any-agent integration playbook](../integrations/any-agent.md).
 
 ### Cost guardrails
 

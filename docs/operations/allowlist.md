@@ -10,10 +10,10 @@ Set per tenant in the keys file:
 {
   "tenant_keys": {
     "<token>": {
-      "tenant_id": "vision_claude_prod",
+      "tenant_id": "tenant_a",
       "allowed_domains": [
         "*.boattrader.com",
-        "staffai-test-crm.exe.xyz"
+        "crm.example.com"
       ]
     }
   }

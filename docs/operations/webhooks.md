@@ -16,7 +16,7 @@ When the run reaches `succeeded` / `failed` / `cancelled`, the server fires the 
 ```jsonc
 {
   "run_id": "20260428_021432_076255ef",
-  "tenant_id": "vision_claude_prod",
+  "tenant_id": "tenant_a",
   "status": "succeeded",
   "summary": { ... same shape as the /v1/predict status response ... },
   "delivered_at": "2026-04-28T02:24:01Z"
