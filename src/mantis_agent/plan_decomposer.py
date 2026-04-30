@@ -171,12 +171,20 @@ VERB → STEP-TYPE MAPPING (FORM FLOWS):
    "enter X in the Y field", "type X into Y", "fill in Y with X", "set Y to X"
        → fill_field with params={"label": "Y", "value": "X"}.
    "click the Submit button", "click Save", "click Update Lead", "press Continue",
-   "submit the form"
-       → submit with params={"label": "<button text>"}.
+   "submit the form", "click the {Leads/Settings/etc} navigation link",
+   "click the {Edit Lead/Cancel} button", "go to the {Y} page"
+   (when {Y} is a tab/nav/menu item, NOT a URL)
+       → submit with params={"label": "<button or link text>"}.
+       Use submit for any SINGLE LABELLED CLICKABLE on a non-listings page —
+       buttons, nav links, tab items, menu items, dock icons, inline
+       action links. The runner uses find_form_target which locates one
+       labelled element by visible text, no listings-grid assumption.
    "select X from the Y dropdown", "choose X under Y", "pick X in the Y selector"
        → select_option with params={"dropdown_label": "Y", "option_label": "X"}.
    "click the first / next / nth result/row/listing/card/job/product/property"
-       → click (this IS a listings click, keep it).
+       → click (this IS a listings click — many similar items on one page,
+       runner picks the next un-extracted one). DO NOT use click for nav
+       links, buttons, or any single-element clickable.
 
 When the source text says "Click the user ID field and enter sarah.connor", emit
 a SINGLE fill_field step (with label="User ID", value="sarah.connor") — NOT a
@@ -216,8 +224,11 @@ STEP TYPES:
 - loop: Jump back to step index (loop_target=N, loop_count=max)
 - fill_field: Click a labelled input and type a value
               (budget=4, params={"label": "<visible field label>", "value": "<text to type>"})
-- submit: Click a labelled button — Login / Save / Submit / Update / Continue / etc.
-          (budget=4, params={"label": "<visible button text>"})
+- submit: Click a SINGLE LABELLED CLICKABLE on a non-listings page — buttons
+          (Login / Save / Submit / Update / Continue), navigation links,
+          tab items, menu items, dock icons, action links.
+          NOT for "click the next listing/result" — use `click` for that.
+          (budget=4, params={"label": "<visible button or link text>"})
 - select_option: Open a dropdown and pick an option by visible text
                  (budget=6, params={"dropdown_label": "<dropdown name>",
                                     "option_label": "<option text>"})
@@ -281,7 +292,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v9_form_vocab"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v11_submit_covers_nav"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
