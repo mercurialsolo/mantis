@@ -58,22 +58,48 @@ class _NullMetric:
         pass
 
 
+def _existing(name: str) -> Any | None:
+    """Return the metric already registered under ``name``, or None.
+
+    Test runs that re-import the FastAPI app re-register module-level
+    metrics — without this lookup we'd raise ``Duplicated timeseries`` on
+    every reload. Reusing the existing collector keeps tests green and
+    matches what the runtime does in practice (single registration).
+    """
+    if not _PROM_AVAILABLE:
+        return None
+    try:
+        from prometheus_client import REGISTRY  # noqa: PLC0415
+        return REGISTRY._names_to_collectors.get(name)
+    except Exception:
+        return None
+
+
 def _counter(name: str, doc: str, labels: tuple[str, ...]) -> Any:
-    if _PROM_AVAILABLE:
-        return Counter(name, doc, labels)
-    return _NullMetric()
+    if not _PROM_AVAILABLE:
+        return _NullMetric()
+    existing = _existing(name)
+    if existing is not None:
+        return existing
+    return Counter(name, doc, labels)
 
 
 def _gauge(name: str, doc: str, labels: tuple[str, ...]) -> Any:
-    if _PROM_AVAILABLE:
-        return Gauge(name, doc, labels)
-    return _NullMetric()
+    if not _PROM_AVAILABLE:
+        return _NullMetric()
+    existing = _existing(name)
+    if existing is not None:
+        return existing
+    return Gauge(name, doc, labels)
 
 
 def _histogram(name: str, doc: str, labels: tuple[str, ...], buckets: tuple[float, ...]) -> Any:
-    if _PROM_AVAILABLE:
-        return Histogram(name, doc, labels, buckets=buckets)
-    return _NullMetric()
+    if not _PROM_AVAILABLE:
+        return _NullMetric()
+    existing = _existing(name)
+    if existing is not None:
+        return existing
+    return Histogram(name, doc, labels, buckets=buckets)
 
 
 # ── Metric handles ──────────────────────────────────────────────────────────
