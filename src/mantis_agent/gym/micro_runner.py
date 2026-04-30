@@ -1529,6 +1529,11 @@ class MicroPlanRunner:
         """Navigate to a URL using env.reset() — no Holo3 steps needed.
 
         Waits for page load and handles Cloudflare challenges (auto-solve in 5-10s).
+
+        First-paint wait resolution order (first hit wins):
+          1. step.params["wait_after_load_seconds"] — plan-driven override
+          2. env MANTIS_NAV_WAIT_SECONDS                — deployment-wide override
+          3. 18s default                                — covers Cloudflare auto-solve
         """
         import re
         url_match = re.search(r'https?://[^\s"]+', step.intent)
@@ -1538,11 +1543,21 @@ class MicroPlanRunner:
             logger.warning(f"  [navigate] No URL found in intent: {step.intent[:60]}")
             return StepResult(step_index=index, intent=step.intent, success=False)
 
-        logger.info(f"  [navigate] Loading {url}")
+        try:
+            wait_seconds = float(
+                (step.params or {}).get("wait_after_load_seconds")
+                or os.environ.get("MANTIS_NAV_WAIT_SECONDS")
+                or 18
+            )
+        except (TypeError, ValueError):
+            wait_seconds = 18.0
+        wait_seconds = max(0.0, min(wait_seconds, 120.0))
+
+        logger.info(f"  [navigate] Loading {url} (first-paint wait {wait_seconds:.0f}s)")
         try:
             self.env.reset(task="navigate", start_url=url)
             # Wait for Cloudflare challenge to auto-solve + page render
-            time.sleep(18)
+            time.sleep(wait_seconds)
             self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
             time.sleep(2)
             # Store as base URL for pagination (results page, not detail page)

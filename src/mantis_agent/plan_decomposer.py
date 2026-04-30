@@ -241,7 +241,11 @@ PLAIN TEXT PLAN:
 {plan_text}
 
 STEP TYPES:
-- navigate: Go to a URL — include full URL in intent (budget=3)
+- navigate: Go to a URL — include full URL in intent (budget=3).
+            Optional params={"wait_after_load_seconds": <int>} when the page
+            needs a longer first-paint wait (e.g. proxied SPA cold-start,
+            heavy CRM splash). Default is 18s; use the param only when the
+            source plan explicitly says the page is slow to load.
 - filter: Click a filter option (budget=8, grounding=true, required=true, section="setup")
 - click: Click an element on a listings/results page (budget=8, grounding=true)
 - scroll: Scroll until target content visible (budget=10, section="extraction")
@@ -320,7 +324,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v11_submit_covers_nav"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v12_navigate_wait_param"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

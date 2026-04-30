@@ -400,6 +400,97 @@ def test_decompose_prompt_template_substitutes_without_format_keyerror():
         DECOMPOSE_PROMPT.format(plan_text=plan)
 
 
+def test_navigate_wait_override_via_params(monkeypatch: pytest.MonkeyPatch):
+    """Per-step params["wait_after_load_seconds"] beats the env override.
+
+    Lets a plan say "this navigate hits a slow proxied SPA, wait 35s before
+    Holo3 reads the page" without globally bumping the deployment-wide wait.
+    """
+    env = _FakeEnv()
+    runner = _runner_with_extractor(env, extractor=MagicMock())
+
+    captured: list[float] = []
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+    # Env override would push to 60 if param were ignored.
+    monkeypatch.setenv("MANTIS_NAV_WAIT_SECONDS", "60")
+
+    intent = MicroIntent(
+        intent="Go to https://example.com",
+        type="navigate",
+        params={"wait_after_load_seconds": 35},
+    )
+    result = runner._execute_navigate(intent, index=0)
+
+    assert result.success is True
+    # First sleep is the first-paint wait. Param=35 wins over env=60.
+    assert captured[0] == 35.0
+
+
+def test_navigate_wait_override_via_env(monkeypatch: pytest.MonkeyPatch):
+    """MANTIS_NAV_WAIT_SECONDS bumps every navigate when no per-step param.
+
+    Useful for the staffai canary's proxied-CRM cold-start where the splash
+    runs longer than 18s. Set once at deploy time, takes effect everywhere.
+    """
+    env = _FakeEnv()
+    runner = _runner_with_extractor(env, extractor=MagicMock())
+
+    captured: list[float] = []
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+    monkeypatch.setenv("MANTIS_NAV_WAIT_SECONDS", "30")
+
+    intent = MicroIntent(intent="Go to https://example.com", type="navigate")
+    result = runner._execute_navigate(intent, index=0)
+
+    assert result.success is True
+    assert captured[0] == 30.0
+
+
+def test_navigate_wait_default_unchanged(monkeypatch: pytest.MonkeyPatch):
+    """No param + no env override → 18s default. Pins the BoatTrader pipeline
+    timing so the new override knob doesn't silently shift existing flows."""
+    env = _FakeEnv()
+    runner = _runner_with_extractor(env, extractor=MagicMock())
+
+    captured: list[float] = []
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+    monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
+
+    intent = MicroIntent(intent="Go to https://example.com", type="navigate")
+    result = runner._execute_navigate(intent, index=0)
+
+    assert result.success is True
+    assert captured[0] == 18.0
+
+
+def test_navigate_wait_clamped_to_safe_range(monkeypatch: pytest.MonkeyPatch):
+    """Garbage / extreme values clamp to [0, 120] — no infinite hang from a
+    typo'd plan, no zero-wait race from a negative number."""
+    env = _FakeEnv()
+    runner = _runner_with_extractor(env, extractor=MagicMock())
+
+    captured: list[float] = []
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+    monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
+
+    intent = MicroIntent(
+        intent="Go to https://example.com",
+        type="navigate",
+        params={"wait_after_load_seconds": 999},
+    )
+    runner._execute_navigate(intent, index=0)
+    assert captured[0] == 120.0
+
+    captured.clear()
+    intent = MicroIntent(
+        intent="Go to https://example.com",
+        type="navigate",
+        params={"wait_after_load_seconds": -5},
+    )
+    runner._execute_navigate(intent, index=0)
+    assert captured[0] == 0.0
+
+
 def test_run_loop_preserves_params_on_effective_step():
     """Regression: the run loop builds an `effective_step` per iteration that
     only copies a subset of MicroIntent fields. ``params`` must be in that
