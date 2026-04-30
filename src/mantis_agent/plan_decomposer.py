@@ -48,9 +48,14 @@ class MicroIntent:
     loop_target: int = -1   # For loop type: jump back to this step index
     loop_count: int = 0     # For loop type: how many times to repeat
     # Structured payload for form-shaped step types (#80). Keys vary by type:
-    #   fill_field    : {"label": str, "value": str}
-    #   submit        : {"label": str}
+    #   fill_field    : {"label": str, "value": str, "aliases"?: list[str]}
+    #   submit        : {"label": str, "aliases"?: list[str]}
     #   select_option : {"dropdown_label": str, "option_label": str}
+    #   navigate      : {"wait_after_load_seconds"?: int}
+    # ``aliases`` (#89 §2) lets a plan list synonyms for a primary submit
+    # button whose copy varies across products (e.g. "Update Lead" /
+    # "Save" / "Save Changes"). Use only for primary submit — never for
+    # nav links or unique-label clickables.
     # Empty for everything else; the runner falls back to parsing `intent`.
     params: dict[str, Any] = field(default_factory=dict)
     # Per-step grounding hints for the runner. Free-form, plan-driven —
@@ -260,7 +265,12 @@ STEP TYPES:
           (Login / Save / Submit / Update / Continue), navigation links,
           tab items, menu items, dock icons, action links.
           NOT for "click the next listing/result" — use `click` for that.
-          (budget=4, params={"label": "<visible button or link text>"})
+          (budget=4, params={"label": "<visible button or link text>",
+                             "aliases": ["<synonym1>", "<synonym2>", ...]})
+          Use `aliases` ONLY for primary submit buttons whose copy varies
+          across products: "Update Lead" / "Save" / "Save Changes" all do
+          the same thing. Do NOT add aliases for nav links, tab clicks, or
+          any other unique-label element — they cause false matches.
 - select_option: Open a dropdown and pick an option by visible text
                  (budget=6, params={"dropdown_label": "<dropdown name>",
                                     "option_label": "<option text>"})
@@ -324,7 +334,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v12_navigate_wait_param"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v13_submit_aliases"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

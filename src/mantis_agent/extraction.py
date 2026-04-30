@@ -1258,6 +1258,7 @@ class ClaudeExtractor:
         *,
         target_label: str = "",
         target_value: str = "",
+        target_aliases: list[str] | None = None,
     ) -> dict | None:
         """Find a labelled form element (input / button / dropdown / option) on any page.
 
@@ -1277,6 +1278,11 @@ class ClaudeExtractor:
             target_value: Optional value to type / option to select. The
                 runner re-reads this from ``params`` for the actual typing,
                 but providing it here helps Claude disambiguate.
+            target_aliases: Optional alternate labels — e.g.
+                ``["Update", "Save", "Save Changes"]`` for an "Update Lead"
+                submit button. Claude treats any alias as an acceptable
+                visual match, so a plan written for one product can survive
+                a copy-tweak in another. Issue #89 §2.
 
         Returns:
             dict with keys: ``x``, ``y``, ``action`` ("click" | "type" |
@@ -1291,10 +1297,16 @@ class ClaudeExtractor:
             f"\nThe value to type or option to select is: \"{target_value}\""
             if target_value else ""
         )
+        aliases = [a for a in (target_aliases or []) if a]
+        alias_clause = (
+            "\nAcceptable equivalent labels (any of these is a valid match): "
+            + ", ".join(f'"{a}"' for a in aliases)
+            if aliases else ""
+        )
         prompt = (
             f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
             f"TASK: {intent}"
-            f"{target_clause}{value_clause}\n\n"
+            f"{target_clause}{value_clause}{alias_clause}\n\n"
             f"This page is NOT a listings/search-results grid. It is a form, "
             f"login/edit page, settings panel, dialog, or similar. Exactly ONE "
             f"element on screen matches the task — find it.\n\n"

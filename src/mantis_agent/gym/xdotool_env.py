@@ -84,6 +84,7 @@ class XdotoolGymEnv(GymEnvironment):
         proxy_server: str = "",
         profile_dir: str = "/data/chrome-profile",
         save_screenshots: str = "",
+        cdp_port: int = 9222,
     ):
         self._start_url = start_url
         self._viewport = viewport
@@ -95,6 +96,10 @@ class XdotoolGymEnv(GymEnvironment):
         self._profile_dir = profile_dir
         self._save_screenshots = save_screenshots  # Dir to save screenshots for replay
         self._step_counter = 0
+        # CDP read-only access — used by current_url to query Chrome's
+        # navigation state directly instead of relying on the screenshot
+        # extractor reading the address bar pixels (issue #89 §1).
+        self._cdp_port = cdp_port
 
         self._xvfb_proc = None
         self._browser_proc = None
@@ -166,6 +171,10 @@ class XdotoolGymEnv(GymEnvironment):
             "--disable-features=InfiniteSessionRestore",
             "--disable-blink-features=AutomationControlled",  # Hide navigator.webdriver
             "--disable-dev-shm-usage",
+            # CDP for read-only current_url. Bound to localhost only.
+            # No automation control beyond URL inspection.
+            f"--remote-debugging-port={self._cdp_port}",
+            "--remote-debugging-address=127.0.0.1",
             f"--window-size={self._viewport[0]},{self._viewport[1]}",
             "--start-maximized",
             f"--user-data-dir={self._profile_dir}",
@@ -308,7 +317,37 @@ class XdotoolGymEnv(GymEnvironment):
 
     @property
     def current_url(self) -> str:
-        # No CDP — model reads URL from the address bar in the screenshot
+        """Read the active tab's URL via Chrome DevTools Protocol.
+
+        Issue #89 §1: the runner used to read the URL from the address-bar
+        pixels through ClaudeExtractor.extract — fragile when the page is
+        mid-render or the address bar is offscreen, surfacing as the
+        well-known ``(url=)`` empty-string in click-verify logs.
+
+        CDP's ``GET /json/list`` returns every Chrome tab; the active page
+        is the first entry of type ``page`` whose ``url`` is non-empty.
+        Bound to 127.0.0.1 only — never reachable from outside the container.
+
+        Returns ``""`` if CDP is unreachable so the runner can fall back to
+        screenshot extraction (preserves backward compatibility).
+        """
+        try:
+            import json as _json
+            import urllib.request
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self._cdp_port}/json/list",
+                timeout=2,
+            ) as resp:
+                tabs = _json.loads(resp.read().decode())
+        except Exception:
+            return ""
+        for tab in tabs:
+            if tab.get("type") == "page" and tab.get("url"):
+                url = str(tab["url"])
+                # Filter chrome:// internal URLs — not what callers want.
+                if url.startswith("chrome://") or url.startswith("about:"):
+                    continue
+                return url
         return ""
 
     def has_session(self, name: str) -> bool:

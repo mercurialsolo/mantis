@@ -1525,6 +1525,34 @@ class MicroPlanRunner:
             logger.warning("  [back] Failed closing detail tab: %s", exc)
             return StepResult(step_index=index, intent=step.intent, success=False)
 
+    def _read_current_url(self, screenshot=None) -> str:
+        """Resolve the active tab's URL, preferring CDP over screenshot OCR.
+
+        Issue #89 §1: the screenshot-only verification was returning empty
+        URLs (``(url=)``) on SPA navigations because the address bar text
+        wasn't yet repainted, or the page used ``history.pushState`` and
+        the runner read a stale screenshot. CDP's ``/json/list`` is the
+        ground truth for the active page's URL.
+
+        Falls back to ``ClaudeExtractor.extract`` when CDP is unreachable
+        (Modal hosts where the port wasn't bound, older Truss images, etc.)
+        so existing screenshot-based behaviour still works.
+        """
+        try:
+            url = self.env.current_url or ""
+        except Exception:
+            url = ""
+        if url:
+            return url
+        if screenshot is not None and self.extractor:
+            try:
+                verify_data = self.extractor.extract(screenshot)
+            except Exception:
+                return ""
+            self.costs["claude_extract"] += 1
+            return verify_data.url if verify_data else ""
+        return ""
+
     def _execute_navigate(self, step: MicroIntent, index: int) -> StepResult:
         """Navigate to a URL using env.reset() — no Holo3 steps needed.
 
@@ -1788,12 +1816,14 @@ class MicroPlanRunner:
             return StepResult(step_index=index, intent=step.intent, success=False)
 
         # Verify: are we on a detail page? Retry once (page may still load)
+        # Prefer CDP over screenshot URL extraction — issue #89 §1.
         for verify_attempt in range(2):
             time.sleep(3 + verify_attempt * 3)  # 3s first, 6s retry
-            after = self.env.screenshot()
-            verify_data = self.extractor.extract(after)
-            self.costs["claude_extract"] += 1
-            url = verify_data.url if verify_data else ""
+            url = self._read_current_url()
+            if not url:
+                # CDP unavailable — fall back to screenshot OCR.
+                after = self.env.screenshot()
+                url = self._read_current_url(after)
 
             if url and self.site_config.is_detail_page(url):
                 logger.info(f"  [claude-click] Verified on detail page: {url[:60]}")
@@ -1830,10 +1860,10 @@ class MicroPlanRunner:
             time.sleep(2)
 
             for switch_attempt in range(2):
-                after = self.env.screenshot()
-                verify_data = self.extractor.extract(after)
-                self.costs["claude_extract"] += 1
-                url = verify_data.url if verify_data else ""
+                url = self._read_current_url()
+                if not url:
+                    after = self.env.screenshot()
+                    url = self._read_current_url(after)
                 if url and self.site_config.is_detail_page(url):
                     logger.info(f"  [claude-click] Middle-click fallback opened detail: {url[:60]}")
                     self._opened_detail_in_new_tab = True
@@ -1898,10 +1928,10 @@ class MicroPlanRunner:
                 self.costs["proxy_mb"] += 5.0
                 time.sleep(3)
 
-                after = self.env.screenshot()
-                verify_data = self.extractor.extract(after)
-                self.costs["claude_extract"] += 1
-                url = verify_data.url if verify_data else ""
+                url = self._read_current_url()
+                if not url:
+                    after = self.env.screenshot()
+                    url = self._read_current_url(after)
                 if url and self.site_config.is_detail_page(url):
                     logger.info(
                         "  [claude-click] Probe %s opened detail: %s",
@@ -2120,6 +2150,10 @@ class MicroPlanRunner:
         if step.type == "fill_field":
             label = str(params.get("label") or "").strip()
             value = str(params.get("value") or "").strip()
+            aliases = params.get("aliases") or []
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            aliases = [str(a).strip() for a in aliases if str(a).strip()]
             search_intent = (
                 f"Click the input field labelled '{label}' so we can type into it"
                 if label
@@ -2130,6 +2164,7 @@ class MicroPlanRunner:
                 search_intent,
                 target_label=label,
                 target_value=value,
+                target_aliases=aliases,
             )
             self.costs["claude_extract"] += 1
             if not target:
@@ -2167,15 +2202,55 @@ class MicroPlanRunner:
 
         if step.type == "submit":
             label = str(params.get("label") or "").strip()
+            aliases = params.get("aliases") or []
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            aliases = [str(a).strip() for a in aliases if str(a).strip()]
             search_intent = (
                 f"Click the '{label}' button to submit the form" if label else step.intent
             )
+            # Scroll-and-rescan loop — issue #89 §2. Long forms (CRMs,
+            # settings panels) often render the primary submit button below
+            # the fold; the previous single-screenshot path declared the
+            # button missing without ever checking lower viewports.
             target = self.extractor.find_form_target(
-                screenshot, search_intent, target_label=label,
+                screenshot, search_intent,
+                target_label=label, target_aliases=aliases,
             )
             self.costs["claude_extract"] += 1
+            scroll_steps = 0
+            max_scrolls = 4
+            while target is None and scroll_steps < max_scrolls:
+                logger.info(
+                    f"  [claude-form] submit '{label}' not in viewport — "
+                    f"scrolling Page_Down ({scroll_steps + 1}/{max_scrolls})"
+                )
+                try:
+                    self.env.step(Action(
+                        action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"},
+                    ))
+                except Exception:
+                    break
+                time.sleep(0.6)
+                screenshot = self.env.screenshot()
+                target = self.extractor.find_form_target(
+                    screenshot, search_intent,
+                    target_label=label, target_aliases=aliases,
+                )
+                self.costs["claude_extract"] += 1
+                scroll_steps += 1
             if not target:
-                logger.warning(f"  [claude-form] submit: button '{label}' not found")
+                logger.warning(
+                    f"  [claude-form] submit: button '{label}' not found "
+                    f"after {scroll_steps} scroll(s)"
+                )
+                # Reset scroll position so the next step starts at top.
+                try:
+                    self.env.step(Action(
+                        action_type=ActionType.KEY_PRESS, params={"keys": "Home"},
+                    ))
+                except Exception:
+                    pass
                 return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
             x, y = target["x"], target["y"]
             try:

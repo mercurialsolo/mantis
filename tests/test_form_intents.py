@@ -400,6 +400,153 @@ def test_decompose_prompt_template_substitutes_without_format_keyerror():
         DECOMPOSE_PROMPT.format(plan_text=plan)
 
 
+def test_submit_scrolls_to_find_below_fold_button():
+    """Issue #89 §2: long forms render the primary submit below the fold;
+    the previous single-screenshot path declared it missing without ever
+    scrolling. The new path Page_Downs and re-asks find_form_target up to
+    4 times before giving up."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    # First two screenshots: button not in viewport. Third: found.
+    extractor.find_form_target.side_effect = [
+        None,
+        None,
+        {"x": 640, "y": 480, "action": "click", "value": "", "label": "Update Lead"},
+    ]
+    runner = _runner_with_extractor(env, extractor)
+
+    intent = MicroIntent(
+        intent="Click Update Lead",
+        type="submit",
+        params={"label": "Update Lead"},
+    )
+    result = runner._execute_claude_guided_form(intent, index=0)
+
+    assert result.success is True
+    assert result.data.startswith("submit:")
+    # Three find_form_target calls: initial + 2 after Page_Down.
+    assert extractor.find_form_target.call_count == 3
+    # Two Page_Down keypresses + one terminal click.
+    page_downs = [
+        a for a in env.actions
+        if a.action_type == ActionType.KEY_PRESS and a.params.get("keys") == "Page_Down"
+    ]
+    assert len(page_downs) == 2
+    clicks = [a for a in env.actions if a.action_type == ActionType.CLICK]
+    assert len(clicks) == 1
+
+
+def test_submit_gives_up_after_max_scrolls():
+    """When the button truly isn't on the page, we cap scrolling so the
+    runner doesn't loop forever. Cap is 4 scrolls — initial + 4 = 5 total
+    find_form_target calls before giving up."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = None  # never found
+    runner = _runner_with_extractor(env, extractor)
+
+    intent = MicroIntent(
+        intent="Click Update Lead",
+        type="submit",
+        params={"label": "Update Lead"},
+    )
+    result = runner._execute_claude_guided_form(intent, index=0)
+
+    assert result.success is False
+    assert result.data == "form_target_not_found"
+    assert extractor.find_form_target.call_count == 5  # 1 initial + 4 scrolls
+    # Final Home press resets scroll for the next step.
+    home_presses = [
+        a for a in env.actions
+        if a.action_type == ActionType.KEY_PRESS and a.params.get("keys") == "Home"
+    ]
+    assert len(home_presses) == 1
+
+
+def test_submit_aliases_passed_to_grounder():
+    """The decomposer can emit ``params["aliases"]`` for primary submit
+    buttons whose copy varies across products. The runner must forward
+    these so claude-form can match on any of them."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {
+        "x": 640, "y": 480, "action": "click", "value": "", "label": "Save Changes",
+    }
+    runner = _runner_with_extractor(env, extractor)
+
+    intent = MicroIntent(
+        intent="Click Update Lead",
+        type="submit",
+        params={
+            "label": "Update Lead",
+            "aliases": ["Update", "Save", "Save Changes"],
+        },
+    )
+    result = runner._execute_claude_guided_form(intent, index=0)
+
+    assert result.success is True
+    # The grounder was told about the aliases.
+    call = extractor.find_form_target.call_args
+    assert call.kwargs["target_aliases"] == ["Update", "Save", "Save Changes"]
+
+
+def test_form_aliases_string_normalised_to_list():
+    """A misshapen ``aliases: "Save"`` (string instead of list) should still
+    work — wrap to a single-element list rather than raising."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {
+        "x": 640, "y": 480, "action": "click", "value": "", "label": "Save",
+    }
+    runner = _runner_with_extractor(env, extractor)
+
+    intent = MicroIntent(
+        intent="Click Update Lead",
+        type="submit",
+        params={"label": "Update Lead", "aliases": "Save"},
+    )
+    result = runner._execute_claude_guided_form(intent, index=0)
+
+    assert result.success is True
+    assert extractor.find_form_target.call_args.kwargs["target_aliases"] == ["Save"]
+
+
+def test_read_current_url_prefers_cdp_over_screenshot():
+    """Issue #89 §1: the ``(url=)`` empty-string halt was caused by reading
+    the address bar from screenshot pixels. _read_current_url must prefer
+    env.current_url (CDP) and fall back to screenshot OCR only when CDP
+    is unreachable."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    runner = _runner_with_extractor(env, extractor)
+
+    # CDP path: env.current_url returns the URL, no extractor call needed.
+    env.current_url_value = "https://example.com/leads/42"
+    type(env).current_url = property(lambda self: getattr(self, "current_url_value", ""))
+
+    url = runner._read_current_url()
+    assert url == "https://example.com/leads/42"
+    extractor.extract.assert_not_called()
+
+
+def test_read_current_url_falls_back_to_screenshot_when_cdp_empty():
+    """When CDP returns empty (port not bound, container without
+    --remote-debugging-port), fall back to the existing screenshot-based
+    URL extractor. Pins the backward-compatible fallback path."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    fake_extract = MagicMock()
+    fake_extract.url = "https://example.com/leads/42"
+    extractor.extract.return_value = fake_extract
+    runner = _runner_with_extractor(env, extractor)
+
+    type(env).current_url = property(lambda self: "")
+
+    url = runner._read_current_url(env._img)
+    assert url == "https://example.com/leads/42"
+    extractor.extract.assert_called_once()
+
+
 def test_navigate_wait_override_via_params(monkeypatch: pytest.MonkeyPatch):
     """Per-step params["wait_after_load_seconds"] beats the env override.
 
