@@ -8,9 +8,12 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from mantis_agent.server_utils import (
     build_micro_result,
     build_micro_suite,
+    build_proxy_config,
     build_task_loop_result,
     micro_plan_steps_to_dicts,
     parse_lead_row,
@@ -20,6 +23,65 @@ from mantis_agent.server_utils import (
     save_result_json,
     write_leads_csv,
 )
+
+
+# ── build_proxy_config: IPRoyal geo-targeting suffix shape ─────────────
+
+class TestBuildProxyConfig:
+    """The IPRoyal residential proxy is finicky about the suffix shape on the
+    proxy password. Empirical contract — verified against geo.iproyal.com:12321:
+
+      _country-us              ✅ accepted
+      _city-miami              ✅ accepted
+      _state-florida           ✅ accepted (full name, lowercase)
+      _state-fl                ❌ rejected with 503 on CONNECT
+      _session-<id>            ✅ accepted (sticky IP)
+
+    These tests pin the build_proxy_config behaviour so a regression doesn't
+    silently break every proxied run.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _proxy_env(self, monkeypatch):
+        monkeypatch.setenv("PROXY_URL", "http://geo.iproyal.com:12321")
+        monkeypatch.setenv("PROXY_USER", "test_user")
+        monkeypatch.setenv("PROXY_PASS", "basepass")
+
+    def test_returns_none_when_proxy_url_unset(self, monkeypatch):
+        monkeypatch.delenv("PROXY_URL", raising=False)
+        assert build_proxy_config(city="miami") is None
+
+    def test_appends_city_suffix(self):
+        cfg = build_proxy_config(city="miami")
+        assert cfg["password"] == "basepass_city-miami"
+
+    def test_drops_two_letter_state_abbreviation(self):
+        """Empirical: IPRoyal returns 503 for `_state-fl`. The builder must
+        not append it — caller likely meant a full state name and only had
+        the abbreviation, so we silently skip rather than corrupt the suffix."""
+        cfg = build_proxy_config(city="miami", state="fl")
+        assert "_state-" not in cfg["password"], (
+            f"two-letter state must NOT be appended: {cfg['password']!r}"
+        )
+        assert cfg["password"] == "basepass_city-miami"
+
+    def test_appends_full_state_name_lowercased(self):
+        cfg = build_proxy_config(city="miami", state="Florida")
+        assert cfg["password"].endswith("_state-florida")
+
+    def test_appends_session_suffix(self):
+        cfg = build_proxy_config(session_id="abc123")
+        assert cfg["password"].endswith("_session-abc123")
+
+    def test_skips_already_present_suffixes(self):
+        """If the env var already has _city- baked in, don't double-append."""
+        import os
+        os.environ["PROXY_PASS"] = "basepass_city-miami"
+        try:
+            cfg = build_proxy_config(city="miami")
+            assert cfg["password"].count("_city-") == 1
+        finally:
+            os.environ["PROXY_PASS"] = "basepass"
 
 
 class FakeStepResult:
