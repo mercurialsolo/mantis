@@ -107,6 +107,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Recipes ship with the wheel: plan.json + any prompt assets a recipe owns.
+"mantis_agent.recipes" = ["**/*.json", "**/*.txt"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
