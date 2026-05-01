@@ -19,17 +19,18 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP :: Browsers",
 ]
 
-[project.urls]
-Homepage = "https://github.com/mercurialsolo/mantis"
-Documentation = "https://mercurialsolo.github.io/mantis/"
-Repository = "https://github.com/mercurialsolo/mantis"
-Issues = "https://github.com/mercurialsolo/mantis/issues"
 # Slim base: just what is needed to import mantis_agent.{actions, gym.base, site_config, ...}
 # without dragging in GPU, browser, or desktop deps. Add an extras group below
 # for the use case you actually need.
 dependencies = [
     "pillow>=10.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mercurialsolo/mantis"
+Documentation = "https://mercurialsolo.github.io/mantis/"
+Repository = "https://github.com/mercurialsolo/mantis"
+Issues = "https://github.com/mercurialsolo/mantis/issues"
 
 [project.optional-dependencies]
 # Orchestrator-only — for callers that run MicroPlanRunner in their own
