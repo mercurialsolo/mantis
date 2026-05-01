@@ -1,239 +1,25 @@
-"""Modal runtime shared by OSWorld + sibling Modal apps.
+"""OSWorld harness — agent loop and OSWorld-specific helpers.
 
-Houses the heavy bits that multiple Modal entrypoints reuse:
+This module owns the OSWorld agent loop (``run_osworld_impl``) and the
+OSWorld-task-specific helpers around it (``extract_setup_paths``,
+``extract_setup_cwd``, ``derive_hint``). The Modal image and volume,
+llama-server lifecycle, and learnings persistence live in sibling
+modules — see :mod:`.image`, :mod:`.llama`, and :mod:`.learnings`.
 
-- ``image``: CUDA + llama.cpp + Docker + OSWorld + Playwright + mantis_agent.
-- ``vol``: the ``osworld-data`` volume holding cached models and run results.
-- ``GEMMA4_MODEL`` / ``GGUF_CONFIGS``: which Gemma 4 GGUF variant to download.
-- ``download_model`` / ``start_llama_server``: bring up the local OpenAI-compatible
-  inference server inside a Modal container.
-- ``run_osworld_impl``: the plain-Python OSWorld agent loop (no Modal decorators)
-  that benchmark wrappers (``benchmarks/osworld_chrome.py`` etc.) call from
-  their own ``@app.function`` definitions.
-
-This module is intentionally Modal-app-free — each caller defines its own
-``modal.App`` and decorates ``run_osworld`` with the GPU/timeout/etc. it wants.
+The package ``__init__`` re-exports every public symbol so existing
+``from mantis_agent.modal_runtime import image, run_osworld_impl, vol``
+imports keep working.
 """
 
 import json
 import os
-import subprocess
+import subprocess  # noqa: F401  — used by run_osworld_impl via type annotation
 import sys
 import time
 
-import modal
-
-vol = modal.Volume.from_name("osworld-data", create_if_missing=True)
-
-# Full image with CUDA, llama.cpp, Docker, OSWorld deps
-image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11"
-    )
-    .apt_install(
-        "git", "build-essential", "cmake", "curl", "wget",
-        # Docker (for OSWorld's Docker provider)
-        "docker.io",
-        # QEMU (fallback if Docker-in-Docker doesn't work)
-        "qemu-system-x86", "qemu-utils",
-        # OSWorld deps
-        "tesseract-ocr", "net-tools",
-    )
-    .run_commands(
-        # Build llama.cpp with CUDA (only A100 arch to speed up build 5x)
-        "git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp",
-        # Link against CUDA stubs (no GPU at build time, real libcuda available at runtime)
-        "ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/libcuda.so.1 && "
-        "ldconfig && "
-        "cd /opt/llama.cpp && cmake -B build -DGGML_CUDA=ON "
-        "-DCMAKE_CUDA_ARCHITECTURES='80' -DLLAMA_CURL=OFF "
-        "&& cmake --build build --target llama-server --config Release -j$(nproc) "
-        "&& rm /usr/local/cuda/lib64/libcuda.so.1",
-        # Clone OSWorld
-        "git clone --depth 1 https://github.com/xlang-ai/OSWorld.git /opt/OSWorld",
-    )
-    .pip_install(
-        # Core OSWorld deps (all unpinned to avoid conflicts with CUDA image)
-        "requests", "pillow", "fabric", "gymnasium", "pytz", "opencv-python-headless",
-        "matplotlib", "psutil", "tqdm", "pandas", "flask", "requests-toolbelt",
-        "filelock", "lxml", "cssselect", "xmltodict", "openpyxl", "python-docx",
-        "python-pptx", "pypdf", "rapidfuzz", "pymupdf", "chardet", "playwright",
-        "backoff", "formulas", "pydrive", "odfpy", "openai", "func-timeout",
-        "beautifulsoup4", "dashscope", "google-generativeai", "PyYAML", "mutagen",
-        "easyocr", "borb", "pypdf2", "pdfplumber", "wrapt-timeout-decorator",
-        "tiktoken", "groq", "docker", "python-dotenv", "tldextract", "anthropic",
-        "json-repair", "loguru", "gdown", "httpx", "huggingface-hub",
-        "ImageHash", "scikit-image", "json-minify",
-        "pyacoustid", "librosa", "fastdtw", "pygame",
-    )
-    .run_commands(
-        "playwright install --with-deps chromium || true",
-    )
-    # Ship the local mantis_agent package (prompts + tool helpers + this module).
-    .add_local_python_source("mantis_agent")
-)
-
-
-GEMMA4_MODEL = os.environ.get("GEMMA4_MODEL", "26B")  # "E4B", "26B", or "31B"
-
-GGUF_CONFIGS = {
-    "E4B": {
-        "repo": "ggml-org/gemma-4-E4B-it-GGUF",
-        "model_file": "gemma-4-e4b-it-Q4_K_M.gguf",
-        "mmproj_file": "mmproj-gemma-4-e4b-it-f16.gguf",
-    },
-    "26B": {
-        "repo": "ggml-org/gemma-4-26b-a4b-it-GGUF",
-        "model_file": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
-        "mmproj_file": "mmproj-gemma-4-26B-A4B-it-f16.gguf",
-    },
-    "31B": {
-        "repo": "ggml-org/gemma-4-31b-it-GGUF",
-        "model_file": "gemma-4-31B-it-Q4_K_M.gguf",
-        "mmproj_file": "mmproj-gemma-4-31B-it-f16.gguf",
-    },
-}
-
-
-def download_model(vol_path: str) -> str:
-    """Download Gemma4 GGUF if not cached."""
-    cfg = GGUF_CONFIGS[GEMMA4_MODEL]
-    model_dir = os.path.join(vol_path, "models")
-    model_path = os.path.join(model_dir, cfg["model_file"])
-    if os.path.exists(model_path):
-        print(f"Model cached at {model_path}")
-        return model_path
-
-    os.makedirs(model_dir, exist_ok=True)
-    from huggingface_hub import hf_hub_download
-    print(f"Downloading Gemma4 {GEMMA4_MODEL} GGUF from {cfg['repo']}...")
-    for f in [cfg["model_file"], cfg["mmproj_file"]]:
-        hf_hub_download(cfg["repo"], f, local_dir=model_dir)
-    vol.commit()
-    print("Model downloaded.")
-    return model_path
-
-
-def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
-    """Start llama-server on CUDA GPU."""
-
-    # Find the model and mmproj files
-    model_dir = os.path.dirname(model_path)
-    print(f"Model dir contents: {os.listdir(model_dir)}")
-    print(f"Model path: {model_path} (exists: {os.path.exists(model_path)})")
-
-    # Find the correct mmproj file for this model
-    cfg = GGUF_CONFIGS[GEMMA4_MODEL]
-    mmproj_path = os.path.join(model_dir, cfg["mmproj_file"])
-    mmproj_files = [mmproj_path] if os.path.exists(mmproj_path) else []
-    print(f"mmproj: {mmproj_path} (exists: {os.path.exists(mmproj_path)})")
-
-    cmd = [
-        "/opt/llama.cpp/build/bin/llama-server",
-        "-m", model_path,
-        "--host", "0.0.0.0", "--port", str(port),
-        "-ngl", "99",
-        "-c", "32768",      # Gemma4 needs larger context for vision (native 256K)
-        "-ub", "2048",       # Must be >= image token batch (~972 for 1920x1080)
-        "--jinja",           # Required for proper Gemma4 chat template
-        "--reasoning-budget", "0",  # Keep 0 for OSWorld CLI tasks — 4096 caused 91.7→83.3% regression
-        "--flash-attn", "on", # EXP-11: ~30-50% faster attention, identical outputs
-    ]
-
-    # Add mmproj if found (needed for multimodal)
-    if mmproj_files:
-        cmd.extend(["--mmproj", mmproj_files[0]])
-
-    print(f"Starting: {' '.join(cmd)}")
-    log_path = "/tmp/llama.log"
-
-    def _tail_log() -> str:
-        try:
-            with open(log_path) as f:
-                return f.read()[-3000:]
-        except OSError:
-            return "(llama log unavailable)"
-
-    log_fh = open(log_path, "w")
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-        )
-    except Exception:
-        log_fh.close()
-        raise
-
-    # Check if process crashed immediately
-    time.sleep(3)
-    if proc.poll() is not None:
-        print(f"llama-server crashed with code {proc.returncode}")
-        print(_tail_log())
-        log_fh.close()
-        raise RuntimeError(f"llama-server crashed with code {proc.returncode}")
-
-    import requests
-    for i in range(90):  # 3 min timeout
-        try:
-            r = requests.get(f"http://localhost:{port}/v1/models", timeout=2)
-            if r.status_code == 200:
-                print(f"llama-server ready on :{port} ({i*2}s)")
-                return proc
-        except Exception:
-            pass
-        # Check if process died
-        if proc.poll() is not None:
-            print(f"llama-server died with code {proc.returncode}")
-            print(_tail_log())
-            log_fh.close()
-            raise RuntimeError("llama-server died during startup")
-        time.sleep(2)
-
-    print("TIMEOUT - llama-server log:")
-    print(_tail_log())
-    log_fh.close()
-    raise RuntimeError("llama-server failed to start within timeout")
-
-
-def load_learnings(volume_path: str = "/data/results/learnings.json") -> list:
-    """Load accumulated learnings from previous runs."""
-    try:
-        with open(volume_path) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-
-def get_prior_learning(task_id: str, instruction: str, learnings: list) -> str:
-    """Find relevant prior learnings for a task — by task ID or similar instruction."""
-    relevant = []
-
-    for entry in learnings:
-        # Exact task match
-        if entry.get("task_id") == task_id:
-            relevant.append(entry)
-            continue
-        # Similar instruction (share 3+ words)
-        prior_words = set(entry.get("instruction", "").lower().split())
-        current_words = set(instruction.lower().split())
-        overlap = prior_words & current_words - {"the", "a", "to", "in", "on", "my", "i", "can", "you", "help", "me", "is"}
-        if len(overlap) >= 4:
-            relevant.append(entry)
-
-    if not relevant:
-        return ""
-
-    # Distill prior learnings into actionable advice
-    advice = "\nPrior learnings from similar tasks:"
-    for entry in relevant[-3:]:  # Last 3 relevant entries
-        diag = entry.get("diagnosis", "")
-        actions = entry.get("actions_tried", [])
-        if diag:
-            advice += f"\n- {diag}"
-        if actions:
-            advice += f" (failed approaches: {', '.join(a[:40] for a in actions)})"
-    return advice
+from .image import GEMMA4_MODEL, GGUF_CONFIGS, vol
+from .learnings import get_prior_learning, load_learnings
+from .llama import download_model, start_llama_server
 
 
 def extract_setup_paths(config: list) -> dict:
