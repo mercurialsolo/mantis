@@ -102,3 +102,79 @@ def resolve_brain(name: str) -> Brain:
 def list_brains() -> list[str]:
     """Names of all registered brains, sorted."""
     return sorted(_REGISTRY)
+
+
+# ── Built-in brain registration ─────────────────────────────────────────────
+#
+# Each factory imports its concrete class lazily *inside* the lambda. That
+# keeps ``register_brain`` cheap — registration always succeeds — and defers
+# heavyweight imports (torch, transformers, anthropic) until the brain is
+# actually resolved. A slim install can list the registered names without
+# pulling GPU / API dependencies.
+#
+# ``MANTIS_BRAIN`` is the public selector. The legacy ``MANTIS_MODEL`` env
+# var maps onto the same names; the runtime prefers ``MANTIS_BRAIN`` when
+# both are set.
+
+
+def _holo3_factory() -> Brain:
+    from .brain_holo3 import Holo3Brain
+    return Holo3Brain()
+
+
+def _claude_factory() -> Brain:
+    from .brain_claude import ClaudeBrain
+    return ClaudeBrain()
+
+
+def _opencua_factory() -> Brain:
+    from .brain_opencua import OpenCUABrain
+    return OpenCUABrain()
+
+
+def _llamacpp_factory() -> Brain:
+    from .brain_llamacpp import LlamaCppBrain
+    return LlamaCppBrain()
+
+
+def _gemma4_factory() -> Brain:
+    from .brain import Gemma4Brain
+    return Gemma4Brain()
+
+
+def _agents_factory() -> Brain:
+    from .brain_agents import AgentSBrain
+    return AgentSBrain()
+
+
+def _register_builtins() -> None:
+    """Register the in-tree brains. Idempotent."""
+    register_brain("holo3", _holo3_factory)
+    register_brain("claude", _claude_factory)
+    register_brain("opencua", _opencua_factory)
+    register_brain("llamacpp", _llamacpp_factory)
+    register_brain("gemma4", _gemma4_factory)
+    register_brain("agent-s", _agents_factory)
+
+
+_register_builtins()
+
+
+def resolve_from_env(default: str = "holo3") -> Brain:
+    """Resolve the brain selected by ``MANTIS_BRAIN`` (or legacy ``MANTIS_MODEL``).
+
+    Used by the deployment runtimes (``baseten_server``, ``modal_runtime``)
+    so the env-var contract lives in one place. Falls back to ``default``
+    if neither variable is set.
+    """
+    import os
+
+    name = (
+        os.environ.get("MANTIS_BRAIN")
+        or os.environ.get("MANTIS_MODEL")
+        or default
+    )
+    # Map a legacy alias: ``MANTIS_MODEL=gemma4-cua`` → ``gemma4``.
+    if name == "gemma4-cua":
+        name = "gemma4"
+    return resolve_brain(name)

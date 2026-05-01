@@ -33,7 +33,25 @@ __all__ = [
     "MicroIntent",
     "PlanDecomposer",
     "scale_brain_to_display",
+    # Brain registry — pluggable model backend
+    "Brain",
+    "register_brain",
+    "resolve_brain",
+    "list_brains",
+    "resolve_brain_from_env",
 ]
+
+
+# Brain registry symbols are eager-imported (the module is pure typing +
+# dict, no heavyweight deps) so plugin packages can ``from mantis_agent
+# import register_brain`` without the lazy __getattr__ machinery.
+from .brain_protocol import (
+    Brain,
+    list_brains,
+    register_brain,
+    resolve_brain,
+    resolve_from_env as resolve_brain_from_env,
+)
 
 
 def __getattr__(name: str):  # PEP 562

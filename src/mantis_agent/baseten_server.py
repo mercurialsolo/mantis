@@ -307,7 +307,14 @@ _build_proxy_config = build_proxy_config  # backward compat alias
 
 class BasetenCUARuntime:
     def __init__(self) -> None:
-        self.model_kind = os.environ.get("MANTIS_MODEL", "holo3")
+        # ``MANTIS_BRAIN`` is the new public selector; ``MANTIS_MODEL`` stays
+        # supported as a fallback for one minor release. ``gemma4-cua`` is
+        # an alias for ``gemma4`` carried over from the legacy name.
+        self.model_kind = (
+            os.environ.get("MANTIS_BRAIN")
+            or os.environ.get("MANTIS_MODEL")
+            or "holo3"
+        )
         self.port = int(os.environ.get("MANTIS_LLAMA_PORT", "18080"))
         self.llama_proc: subprocess.Popen | None = None
         self._llama_log_fh: Any = None
