@@ -1,10 +1,11 @@
 """Claude-based data extraction — read structured data from screenshots.
 
-Uses Claude Sonnet to extract boat listing data from a single screenshot.
+Uses Claude Sonnet to extract listing data from a single screenshot.
 Same API pattern as ClaudeGrounding but for data extraction instead of
 click targeting.
 
-Architecture:
+Architecture::
+
     Holo3 navigates → clicks listing → screenshot captured
       ↓
     ClaudeExtractor.extract(screenshot) → structured data
@@ -14,11 +15,14 @@ Architecture:
 Cost: ~$0.003-0.005 per extraction call (1 screenshot + short prompt).
 Called once or twice per listing (top of page + after scrolling).
 
-Usage:
+Usage::
+
     extractor = ClaudeExtractor()
     data = extractor.extract(screenshot)
-    # data = {"year": "2018", "make": "Sea Ray", "model": "240 Sundeck",
-    #         "price": "$42,500", "phone": "305-555-1234", "url": "boattrader.com/..."}
+
+This module owns ``ClaudeExtractor`` and the prompt constants. The
+schema, result, and spam helpers were split out under :mod:`.schema`,
+:mod:`.result`, and :mod:`.spam` in PR #105.
 """
 
 from __future__ import annotations
@@ -29,307 +33,16 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any
 
 from PIL import Image
 
+from .result import ExtractionResult
+from .schema import ExtractionSchema
+from .spam import contains_dealer_text, parse_bool, seller_looks_like_dealer
+
 logger = logging.getLogger(__name__)
-
-
-# ── ExtractionSchema — domain-agnostic extraction configuration ───
-
-
-@dataclass
-class ExtractionSchema:
-    """Describes what to extract, how to detect spam, and what viability means.
-
-    When passed to ClaudeExtractor, overrides the hardcoded BoatTrader prompts
-    with dynamic prompts generated from these fields.
-
-    Use ExtractionSchema.from_objective(spec) to build from an ObjectiveSpec,
-    or ExtractionSchema.default_boattrader() for backward compatibility.
-    """
-
-    entity_name: str = "listing"  # "boat listing", "job posting", "property"
-    fields: list[dict[str, Any]] = field(default_factory=list)  # OutputField-like dicts
-    required_fields: list[str] = field(default_factory=list)  # field names for viability
-    spam_indicators: list[str] = field(default_factory=list)  # replaces DEALER_TEXT_INDICATORS
-    spam_seller_indicators: list[str] = field(default_factory=list)  # replaces DEALER_SELLER_INDICATORS
-    spam_label: str = "dealer/spam"  # what to call spam (e.g. "dealer", "recruiter")
-    forbidden_controls: list[str] = field(default_factory=list)  # "Contact Seller", etc.
-    allowed_controls: list[str] = field(default_factory=list)  # "Show more", "Show phone"
-
-    @classmethod
-    def from_objective(cls, objective: Any) -> ExtractionSchema:
-        """Build from an ObjectiveSpec.
-
-        All domain-specific signals (spam indicators, allowed reveal
-        controls, forbidden lead-form labels) come from the objective. No
-        hardcoded application-specific defaults are injected — callers that
-        want them must specify them on the ObjectiveSpec.
-        """
-        fields = [
-            {"name": f.name, "type": f.type, "required": f.required, "example": f.example}
-            for f in getattr(objective, "output_schema", [])
-        ]
-        required = [f["name"] for f in fields if f.get("required", True)]
-        forbidden = list(getattr(objective, "forbidden_actions", []))
-        allowed = list(getattr(objective, "allowed_reveal_actions", []))
-        spam_text = list(getattr(objective, "spam_text_indicators", []))
-        spam_seller = list(getattr(objective, "spam_seller_indicators", []))
-        spam_label = str(getattr(objective, "spam_label", "") or "non-organic")
-
-        return cls(
-            entity_name=getattr(objective, "target_entity", "item") or "item",
-            fields=fields or cls._default_fields(),
-            required_fields=required or ["url"],
-            spam_indicators=spam_text,
-            spam_seller_indicators=spam_seller,
-            spam_label=spam_label,
-            forbidden_controls=forbidden,
-            allowed_controls=allowed,
-        )
-
-    @classmethod
-    def default_boattrader(cls) -> ExtractionSchema:
-        """Deprecated alias for ``recipes.marketplace_listings.schema.SCHEMA``.
-
-        Kept for one minor release so existing callers (tests, training
-        configs, deployed plans) keep working. New callers should import
-        ``mantis_agent.recipes.marketplace_listings.schema.SCHEMA`` or
-        resolve a recipe by name via ``mantis_agent.recipes.load_schema``.
-        """
-        import warnings
-
-        warnings.warn(
-            "ExtractionSchema.default_boattrader() is deprecated; import "
-            "mantis_agent.recipes.marketplace_listings.schema.SCHEMA "
-            "or call mantis_agent.recipes.load_schema('marketplace_listings').",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        from .recipes.marketplace_listings.schema import SCHEMA
-
-        return SCHEMA
-
-    @staticmethod
-    def _default_fields() -> list[dict[str, Any]]:
-        return [
-            {"name": "url", "type": "str", "required": True, "example": ""},
-            {"name": "title", "type": "str", "required": False, "example": ""},
-            {"name": "price", "type": "str", "required": False, "example": ""},
-            {"name": "phone", "type": "str", "required": False, "example": ""},
-            {"name": "seller", "type": "str", "required": False, "example": ""},
-        ]
-
-    def field_names(self) -> list[str]:
-        return [f["name"] for f in self.fields]
-
-    def json_template(self) -> str:
-        """JSON template string for the extraction prompt."""
-        obj = {}
-        for f in self.fields:
-            obj[f["name"]] = ""
-        obj["is_spam"] = False
-        return json.dumps(obj)
-
-    def field_descriptions(self) -> str:
-        """Numbered field list for extraction prompts."""
-        lines = []
-        for i, f in enumerate(self.fields, 1):
-            example = f" (e.g. {f['example']})" if f.get("example") else ""
-            required = " [REQUIRED]" if f.get("required") else ""
-            lines.append(f"{i}. {f['name']}: {f.get('type', 'str')}{example}{required}")
-        lines.append(f"{len(self.fields) + 1}. is_spam: Is this a {self.spam_label} listing? (true/false)")
-        return "\n".join(lines)
-
-    def contains_spam_text(self, text: str) -> bool:
-        text_lower = text.lower()
-        return any(ind in text_lower for ind in self.spam_indicators)
-
-    def seller_looks_like_spam(self, seller: str) -> bool:
-        seller_lower = seller.lower()
-        return any(ind in seller_lower for ind in self.spam_seller_indicators)
-
-
-# DEALER_TEXT_INDICATORS / DEALER_SELLER_INDICATORS used to live here. They
-# now live under ``recipes.marketplace_listings._data`` — the recipe owns
-# its own vertical signals so adding a new vertical doesn't require editing
-# the core. Module-level access is preserved via PEP 562 ``__getattr__``
-# below for one deprecation cycle.
-def __getattr__(name: str) -> Any:  # PEP 562
-    if name in ("DEALER_TEXT_INDICATORS", "DEALER_SELLER_INDICATORS"):
-        import warnings
-
-        warnings.warn(
-            f"mantis_agent.extraction.{name} has moved to "
-            f"mantis_agent.recipes.marketplace_listings._data.{name}",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        from .recipes.marketplace_listings import _data as _md
-
-        return getattr(_md, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def _parse_bool(value: object) -> bool:
-    """Parse API booleans that may arrive as strings."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"true", "yes", "1"}
-    return bool(value)
-
-
-def _legacy_dealer_indicators() -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Lazy-load the marketplace_listings recipe constants.
-
-    Cached on first call. Only exists so the legacy ``dealer_reason`` /
-    ``find_all`` paths (callers that don't supply an ``ExtractionSchema``)
-    keep working without re-introducing a vertical-specific dependency at
-    import time.
-    """
-    cached = getattr(_legacy_dealer_indicators, "_cached", None)
-    if cached is None:
-        from .recipes.marketplace_listings import _data as _md
-        cached = (_md.DEALER_TEXT_INDICATORS, _md.DEALER_SELLER_INDICATORS)
-        _legacy_dealer_indicators._cached = cached
-    return cached
-
-
-def _contains_dealer_text(text: str) -> bool:
-    text_lower = text.lower()
-    text_indicators, _ = _legacy_dealer_indicators()
-    return any(indicator in text_lower for indicator in text_indicators)
-
-
-def _seller_looks_like_dealer(seller: str) -> bool:
-    seller_lower = seller.lower()
-    _, seller_indicators = _legacy_dealer_indicators()
-    return any(indicator in seller_lower for indicator in seller_indicators)
-
-
-@dataclass
-class ExtractionResult:
-    """Structured data extracted from a listing screenshot.
-
-    Named fields (year, make, model, etc.) are kept for backward compatibility.
-    When an ExtractionSchema is set, the generic ``fields`` dict is the primary
-    data store and all viability/spam checks use the schema configuration.
-    """
-
-    # Existing named fields (backward compat with BoatTrader)
-    year: str = ""
-    make: str = ""
-    model: str = ""
-    price: str = ""
-    phone: str = ""
-    url: str = ""
-    seller: str = ""
-    is_dealer: bool = False
-    raw_response: str = ""
-    confidence: float = 0.0
-
-    # Generic field storage — populated when schema is set
-    extracted_fields: dict[str, str] = field(default_factory=dict)
-    _schema: ExtractionSchema | None = field(default=None, repr=False)
-
-    def dealer_reason(self) -> str:
-        """Return a reason if this looks like spam/dealer inventory."""
-        if self._schema:
-            if self.is_dealer:
-                return f"extractor marked as {self._schema.spam_label}"
-            if self._schema.seller_looks_like_spam(self.seller or self.extracted_fields.get("seller", "")):
-                seller = self.seller or self.extracted_fields.get("seller", "")
-                return f"seller looks like {self._schema.spam_label}: {seller}"
-            text = f"{self.url} {self.raw_response} " + " ".join(self.extracted_fields.values())
-            if self._schema.contains_spam_text(text):
-                return f"{self._schema.spam_label} indicator in listing text"
-            return ""
-        # Legacy BoatTrader path
-        if self.is_dealer:
-            return "extractor marked listing as dealer"
-        if _seller_looks_like_dealer(self.seller):
-            return f"seller looks like dealer: {self.seller}"
-        if _contains_dealer_text(f"{self.url} {self.price} {self.raw_response}"):
-            return "dealer/sponsored indicator in listing text"
-        return ""
-
-    def is_private_seller(self) -> bool:
-        """Not spam/dealer."""
-        return not self.dealer_reason()
-
-    def has_phone(self) -> bool:
-        """Require an actually visible phone number."""
-        phone_val = self.phone or self.extracted_fields.get("phone", "")
-        phone = phone_val.strip().lower()
-        if phone in {"", "none", "n/a", "na", "unknown", "not visible", "not shown"}:
-            return False
-        digits = re.sub(r"\D", "", phone)
-        return len(digits) >= 10
-
-    def missing_required_reason(self) -> str:
-        """Return why this extraction is not a usable lead."""
-        if self._schema:
-            missing = [
-                name for name in self._schema.required_fields
-                if not self.extracted_fields.get(name)
-            ]
-            return f"missing required field(s): {', '.join(missing)}" if missing else ""
-        # Legacy
-        missing = []
-        if not self.year:
-            missing.append("year")
-        if not self.make:
-            missing.append("make")
-        return f"missing required field(s): {', '.join(missing)}" if missing else ""
-
-    def to_summary(self) -> str:
-        """Format as the VIABLE summary string."""
-        if self._schema and self.extracted_fields:
-            parts = []
-            for f in self._schema.fields:
-                name = f["name"]
-                val = self.extracted_fields.get(name, "")
-                if val:
-                    parts.append(f"{name.replace('_', ' ').title()}: {val}")
-                elif name == "phone":
-                    parts.append("Phone: none")
-            return "VIABLE | " + " | ".join(parts) if parts else ""
-        # Legacy BoatTrader
-        parts = []
-        if self.year:
-            parts.append(f"Year: {self.year}")
-        if self.make:
-            parts.append(f"Make: {self.make}")
-        if self.model:
-            parts.append(f"Model: {self.model}")
-        if self.price:
-            parts.append(f"Price: {self.price}")
-        if self.phone:
-            parts.append(f"Phone: {self.phone}")
-        else:
-            parts.append("Phone: none")
-        if self.url:
-            parts.append(f"URL: {self.url}")
-        if self.seller:
-            parts.append(f"Seller: {self.seller}")
-        return "VIABLE | " + " | ".join(parts) if parts else ""
-
-    def is_viable(self) -> bool:
-        """Has enough data to be a useful lead (not spam, required fields present)."""
-        if self._schema:
-            has_required = all(
-                self.extracted_fields.get(name)
-                for name in self._schema.required_fields
-            )
-            return has_required and self.is_private_seller()
-        # Legacy
-        return bool(self.year and self.make and self.is_private_seller())
-
 
 # Generic fallback prompts used when ClaudeExtractor is constructed without
 # a schema. They describe the extractor's job in entity-neutral language and
@@ -504,7 +217,7 @@ class ClaudeExtractor:
             phone=str(data.get("phone", "")),
             url=str(data.get("url", "")),
             seller=str(data.get("seller", "")),
-            is_dealer=_parse_bool(data.get("is_dealer") or data.get("is_spam", False)),
+            is_dealer=parse_bool(data.get("is_dealer") or data.get("is_spam", False)),
             raw_response=json.dumps(data),
             _schema=self.schema,
         )
@@ -682,7 +395,7 @@ class ClaudeExtractor:
             phone=str(parsed.get("phone", "")),
             url=str(parsed.get("url", "")),
             seller=str(parsed.get("seller", "")),
-            is_dealer=_parse_bool(parsed.get("is_dealer", False)),
+            is_dealer=parse_bool(parsed.get("is_dealer", False)),
             raw_response=text,
             confidence=0.9,
         )
@@ -748,7 +461,7 @@ class ClaudeExtractor:
             phone=str(parsed.get("phone", "")),
             url=str(parsed.get("url", "")),
             seller=str(parsed.get("seller", "")),
-            is_dealer=_parse_bool(parsed.get("is_dealer", False)),
+            is_dealer=parse_bool(parsed.get("is_dealer", False)),
             raw_response=text,
             confidence=0.9,
         )
@@ -1059,15 +772,15 @@ class ClaudeExtractor:
             seller = str(item.get("seller", ""))
             reason = str(item.get("reason", ""))
             is_private_seller = item.get("is_private_seller")
-            is_dealer = _parse_bool(item.get("is_dealer", False))
-            is_sponsored = _parse_bool(item.get("is_sponsored", False))
+            is_dealer = parse_bool(item.get("is_dealer", False))
+            is_sponsored = parse_bool(item.get("is_sponsored", False))
             card_text = f"{title} {seller} {reason}"
             if (
                 is_private_seller is False
                 or is_dealer
                 or is_sponsored
-                or _contains_dealer_text(card_text)
-                or _seller_looks_like_dealer(seller)
+                or contains_dealer_text(card_text)
+                or seller_looks_like_dealer(seller)
             ):
                 logger.info(
                     "  [find_all] Skipping non-private card: title='%s' seller='%s' reason='%s'",
