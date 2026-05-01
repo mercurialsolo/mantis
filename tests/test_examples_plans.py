@@ -16,7 +16,8 @@ from mantis_agent.api_schemas import validate_micro_steps
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_DIR = REPO_ROOT / "examples"
-RECIPE_PLANS = list((REPO_ROOT / "recipes").glob("*/plan.json"))
+RECIPES_DIR = REPO_ROOT / "src" / "mantis_agent" / "recipes"
+RECIPE_PLANS = list(RECIPES_DIR.glob("*/plan.json"))
 
 
 def _example_plans() -> list[Path]:

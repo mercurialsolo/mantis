@@ -94,35 +94,25 @@ class ExtractionSchema:
 
     @classmethod
     def default_boattrader(cls) -> ExtractionSchema:
-        """The current hardcoded BoatTrader schema for backward compatibility."""
-        return cls(
-            entity_name="boat listing",
-            fields=cls._boattrader_fields(),
-            required_fields=["year", "make"],
-            spam_indicators=list(DEALER_TEXT_INDICATORS),
-            spam_seller_indicators=list(DEALER_SELLER_INDICATORS),
-            spam_label="dealer",
-            forbidden_controls=[
-                "Contact Seller", "Request Info", "Email Seller",
-                "Get Pre-Qualified", "loan", "financing",
-            ],
-            allowed_controls=[
-                "Show more", "Read more", "See more", "Show phone",
-                "View phone", "Call",
-            ],
-        )
+        """Deprecated alias for ``recipes.marketplace_listings.schema.SCHEMA``.
 
-    @staticmethod
-    def _boattrader_fields() -> list[dict[str, Any]]:
-        return [
-            {"name": "year", "type": "str", "required": True, "example": "2018"},
-            {"name": "make", "type": "str", "required": True, "example": "Sea Ray"},
-            {"name": "model", "type": "str", "required": False, "example": "240 Sundeck"},
-            {"name": "price", "type": "str", "required": False, "example": "$42,500"},
-            {"name": "phone", "type": "str", "required": False, "example": "305-555-1234"},
-            {"name": "url", "type": "str", "required": False, "example": "boattrader.com/boat/..."},
-            {"name": "seller", "type": "str", "required": False, "example": "John Smith"},
-        ]
+        Kept for one minor release so existing callers (tests, training
+        configs, deployed plans) keep working. New callers should import
+        ``mantis_agent.recipes.marketplace_listings.schema.SCHEMA`` or
+        resolve a recipe by name via ``mantis_agent.recipes.load_schema``.
+        """
+        import warnings
+
+        warnings.warn(
+            "ExtractionSchema.default_boattrader() is deprecated; import "
+            "mantis_agent.recipes.marketplace_listings.schema.SCHEMA "
+            "or call mantis_agent.recipes.load_schema('marketplace_listings').",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from .recipes.marketplace_listings.schema import SCHEMA
+
+        return SCHEMA
 
     @staticmethod
     def _default_fields() -> list[dict[str, Any]]:
@@ -164,43 +154,25 @@ class ExtractionSchema:
         return any(ind in seller_lower for ind in self.spam_seller_indicators)
 
 
-# Spam indicator constants. Kept for ExtractionSchema.default_boattrader()
-# which is now the only opt-in pathway that wires them in. Generic callers
-# get an empty spam list and rely on their own ExtractionSchema to inject
-# domain-specific indicators (recruiter spam for jobs, broker spam for
-# real estate, etc.). Nothing here is referenced as an implicit default
-# anywhere else in the file.
-_LEGACY_BOATTRADER_TEXT_INDICATORS = (
-    "dealername-",
-    "dealer website",
-    "view dealer website",
-    "more from this dealer",
-    "request a price",
-    "condition-new",
-    "certified dealer",
-    "sponsored",
-    "advertisement",
-    "boatsgroup",
-    "marinemax",
-)
+# DEALER_TEXT_INDICATORS / DEALER_SELLER_INDICATORS used to live here. They
+# now live under ``recipes.marketplace_listings._data`` — the recipe owns
+# its own vertical signals so adding a new vertical doesn't require editing
+# the core. Module-level access is preserved via PEP 562 ``__getattr__``
+# below for one deprecation cycle.
+def __getattr__(name: str) -> Any:  # PEP 562
+    if name in ("DEALER_TEXT_INDICATORS", "DEALER_SELLER_INDICATORS"):
+        import warnings
 
-_LEGACY_BOATTRADER_SELLER_INDICATORS = (
-    "marine",
-    "marinemax",
-    "yacht",
-    "boats",
-    "brokerage",
-    "sales",
-    "dealer",
-    "center",
-    "inc",
-    "llc",
-)
+        warnings.warn(
+            f"mantis_agent.extraction.{name} has moved to "
+            f"mantis_agent.recipes.marketplace_listings._data.{name}",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        from .recipes.marketplace_listings import _data as _md
 
-# Deprecated public aliases — read by ExtractionSchema.default_boattrader()
-# only. New callers should populate ExtractionSchema fields explicitly.
-DEALER_TEXT_INDICATORS = _LEGACY_BOATTRADER_TEXT_INDICATORS
-DEALER_SELLER_INDICATORS = _LEGACY_BOATTRADER_SELLER_INDICATORS
+        return getattr(_md, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _parse_bool(value: object) -> bool:
@@ -212,14 +184,32 @@ def _parse_bool(value: object) -> bool:
     return bool(value)
 
 
+def _legacy_dealer_indicators() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Lazy-load the marketplace_listings recipe constants.
+
+    Cached on first call. Only exists so the legacy ``dealer_reason`` /
+    ``find_all`` paths (callers that don't supply an ``ExtractionSchema``)
+    keep working without re-introducing a vertical-specific dependency at
+    import time.
+    """
+    cached = getattr(_legacy_dealer_indicators, "_cached", None)
+    if cached is None:
+        from .recipes.marketplace_listings import _data as _md
+        cached = (_md.DEALER_TEXT_INDICATORS, _md.DEALER_SELLER_INDICATORS)
+        _legacy_dealer_indicators._cached = cached
+    return cached
+
+
 def _contains_dealer_text(text: str) -> bool:
     text_lower = text.lower()
-    return any(indicator in text_lower for indicator in DEALER_TEXT_INDICATORS)
+    text_indicators, _ = _legacy_dealer_indicators()
+    return any(indicator in text_lower for indicator in text_indicators)
 
 
 def _seller_looks_like_dealer(seller: str) -> bool:
     seller_lower = seller.lower()
-    return any(indicator in seller_lower for indicator in DEALER_SELLER_INDICATORS)
+    _, seller_indicators = _legacy_dealer_indicators()
+    return any(indicator in seller_lower for indicator in seller_indicators)
 
 
 @dataclass

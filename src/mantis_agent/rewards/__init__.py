@@ -4,14 +4,19 @@ The package is split into:
   base.py        — RewardSignal, EpisodeState, RewardFn protocol
   components.py  — reusable primitives (format_reward, off_site_penalty, ...)
   plan_adherence — generic per-step plan verifier reward
-  boattrader     — terminal gate predicate for BoatTrader extraction
 
-A reward function plugs into GymRunner via the `reward_fn=` kwarg. Each
-TrajectoryStep gets `step()`'s value; RunResult's terminal_reward gets
-`episode()`'s value.
+Vertical-specific terminal gates live under ``mantis_agent.recipes.<name>.rewards``.
+``BoatTraderReward`` (deprecated alias) is still re-exported here for one
+minor release; new callers should import
+``mantis_agent.recipes.marketplace_listings.rewards.MarketplaceListingReward``.
+
+A reward function plugs into GymRunner via the ``reward_fn=`` kwarg. Each
+TrajectoryStep gets ``step()``'s value; RunResult's terminal_reward gets
+``episode()``'s value.
 """
 
 from .base import EpisodeState, RewardFn, RewardSignal
+from .boattrader import BoatTraderReward  # deprecated alias
 from .components import (
     format_reward,
     loop_penalty,
@@ -21,7 +26,6 @@ from .components import (
     url_progress_reward,
 )
 from .plan_adherence import PlanAdherenceReward
-from .boattrader import BoatTraderReward
 
 __all__ = [
     "EpisodeState",
@@ -36,5 +40,6 @@ __all__ = [
     "url_progress_reward",
     # Reward fns
     "PlanAdherenceReward",
+    # Deprecated — see module docstring
     "BoatTraderReward",
 ]
