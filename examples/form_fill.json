@@ -1,0 +1,48 @@
+[
+  {
+    "intent": "Open httpbin's public test form.",
+    "type": "navigate",
+    "url": "https://httpbin.org/forms/post",
+    "wait_for_load": true
+  },
+  {
+    "intent": "Fill the customer name field.",
+    "type": "holo3",
+    "max_steps": 4,
+    "hint": "Click the 'Customer name' input, then type 'Mantis Test'."
+  },
+  {
+    "intent": "Fill the telephone field.",
+    "type": "holo3",
+    "max_steps": 4,
+    "hint": "Click the 'Telephone' input, then type '555-0100'."
+  },
+  {
+    "intent": "Fill the email field.",
+    "type": "holo3",
+    "max_steps": 4,
+    "hint": "Click the 'Email address' input, then type 'noreply@example.com'."
+  },
+  {
+    "intent": "Choose 'Medium' pizza size.",
+    "type": "holo3",
+    "max_steps": 4,
+    "hint": "Click the radio button labeled 'Medium'."
+  },
+  {
+    "intent": "Submit the form.",
+    "type": "holo3",
+    "max_steps": 3,
+    "hint": "Click the 'Submit order' button."
+  },
+  {
+    "intent": "Capture the response page so the caller can verify the submission.",
+    "type": "claude",
+    "extract": {
+      "schema_name": "form_submission_echo",
+      "fields": [
+        {"name": "submitted_payload", "type": "str", "required": true}
+      ]
+    }
+  }
+]

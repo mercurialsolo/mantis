@@ -1,0 +1,20 @@
+Mantis
+Copyright 2025 Mantis contributors
+
+This product includes software developed by the Mantis project contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this product except in compliance with the License. You may obtain a copy
+of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Third-party components (linked or invoked at runtime) retain their own
+upstream licenses; consult the dependency tree (`pip show <package>`) for
+details. Notable runtime dependencies include:
+
+- Anthropic SDK (used as a client; messages are sent to Anthropic's API)
+- Hugging Face transformers / Holo3 model weights (subject to their own
+  model-card licenses; see the upstream model page)
+- Chromium / Xvfb / xdotool / ffmpeg (system packages; not redistributed
+  by this project)

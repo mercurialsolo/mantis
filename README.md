@@ -3,7 +3,7 @@
 A unified perception-reasoning-action agent for computer use. Given a structured plan, Mantis drives a real browser (or any Xvfb-rendered application), takes actions, extracts structured data, and produces both a JSON result and an optional polished video walkthrough.
 
 [![Docs](https://img.shields.io/badge/docs-mkdocs--material-teal)](https://mercurialsolo.github.io/mantis/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
 
 ```
        ┌──────────────────────┐         ┌─────────────────────────┐
@@ -49,7 +49,7 @@ The full docs site is at **[mercurialsolo.github.io/mantis](https://mercurialsol
 | Integrate from your app | [Client](docs/client/index.md) — auth, plans, polling, recordings |
 | Run a multi-tenant fleet | [Operations](docs/operations/index.md) — tenant keys, rate limits, webhooks, metrics |
 | Look up an HTTP endpoint | [API reference](docs/api.md) |
-| Replace a Claude-CUA-style backend | [the host integration integration](docs/integration-the host integration.md) |
+| Replace a Claude-CUA-style backend | [Any-agent integration](docs/integrations/any-agent.md) |
 
 ## Quick start (no deploy needed)
 
@@ -153,4 +153,4 @@ mkdocs serve   # → http://127.0.0.1:8000
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).

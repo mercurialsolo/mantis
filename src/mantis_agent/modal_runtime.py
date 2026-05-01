@@ -145,17 +145,32 @@ def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
         cmd.extend(["--mmproj", mmproj_files[0]])
 
     print(f"Starting: {' '.join(cmd)}")
-    proc = subprocess.Popen(
-        cmd,
-        stdout=open("/tmp/llama.log", "w"),
-        stderr=subprocess.STDOUT,
-    )
+    log_path = "/tmp/llama.log"
+
+    def _tail_log() -> str:
+        try:
+            with open(log_path) as f:
+                return f.read()[-3000:]
+        except OSError:
+            return "(llama log unavailable)"
+
+    log_fh = open(log_path, "w")
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+        )
+    except Exception:
+        log_fh.close()
+        raise
 
     # Check if process crashed immediately
     time.sleep(3)
     if proc.poll() is not None:
         print(f"llama-server crashed with code {proc.returncode}")
-        print(open("/tmp/llama.log").read()[-3000:])
+        print(_tail_log())
+        log_fh.close()
         raise RuntimeError(f"llama-server crashed with code {proc.returncode}")
 
     import requests
@@ -170,12 +185,14 @@ def start_llama_server(model_path: str, port: int = 8080) -> subprocess.Popen:
         # Check if process died
         if proc.poll() is not None:
             print(f"llama-server died with code {proc.returncode}")
-            print(open("/tmp/llama.log").read()[-3000:])
+            print(_tail_log())
+            log_fh.close()
             raise RuntimeError("llama-server died during startup")
         time.sleep(2)
 
     print("TIMEOUT - llama-server log:")
-    print(open("/tmp/llama.log").read()[-3000:])
+    print(_tail_log())
+    log_fh.close()
     raise RuntimeError("llama-server failed to start within timeout")
 
 

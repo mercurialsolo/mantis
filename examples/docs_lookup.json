@@ -1,0 +1,32 @@
+[
+  {
+    "intent": "Open the Python standard-library docs.",
+    "type": "navigate",
+    "url": "https://docs.python.org/3/",
+    "wait_for_load": true
+  },
+  {
+    "intent": "Click into the search box and type the query term.",
+    "type": "holo3",
+    "max_steps": 4,
+    "hint": "Click the 'Quick search' input near the top-right, then type 'pathlib'."
+  },
+  {
+    "intent": "Submit the search and wait for the results page.",
+    "type": "holo3",
+    "max_steps": 3,
+    "hint": "Press Enter to submit the search."
+  },
+  {
+    "intent": "Capture the title and first paragraph of the top result so the caller knows the lookup landed on the right page.",
+    "type": "claude",
+    "extract": {
+      "schema_name": "docs_lookup",
+      "fields": [
+        {"name": "page_title", "type": "str", "required": true},
+        {"name": "first_paragraph", "type": "str", "required": false},
+        {"name": "url", "type": "str", "required": true}
+      ]
+    }
+  }
+]

@@ -3,12 +3,34 @@ name = "mantis-agent"
 version = "0.1.0"
 description = "Mantis — a small creature with world-class vision that watches patiently and acts with speed and precision"
 requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+readme = "README.md"
+authors = [{ name = "Mantis contributors" }]
+keywords = ["cua", "computer-use-agent", "browser-automation", "llm", "agent", "holo3", "claude"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+]
+
 # Slim base: just what is needed to import mantis_agent.{actions, gym.base, site_config, ...}
 # without dragging in GPU, browser, or desktop deps. Add an extras group below
 # for the use case you actually need.
 dependencies = [
     "pillow>=10.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mercurialsolo/mantis"
+Documentation = "https://mercurialsolo.github.io/mantis/"
+Repository = "https://github.com/mercurialsolo/mantis"
+Issues = "https://github.com/mercurialsolo/mantis/issues"
 
 [project.optional-dependencies]
 # Orchestrator-only — for callers that run MicroPlanRunner in their own
