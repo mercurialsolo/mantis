@@ -44,6 +44,8 @@ The full docs site is at **[mercurialsolo.github.io/mantis](https://mercurialsol
 | If you want to… | Go here |
 |---|---|
 | Try it in 5 minutes | [Quickstart](docs/getting-started/quickstart.md) |
+| See what Mantis is good at | [Use cases](docs/getting-started/use-cases.md) — listings, jobs, real-estate, products, news, CRM edits, refunds, social posting, multi-app workflows |
+| Copy-paste a working plan | [Recipes](docs/integrations/recipes.md) — 11 worked examples |
 | Understand the architecture | [Concepts](docs/getting-started/concepts.md) · [Architecture](docs/architecture.md) |
 | Deploy your own instance | [Hosting](docs/hosting/index.md) — Baseten / Modal / EKS / GKE / local |
 | Integrate from your app | [Client](docs/client/index.md) — auth, plans, polling, recordings |

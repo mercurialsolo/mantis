@@ -7,7 +7,7 @@ Set `record_video: true` on `POST /v1/predict` and you get a polished, narratabl
 ```jsonc
 {
   "detached": true,
-  "micro": "plans/boattrader/...json",
+  "micro": "plans/example/...json",
   "record_video": true,
   "video_format": "mp4",   // or "webm" | "gif"
   "video_fps":    8,        // 1–30, defaults to 5
@@ -22,7 +22,7 @@ Set `record_video: true` on `POST /v1/predict` and you get a polished, narratabl
                 Mantis CUA · <plan name> · tenant · run id
 
 0:03 ─── 9:30   CAPTIONED RUN
-                Step 1: Navigate to BoatTrader…           [OK]
+                Step 1: Navigate to listings page          [OK]
                 Step 2: Verify private-seller listings     [OK]
                 Step 3: Click only an organic listing      [OK]
                 ...

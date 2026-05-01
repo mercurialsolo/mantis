@@ -63,7 +63,7 @@ The request body must contain **exactly one** of these plan-shape fields, in pri
 | `task_suite` | object | Inline task-suite dict. Use this for arbitrary plans where you don't want to bake them into the container image. |
 | `task_file_contents` | string | JSON-as-string. Same shape as `task_suite` but pre-serialized. |
 | `task_file` | string | Path inside the container image (e.g. `tasks/crm/crm_tasks.json`). |
-| `micro` | string | Path to a micro-plan JSON or plain-text plan inside the image (e.g. `plans/boattrader/extract_url_filtered.json`). |
+| `micro` | string | Path to a micro-plan JSON or plain-text plan inside the image (e.g. `plans/example/extract_listings.json`). |
 | `plan_text` | string | Inline plain-English plan. Decomposed via Claude on the server side. |
 
 Plus the run options:
@@ -339,7 +339,7 @@ Each task runs with its own `max_steps` budget; Claude decides what to do per ta
 
 ```jsonc
 {
-  "plan_text": "Go to BoatTrader, filter to Miami private sellers above $35,000, extract listing details for the first 3 listings, save year/make/model/price/phone."
+  "plan_text": "Go to a marketplace listings site, filter to private sellers above $35,000 in Florida, extract listing details for the first 3 listings, save year/make/model/price/phone."
 }
 ```
 
@@ -349,7 +349,7 @@ Each task runs with its own `max_steps` budget; Claude decides what to do per ta
 
 ## Pricing (verified end-to-end)
 
-Real numbers from the BoatTrader 3-listing run on Baseten:
+Real numbers from a 3-listing marketplace-extraction run on Baseten:
 
 | Item | Cost |
 |---|---|
@@ -447,7 +447,7 @@ RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -H "Content-Type: application/json" \
   -d '{
     "detached": true,
-    "micro": "plans/boattrader/extract_url_filtered_3listings.json",
+    "micro": "plans/example/extract_listings.json",
     "state_key": "demo-recording",
     "max_cost": 2,
     "max_time_minutes": 20,
@@ -574,7 +574,7 @@ If a tenant has `allowed_domains` set in the keys file, every plan submitted via
 }
 ```
 
-Wildcards: `*.boattrader.com` matches any subdomain but not `boattrader.com.evil.com`. Empty `allowed_domains` (the default) skips this check.
+Wildcards: `*.example.com` matches any subdomain but not `example.com.evil.com`. Empty `allowed_domains` (the default) skips this check.
 
 ### Prometheus metrics
 

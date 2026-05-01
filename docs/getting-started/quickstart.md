@@ -1,6 +1,6 @@
 # Quickstart — five minutes to a real extraction
 
-If someone has already deployed Mantis (or you're using the public Baseten reference deployment), all you need is a curl, your tenant token, and a plan. This page does an end-to-end run that produces three real BoatTrader leads.
+If someone has already deployed Mantis (or you're using the public Baseten reference deployment), all you need is a curl, your tenant token, and a plan. This page does an end-to-end run that walks a public listings page and returns three structured rows. Adapt the plan path to whatever shape you actually need (jobs, products, real estate, CRM record edits — see [Use cases](use-cases.md)).
 
 ## Prerequisites
 
@@ -25,7 +25,7 @@ RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -H "Content-Type: application/json" \
   -d '{
     "detached": true,
-    "micro": "plans/boattrader/extract_url_filtered_3listings.json",
+    "micro": "plans/example/extract_listings.json",
     "state_key": "first-quickstart",
     "max_cost": 2,
     "max_time_minutes": 20,
@@ -102,8 +102,8 @@ open demo.mp4
 You'll see the three-segment walkthrough:
 
 1. Title card (Mantis CUA · plan name · tenant · run id)
-2. The actual BoatTrader navigation, with per-step captions and overlays for every action (click ripples, scroll arrows, key chord badges, type captions)
-3. Outro card with the result summary (3 viable leads, 1 with phone, $0.42, 9.5 min)
+2. The actual browser navigation, with per-step captions and overlays for every action (click ripples, scroll arrows, key chord badges, type captions)
+3. Outro card with the result summary (3 viable rows extracted, $0.42, 9.5 min)
 
 Pass `?raw=1` to fetch the un-overlaid screen capture instead.
 

@@ -57,8 +57,8 @@ def fetch_result(run_id: str) -> dict:
 
 # Usage
 run_id = submit(
-    "plans/boattrader/extract_url_filtered_3listings.json",
-    "boattrader-prod",
+    "plans/example/extract_listings.json",
+    "marketplace-prod",
     max_cost=2, max_time_minutes=20, record_video=True,
 )
 final = poll(run_id)

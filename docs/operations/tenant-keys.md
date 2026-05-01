@@ -29,7 +29,7 @@ If `MANTIS_TENANT_KEYS_PATH` is not set, the server falls back to single-tenant 
       "max_time_minutes_per_run": 30,
       "rate_limit_per_minute": 60,
       "anthropic_secret_name": "anthropic_api_key_tenant_a",
-      "allowed_domains": ["*.boattrader.com", "crm.example.com"],
+      "allowed_domains": ["*.marketplace.example.com", "crm.example.com"],
       "webhook_url": "https://callbacks.example.com/mantis",
       "webhook_secret_name": "webhook_secret_tenant_a"
     },

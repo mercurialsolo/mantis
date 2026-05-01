@@ -72,7 +72,7 @@ curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -H "Content-Type: application/json" \
   -d '{
     "detached": true,
-    "micro": "plans/boattrader/extract_url_filtered_3listings.json",
+    "micro": "plans/example/extract_listings.json",
     "state_key": "smoke-test",
     "max_cost": 2,
     "max_time_minutes": 20

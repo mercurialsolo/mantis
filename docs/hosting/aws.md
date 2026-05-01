@@ -84,7 +84,7 @@ The detailed runbook is in [`deploy/aws/README.md`](https://github.com/mercurial
    curl -fsS -X POST "https://$HOST/v1/predict" \
      -H "X-Mantis-Token: $TOK" \
      -H "Content-Type: application/json" \
-     -d '{"detached": true, "micro": "plans/boattrader/extract_url_filtered_3listings.json", "state_key": "smoke", "max_cost": 2}'
+     -d '{"detached": true, "micro": "plans/example/extract_listings.json", "state_key": "smoke", "max_cost": 2}'
    ```
 
 ## Operational notes

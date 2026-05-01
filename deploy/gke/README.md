@@ -158,4 +158,4 @@ Expected: `{"status": "queued", "run_id": "...", ...}`. Poll with
 
 Same as AWS: Holo3 occasionally emits clicks instead of scrolls on detail
 pages — the `MicroPlanRunner` already has a scroll-fail-as-success
-fallback. BoatTrader proxy is geo-targeted to Miami via IPRoyal.
+fallback. The default residential proxy is geo-targeted to Miami via IPRoyal.

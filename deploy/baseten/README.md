@@ -6,7 +6,7 @@ workload:
 - `holo3/`: Holo3-35B-A3B GGUF + Chrome/Xvfb/xdotool workload runner on H100.
 - `gemma4/`: Gemma4-31B vLLM OpenAI-compatible endpoint on 2x H100.
 - `gemma4_26b/`: Gemma4-26B A4B vLLM OpenAI-compatible endpoint on 2x H100.
-- `training/holo3_distill/`: Baseten Training job for the current BoatTrader
+- `training/holo3_distill/`: Baseten Training job for the marketplace-listings
   Holo3 distillation data.
 
 The inference Trusses use Baseten custom Docker servers because the workload is
@@ -19,7 +19,7 @@ Create these in the Baseten secret manager before deploying:
 
 - `anthropic_api_key`: required for Claude extraction and grounding.
 - `proxy_url`, `proxy_user`, `proxy_pass`: optional but recommended for
-  BoatTrader runs that need a residential proxy.
+  runs against bot-detecting sites that need a residential proxy.
 
 ## Deploy
 
@@ -87,7 +87,7 @@ Keys-file shape:
       "max_cost_per_run": 5.0,
       "max_time_minutes_per_run": 30,
       "anthropic_secret_name": "anthropic_api_key_tenant_a",
-      "allowed_domains": ["*.boattrader.com", "crm.example.com"]
+      "allowed_domains": ["*.marketplace.example.com", "crm.example.com"]
     }
   }
 }
@@ -139,7 +139,7 @@ and lead CSV files under `$MANTIS_DATA_DIR/runs/<run_id>/`.
 {
   "detached": true,
   "micro": "plans/example/extract_listings.json",
-  "state_key": "boattrader-miami-private-v1",
+  "state_key": "marketplace-miami-listings-v1",
   "resume_state": false,
   "max_cost": 10.0,
   "max_time_minutes": 180
@@ -171,7 +171,7 @@ the Baseten API key from `.env`:
 ```bash
 uv run python scripts/baseten_workload.py run \
   --micro plans/example/extract_listings.json \
-  --state-key boattrader-miami-private-v1 \
+  --state-key marketplace-miami-listings-v1 \
   --max-cost 10 \
   --max-time-minutes 180
 
@@ -189,7 +189,7 @@ distillation JSONL/screenshots, then writes checkpoints under
 
 ```bash
 uvx truss train push deploy/baseten/training/holo3_distill/config.py \
-  --job-name holo3-boattrader-distill
+  --job-name holo3-marketplace-distill
 ```
 
 After completion:

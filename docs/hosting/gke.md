@@ -90,7 +90,7 @@ The detailed runbook is in [`deploy/gke/README.md`](https://github.com/mercurial
    TOK=$(gcloud secrets versions access latest --secret=mantis-prod-mantis_api_token)
    curl -fsS -X POST "https://$HOST/v1/predict" \
      -H "X-Mantis-Token: $TOK" \
-     -d '{"detached": true, "micro": "plans/boattrader/extract_url_filtered_3listings.json", "state_key": "smoke"}'
+     -d '{"detached": true, "micro": "plans/example/extract_listings.json", "state_key": "smoke"}'
    ```
 
 ## Operational notes
