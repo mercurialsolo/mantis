@@ -18,19 +18,19 @@ A flat JSON list of step objects executed by `MicroPlanRunner`. Best reliability
 ```jsonc
 [
   {
-    "intent": "Navigate to https://www.boattrader.com/boats/state-fl/by-owner/price-35000/",
+    "intent": "Navigate to https://marketplace.example.com/listings/state-fl/by-owner/price-35000/",
     "type": "navigate",
     "budget": 3,
     "section": "setup",
     "required": true
   },
   {
-    "intent": "Verify page shows private-seller listings near Miami above $35,000",
+    "intent": "Verify page shows private-seller listings near Florida above $35,000",
     "type": "extract_data",
     "claude_only": true,
     "section": "setup",
     "gate": true,
-    "verify": "Page shows boat listings from private sellers near Miami with prices above $35,000"
+    "verify": "Page shows listings from private sellers near Florida with prices above $35,000"
   },
   {
     "intent": "Click only an organic private-seller listing title; skip sponsored cards",
@@ -79,7 +79,7 @@ Submit it three ways:
 
 ```jsonc
 // (a) reference a baked-in path
-{ "micro": "plans/boattrader/extract_url_filtered_3listings.json" }
+{ "micro": "plans/example/extract_listings.json" }
 
 // (b) inline the raw step list
 { "task_suite": [ ...the array above... ] }
@@ -144,7 +144,7 @@ Plain English in, micro-plan out. The server runs `PlanDecomposer` (Claude, cach
 
 ```jsonc
 {
-  "plan_text": "Go to BoatTrader, filter to Miami private sellers above $35,000, extract listing details for the first 3 listings, save year/make/model/price/phone."
+  "plan_text": "Go to a marketplace listings site, filter to private sellers above $35,000 in Florida, extract listing details for the first 3 listings, save year/make/model/price/phone."
 }
 ```
 

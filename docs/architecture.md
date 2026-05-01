@@ -127,7 +127,7 @@ class ExtractionSchema:
     forbidden_controls: list[str] # lead-form traps
 ```
 
-Drives ClaudeExtractor prompts dynamically. Default: BoatTrader schema.
+Drives ClaudeExtractor prompts dynamically. Default: marketplace-listings schema (`mantis_agent.recipes.marketplace_listings.schema.SCHEMA`).
 
 ### SiteConfig
 
@@ -228,7 +228,7 @@ Uses same `task_loop.run_executor_lifecycle()` as Modal.
 ```python
 set -a && source .env && set +a
 uv run modal run deploy/modal/modal_cua_server.py \
-  --micro plans/boattrader/extract_url_filtered.json \
+  --micro plans/example/extract_listings.json \
   --model holo3 --max-cost 0.30
 ```
 

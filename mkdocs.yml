@@ -90,6 +90,7 @@ nav:
   - Getting started:
       - getting-started/index.md
       - Quickstart: getting-started/quickstart.md
+      - Use cases: getting-started/use-cases.md
       - Concepts: getting-started/concepts.md
       - Plan formats: getting-started/plan-formats.md
   - Hosting:

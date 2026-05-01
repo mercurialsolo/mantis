@@ -2,11 +2,26 @@
 
 _Updated: 2026-04-17 | 190+ commits | ~$175+ GPU spend | Branch: feat/gym-anything-integration_
 
+> **What this doc is.** A journey log of the lessons learned while
+> hardening Mantis on one canonical extraction workflow — walking
+> consumer-marketplace listings, classifying private vs dealer sellers,
+> and pulling structured rows. Some examples below reference specific
+> sites and scripts from that engagement. The lessons generalise to
+> any extraction or form-flow workflow; the [Recipes](integrations/recipes.md)
+> page abstracts the patterns into reusable shapes.
+
 ---
 
 ## Executive Summary
 
-We're building a CUA (Computer Use Agent) that can extract leads from boat listing sites using open-weight models instead of proprietary APIs. We've achieved 83.3% on OSWorld benchmarks (OS domain) and can successfully extract leads from BoatTrader, but the economics don't work yet — most private sellers don't post phone numbers (~5-10% hit rate), and each lead costs $4-29 depending on model/run.
+We're building a CUA (Computer Use Agent) that can drive any web app or
+desktop application with open-weight models instead of proprietary APIs.
+We've achieved 83.3% on OSWorld benchmarks (OS domain) and successfully
+extract structured data from listings sites end-to-end. The hardest open
+problem is unit economics — flows that depend on variable third-party
+data quality (e.g. seller-posted phone numbers on consumer marketplaces
+hit ~5-10%) make per-row costs hard to amortise, with extraction running
+$4–29 per row depending on model and run length.
 
 ---
 

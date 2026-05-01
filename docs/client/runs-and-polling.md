@@ -112,7 +112,7 @@ The `summary.dynamic_verification_summary` block contains the per-page health ch
 }
 ```
 
-The lead format depends on the plan — for BoatTrader-style extractions it's the `VIABLE | …` strings above; for `task_suite` runs each task gets its own `result` block.
+The lead format depends on the plan — for marketplace-listings extractions it's the `VIABLE | …` strings above; for `task_suite` runs each task gets its own `result` block.
 
 ## Idempotency
 
@@ -177,8 +177,8 @@ If a run failed mid-way (network hiccup, replica restart, OOM), re-submit with t
 ```jsonc
 {
   "detached": true,
-  "micro": "plans/boattrader/...json",
-  "state_key": "boattrader-prod",     // ← same key as the failed run
+  "micro": "plans/example/...json",
+  "state_key": "marketplace-prod",    // ← same key as the failed run
   "resume_state": true,
   "max_cost": 2
 }

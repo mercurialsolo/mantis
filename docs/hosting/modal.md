@@ -15,11 +15,11 @@ You'll also need an `.env` file at the repo root with the same five secrets Base
 
 ```bash
 uv run modal run --detach deploy/modal/modal_cua_server.py \
-  --micro plans/boattrader/extract_url_filtered_3listings.json \
+  --micro plans/example/extract_listings.json \
   --model holo3 \
   --max-cost 2 \
   --max-time-minutes 20 \
-  --session-name boattrader-smoke
+  --session-name marketplace-smoke
 ```
 
 `--detach` returns immediately; the run continues in Modal. Each run gets its own GPU container, scales to zero when done.

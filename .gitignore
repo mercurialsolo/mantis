@@ -55,6 +55,10 @@ site/
 plans/
 tasks/
 internal-docs/
+# Test-only plans (often contain throwaway credentials for staging
+# tenants — do NOT commit). Keep generic, public-target examples in
+# `examples/` instead.
+tests/plans/
 
 # VisualWebArena upstream — clone next to the repo when running the
 # benchmarking conversion script. Never commit; would re-introduce the

@@ -272,7 +272,7 @@ This recipe uses the form-shaped step types (`fill_field`, `submit`,
 `select_option`) introduced in [issue #80](https://github.com/mercurialsolo/mantis/issues/80).
 They route through a single labelled-element grounder (no listings
 extraction), so login pages and edit forms work the same as search-result
-extraction works for boats.
+extraction works for listings.
 
 ```bash
 curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \

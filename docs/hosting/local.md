@@ -67,7 +67,7 @@ curl -fsS -X POST http://localhost:8000/v1/predict \
   -H "Content-Type: application/json" \
   -d '{
     "detached": true,
-    "micro": "plans/boattrader/extract_url_filtered_3listings.json",
+    "micro": "plans/example/extract_listings.json",
     "state_key": "local-smoke",
     "max_cost": 2,
     "max_time_minutes": 20
@@ -93,7 +93,7 @@ cat > /srv/mantis-secrets/tenant_keys.json <<EOF
     "$(openssl rand -hex 32)": {
       "tenant_id": "bob",
       "scopes": ["run", "status", "result"],
-      "allowed_domains": ["*.boattrader.com"]
+      "allowed_domains": ["*.marketplace.example.com"]
     }
   }
 }

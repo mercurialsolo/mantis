@@ -7,7 +7,7 @@ Once you have an authenticated session, every plan submission lands on `POST /v1
   "detached": true,                                  // (default) async with run_id
   "task_suite":  { ... },                            // OR
   "task_file":   "tasks/crm/crm_tasks.json",     // OR
-  "micro":       "plans/boattrader/...json",         // OR
+  "micro":       "plans/example/...json",            // OR
   "plan_text":   "Plain English description",        //
 
   "state_key":         "stable-workflow-id",         // namespaced server-side
@@ -48,8 +48,8 @@ Have a stable workflow you'll run many times?
       -H "Content-Type: application/json" \
       -d '{
         "detached": true,
-        "micro": "plans/boattrader/extract_url_filtered_3listings.json",
-        "state_key": "boattrader-prod",
+        "micro": "plans/example/extract_listings.json",
+        "state_key": "marketplace-prod",
         "max_cost": 2,
         "max_time_minutes": 20
       }'
@@ -64,7 +64,7 @@ Have a stable workflow you'll run many times?
       -H "Content-Type: application/json" \
       -d '{
         "detached": true,
-        "plan_text": "Go to BoatTrader, filter to Miami private sellers above $35,000, extract listing details for the first 3 listings.",
+        "plan_text": "Go to a marketplace listings site, filter to private sellers above $35,000 in Florida, extract listing details for the first 3 listings.",
         "state_key": "ad-hoc-1",
         "max_cost": 2
       }'
@@ -116,7 +116,7 @@ The effective value is `min(server_cap, tenant_cap, request_value)`. If you ask 
 
 ## URL allowlist
 
-If your tenant has `allowed_domains` configured, the server scans your plan's `navigate` steps + `task_suite.base_url` + each `task.start_url` and rejects 403 if any host is off-list. Wildcards like `*.boattrader.com` work; exact matches like `crm.example.com` work.
+If your tenant has `allowed_domains` configured, the server scans your plan's `navigate` steps + `task_suite.base_url` + each `task.start_url` and rejects 403 if any host is off-list. Wildcards like `*.example.com` work; exact matches like `crm.example.com` work.
 
 If you need to add a domain, ask your operator to update your tenant config — see [URL allowlist](../operations/allowlist.md).
 

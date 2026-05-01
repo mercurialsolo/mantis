@@ -12,7 +12,7 @@ Set per tenant in the keys file:
     "<token>": {
       "tenant_id": "tenant_a",
       "allowed_domains": [
-        "*.boattrader.com",
+        "*.marketplace.example.com",
         "crm.example.com"
       ]
     }
@@ -26,9 +26,9 @@ Empty `allowed_domains` (or absent field) = no restriction. Useful for trusted i
 
 | Pattern | Matches |
 |---|---|
-| `boattrader.com` | exactly `boattrader.com` |
-| `*.boattrader.com` | any subdomain like `www.boattrader.com`, `api.boattrader.com` |
-| `*.boattrader.com` | does **not** match `boattrader.com.evil.com` (suffix check is on `.boattrader.com`) |
+| `example.com` | exactly `example.com` |
+| `*.example.com` | any subdomain like `www.example.com`, `api.example.com` |
+| `*.example.com` | does **not** match `example.com.evil.com` (suffix check is on `.example.com`) |
 
 Hosts are extracted from URLs by regex; case is folded; ports / paths / query are ignored.
 
