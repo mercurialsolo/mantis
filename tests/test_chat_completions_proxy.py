@@ -64,7 +64,7 @@ def test_proxy_forwards_to_upstream(client, monkeypatch):
         captured["timeout"] = timeout
         return _mock_upstream_post(expected)
 
-    with patch("mantis_agent.baseten_server.requests.post", side_effect=fake_post):
+    with patch("mantis_agent.baseten_server.routes.requests.post", side_effect=fake_post):
         r = client.post(
             "/v1/chat/completions",
             json={"model": "holo3", "messages": [{"role": "user", "content": "hi"}]},
@@ -101,7 +101,7 @@ def test_proxy_rejects_wrong_token(client):
 def test_proxy_passes_through_upstream_4xx(client):
     err_body = {"error": {"message": "bad request from llama.cpp"}}
     with patch(
-        "mantis_agent.baseten_server.requests.post",
+        "mantis_agent.baseten_server.routes.requests.post",
         return_value=_mock_upstream_post(err_body, status=400),
     ):
         r = client.post(
@@ -120,7 +120,7 @@ def test_proxy_returns_502_on_upstream_connection_error(client):
         raise real_requests.ConnectionError("upstream not reachable")
 
     with patch(
-        "mantis_agent.baseten_server.requests.post",
+        "mantis_agent.baseten_server.routes.requests.post",
         side_effect=raise_connection_error,
     ):
         r = client.post(
@@ -137,7 +137,7 @@ def test_proxy_handles_non_json_upstream_response(client):
     bad.status_code = 500
     bad.json.side_effect = ValueError("not json")
     bad.text = "<html>500 internal server error</html>"
-    with patch("mantis_agent.baseten_server.requests.post", return_value=bad):
+    with patch("mantis_agent.baseten_server.routes.requests.post", return_value=bad):
         r = client.post(
             "/v1/chat/completions",
             json={"messages": []},
