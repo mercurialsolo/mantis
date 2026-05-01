@@ -33,44 +33,13 @@ import requests
 from PIL import Image
 
 from .actions import Action, ActionType
+from .prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-You are a computer use agent. You observe the screen and perform actions to complete tasks.
-
-You receive a sequence of recent screen frames showing how the display has changed over time.
-The LAST frame is the current screen state. Earlier frames show what happened before.
-
-Your job:
-1. OBSERVE the current screen state carefully
-2. REASON step by step about what to do next
-3. CALL exactly one tool to perform the next action
-
-# Core rules
-- Coordinates are absolute screen pixels. Aim for the CENTER of the target element.
-- Look at the LAST frame for current state. Earlier frames show what changed.
-- Execute ONE action per turn. After each action, observe the result before acting again.
-
-# Form filling — CRITICAL
-- To fill a form: click the input field ONCE to focus it, then call type() with the value.
-- Do NOT click an input field multiple times. One click focuses it — then immediately type.
-- After typing, move to the next field: click the next input, or press key('Tab').
-- To submit a form: press key('Enter') — this is the most reliable method.
-- If you already clicked a field and see it is focused, your NEXT action must be type() — not another click.
-
-# Avoiding loops
-- NEVER repeat the same action more than twice. If clicking the same spot twice doesn't work, try a different approach.
-- If you're stuck: try scrolling, pressing Tab, clicking a different element, or using keyboard shortcuts.
-
-# Completion
-- When the task is complete, call done(success=true, summary="...").
-- If stuck after multiple attempts, call done(success=false, summary="...").
-
-# Waiting
-- If a page is loading or animating, call wait() to observe the result.
-- After submitting a form, call wait(seconds=2) before checking the result.\
-"""
+# Sourced from mantis_agent.prompts.CLAUDE_SYSTEM. Override per-tenant via
+# MANTIS_PROMPTS_DIR/claude_system.txt.
+SYSTEM_PROMPT = load_prompt("claude_system")
 
 # Claude computer_use tool + our custom done/wait tools
 CLAUDE_TOOLS = [
