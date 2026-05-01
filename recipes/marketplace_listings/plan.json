@@ -1,0 +1,41 @@
+[
+  {
+    "intent": "Open the marketplace's search results page for the requested category.",
+    "type": "navigate",
+    "url": "{{search_url}}",
+    "wait_for_load": true,
+    "notes": "Caller substitutes {{search_url}} with the concrete listings URL. Plan is generic across vehicle-marketplace sites that follow the same listings → detail-page pattern."
+  },
+  {
+    "intent": "Wait for the listings grid to render.",
+    "type": "wait",
+    "seconds": 2
+  },
+  {
+    "intent": "Walk listings and extract a structured row for each.",
+    "type": "loop",
+    "loop_count": 10,
+    "steps": [
+      {
+        "intent": "Open the next listing that we have not yet visited in this run.",
+        "type": "holo3",
+        "max_steps": 6,
+        "hint": "Click the next listing card or row. Skip dealer-tagged listings if the search filter allows."
+      },
+      {
+        "intent": "Extract year, make, model, price, phone, seller, url.",
+        "type": "claude",
+        "extract": {
+          "schema_name": "marketplace_listings",
+          "recipe": "marketplace_listings"
+        }
+      },
+      {
+        "intent": "Return to the listings page.",
+        "type": "holo3",
+        "max_steps": 2,
+        "hint": "Press Alt+Left to navigate back to the listings page."
+      }
+    ]
+  }
+]

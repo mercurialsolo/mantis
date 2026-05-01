@@ -14,6 +14,7 @@ of its previous actions.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 import torch
@@ -31,14 +32,15 @@ logger = logging.getLogger(__name__)
 # - 31B: Maximum accuracy, but slower. Use if latency isn't critical.
 DEFAULT_MODEL = "google/gemma-4-E4B-it"
 
-# Check for local model path first (avoids re-downloading)
+# Optional override: set MANTIS_GEMMA4_LOCAL_PATH to a directory containing a
+# pre-downloaded Gemma4 checkpoint to skip the HuggingFace download. Empty by
+# default so the public surface has no developer-machine paths baked in.
 _LOCAL_MODEL_PATHS = [
-    "/Users/barada/Sandbox/Mason/gemma-4-E4B-it",
+    p for p in (os.environ.get("MANTIS_GEMMA4_LOCAL_PATH", "").strip(),) if p
 ]
 
 def _resolve_model_path(model_name: str) -> str:
     """Resolve model name to local path if available."""
-    import os
     # If it's already a local path, use it
     if os.path.isdir(model_name):
         return model_name

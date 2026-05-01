@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/mercurialsolo/mantis/security/policy
+    about: Please do NOT open a public issue for security problems. See SECURITY.md.
+  - name: Question or discussion
+    url: https://github.com/mercurialsolo/mantis/discussions
+    about: For "how do I…" or "is this the right approach", use Discussions.

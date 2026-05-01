@@ -310,6 +310,7 @@ class BasetenCUARuntime:
         self.model_kind = os.environ.get("MANTIS_MODEL", "holo3")
         self.port = int(os.environ.get("MANTIS_LLAMA_PORT", "18080"))
         self.llama_proc: subprocess.Popen | None = None
+        self._llama_log_fh: Any = None
         self.brain: Any = None
         self.lock = threading.Lock()
         self.detached_threads: dict[str, threading.Thread] = {}
@@ -346,11 +347,20 @@ class BasetenCUARuntime:
         cmd.extend(extra_args)
 
         logger.info("starting llama.cpp: %s", " ".join(cmd))
-        self.llama_proc = subprocess.Popen(
-            cmd,
-            stdout=open("/tmp/llama.log", "w"),
-            stderr=subprocess.STDOUT,
-        )
+        # Open the log file via context-managed handle that survives the
+        # Popen call but is owned by the runtime so it's closed at shutdown
+        # instead of leaking on every restart.
+        self._llama_log_fh = open("/tmp/llama.log", "w")
+        try:
+            self.llama_proc = subprocess.Popen(
+                cmd,
+                stdout=self._llama_log_fh,
+                stderr=subprocess.STDOUT,
+            )
+        except Exception:
+            self._llama_log_fh.close()
+            self._llama_log_fh = None
+            raise
         _wait_for_openai_server(self.port, self.llama_proc, "llama.cpp")
 
     def _load_holo3(self) -> Any:
