@@ -239,6 +239,61 @@ SHA tag remain accurate.
 
 ---
 
+## Plugging in your own brain
+
+Mantis ships several reference brains (`holo3`, `claude`, `opencua`,
+`llamacpp`, `gemma4`, `agent-s`) registered under the
+`mantis_agent.brain_protocol` registry. Swap one of these — or add your
+own — without forking the runtime.
+
+### 1. Pick a built-in by name
+
+Set `MANTIS_BRAIN` on the deployment:
+
+```bash
+export MANTIS_BRAIN=claude     # surgical-reasoning only
+# or
+export MANTIS_BRAIN=opencua    # local OpenCUA-7B endpoint
+```
+
+The legacy `MANTIS_MODEL` env var keeps working for one minor release.
+When both are set, `MANTIS_BRAIN` wins. The legacy alias `gemma4-cua`
+maps to `gemma4`.
+
+### 2. Register your own backend
+
+Implement the `Brain` protocol — `load()` plus `think(frames, task,
+action_history=None, screen_size=(1920, 1080))` returning an
+`InferenceResult`-shaped object — then register it before the runtime
+starts:
+
+```python
+from mantis_agent import Brain, register_brain
+
+
+class MyBrain:
+    def load(self) -> None:
+        ...
+
+    def think(self, frames, task, action_history=None, screen_size=(1920, 1080)):
+        ...
+
+
+register_brain("my-brain", lambda: MyBrain())
+```
+
+Then run with `MANTIS_BRAIN=my-brain`. The runtime asks
+`mantis_agent.resolve_brain("my-brain")` and gets a fresh instance.
+
+The protocol is `runtime_checkable`, so `isinstance(b, Brain)` works for
+quick smoke tests without forcing inheritance from a base class.
+
+`register_brain` and `resolve_brain` are pure typing + dict — they pull
+no GPU / API dependencies, so a plugin package can register a brain on
+import without growing the slim install.
+
+---
+
 ## Where to go next
 
 - [Recipes](recipes.md) — copy-paste micro-plans for jobs, e-commerce,
