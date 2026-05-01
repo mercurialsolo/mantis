@@ -35,9 +35,11 @@ These are global hard caps; tenant config can be tighter, never looser.
 | Var | Default | Effect |
 |---|---|---|
 | `MANTIS_LLAMA_PORT` | 18080 | Internal port the in-pod llama.cpp server binds to. The `/v1/chat/completions` proxy forwards here. |
-| `MANTIS_MODEL` | (set by Truss) | Model kind: `holo3`, `gemma4`, `evocua-32b`, etc. |
+| `MANTIS_BRAIN` | `holo3` | Brain backend selector. One of `holo3`, `claude`, `opencua`, `llamacpp`, `gemma4`, `agent-s`. Wins over the legacy `MANTIS_MODEL`. |
+| `MANTIS_MODEL` | (set by Truss) | Legacy alias of `MANTIS_BRAIN` for one minor release. `gemma4-cua` aliases to `gemma4`. |
 | `MANTIS_HOLO3_MODEL_DIR` | `/models/holo3` | Where Holo3 GGUF weights are mounted. |
 | `ANTHROPIC_API_KEY` | unset | Default Anthropic key. Per-tenant `anthropic_secret_name` overrides per request. |
+| `MANTIS_PROMPTS_DIR` | unset | Override directory for prompt files. When set, the loader reads `<dir>/<name>.txt` before falling back to the in-tree constant — lets a tenant tune wording without forking the wheel. Names: `system_v1`, `gemma4_system`, `holo3_system`, `claude_system`, `opencua_system`, `llamacpp_system`. |
 
 ## Proxy (IPRoyal)
 

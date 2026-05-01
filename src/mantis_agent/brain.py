@@ -22,6 +22,7 @@ from PIL import Image
 from transformers import AutoModelForMultimodalLM, AutoProcessor
 
 from .actions import TOOLS, Action, ActionType, parse_tool_call
+from .prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -52,26 +53,9 @@ def _resolve_model_path(model_name: str) -> str:
                 return path
     return model_name
 
-SYSTEM_PROMPT = """\
-You are a computer use agent. You observe the screen and perform actions to complete tasks.
-
-You receive a sequence of recent screen frames showing how the display has changed over time.
-The LAST frame is the current screen state. Earlier frames show what happened before.
-
-Your job:
-1. OBSERVE the current screen state carefully
-2. REASON about what to do next given the task and what you see
-3. CALL exactly one tool to perform an action
-
-Important guidelines:
-- Coordinates are in absolute screen pixels
-- Look at the last frame for current state; earlier frames for context
-- If something is loading or animating, call wait() to observe the result
-- If you cannot find an element, try scrolling to reveal it
-- When the task is complete, call done(success=true, summary="...")
-- If you're stuck after multiple attempts, call done(success=false, summary="...")
-- Be precise with click coordinates — aim for the center of the target element\
-"""
+# Sourced from mantis_agent.prompts.GEMMA4_SYSTEM. Override per-tenant via
+# MANTIS_PROMPTS_DIR/gemma4_system.txt.
+SYSTEM_PROMPT = load_prompt("gemma4_system")
 
 
 @dataclass

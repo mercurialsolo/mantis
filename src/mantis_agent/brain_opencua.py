@@ -33,41 +33,13 @@ import requests
 from PIL import Image
 
 from .actions import Action, ActionType
+from .prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-You are a computer use agent performing multi-step browser workflows. You observe screenshots and output exactly ONE action per turn.
-
-Available actions:
-- pyautogui.click(x=<int>, y=<int>) — click at coordinates (CENTER of target element)
-- pyautogui.doubleClick(x=<int>, y=<int>) — double click
-- pyautogui.typewrite('<text>') — type text into the currently focused field
-- pyautogui.hotkey('<key1>', '<key2>') — press key combo (e.g. ctrl+a, alt+left)
-- pyautogui.press('<key>') — press single key (enter, tab, backspace, escape)
-- pyautogui.scroll(<amount>) — scroll (negative = down, positive = up)
-- terminate('success') — task complete, include ALL results in the message
-- terminate('failure') — task cannot be completed
-
-Core rules:
-- Click the CENTER of target elements precisely
-- After clicking an input field, IMMEDIATELY use typewrite() — do NOT click again
-- NEVER repeat the same action more than twice — try a different approach
-- Press tab to move between form fields, enter to submit forms
-
-Browser navigation:
-- hotkey('alt', 'left') — go back
-- hotkey('ctrl', 'w') — close current tab
-- hotkey('ctrl', 'tab') — switch tabs
-- scroll(-5) to see more content below
-
-Data extraction:
-- Read ALL text visually from the screenshot
-- Phone numbers: (555) 555-5555, 555-555-5555, or 10+ consecutive digits
-- Read prices, years, makes, models from page titles and content
-- Read the current URL from the browser address bar
-- When reporting results, include EVERY piece of extracted data\
-"""
+# Sourced from mantis_agent.prompts.OPENCUA_SYSTEM. Override per-tenant via
+# MANTIS_PROMPTS_DIR/opencua_system.txt.
+SYSTEM_PROMPT = load_prompt("opencua_system")
 
 
 def _image_to_base64(img: Image.Image) -> str:
