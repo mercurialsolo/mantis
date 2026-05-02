@@ -29,6 +29,7 @@ from dataclasses import asdict, dataclass, field, fields
 from typing import Any, ClassVar, TYPE_CHECKING
 
 from ..actions import Action, ActionType
+from ..cost_config import CostConfig
 from .runner import GymRunner
 
 from ..plan_decomposer import MicroIntent, MicroPlan
@@ -105,6 +106,7 @@ class RunCheckpoint:
     last_extracted: dict = field(default_factory=dict)
     costs: dict = field(default_factory=dict)
     dynamic_coverage: dict = field(default_factory=dict)
+    prompt_versions: dict = field(default_factory=dict)  # {name: short_sha} for #127
     timestamp: float = 0.0
 
     def save(self, path: str):
@@ -238,6 +240,8 @@ class MicroPlanRunner:
         step_callback: Any = None,           # Callable[[int, str, Action|None, bool], None]
         keep_screenshots: int | None = None,  # cap on retained screenshot bytes (None=all)
         cancel_event: Any = None,            # threading.Event-like (.is_set()) or callable for #76
+        cost_config: CostConfig | None = None,  # rate overrides for cost reporting (#122)
+        tenant_id: str = "",                 # label for Prometheus inflight cost gauge (#122)
     ):
         self.brain = brain
         self.env = env
@@ -273,6 +277,8 @@ class MicroPlanRunner:
         self.step_callback = step_callback
         self.keep_screenshots = keep_screenshots
         self.cancel_event = cancel_event
+        self.cost_config = cost_config or CostConfig.from_env()
+        self.tenant_id = tenant_id
         # Registered host tools (#71). Mutated via register_tool().
         self._tools: dict[str, dict[str, Any]] = {}
         # Pending pause signal from a tool handler (#73).
@@ -427,9 +433,12 @@ class MicroPlanRunner:
         ).hexdigest()
 
     def _cost_totals(self) -> tuple[float, float, float, float]:
-        gpu_cost = (self.costs["gpu_seconds"] / 3600) * 3.25
-        claude_cost = (self.costs["claude_extract"] * 0.003) + (self.costs["claude_grounding"] * 0.003)
-        proxy_cost = (self.costs["proxy_mb"] / 1024) * 5.0
+        cfg = self.cost_config
+        gpu_cost = cfg.gpu_cost(self.costs["gpu_seconds"])
+        claude_cost = cfg.claude_cost(
+            self.costs["claude_extract"] + self.costs["claude_grounding"]
+        )
+        proxy_cost = cfg.proxy_cost(self.costs["proxy_mb"])
         total_cost = gpu_cost + claude_cost + proxy_cost
         return gpu_cost, claude_cost, proxy_cost, total_cost
 
@@ -441,17 +450,18 @@ class MicroPlanRunner:
         return list(unique.values())
 
     def _record_step_costs(self, step: MicroIntent, step_result: StepResult) -> None:
+        cfg = self.cost_config
         if step_result.steps_used > 0:
             self.costs["gpu_steps"] += step_result.steps_used
-            self.costs["gpu_seconds"] += step_result.steps_used * 3  # ~3s per step
+            self.costs["gpu_seconds"] += step_result.steps_used * cfg.gpu_seconds_per_step
         if step.claude_only:
             self.costs["claude_extract"] += 1
         if step.grounding:
             self.costs["claude_grounding"] += step_result.steps_used  # ~1 grounding per click
         if step.type in ("click", "navigate", "paginate"):
-            self.costs["proxy_mb"] += 5.0  # ~5MB per page load
+            self.costs["proxy_mb"] += cfg.proxy_mb_per_nav
         elif step.type == "scroll":
-            self.costs["proxy_mb"] += 0.5  # minimal for scroll
+            self.costs["proxy_mb"] += cfg.proxy_mb_per_scroll
 
     def _log_progress(self, step_result: StepResult, results: list[StepResult]) -> None:
         gpu_cost, claude_cost, proxy_cost, total_cost = self._cost_totals()
@@ -466,6 +476,34 @@ class MicroPlanRunner:
             f"GPU ${gpu_cost:.2f} Claude ${claude_cost:.2f} Proxy ${proxy_cost:.2f} | "
             f"{elapsed/60:.0f}m"
         )
+        self._emit_cost_gauges(gpu_cost, claude_cost, proxy_cost, total_cost)
+
+    def _emit_cost_gauges(
+        self, gpu_cost: float, claude_cost: float, proxy_cost: float, total_cost: float
+    ) -> None:
+        """Push the running per-component cost to Prometheus (#122).
+
+        Skipped when no tenant_id is set so we don't pollute the registry with
+        a default-label series for local/script runs.
+        """
+        if not self.tenant_id:
+            return
+        try:
+            from .. import metrics as _metrics
+            _metrics.RUN_COST_USD_INFLIGHT.labels(
+                tenant_id=self.tenant_id, component="gpu"
+            ).set(gpu_cost)
+            _metrics.RUN_COST_USD_INFLIGHT.labels(
+                tenant_id=self.tenant_id, component="claude"
+            ).set(claude_cost)
+            _metrics.RUN_COST_USD_INFLIGHT.labels(
+                tenant_id=self.tenant_id, component="proxy"
+            ).set(proxy_cost)
+            _metrics.RUN_COST_USD_INFLIGHT.labels(
+                tenant_id=self.tenant_id, component="total"
+            ).set(total_cost)
+        except Exception as exc:  # noqa: BLE001 — metrics are observability, never fatal
+            logger.debug("inflight cost gauge update failed: %s", exc)
 
     def _current_results_page_url(self) -> str:
         if not self._results_base_url:
@@ -524,6 +562,14 @@ class MicroPlanRunner:
         checkpoint.last_extracted = dict(self._last_extracted)
         checkpoint.costs = dict(self.costs)
         checkpoint.dynamic_coverage = self.dynamic_verification_report(status=status)
+        # #127: snapshot prompt SHAs so a regression can be attributed to a
+        # specific prompt edit even after the registry changes.
+        try:
+            from ..prompts import current_prompt_versions as _cpv
+            checkpoint.prompt_versions = _cpv()
+        except Exception as exc:  # noqa: BLE001 — telemetry must not abort saves
+            logger.debug("prompt_versions snapshot skipped: %s", exc)
+            checkpoint.prompt_versions = {}
         checkpoint.save(self.checkpoint_path)
         self._final_status = status
         if self.on_checkpoint:

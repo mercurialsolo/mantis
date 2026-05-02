@@ -25,6 +25,7 @@ without redeploying the wheel.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -327,9 +328,49 @@ def list_prompts() -> list[str]:
     return sorted(_PROMPTS)
 
 
+def prompt_version(name: str) -> str:
+    """Return an 8-char SHA1 of the prompt content as currently resolved (#127).
+
+    Honors ``MANTIS_PROMPTS_DIR`` overrides — operators who replace a prompt
+    should see a different SHA so prompt regressions are attributable. Pure
+    in-tree constants are hashed without substitution applied (the post-
+    substitution string is run-specific and would change per-tenant).
+
+    Returns ``"unknown"`` for names not registered and not present in the
+    override dir, so this is safe to call eagerly at run start without
+    crashing on a typo.
+    """
+    text: str | None = None
+    override = _override_dir()
+    if override is not None:
+        candidate = override / f"{name}.txt"
+        if candidate.is_file():
+            try:
+                text = candidate.read_text(encoding="utf-8")
+            except OSError:
+                text = None
+    if text is None:
+        text = _PROMPTS.get(name)
+    if text is None:
+        return "unknown"
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+
+
+def current_prompt_versions() -> dict[str, str]:
+    """``{prompt_name: short_sha}`` for every in-tree prompt (#127).
+
+    Intended for run-start telemetry. Override files for unknown names are
+    *not* enumerated — only registered prompts contribute, matching
+    :func:`list_prompts` semantics.
+    """
+    return {name: prompt_version(name) for name in _PROMPTS}
+
+
 __all__ = [
     "load_prompt",
     "list_prompts",
+    "prompt_version",
+    "current_prompt_versions",
     "SYSTEM_V1",
     "GEMMA4_SYSTEM",
     "HOLO3_SYSTEM",

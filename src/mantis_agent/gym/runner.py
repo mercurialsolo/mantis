@@ -27,6 +27,7 @@ from typing import Any, Protocol
 from PIL import Image
 
 from ..actions import Action, ActionType
+from ..loop_detector import LoopDetector
 from .base import GymEnvironment
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ class GymRunner:
         self.plan_executor = plan_executor
         self.page_discovery = page_discovery
         self.on_step = on_step  # Optional: fn(dict) -> None for live viewer
+        self._loop_detector = LoopDetector()
 
     def _emit(self, event_type: str, **data: Any) -> None:
         """Emit an event to the viewer (if connected). Never crashes the runner."""
@@ -219,6 +221,7 @@ class GymRunner:
             reset_kwargs["seed"] = seed
 
         obs = self.env.reset(task, **reset_kwargs)
+        self._loop_detector.reset()
         frame_history.append(obs.screenshot)
         _save_frame(obs.screenshot, 0)
         last_url = obs.extras.get("url", "")
@@ -427,6 +430,11 @@ class GymRunner:
                 action_history.append(action)
                 frame_history.append(gym_result.observation.screenshot)
                 _save_frame(gym_result.observation.screenshot, step_num)
+                self._loop_detector.record(
+                    action,
+                    url=gym_result.info.get("url", ""),
+                    frame=gym_result.observation.screenshot,
+                )
 
                 # Reward — apply before mutating step_reward / components so the
                 # signal includes this step's action in any history-based terms.
@@ -471,14 +479,19 @@ class GymRunner:
                     termination_reason = "env_done"
                     break
 
-                if self._detect_repeat(action_history, self.hard_loop_window):
+                if self._loop_detector.is_any_loop(self.hard_loop_window):
                     logger.warning("Hard action loop detected — stopping")
                     termination_reason = "loop"
                     break
 
-            # Trim frame history
-            if len(frame_history) > self.frames_per_inference * 3:
-                frame_history = frame_history[-self.frames_per_inference * 2:]
+            # Trim frame history. Inference reads the last
+            # ``frames_per_inference`` frames, so we always retain at least
+            # that many. We let the buffer grow to ``min_keep * 3`` before
+            # trimming back to ``min_keep * 2`` — the trim cost is paid once
+            # per ~max_steps/3 rather than every step.
+            min_keep = max(self.frames_per_inference, 1)
+            if len(frame_history) > min_keep * 3:
+                frame_history = frame_history[-min_keep * 2:]
 
         total_time = time.time() - t0
         success = termination_reason == "done" or (termination_reason == "env_done" and total_reward > 0)
@@ -602,10 +615,19 @@ class GymRunner:
                         "NOT the photo."
                     )
 
-            # Soft loop nudge
-            if self._detect_repeat(action_history, self.soft_loop_window):
+            # Soft loop nudge — fires on byte-equal repeats, coordinate-drift
+            # clicks, or diverse-actions-on-frozen-state.
+            if self._loop_detector.is_any_loop(self.soft_loop_window):
                 nudge = self._build_nudge(action_history, last_focused_input)
                 parts.append(nudge)
+                # #123: re-inject curriculum techniques scoped to whatever
+                # action type the model is repeating, so the form-filling /
+                # navigation hint is back in context after step 1.
+                refresher = self._curriculum_refresher(
+                    action_history, last_focused_input
+                )
+                if refresher:
+                    parts.append(f"\n\nRelevant techniques:\n{refresher}")
 
         return "\n".join(parts)
 
@@ -615,6 +637,49 @@ class GymRunner:
         try:
             from mantis_agent.curriculum import select_techniques
             return select_techniques(task, domain="chrome", max_topics=2)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _curriculum_refresher(
+        action_history: list[Action],
+        focused_input: dict | None,
+    ) -> str:
+        """Re-injection hint for #123 — pick a curriculum snippet based on
+        what action the model is currently looping on, NOT on the original
+        task. After step 1 the original "form-filling" technique is gone
+        from context; this brings back exactly the one that's relevant now.
+
+        Returns "" if curriculum lookup fails or has no match.
+        """
+        if not action_history:
+            return ""
+        last = action_history[-1]
+        # Build a small hint string the curriculum's TF-IDF + triggers can
+        # match against. Specific enough to pick form/scroll/navigation
+        # techniques apart, generic enough to share across tasks.
+        if last.action_type == ActionType.CLICK:
+            if focused_input:
+                hint = "form input field focused click type text"
+            else:
+                hint = "click button link"
+        elif last.action_type == ActionType.TYPE:
+            hint = "type text into focused input form"
+        elif last.action_type == ActionType.SCROLL:
+            hint = "scroll page reveal hidden content"
+        elif last.action_type == ActionType.KEY_PRESS:
+            keys = str(last.params.get("keys") or last.params.get("key") or "").lower()
+            if "tab" in keys or "enter" in keys:
+                hint = "form navigation tab enter submit"
+            elif "escape" in keys or "alt+left" in keys:
+                hint = "modal close back navigation"
+            else:
+                hint = "keyboard shortcut"
+        else:
+            return ""
+        try:
+            from mantis_agent.curriculum import select_techniques
+            return select_techniques(hint, domain="chrome", max_topics=1)
         except Exception:
             return ""
 

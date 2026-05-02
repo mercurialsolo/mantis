@@ -32,12 +32,16 @@ import logging
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .actions import Action, ActionType
-from .brain import Gemma4Brain, InferenceResult
-from .executor import ActionExecutor, ExecutionResult
+from .executor import ExecutionResult
+from .loop_detector import LoopDetector
 from .streamer import ScreenStreamer
+
+if TYPE_CHECKING:
+    from .brain import Gemma4Brain, InferenceResult
+    from .executor import ActionExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +51,7 @@ class StepResult:
     """Result of a single agent step (one perception-reasoning-action cycle)."""
 
     step: int
-    inference: InferenceResult
+    inference: "InferenceResult"
     execution: ExecutionResult
     timestamp: float = field(default_factory=time.time)
 
@@ -82,9 +86,9 @@ class StreamingCUA:
 
     def __init__(
         self,
-        brain: Gemma4Brain,
+        brain: "Gemma4Brain",
         streamer: ScreenStreamer | None = None,
-        executor: ActionExecutor | None = None,
+        executor: "ActionExecutor | None" = None,
         max_steps: int = 50,
         frames_per_inference: int = 5,
         settle_time: float = 0.5,
@@ -92,13 +96,19 @@ class StreamingCUA:
     ):
         self.brain = brain
         self.streamer = streamer or ScreenStreamer()
-        self.executor = executor or ActionExecutor()
+        if executor is None:
+            # Default ActionExecutor instantiation triggers the lazy
+            # pyautogui import; tests pass their own stub to avoid this.
+            from .executor import ActionExecutor as _ActionExecutor
+            executor = _ActionExecutor()
+        self.executor = executor
         self.max_steps = max_steps
         self.frames_per_inference = frames_per_inference
         self.settle_time = settle_time
         self.on_event = on_event
         self._action_history: list[Action] = []
         self._steps: list[StepResult] = []
+        self._loop_detector = LoopDetector()
 
     async def _emit(self, event_type: str, **data: Any) -> None:
         """Emit an event to the viewer (if connected). Never crashes the agent."""
@@ -121,6 +131,7 @@ class StreamingCUA:
         t0 = time.time()
         self._action_history.clear()
         self._steps.clear()
+        self._loop_detector.reset()
 
         # Start continuous screen capture
         await self.streamer.start()
@@ -140,7 +151,7 @@ class StreamingCUA:
         )
 
         try:
-            result = await self._run_loop(task)
+            result = await self._run_loop(task, t0=t0)
         finally:
             await self.streamer.stop()
 
@@ -158,7 +169,7 @@ class StreamingCUA:
         )
         return result
 
-    async def _run_loop(self, task: str) -> AgentResult:
+    async def _run_loop(self, task: str, t0: float) -> AgentResult:
         """The core perception-action loop."""
         for step_num in range(1, self.max_steps + 1):
             logger.info(f"─── Step {step_num}/{self.max_steps} ───")
@@ -213,13 +224,22 @@ class StreamingCUA:
                     success=success,
                     summary=summary,
                     steps=self._steps,
-                    total_time=time.time(),
+                    total_time=time.time() - t0,
                     total_steps=step_num,
                 )
 
             # 4. ACT — execute the action on the computer
             execution = self.executor.execute(action)
             self._action_history.append(action)
+            # Record post-action frame for state-loop detection (latest in buffer
+            # reflects the consequences of this step after settle).
+            post_frame = None
+            try:
+                post_frames = self.streamer.get_recent_frames(1)
+                post_frame = post_frames[0] if post_frames else None
+            except Exception:
+                post_frame = None
+            self._loop_detector.record(action, frame=post_frame)
 
             self._steps.append(
                 StepResult(step=step_num, inference=inference, execution=execution)
@@ -241,15 +261,16 @@ class StreamingCUA:
             # will see the action's consequences in the next cycle's frames
             await asyncio.sleep(self.settle_time)
 
-            # Detect loops: if the last 5 actions are identical, we're stuck
-            if self._detect_loop():
+            # Detect loops: byte-equal repeats, coordinate-drift clicks, or
+            # diverse actions on a frozen screen all count.
+            if self._loop_detector.is_any_loop(window=5):
                 logger.warning("Action loop detected — breaking out")
                 return AgentResult(
                     task=task,
                     success=False,
                     summary="Agent detected a loop and stopped",
                     steps=self._steps,
-                    total_time=time.time(),
+                    total_time=time.time() - t0,
                     total_steps=step_num,
                 )
 
@@ -259,16 +280,19 @@ class StreamingCUA:
             success=False,
             summary=f"Max steps ({self.max_steps}) reached without completion",
             steps=self._steps,
-            total_time=time.time(),
+            total_time=time.time() - t0,
             total_steps=self.max_steps,
         )
 
     def _detect_loop(self, window: int = 5) -> bool:
-        """Check if the agent is stuck repeating the same action."""
+        """Legacy byte-equal loop check. Kept for backward compat with callers
+        that constructed StreamingCUA before the LoopDetector existed.
+
+        New code should call ``self._loop_detector.is_any_loop(window=...)``.
+        """
         if len(self._action_history) < window:
             return False
         recent = self._action_history[-window:]
-        # All recent actions are the same type with the same params
         first = recent[0]
         return all(
             a.action_type == first.action_type and a.params == first.params
