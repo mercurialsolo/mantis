@@ -161,6 +161,10 @@ def test_checkpoint_roundtrip_preserves_resume_state(tmp_path):
         "claude_grounding": 0,
         "proxy_mb": 0.0,
     }
+    # #115 step 6: restore flow lives on CheckpointManager; tests that
+    # bypass __init__ must wire it up explicitly.
+    from mantis_agent.gym.checkpoint_manager import CheckpointManager
+    runner.checkpoint_manager = CheckpointManager(runner)
     results, loop_counters, listings_on_page = runner._restore_from_checkpoint(loaded)
 
     assert results[0].data == lead

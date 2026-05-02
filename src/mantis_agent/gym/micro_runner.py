@@ -19,8 +19,6 @@ Usage:
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import re
@@ -30,6 +28,7 @@ from typing import Any, TYPE_CHECKING
 from ..actions import Action, ActionType
 from ..cost_config import CostConfig
 from .browser_state import BrowserState
+from .checkpoint_manager import CheckpointManager
 from .cost_meter import CostMeter
 from .listing_dedup import ListingDedup
 from .checkpoint import (
@@ -166,6 +165,11 @@ class MicroPlanRunner:
         # delegate here so the bodies live in one place.
         self.browser_state = BrowserState(self)
 
+        # #115 step 6: checkpoint persist/restore + plan-signature flow
+        # live on CheckpointManager. Reads 14 different runner attributes
+        # via self.parent — same back-reference pattern as BrowserState.
+        self.checkpoint_manager = CheckpointManager(self)
+
     def dynamic_verification_report(self, status: str | None = None) -> dict[str, Any]:
         return self.dynamic_verifier.report(status=status or self._final_status)
 
@@ -247,26 +251,8 @@ class MicroPlanRunner:
 
     @staticmethod
     def _compute_plan_signature(plan: MicroPlan) -> str:
-        payload = [
-            {
-                "intent": step.intent,
-                "type": step.type,
-                "verify": step.verify,
-                "budget": step.budget,
-                "reverse": step.reverse,
-                "grounding": step.grounding,
-                "claude_only": step.claude_only,
-                "loop_target": step.loop_target,
-                "loop_count": step.loop_count,
-                "section": step.section,
-                "required": step.required,
-                "gate": step.gate,
-            }
-            for step in plan.steps
-        ]
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        """Backward-compat shim — delegates to :class:`CheckpointManager`."""
+        return CheckpointManager.compute_plan_signature(plan)
 
     def _cost_totals(self) -> tuple[float, float, float, float]:
         """Backward-compat shim — delegates to :meth:`CostMeter.totals`."""
@@ -321,90 +307,28 @@ class MicroPlanRunner:
         status: str = "running",
         halt_reason: str = "",
     ) -> None:
-        checkpoint.run_key = self.run_key
-        checkpoint.plan_signature = self.plan_signature
-        checkpoint.session_name = self.session_name
-        checkpoint.status = status
-        checkpoint.halt_reason = halt_reason
-        checkpoint.step_index = next_step_index
-        checkpoint.page = getattr(self, "_current_page", 1)
-        checkpoint.current_url = self._last_known_url
-        checkpoint.reentry_url = self._reentry_url_for_step(plan, next_step_index)
-        checkpoint.seen_urls = sorted(self._seen_urls)
-        checkpoint.extracted_leads = self._unique_leads_from_results(results)
-        checkpoint.step_results = [result.to_dict() for result in results]
-        checkpoint.loop_counters = {str(k): v for k, v in loop_counters.items()}
-        checkpoint.listings_on_page = listings_on_page
-        checkpoint.extracted_titles = list(self._extracted_titles)
-        checkpoint.page_listings = [list(item) for item in self._page_listings]
-        checkpoint.page_listing_index = self._page_listing_index
-        checkpoint.viewport_stage = self._viewport_stage
-        checkpoint.current_page = getattr(self, "_current_page", 1)
-        checkpoint.results_base_url = self._results_base_url
-        checkpoint.required_filter_tokens = list(self._required_filter_tokens)
-        checkpoint.scroll_state = dict(self._scroll_state)
-        checkpoint.last_extracted = dict(self._last_extracted)
-        checkpoint.costs = dict(self.costs)
-        checkpoint.dynamic_coverage = self.dynamic_verification_report(status=status)
-        # #127: snapshot prompt SHAs so a regression can be attributed to a
-        # specific prompt edit even after the registry changes.
-        try:
-            from ..prompts import current_prompt_versions as _cpv
-            checkpoint.prompt_versions = _cpv()
-        except Exception as exc:  # noqa: BLE001 — telemetry must not abort saves
-            logger.debug("prompt_versions snapshot skipped: %s", exc)
-            checkpoint.prompt_versions = {}
-        checkpoint.save(self.checkpoint_path)
-        self._final_status = status
-        if self.on_checkpoint:
-            try:
-                self.on_checkpoint()
-            except Exception as e:
-                logger.warning("  [checkpoint] external commit failed: %s", e)
+        """Backward-compat shim — delegates to :class:`CheckpointManager`."""
+        self.checkpoint_manager.persist(
+            checkpoint=checkpoint,
+            plan=plan,
+            results=results,
+            loop_counters=loop_counters,
+            listings_on_page=listings_on_page,
+            next_step_index=next_step_index,
+            status=status,
+            halt_reason=halt_reason,
+        )
 
     def _restore_from_checkpoint(
         self,
         checkpoint: RunCheckpoint,
     ) -> tuple[list[StepResult], dict[int, int], int]:
-        self._seen_urls = set(checkpoint.seen_urls)
-        self._extracted_titles = list(checkpoint.extracted_titles)
-        self._page_listings = [tuple(item) for item in checkpoint.page_listings]
-        self._page_listing_index = checkpoint.page_listing_index
-        self._viewport_stage = checkpoint.viewport_stage
-        self._results_base_url = checkpoint.results_base_url
-        self._required_filter_tokens = tuple(checkpoint.required_filter_tokens)
-        self._current_page = checkpoint.current_page or checkpoint.page or 1
-        self._last_known_url = checkpoint.current_url or checkpoint.reentry_url
-        self._scroll_state = dict(checkpoint.scroll_state or {})
-        self._last_extracted = dict(checkpoint.last_extracted or {})
-        # Preserves the pre-#115 contract: callers that bypass __init__
-        # (e.g. test_private_seller_filter uses object.__new__ + manual
-        # ``runner.costs = {...}``) keep working. CostMeter.restore()
-        # exists for clean composition but the runner's path uses the
-        # in-place dict update so it doesn't require a cost_meter to
-        # be present on the instance.
-        self.costs.update(checkpoint.costs or {})
-        if checkpoint.dynamic_coverage:
-            self.dynamic_verifier.load_report(checkpoint.dynamic_coverage)
-        self._listings_on_page = checkpoint.listings_on_page
-        results = [StepResult.from_dict(item) for item in checkpoint.step_results]
-        loop_counters = {int(k): int(v) for k, v in (checkpoint.loop_counters or {}).items()}
-        return results, loop_counters, checkpoint.listings_on_page
+        """Backward-compat shim — delegates to :class:`CheckpointManager`."""
+        return self.checkpoint_manager.restore(checkpoint)
 
     def _checkpoint_active_progress(self, halt_reason: str = "step_progress") -> None:
-        ctx = self._active_checkpoint_context
-        if not ctx:
-            return
-        self._persist_checkpoint(
-            checkpoint=ctx["checkpoint"],
-            plan=ctx["plan"],
-            results=ctx["results"],
-            loop_counters=ctx["loop_counters"],
-            listings_on_page=ctx["listings_on_page"],
-            next_step_index=ctx["step_index"],
-            status="running",
-            halt_reason=halt_reason,
-        )
+        """Backward-compat shim — delegates to :class:`CheckpointManager`."""
+        self.checkpoint_manager.save_active_progress(halt_reason)
 
     def _set_scroll_state(
         self,
