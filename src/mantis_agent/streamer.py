@@ -4,6 +4,11 @@ Instead of discrete screenshots, this captures the screen continuously so the
 model always has fresh temporal context. It sees what changed between frames,
 which is critical for understanding animations, loading states, and the
 consequences of its own actions.
+
+``mss`` lives in the ``[local-cua]`` extras and only needed at capture time.
+The bare-package install (and CI) can import :class:`Frame` and
+:class:`ScreenStreamer` itself; calling :meth:`capture_once` /
+:meth:`start` is what triggers the import.
 """
 
 from __future__ import annotations
@@ -12,9 +17,20 @@ import asyncio
 import time
 from collections import deque
 from dataclasses import dataclass
+from typing import Any
 
-import mss
 from PIL import Image
+
+
+def _load_mss() -> Any:
+    """Lazy import of mss so the module is importable without [local-cua]."""
+    try:
+        import mss  # noqa: PLC0415
+    except ImportError as exc:
+        raise ImportError(
+            "ScreenStreamer requires mss. Install with: pip install -e .[local-cua]"
+        ) from exc
+    return mss
 
 
 @dataclass
@@ -77,6 +93,7 @@ class ScreenStreamer:
 
     def capture_once(self) -> Frame:
         """Capture a single frame synchronously. Useful for one-shot queries."""
+        mss = _load_mss()
         with mss.mss() as sct:
             mon = sct.monitors[self.monitor]
             self._screen_size = (mon["width"], mon["height"])
