@@ -29,6 +29,7 @@ from typing import Any, TYPE_CHECKING
 
 from ..actions import Action, ActionType
 from ..cost_config import CostConfig
+from .cost_meter import CostMeter
 from .checkpoint import (
     REVERSE_ACTIONS,
     PauseRequested,
@@ -138,22 +139,22 @@ class MicroPlanRunner:
         self.step_callback = step_callback
         self.keep_screenshots = keep_screenshots
         self.cancel_event = cancel_event
-        self.cost_config = cost_config or CostConfig.from_env()
-        self.tenant_id = tenant_id
         # #115: tool registry + pause state extracted into ToolChannel.
         # Public ``register_tool``/``list_tools``/``call_tool`` below remain on
         # the runner and delegate here so external callers don't change.
         self.tool_channel = ToolChannel()
 
-        # Cost tracking
-        self.costs = {
-            "gpu_steps": 0,        # Total Holo3 steps
-            "gpu_seconds": 0.0,    # Approx GPU time
-            "claude_extract": 0,   # Claude extraction calls
-            "claude_grounding": 0, # Claude grounding calls
-            "proxy_mb": 0.0,       # Estimated proxy bandwidth
-        }
-        self._run_start = time.time()
+        # #115 step 3: cost counters + rate config + Prometheus inflight
+        # gauges live on the CostMeter. ``self.costs`` aliases the meter's
+        # canonical dict so the 60+ scattered ``self.costs["..."] += N``
+        # mutation sites in this file continue to work unchanged.
+        # ``self.cost_config`` and ``self.tenant_id`` stay as runner attrs
+        # for any external reader; they mirror the meter's view.
+        self.cost_meter = CostMeter(cost_config=cost_config, tenant_id=tenant_id)
+        self.cost_config = self.cost_meter.cost_config
+        self.tenant_id = self.cost_meter.tenant_id
+        self.costs = self.cost_meter.costs
+        self._run_start = self.cost_meter.run_start
 
     def dynamic_verification_report(self, status: str | None = None) -> dict[str, Any]:
         return self.dynamic_verifier.report(status=status or self._final_status)
@@ -258,14 +259,8 @@ class MicroPlanRunner:
         ).hexdigest()
 
     def _cost_totals(self) -> tuple[float, float, float, float]:
-        cfg = self.cost_config
-        gpu_cost = cfg.gpu_cost(self.costs["gpu_seconds"])
-        claude_cost = cfg.claude_cost(
-            self.costs["claude_extract"] + self.costs["claude_grounding"]
-        )
-        proxy_cost = cfg.proxy_cost(self.costs["proxy_mb"])
-        total_cost = gpu_cost + claude_cost + proxy_cost
-        return gpu_cost, claude_cost, proxy_cost, total_cost
+        """Backward-compat shim — delegates to :meth:`CostMeter.totals`."""
+        return self.cost_meter.totals()
 
     @classmethod
     def _unique_leads_from_results(cls, results: list[StepResult]) -> list[str]:
@@ -275,18 +270,8 @@ class MicroPlanRunner:
         return list(unique.values())
 
     def _record_step_costs(self, step: MicroIntent, step_result: StepResult) -> None:
-        cfg = self.cost_config
-        if step_result.steps_used > 0:
-            self.costs["gpu_steps"] += step_result.steps_used
-            self.costs["gpu_seconds"] += step_result.steps_used * cfg.gpu_seconds_per_step
-        if step.claude_only:
-            self.costs["claude_extract"] += 1
-        if step.grounding:
-            self.costs["claude_grounding"] += step_result.steps_used  # ~1 grounding per click
-        if step.type in ("click", "navigate", "paginate"):
-            self.costs["proxy_mb"] += cfg.proxy_mb_per_nav
-        elif step.type == "scroll":
-            self.costs["proxy_mb"] += cfg.proxy_mb_per_scroll
+        """Backward-compat shim — delegates to :meth:`CostMeter.record_step`."""
+        self.cost_meter.record_step(step, step_result)
 
     def _log_progress(self, step_result: StepResult, results: list[StepResult]) -> None:
         gpu_cost, claude_cost, proxy_cost, total_cost = self._cost_totals()
@@ -306,29 +291,8 @@ class MicroPlanRunner:
     def _emit_cost_gauges(
         self, gpu_cost: float, claude_cost: float, proxy_cost: float, total_cost: float
     ) -> None:
-        """Push the running per-component cost to Prometheus (#122).
-
-        Skipped when no tenant_id is set so we don't pollute the registry with
-        a default-label series for local/script runs.
-        """
-        if not self.tenant_id:
-            return
-        try:
-            from .. import metrics as _metrics
-            _metrics.RUN_COST_USD_INFLIGHT.labels(
-                tenant_id=self.tenant_id, component="gpu"
-            ).set(gpu_cost)
-            _metrics.RUN_COST_USD_INFLIGHT.labels(
-                tenant_id=self.tenant_id, component="claude"
-            ).set(claude_cost)
-            _metrics.RUN_COST_USD_INFLIGHT.labels(
-                tenant_id=self.tenant_id, component="proxy"
-            ).set(proxy_cost)
-            _metrics.RUN_COST_USD_INFLIGHT.labels(
-                tenant_id=self.tenant_id, component="total"
-            ).set(total_cost)
-        except Exception as exc:  # noqa: BLE001 — metrics are observability, never fatal
-            logger.debug("inflight cost gauge update failed: %s", exc)
+        """Backward-compat shim — delegates to :meth:`CostMeter.emit_inflight_gauges`."""
+        self.cost_meter.emit_inflight_gauges(gpu_cost, claude_cost, proxy_cost, total_cost)
 
     def _current_results_page_url(self) -> str:
         if not self._results_base_url:
@@ -418,6 +382,12 @@ class MicroPlanRunner:
         self._last_known_url = checkpoint.current_url or checkpoint.reentry_url
         self._scroll_state = dict(checkpoint.scroll_state or {})
         self._last_extracted = dict(checkpoint.last_extracted or {})
+        # Preserves the pre-#115 contract: callers that bypass __init__
+        # (e.g. test_private_seller_filter uses object.__new__ + manual
+        # ``runner.costs = {...}``) keep working. CostMeter.restore()
+        # exists for clean composition but the runner's path uses the
+        # in-place dict update so it doesn't require a cost_meter to
+        # be present on the instance.
         self.costs.update(checkpoint.costs or {})
         if checkpoint.dynamic_coverage:
             self.dynamic_verifier.load_report(checkpoint.dynamic_coverage)
