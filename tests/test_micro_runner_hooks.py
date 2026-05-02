@@ -299,12 +299,14 @@ def test_pause_requested_yields_pause_state_via_tool_invocation():
     )
 
     # First invocation triggers a pause — `_invoke_tool` returns success but
-    # records the pending pause for the run loop to surface.
+    # records the pending pause for the run loop to surface. Pause state lives
+    # on the ToolChannel after #115 step 2; the ``_invoke_tool`` shim still
+    # delegates correctly.
     ok, data = r._invoke_tool("request_user_input", {"prompt": "MFA code?"})
     assert ok is True
     assert data.endswith(":pause")
-    assert r._pending_pause is not None
-    assert r._pending_pause["tool"] == "request_user_input"
+    assert r.tool_channel.is_paused()
+    assert r.tool_channel.pending_pause["tool"] == "request_user_input"
 
     # On resume, consume_pause_input returns the staged value.
     r._pause_input = "123456"
