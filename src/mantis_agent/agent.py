@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from .actions import Action, ActionType
 from .executor import ActionExecutor, ExecutionResult
+from .loop_detector import LoopDetector
 from .streamer import ScreenStreamer
 
 if TYPE_CHECKING:
@@ -101,6 +102,7 @@ class StreamingCUA:
         self.on_event = on_event
         self._action_history: list[Action] = []
         self._steps: list[StepResult] = []
+        self._loop_detector = LoopDetector()
 
     async def _emit(self, event_type: str, **data: Any) -> None:
         """Emit an event to the viewer (if connected). Never crashes the agent."""
@@ -123,6 +125,7 @@ class StreamingCUA:
         t0 = time.time()
         self._action_history.clear()
         self._steps.clear()
+        self._loop_detector.reset()
 
         # Start continuous screen capture
         await self.streamer.start()
@@ -222,6 +225,15 @@ class StreamingCUA:
             # 4. ACT — execute the action on the computer
             execution = self.executor.execute(action)
             self._action_history.append(action)
+            # Record post-action frame for state-loop detection (latest in buffer
+            # reflects the consequences of this step after settle).
+            post_frame = None
+            try:
+                post_frames = self.streamer.get_recent_frames(1)
+                post_frame = post_frames[0] if post_frames else None
+            except Exception:
+                post_frame = None
+            self._loop_detector.record(action, frame=post_frame)
 
             self._steps.append(
                 StepResult(step=step_num, inference=inference, execution=execution)
@@ -243,8 +255,9 @@ class StreamingCUA:
             # will see the action's consequences in the next cycle's frames
             await asyncio.sleep(self.settle_time)
 
-            # Detect loops: if the last 5 actions are identical, we're stuck
-            if self._detect_loop():
+            # Detect loops: byte-equal repeats, coordinate-drift clicks, or
+            # diverse actions on a frozen screen all count.
+            if self._loop_detector.is_any_loop(window=5):
                 logger.warning("Action loop detected — breaking out")
                 return AgentResult(
                     task=task,
@@ -266,11 +279,14 @@ class StreamingCUA:
         )
 
     def _detect_loop(self, window: int = 5) -> bool:
-        """Check if the agent is stuck repeating the same action."""
+        """Legacy byte-equal loop check. Kept for backward compat with callers
+        that constructed StreamingCUA before the LoopDetector existed.
+
+        New code should call ``self._loop_detector.is_any_loop(window=...)``.
+        """
         if len(self._action_history) < window:
             return False
         recent = self._action_history[-window:]
-        # All recent actions are the same type with the same params
         first = recent[0]
         return all(
             a.action_type == first.action_type and a.params == first.params

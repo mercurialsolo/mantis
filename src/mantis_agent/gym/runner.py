@@ -27,6 +27,7 @@ from typing import Any, Protocol
 from PIL import Image
 
 from ..actions import Action, ActionType
+from ..loop_detector import LoopDetector
 from .base import GymEnvironment
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,7 @@ class GymRunner:
         self.plan_executor = plan_executor
         self.page_discovery = page_discovery
         self.on_step = on_step  # Optional: fn(dict) -> None for live viewer
+        self._loop_detector = LoopDetector()
 
     def _emit(self, event_type: str, **data: Any) -> None:
         """Emit an event to the viewer (if connected). Never crashes the runner."""
@@ -219,6 +221,7 @@ class GymRunner:
             reset_kwargs["seed"] = seed
 
         obs = self.env.reset(task, **reset_kwargs)
+        self._loop_detector.reset()
         frame_history.append(obs.screenshot)
         _save_frame(obs.screenshot, 0)
         last_url = obs.extras.get("url", "")
@@ -427,6 +430,11 @@ class GymRunner:
                 action_history.append(action)
                 frame_history.append(gym_result.observation.screenshot)
                 _save_frame(gym_result.observation.screenshot, step_num)
+                self._loop_detector.record(
+                    action,
+                    url=gym_result.info.get("url", ""),
+                    frame=gym_result.observation.screenshot,
+                )
 
                 # Reward — apply before mutating step_reward / components so the
                 # signal includes this step's action in any history-based terms.
@@ -471,7 +479,7 @@ class GymRunner:
                     termination_reason = "env_done"
                     break
 
-                if self._detect_repeat(action_history, self.hard_loop_window):
+                if self._loop_detector.is_any_loop(self.hard_loop_window):
                     logger.warning("Hard action loop detected — stopping")
                     termination_reason = "loop"
                     break
@@ -607,8 +615,9 @@ class GymRunner:
                         "NOT the photo."
                     )
 
-            # Soft loop nudge
-            if self._detect_repeat(action_history, self.soft_loop_window):
+            # Soft loop nudge — fires on byte-equal repeats, coordinate-drift
+            # clicks, or diverse-actions-on-frozen-state.
+            if self._loop_detector.is_any_loop(self.soft_loop_window):
                 nudge = self._build_nudge(action_history, last_focused_input)
                 parts.append(nudge)
 
