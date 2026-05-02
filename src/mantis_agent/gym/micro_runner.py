@@ -106,6 +106,7 @@ class RunCheckpoint:
     last_extracted: dict = field(default_factory=dict)
     costs: dict = field(default_factory=dict)
     dynamic_coverage: dict = field(default_factory=dict)
+    prompt_versions: dict = field(default_factory=dict)  # {name: short_sha} for #127
     timestamp: float = 0.0
 
     def save(self, path: str):
@@ -561,6 +562,14 @@ class MicroPlanRunner:
         checkpoint.last_extracted = dict(self._last_extracted)
         checkpoint.costs = dict(self.costs)
         checkpoint.dynamic_coverage = self.dynamic_verification_report(status=status)
+        # #127: snapshot prompt SHAs so a regression can be attributed to a
+        # specific prompt edit even after the registry changes.
+        try:
+            from ..prompts import current_prompt_versions as _cpv
+            checkpoint.prompt_versions = _cpv()
+        except Exception as exc:  # noqa: BLE001 — telemetry must not abort saves
+            logger.debug("prompt_versions snapshot skipped: %s", exc)
+            checkpoint.prompt_versions = {}
         checkpoint.save(self.checkpoint_path)
         self._final_status = status
         if self.on_checkpoint:

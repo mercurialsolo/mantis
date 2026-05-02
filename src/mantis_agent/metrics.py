@@ -149,6 +149,33 @@ RUN_COST_USD_INFLIGHT = _gauge(
     ("tenant_id", "component"),  # component: gpu | claude | proxy | total
 )
 
+# Prompt content version, set to 1 once per process for each loaded prompt.
+# Lets operators correlate run regressions with prompt edits — a different
+# `sha` label reveals which prompt changed even without a code release.
+PROMPT_VERSION = _gauge(
+    "mantis_prompt_version",
+    "Short SHA1 of each loaded prompt content (always set to 1).",
+    ("prompt_name", "sha"),
+)
+
+
+def publish_prompt_versions() -> None:
+    """Set the prompt-version gauge for every registered prompt (#127).
+
+    Idempotent — safe to call repeatedly. Operators should call once at
+    process start; tests may call after monkeypatching MANTIS_PROMPTS_DIR.
+    """
+    try:
+        from .prompts import current_prompt_versions
+    except Exception as exc:  # noqa: BLE001 — telemetry must not break runs
+        logger.debug("prompt version publish skipped: %s", exc)
+        return
+    for name, sha in current_prompt_versions().items():
+        try:
+            PROMPT_VERSION.labels(prompt_name=name, sha=sha).set(1)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("prompt gauge set failed for %s: %s", name, exc)
+
 
 def is_available() -> bool:
     """True if prometheus_client is installed and metrics are live."""
