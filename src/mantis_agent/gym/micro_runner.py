@@ -382,7 +382,13 @@ class MicroPlanRunner:
         self._last_known_url = checkpoint.current_url or checkpoint.reentry_url
         self._scroll_state = dict(checkpoint.scroll_state or {})
         self._last_extracted = dict(checkpoint.last_extracted or {})
-        self.cost_meter.restore(checkpoint.costs)
+        # Preserves the pre-#115 contract: callers that bypass __init__
+        # (e.g. test_private_seller_filter uses object.__new__ + manual
+        # ``runner.costs = {...}``) keep working. CostMeter.restore()
+        # exists for clean composition but the runner's path uses the
+        # in-place dict update so it doesn't require a cost_meter to
+        # be present on the instance.
+        self.costs.update(checkpoint.costs or {})
         if checkpoint.dynamic_coverage:
             self.dynamic_verifier.load_report(checkpoint.dynamic_coverage)
         self._listings_on_page = checkpoint.listings_on_page
