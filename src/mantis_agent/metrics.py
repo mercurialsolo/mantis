@@ -141,6 +141,14 @@ RATE_LIMIT_REJECTIONS = _counter(
     ("tenant_id", "kind"),
 )
 
+# In-flight cost for the active run. Set on each progress log so operators
+# can dashboard live runs without waiting for the run-cost histogram.
+RUN_COST_USD_INFLIGHT = _gauge(
+    "mantis_run_cost_usd_inflight",
+    "Live USD cost of the currently running session, by component.",
+    ("tenant_id", "component"),  # component: gpu | claude | proxy | total
+)
+
 
 def is_available() -> bool:
     """True if prometheus_client is installed and metrics are live."""
