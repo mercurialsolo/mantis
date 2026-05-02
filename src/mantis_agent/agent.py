@@ -32,12 +32,14 @@ import logging
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .actions import Action, ActionType
-from .brain import Gemma4Brain, InferenceResult
 from .executor import ActionExecutor, ExecutionResult
 from .streamer import ScreenStreamer
+
+if TYPE_CHECKING:
+    from .brain import Gemma4Brain, InferenceResult
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,7 @@ class StepResult:
     """Result of a single agent step (one perception-reasoning-action cycle)."""
 
     step: int
-    inference: InferenceResult
+    inference: "InferenceResult"
     execution: ExecutionResult
     timestamp: float = field(default_factory=time.time)
 
@@ -82,7 +84,7 @@ class StreamingCUA:
 
     def __init__(
         self,
-        brain: Gemma4Brain,
+        brain: "Gemma4Brain",
         streamer: ScreenStreamer | None = None,
         executor: ActionExecutor | None = None,
         max_steps: int = 50,
@@ -140,7 +142,7 @@ class StreamingCUA:
         )
 
         try:
-            result = await self._run_loop(task)
+            result = await self._run_loop(task, t0=t0)
         finally:
             await self.streamer.stop()
 
@@ -158,7 +160,7 @@ class StreamingCUA:
         )
         return result
 
-    async def _run_loop(self, task: str) -> AgentResult:
+    async def _run_loop(self, task: str, t0: float) -> AgentResult:
         """The core perception-action loop."""
         for step_num in range(1, self.max_steps + 1):
             logger.info(f"─── Step {step_num}/{self.max_steps} ───")
@@ -213,7 +215,7 @@ class StreamingCUA:
                     success=success,
                     summary=summary,
                     steps=self._steps,
-                    total_time=time.time(),
+                    total_time=time.time() - t0,
                     total_steps=step_num,
                 )
 
@@ -249,7 +251,7 @@ class StreamingCUA:
                     success=False,
                     summary="Agent detected a loop and stopped",
                     steps=self._steps,
-                    total_time=time.time(),
+                    total_time=time.time() - t0,
                     total_steps=step_num,
                 )
 
@@ -259,7 +261,7 @@ class StreamingCUA:
             success=False,
             summary=f"Max steps ({self.max_steps}) reached without completion",
             steps=self._steps,
-            total_time=time.time(),
+            total_time=time.time() - t0,
             total_steps=self.max_steps,
         )
 
