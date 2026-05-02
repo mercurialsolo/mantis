@@ -31,6 +31,7 @@ from ..actions import Action, ActionType
 from ..cost_config import CostConfig
 from .browser_state import BrowserState
 from .cost_meter import CostMeter
+from .listing_dedup import ListingDedup
 from .checkpoint import (
     REVERSE_ACTIONS,
     PauseRequested,
@@ -273,10 +274,8 @@ class MicroPlanRunner:
 
     @classmethod
     def _unique_leads_from_results(cls, results: list[StepResult]) -> list[str]:
-        unique: dict[str, str] = {}
-        for lead in cls._successful_lead_data(results):
-            unique[cls._lead_key(lead)] = lead
-        return list(unique.values())
+        """Backward-compat shim — delegates to :class:`ListingDedup`."""
+        return ListingDedup.unique_leads_from_results(results)
 
     def _record_step_costs(self, step: MicroIntent, step_result: StepResult) -> None:
         """Backward-compat shim — delegates to :meth:`CostMeter.record_step`."""
@@ -1010,36 +1009,23 @@ class MicroPlanRunner:
 
     @staticmethod
     def _successful_lead_data(results: list[StepResult]) -> list[str]:
-        return [
-            r.data for r in results
-            if r.success and (r.data or "").startswith("VIABLE")
-        ]
+        """Backward-compat shim — delegates to :class:`ListingDedup`."""
+        return ListingDedup.successful_lead_data(results)
 
     @staticmethod
     def _lead_key(data: str) -> str:
-        url_match = re.search(r"URL:\s*([^|]+)", data)
-        if url_match:
-            return url_match.group(1).strip()
-        return data[:100]
+        """Backward-compat shim — delegates to :class:`ListingDedup`."""
+        return ListingDedup.lead_key(data)
 
     @staticmethod
     def _lead_has_phone(data: str) -> bool:
-        phone_match = re.search(r"Phone:\s*([^|]+)", data, flags=re.IGNORECASE)
-        if not phone_match:
-            return False
-        phone = phone_match.group(1).strip().lower()
-        if phone in {"", "none", "n/a", "na", "unknown", "not visible", "not shown"}:
-            return False
-        return len(re.sub(r"\D", "", phone)) >= 10
+        """Backward-compat shim — delegates to :class:`ListingDedup`."""
+        return ListingDedup.lead_has_phone(data)
 
     @classmethod
     def _lead_counts(cls, results: list[StepResult]) -> tuple[int, int]:
-        leads_by_key = {}
-        for data in cls._successful_lead_data(results):
-            leads_by_key[cls._lead_key(data)] = data
-        total = len(leads_by_key)
-        with_phone = sum(1 for data in leads_by_key.values() if cls._lead_has_phone(data))
-        return total, with_phone
+        """Backward-compat shim — delegates to :class:`ListingDedup`."""
+        return ListingDedup.lead_counts(results)
 
     @staticmethod
     def _extract_url_from_intent(intent: str) -> str:
