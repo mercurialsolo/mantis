@@ -184,6 +184,7 @@ def test_checkpoint_load_ignores_unknown_fields(tmp_path):
 
 
 def test_current_results_page_url_preserves_filtered_page_number():
+    from mantis_agent.gym.browser_state import BrowserState
     from mantis_agent.site_config import SiteConfig
 
     runner = object.__new__(MicroPlanRunner)
@@ -192,6 +193,9 @@ def test_current_results_page_url_preserves_filtered_page_number():
         "https://www.boattrader.com/boats/state-fl/city-miami/zip-33101/by-owner/price-35000/"
     )
     runner._current_page = 3
+    # #115 step 4: URL composition lives on BrowserState; tests that bypass
+    # __init__ must wire it up explicitly.
+    runner.browser_state = BrowserState(runner)
 
     assert runner._current_results_page_url() == (
         "https://www.boattrader.com/boats/state-fl/city-miami/zip-33101/by-owner/price-35000/page-3/"
