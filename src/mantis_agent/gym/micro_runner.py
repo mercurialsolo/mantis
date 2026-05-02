@@ -39,6 +39,7 @@ from .checkpoint import (
     _PauseRequested,
 )
 from .runner import GymRunner
+from .tool_channel import ToolChannel
 
 from ..plan_decomposer import MicroIntent, MicroPlan
 from ..site_config import SiteConfig
@@ -139,10 +140,10 @@ class MicroPlanRunner:
         self.cancel_event = cancel_event
         self.cost_config = cost_config or CostConfig.from_env()
         self.tenant_id = tenant_id
-        # Registered host tools (#71). Mutated via register_tool().
-        self._tools: dict[str, dict[str, Any]] = {}
-        # Pending pause signal from a tool handler (#73).
-        self._pending_pause: dict[str, Any] | None = None
+        # #115: tool registry + pause state extracted into ToolChannel.
+        # Public ``register_tool``/``list_tools``/``call_tool`` below remain on
+        # the runner and delegate here so external callers don't change.
+        self.tool_channel = ToolChannel()
 
         # Cost tracking
         self.costs = {
@@ -157,58 +158,22 @@ class MicroPlanRunner:
     def dynamic_verification_report(self, status: str | None = None) -> dict[str, Any]:
         return self.dynamic_verifier.report(status=status or self._final_status)
 
-    # ── #71 Tool channel ────────────────────────────────────────────────
+    # ── #71 Tool channel — public API delegates to self.tool_channel ────
     def register_tool(self, name: str, schema: dict[str, Any], handler: Any) -> None:
-        """Register a host-provided tool callable mid-plan.
-
-        Args:
-            name: Tool name (matches what the brain emits in its tool_use blocks).
-            schema: JSON-schema input definition. Compatible with
-                ``GenericToolAdapter.to_params()`` on the host side.
-            handler: ``Callable[[dict[str, Any]], Any]``. Invoked with the
-                kwargs the brain supplied. Return value is surfaced into the
-                step ``data`` field; raised exceptions are caught and surfaced
-                as ``success=False`` step results, never silently swallowed.
-        """
-        if not callable(handler):
-            raise TypeError(f"register_tool handler for {name!r} must be callable")
-        self._tools[name] = {"schema": dict(schema or {}), "handler": handler}
+        """Register a host-provided tool callable mid-plan. See :class:`ToolChannel`."""
+        self.tool_channel.register(name, schema, handler)
 
     def list_tools(self) -> list[dict[str, Any]]:
         """Return registered tools as ``[{"name", "schema"}]`` (for brain prompts)."""
-        return [{"name": n, "schema": t["schema"]} for n, t in self._tools.items()]
+        return self.tool_channel.list()
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
-        """Invoke a registered tool. Raises KeyError if not registered.
-
-        Errors from the handler propagate to the caller; `_invoke_tool` is the
-        loop-internal wrapper that converts errors into StepResult failures.
-        """
-        if name not in self._tools:
-            raise KeyError(f"tool not registered: {name}")
-        return self._tools[name]["handler"](arguments or {})
+        """Invoke a registered tool. Raises KeyError if not registered."""
+        return self.tool_channel.call(name, arguments)
 
     def _invoke_tool(self, name: str, arguments: dict[str, Any]) -> tuple[bool, str]:
         """Run a tool, returning ``(success, data_str)`` for the step result."""
-        try:
-            value = self.call_tool(name, arguments)
-        except _PauseRequested as exc:
-            # Tool requested pause (#73) — propagate so the run() loop can
-            # snapshot and return a PauseState. Don't treat as failure.
-            self._pending_pause = {
-                "tool": name,
-                "arguments": dict(arguments),
-                "reason": exc.reason,
-                "prompt": exc.prompt,
-            }
-            return True, f"tool:{name}:pause"
-        except KeyError as exc:
-            return False, f"tool:{name}:not_registered:{exc}"
-        except Exception as exc:  # noqa: BLE001 — surface, never swallow
-            logger.exception("tool %s raised", name)
-            return False, f"tool:{name}:error:{type(exc).__name__}:{exc}"
-        rendered = "" if value is None else str(value)
-        return True, f"tool:{name}:ok:{rendered[:200]}"
+        return self.tool_channel.invoke(name, arguments)
 
     # ── #74 Observability ──────────────────────────────────────────────
     def _capture_screenshot_bytes(self) -> bytes | None:
@@ -692,7 +657,7 @@ class MicroPlanRunner:
 
             # Pending pause (#73) — surface as paused, build PauseState in
             # _build_runner_result.
-            if self._pending_pause is not None:
+            if self.tool_channel.is_paused():
                 persist(step_index, status="paused", halt_reason="user_input")
                 self._final_status = "paused"
                 break
@@ -1096,7 +1061,7 @@ class MicroPlanRunner:
 
         # Replay results from the snapshot so cost/lead totals stay continuous.
         replayed = [StepResult.from_dict(d) for d in state.step_results]
-        self._pending_pause = None
+        self.tool_channel.clear_pause()
 
         # Rehydrate runner state. The simplest correct approach: load the
         # checkpoint that the original run() persisted (state.checkpoint_path
@@ -1135,10 +1100,10 @@ class MicroPlanRunner:
     ) -> RunnerResult:
         status = self._final_status or "completed"
         cancelled = status == "cancelled"
-        paused = status == "paused" and self._pending_pause is not None
+        paused = status == "paused" and self.tool_channel.is_paused()
         pause_state: PauseState | None = None
         if paused:
-            pp = self._pending_pause or {}
+            pp = self.tool_channel.pending_pause or {}
             pause_state = PauseState(
                 run_key=self.run_key,
                 plan_signature=self.plan_signature
