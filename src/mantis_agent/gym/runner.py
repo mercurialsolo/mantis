@@ -476,9 +476,14 @@ class GymRunner:
                     termination_reason = "loop"
                     break
 
-            # Trim frame history
-            if len(frame_history) > self.frames_per_inference * 3:
-                frame_history = frame_history[-self.frames_per_inference * 2:]
+            # Trim frame history. Inference reads the last
+            # ``frames_per_inference`` frames, so we always retain at least
+            # that many. We let the buffer grow to ``min_keep * 3`` before
+            # trimming back to ``min_keep * 2`` — the trim cost is paid once
+            # per ~max_steps/3 rather than every step.
+            min_keep = max(self.frames_per_inference, 1)
+            if len(frame_history) > min_keep * 3:
+                frame_history = frame_history[-min_keep * 2:]
 
         total_time = time.time() - t0
         success = termination_reason == "done" or (termination_reason == "env_done" and total_reward > 0)
