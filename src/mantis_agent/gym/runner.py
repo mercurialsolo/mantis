@@ -432,6 +432,11 @@ class GymRunner:
                 action = result.action
                 thinking = getattr(result, "thinking", "")
                 last_thinking = thinking  # Persist for next step's prompt
+                # #120 step 2: Holo3 (and other brains as they adopt the
+                # prompt change) now emits predicted_outcome alongside
+                # action + thinking. Brains that don't yet emit it return
+                # "" — TrajectoryStep field defaults handle that.
+                predicted_outcome = getattr(result, "predicted_outcome", "")
                 logger.info(f"Action: {action} ({inference_time:.2f}s)")
 
                 self._emit("step", step=step_num, max_steps=self.max_steps)
@@ -548,6 +553,7 @@ class GymRunner:
                     frame_hash=phash_64(gym_result.observation.screenshot),
                     observed_state=_observed_state(gym_result.info),
                     observed_outcome=feedback,
+                    predicted_outcome=predicted_outcome,
                 ))
 
                 logger.info(f"Feedback: {feedback}")

@@ -115,6 +115,32 @@ def _image_to_base64(img: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
+_PREDICTED_LINE_RE = re.compile(
+    r"^\s*Predicted\s*:\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _extract_predicted_outcome(text: str) -> str:
+    """Pull the first ``Predicted: <delta>`` line out of a Holo3 response.
+
+    The Holo3 system prompt asks for an optional trailing line in this
+    format. The brain may omit it (e.g. for done() steps, or when it
+    genuinely doesn't know). Returns ``""`` when no line is present so
+    the trajectory's ``predicted_outcome`` stays at its default — see #120.
+
+    Trims trailing punctuation/quotes that often appear when the model
+    paraphrases the example. Caps at 240 chars to keep trajectories bounded.
+    """
+    if not text:
+        return ""
+    match = _PREDICTED_LINE_RE.search(text)
+    if not match:
+        return ""
+    line = match.group(1).strip().strip('"').strip("'").strip()
+    return line[:240]
+
+
 @dataclass
 class InferenceResult:
     """Result from a single brain inference cycle."""
@@ -122,6 +148,9 @@ class InferenceResult:
     raw_output: str
     thinking: str = ""
     tokens_used: int = 0
+    # #120 step 2: brain's prediction of what its action will cause.
+    # Empty when the model didn't emit a "Predicted:" line.
+    predicted_outcome: str = ""
 
 
 # ── Brain ───────────────────────────────────────────────────────────────────
@@ -350,6 +379,10 @@ class Holo3Brain:
         thinking = message.get("reasoning_content", "") or ""
         content_text = message.get("content", "") or ""
 
+        # #120 step 2: extract the optional "Predicted: <delta>" line the
+        # prompt asks for. Empty when the model didn't emit it.
+        predicted = _extract_predicted_outcome(content_text)
+
         if not thinking and "<think>" in content_text:
             think_match = re.search(r"<think>(.*?)</think>", content_text, re.DOTALL)
             if think_match:
@@ -380,6 +413,7 @@ class Holo3Brain:
                 raw_output=raw_output,
                 thinking=thinking,
                 tokens_used=data.get("usage", {}).get("total_tokens", 0),
+                predicted_outcome=predicted,
             )
 
         # Strategy 2: Holo3 "Action: name({...})" or "Action: name(key=val)" text format
@@ -395,6 +429,7 @@ class Holo3Brain:
                 raw_output=raw_output,
                 thinking=thinking,
                 tokens_used=data.get("usage", {}).get("total_tokens", 0),
+                predicted_outcome=predicted,
             )
 
         # Strategy 3: JSON action {"action": "click", ...} in content text
@@ -408,6 +443,7 @@ class Holo3Brain:
                 raw_output=raw_output,
                 thinking=thinking,
                 tokens_used=data.get("usage", {}).get("total_tokens", 0),
+                predicted_outcome=predicted,
             )
 
         # Strategy 4: pyautogui-style text (pyautogui.click, etc.)
@@ -421,6 +457,7 @@ class Holo3Brain:
                 raw_output=raw_output,
                 thinking=thinking,
                 tokens_used=data.get("usage", {}).get("total_tokens", 0),
+                predicted_outcome=predicted,
             )
 
         # Strategy 5: terminate / DONE / FAIL keywords
@@ -435,6 +472,7 @@ class Holo3Brain:
                 raw_output=raw_output,
                 thinking=thinking,
                 tokens_used=data.get("usage", {}).get("total_tokens", 0),
+                predicted_outcome=predicted,
             )
 
         if "DONE" in content_text.upper():
@@ -453,6 +491,7 @@ class Holo3Brain:
             raw_output=raw_output,
             thinking=thinking,
             tokens_used=data.get("usage", {}).get("total_tokens", 0),
+            predicted_outcome=predicted,
         )
 
     def _convert_coords(self, action_name: str, args: dict, screen_size: tuple[int, int]) -> dict:
