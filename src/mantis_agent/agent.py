@@ -35,12 +35,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .actions import Action, ActionType
-from .executor import ActionExecutor, ExecutionResult
+from .executor import ExecutionResult
 from .loop_detector import LoopDetector
 from .streamer import ScreenStreamer
 
 if TYPE_CHECKING:
     from .brain import Gemma4Brain, InferenceResult
+    from .executor import ActionExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ class StreamingCUA:
         self,
         brain: "Gemma4Brain",
         streamer: ScreenStreamer | None = None,
-        executor: ActionExecutor | None = None,
+        executor: "ActionExecutor | None" = None,
         max_steps: int = 50,
         frames_per_inference: int = 5,
         settle_time: float = 0.5,
@@ -95,7 +96,12 @@ class StreamingCUA:
     ):
         self.brain = brain
         self.streamer = streamer or ScreenStreamer()
-        self.executor = executor or ActionExecutor()
+        if executor is None:
+            # Default ActionExecutor instantiation triggers the lazy
+            # pyautogui import; tests pass their own stub to avoid this.
+            from .executor import ActionExecutor as _ActionExecutor
+            executor = _ActionExecutor()
+        self.executor = executor
         self.max_steps = max_steps
         self.frames_per_inference = frames_per_inference
         self.settle_time = settle_time

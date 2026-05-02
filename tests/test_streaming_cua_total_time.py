@@ -11,8 +11,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import pytest
-
 from mantis_agent.actions import Action, ActionType
 from mantis_agent.agent import StreamingCUA
 

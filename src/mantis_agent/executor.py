@@ -2,6 +2,11 @@
 
 Handles the physical execution of actions on the computer. Includes safety
 bounds checking and action history for debugging.
+
+``pyautogui`` is in the ``[local-cua]`` extras and only needed at execute
+time. The bare-package install (and CI) can import :class:`ExecutionResult`
+and the module itself; instantiating :class:`ActionExecutor` is what
+requires the dependency to be present.
 """
 
 from __future__ import annotations
@@ -10,16 +15,30 @@ import logging
 import platform
 import time
 from dataclasses import dataclass
-
-import pyautogui
+from typing import TYPE_CHECKING, Any
 
 from .actions import Action, ActionType
 
 logger = logging.getLogger(__name__)
 
-# Safety: prevent pyautogui from moving too fast
-pyautogui.PAUSE = 0.05
-pyautogui.FAILSAFE = True  # Move mouse to corner to abort
+if TYPE_CHECKING:  # pragma: no cover
+    import pyautogui as _pyautogui_t  # noqa: F401
+
+
+def _load_pyautogui() -> Any:
+    """Import pyautogui on demand and apply our default safety knobs.
+
+    Raised import error includes a hint so users know which extras to install.
+    """
+    try:
+        import pyautogui  # noqa: PLC0415
+    except ImportError as exc:
+        raise ImportError(
+            "ActionExecutor requires pyautogui. Install with: pip install -e .[local-cua]"
+        ) from exc
+    pyautogui.PAUSE = 0.05
+    pyautogui.FAILSAFE = True  # Move mouse to corner to abort
+    return pyautogui
 
 
 @dataclass
@@ -52,6 +71,7 @@ class ActionExecutor:
         self.safe_mode = safe_mode
         self.type_interval = type_interval
         self.history: list[ExecutionResult] = []
+        self._pg = _load_pyautogui()
 
     def execute(self, action: Action) -> ExecutionResult:
         """Execute a single action and return the result."""
@@ -103,18 +123,18 @@ class ActionExecutor:
     def _click(self, action: Action) -> None:
         x, y = self._clamp(action.params["x"], action.params["y"])
         button = action.params.get("button", "left")
-        pyautogui.click(x, y, button=button)
+        self._pg.click(x, y, button=button)
 
     def _double_click(self, action: Action) -> None:
         x, y = self._clamp(action.params["x"], action.params["y"])
-        pyautogui.doubleClick(x, y)
+        self._pg.doubleClick(x, y)
 
     def _type_text(self, action: Action) -> None:
         text = action.params["text"]
         # Use write for ASCII, typewrite doesn't handle unicode well
         # For unicode, we use the platform clipboard as fallback
         try:
-            pyautogui.write(text, interval=self.type_interval)
+            self._pg.write(text, interval=self.type_interval)
         except Exception:
             # Fallback: use clipboard for non-ASCII text
             self._type_via_clipboard(text)
@@ -127,29 +147,29 @@ class ActionExecutor:
             subprocess.run(
                 ["pbcopy"], input=text.encode("utf-8"), check=True
             )
-            pyautogui.hotkey("command", "v")
+            self._pg.hotkey("command", "v")
         elif platform.system() == "Linux":
             subprocess.run(
                 ["xclip", "-selection", "clipboard"],
                 input=text.encode("utf-8"),
                 check=True,
             )
-            pyautogui.hotkey("ctrl", "v")
+            self._pg.hotkey("ctrl", "v")
         else:
             # Windows
             subprocess.run(
                 ["clip"], input=text.encode("utf-16le"), check=True
             )
-            pyautogui.hotkey("ctrl", "v")
+            self._pg.hotkey("ctrl", "v")
 
     def _key_press(self, action: Action) -> None:
         keys_str = action.params["keys"]
         # Handle combinations like "command+c", "ctrl+shift+a"
         parts = [k.strip() for k in keys_str.split("+")]
         if len(parts) == 1:
-            pyautogui.press(parts[0])
+            self._pg.press(parts[0])
         else:
-            pyautogui.hotkey(*parts)
+            self._pg.hotkey(*parts)
 
     def _scroll(self, action: Action) -> None:
         direction = action.params["direction"]
@@ -157,27 +177,27 @@ class ActionExecutor:
         x = action.params.get("x")
         y = action.params.get("y")
 
-        # pyautogui.scroll: positive = up, negative = down
+        # self._pg.scroll: positive = up, negative = down
         scroll_map = {"up": amount, "down": -amount, "left": -amount, "right": amount}
         clicks = scroll_map.get(direction, 0)
 
         if x is not None and y is not None:
             x, y = self._clamp(x, y)
             if direction in ("left", "right"):
-                pyautogui.hscroll(clicks, x=x, y=y)
+                self._pg.hscroll(clicks, x=x, y=y)
             else:
-                pyautogui.scroll(clicks, x=x, y=y)
+                self._pg.scroll(clicks, x=x, y=y)
         else:
             if direction in ("left", "right"):
-                pyautogui.hscroll(clicks)
+                self._pg.hscroll(clicks)
             else:
-                pyautogui.scroll(clicks)
+                self._pg.scroll(clicks)
 
     def _drag(self, action: Action) -> None:
         sx, sy = self._clamp(action.params["start_x"], action.params["start_y"])
         ex, ey = self._clamp(action.params["end_x"], action.params["end_y"])
-        pyautogui.moveTo(sx, sy)
-        pyautogui.drag(ex - sx, ey - sy, duration=0.5)
+        self._pg.moveTo(sx, sy)
+        self._pg.drag(ex - sx, ey - sy, duration=0.5)
 
     def _wait(self, action: Action) -> None:
         seconds = action.params.get("seconds", 1.0)
