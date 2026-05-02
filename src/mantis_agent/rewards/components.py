@@ -17,6 +17,7 @@ Signals available today (any may be missing, depending on adapter):
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
@@ -144,3 +145,84 @@ def task_success_reward(
     if success:
         return value
     return failure_value
+
+
+# ── World-model accuracy (#120) ────────────────────────────────────────
+
+
+# A small, opinionated stopword list. Kept inline rather than depending on NLTK
+# so the rewards module has no extra runtime cost. These are the function
+# words most likely to inflate Jaccard similarity without adding signal.
+_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a", "an", "the",
+        "is", "are", "was", "were", "be", "been", "being",
+        "to", "of", "in", "on", "at", "by", "for", "with", "from", "as",
+        "and", "or", "but", "so",
+        "it", "its", "this", "that", "these", "those",
+        "will", "would", "should", "can", "could", "may", "might",
+        "do", "does", "did", "done",
+        "i", "you", "we", "they", "he", "she",
+        "my", "your", "our", "their",
+    }
+)
+
+# Light stemming: drop a handful of common suffixes so "navigates" and
+# "navigated" hash to the same token. Good enough for coarse similarity;
+# avoids pulling in a real stemmer dependency.
+_STEM_SUFFIXES: tuple[str, ...] = ("ing", "ed", "es", "s")
+
+
+def _stem(word: str) -> str:
+    if len(word) < 4:
+        return word
+    for suffix in _STEM_SUFFIXES:
+        if len(word) > len(suffix) + 2 and word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
+
+def _tokenize(text: str) -> set[str]:
+    """Lowercase + split-on-non-word + stopword-strip + stem."""
+    if not text:
+        return set()
+    raw = re.findall(r"[a-z0-9]+", text.lower())
+    return {_stem(w) for w in raw if w and w not in _STOPWORDS}
+
+
+def world_model_accuracy_reward(
+    predicted: str | None,
+    observed: str | None,
+    value: float = 0.05,
+) -> float:
+    """+value * jaccard(tokens(predicted), tokens(observed)) — the brain's
+    prediction-accuracy shaping term (#120).
+
+    Returns 0 when either side is empty so brains that don't yet emit a
+    Predicted: line don't get penalized — matches the schema's "fail-safe
+    to empty" contract from #135.
+
+    Tokenization is intentionally cheap: lowercase, word-split, drop a
+    small stopword set, light suffix-stem ("navigates" ≈ "navigated").
+    Future versions can swap in embedding cosine without changing the
+    public surface.
+
+    Two failure modes a Jaccard signal handles well:
+      • Brain says "modal closes" but URL navigates → low overlap, low reward.
+      • Brain says "URL changes to /detail/123" and feedback says
+        "page navigated to https://x.test/detail/123" → high overlap, high reward.
+
+    One known weakness: vague predictions like "something happens" overlap
+    with most observations — the stopword + length-3 minimum filtering
+    blunts but doesn't eliminate this. Pair with task_success_reward so the
+    policy can't farm this signal alone.
+    """
+    p_tokens = _tokenize(predicted or "")
+    o_tokens = _tokenize(observed or "")
+    if not p_tokens or not o_tokens:
+        return 0.0
+    intersection = p_tokens & o_tokens
+    union = p_tokens | o_tokens
+    if not union:
+        return 0.0
+    return value * (len(intersection) / len(union))
