@@ -27,7 +27,7 @@ from typing import Any, Protocol
 from PIL import Image
 
 from ..actions import Action, ActionType
-from ..loop_detector import LoopDetector
+from ..loop_detector import LoopDetector, phash_64
 from .base import GymEnvironment
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,29 @@ class Brain(Protocol):
 
 @dataclass
 class TrajectoryStep:
-    """A single step in the agent's trajectory."""
+    """A single step in the agent's trajectory.
+
+    The base fields (``action``, ``thinking``, ``reward``, ``feedback``) are
+    populated on every step. The world-model fields (``frame_hash``,
+    ``observed_state``, ``hypothesized_state``, ``predicted_outcome``,
+    ``observed_outcome``) are an extension landed for #120 — they let
+    rewards / SFT pipelines compute world-model error (predicted vs
+    observed delta) per step.
+
+    Fields are optional and default to empty so:
+
+    * Brains that don't yet emit ``predicted_outcome`` produce trajectories
+      with ``predicted_outcome=""``; reward components keyed on it will
+      simply contribute 0.0 instead of erroring.
+    * Existing trajectory consumers (rollout collector, replay, viewer)
+      continue working — no positional arg shift, no required new fields.
+
+    Subsequent PRs in #120 will:
+      1. Update brain prompts to emit ``predicted_outcome`` for click/type/key
+         steps and parse it into the trajectory.
+      2. Add a ``world_model_error`` reward component that compares
+         ``predicted_outcome`` and ``observed_outcome`` per step.
+    """
 
     step: int
     action: Action
@@ -64,6 +86,53 @@ class TrajectoryStep:
     feedback: str = ""
     timestamp: float = field(default_factory=time.time)
     reward_components: dict[str, float] = field(default_factory=dict)
+
+    # ── #120 world-model fields ─────────────────────────────────────────
+    # Perceptual hash of the post-action frame; lets two trajectories at
+    # the same logical state hash-equal even if pixel-level noise differs.
+    # 17 hex chars (16 dHash + 1 brightness bucket) — see loop_detector.phash_64.
+    frame_hash: str = ""
+
+    # Observed environment state after the action: url, title, focused_input,
+    # any other gym_result.info keys the env exposes.
+    observed_state: dict = field(default_factory=dict)
+
+    # The brain's belief about the *current* state before acting (parsed from
+    # thinking / chain-of-thought). Empty string when the brain doesn't emit it.
+    hypothesized_state: str = ""
+
+    # The brain's prediction of what its action will cause (e.g. "modal closes",
+    # "URL navigates to /detail/123", "search field gets focus"). Empty when
+    # the brain doesn't yet emit predictions.
+    predicted_outcome: str = ""
+
+    # The actual observed delta in plain words, derived from feedback +
+    # url/title changes. The reward function compares this to predicted_outcome
+    # to compute world-model error.
+    observed_outcome: str = ""
+
+
+# Subset of ``gym_result.info`` that round-trips into TrajectoryStep
+# observed_state. Excludes high-cardinality / large-blob fields (raw DOM,
+# screenshots, cookies) to keep trajectories small and JSON-friendly.
+_OBSERVED_STATE_KEYS: tuple[str, ...] = (
+    "url",
+    "title",
+    "focused_input",
+    "type_verified",
+    "backtracked",
+    "warning",
+)
+
+
+def _observed_state(info: dict | None) -> dict:
+    """Pick stable, low-cardinality keys from ``gym_result.info`` for the
+    trajectory's ``observed_state`` field. Returns an empty dict when info
+    is missing — callers should treat that as "no signal" rather than error.
+    """
+    if not info:
+        return {}
+    return {k: info[k] for k in _OBSERVED_STATE_KEYS if k in info}
 
 
 @dataclass
@@ -466,11 +535,19 @@ class GymRunner:
 
                 step_log.append(f"Step {step_num}: {action} → {feedback}")
 
+                # #120 world-model schema: capture post-action observation so
+                # follow-on PRs (and offline rollout consumers) can compare
+                # the brain's predicted_outcome to what actually happened.
+                # frame_hash uses the same dHash as the loop detector so two
+                # trajectories at the same logical state hash equal.
                 trajectory.append(TrajectoryStep(
                     step=step_num, action=action, thinking=thinking,
                     reward=step_reward, done=gym_result.done,
                     inference_time=inference_time, feedback=feedback,
                     reward_components=step_components,
+                    frame_hash=phash_64(gym_result.observation.screenshot),
+                    observed_state=_observed_state(gym_result.info),
+                    observed_outcome=feedback,
                 ))
 
                 logger.info(f"Feedback: {feedback}")
