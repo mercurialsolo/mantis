@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from mantis_agent.gym.checkpoint import RunCheckpoint, StepResult
 from mantis_agent.gym.checkpoint_manager import CheckpointManager
 
