@@ -29,6 +29,7 @@ from typing import Any, TYPE_CHECKING
 
 from ..actions import Action, ActionType
 from ..cost_config import CostConfig
+from .browser_state import BrowserState
 from .cost_meter import CostMeter
 from .checkpoint import (
     REVERSE_ACTIONS,
@@ -155,6 +156,14 @@ class MicroPlanRunner:
         self.tenant_id = self.cost_meter.tenant_id
         self.costs = self.cost_meter.costs
         self._run_start = self.cost_meter.run_start
+
+        # #115 step 4: scroll/viewport/url helpers live on BrowserState.
+        # State attributes (_scroll_state, _viewport_stage, _current_page,
+        # _last_known_url, _results_base_url, _required_filter_tokens) stay
+        # on the runner — there are 170+ scattered access sites; migrating
+        # them all in one PR would be unreviewable. Helper methods below
+        # delegate here so the bodies live in one place.
+        self.browser_state = BrowserState(self)
 
     def dynamic_verification_report(self, status: str | None = None) -> dict[str, Any]:
         return self.dynamic_verifier.report(status=status or self._final_status)
@@ -295,25 +304,12 @@ class MicroPlanRunner:
         self.cost_meter.emit_inflight_gauges(gpu_cost, claude_cost, proxy_cost, total_cost)
 
     def _current_results_page_url(self) -> str:
-        if not self._results_base_url:
-            return ""
-        if self._current_page <= 1:
-            base_clean = re.sub(
-                self.site_config.pagination_strip_pattern or r"/page-\d+/?$",
-                "",
-                self._results_base_url.rstrip("/"),
-            )
-            return f"{base_clean}/"
-        return self.site_config.paginated_url(self._results_base_url, self._current_page)
+        """Backward-compat shim — delegates to :class:`BrowserState`."""
+        return self.browser_state.current_results_page_url()
 
     def _reentry_url_for_step(self, plan: MicroPlan, next_step_index: int) -> str:
-        next_step = plan.steps[next_step_index] if 0 <= next_step_index < len(plan.steps) else None
-        results_url = self._current_results_page_url() or self._results_base_url
-        if next_step and next_step.type in {"click", "paginate", "loop", "filter"}:
-            return results_url or self._last_known_url
-        if next_step and next_step.type in {"extract_url", "scroll", "extract_data", "navigate_back"}:
-            return self._last_known_url or results_url
-        return self._last_known_url or results_url
+        """Backward-compat shim — delegates to :class:`BrowserState`."""
+        return self.browser_state.reentry_url_for_step(plan, next_step_index)
 
     def _persist_checkpoint(
         self,
@@ -422,115 +418,28 @@ class MicroPlanRunner:
         label: str = "",
         flush: bool = False,
     ) -> None:
-        state = dict(self._scroll_state)
-        state["context"] = context
-        state["url"] = url or self._last_known_url or self._current_results_page_url()
-        state["updated_at"] = time.time()
-        if page_downs is not None:
-            state["page_downs"] = max(0, page_downs)
-        if wheel_downs is not None:
-            state["wheel_downs"] = max(0, wheel_downs)
-        if viewport_stage is not None:
-            state["viewport_stage"] = max(0, viewport_stage)
-        if label:
-            state["label"] = label
-        self._scroll_state = state
-        if flush:
-            self._checkpoint_active_progress(f"scroll_state:{context}")
-
-    def _update_scroll_state_from_trajectory(self, result: Any, context: str) -> None:
-        page_downs = int(self._scroll_state.get("page_downs", 0) or 0)
-        wheel_downs = int(self._scroll_state.get("wheel_downs", 0) or 0)
-        for item in getattr(result, "trajectory", []) or []:
-            action = getattr(item, "action", None)
-            if not action:
-                continue
-            if action.action_type == ActionType.KEY_PRESS:
-                keys = str(action.params.get("keys") or action.params.get("key") or "").lower()
-                if "home" in keys:
-                    page_downs = 0
-                    wheel_downs = 0
-                elif "page_down" in keys or "pagedown" in keys:
-                    page_downs += 1
-                elif "page_up" in keys or "pageup" in keys:
-                    page_downs = max(0, page_downs - 1)
-                elif keys == "end":
-                    self._scroll_state["end_reached"] = True
-            elif action.action_type == ActionType.SCROLL:
-                direction = str(action.params.get("direction", "down")).lower()
-                amount = int(action.params.get("amount", 3) or 0)
-                if direction == "down":
-                    wheel_downs += amount
-                elif direction == "up":
-                    wheel_downs = max(0, wheel_downs - amount)
-        self._set_scroll_state(
+        """Backward-compat shim — delegates to :class:`BrowserState`."""
+        self.browser_state.set_scroll_state(
             context=context,
+            url=url,
             page_downs=page_downs,
             wheel_downs=wheel_downs,
-            viewport_stage=self._viewport_stage,
+            viewport_stage=viewport_stage,
+            label=label,
+            flush=flush,
         )
 
-    def _restore_scroll_position(self) -> None:
-        """Replay logical scroll depth after URL re-entry in screen-only envs."""
-        if not self._scroll_state:
-            return
-        state_url = str(self._scroll_state.get("url") or "")
-        current_url = self._last_known_url or self._current_results_page_url()
-        if state_url and current_url:
-            def normalize(url: str) -> str:
-                return re.sub(r"^https?://(www\.)?", "", url).rstrip("/")
+    def _update_scroll_state_from_trajectory(self, result: Any, context: str) -> None:
+        """Backward-compat shim — delegates to :class:`BrowserState`."""
+        self.browser_state.update_scroll_state_from_trajectory(result, context)
 
-            if normalize(state_url) != normalize(current_url):
-                logger.info(
-                    "  [resume] Skipping scroll restore for different URL "
-                    "(state=%s current=%s)",
-                    state_url[:80],
-                    current_url[:80],
-                )
-                return
-        page_downs = int(self._scroll_state.get("page_downs", 0) or 0)
-        wheel_downs = int(self._scroll_state.get("wheel_downs", 0) or 0)
-        if page_downs <= 0 and wheel_downs <= 0:
-            return
-        try:
-            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(0.5)
-            for _ in range(min(page_downs, 12)):
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
-                time.sleep(0.3)
-            if wheel_downs:
-                self.env.step(Action(
-                    action_type=ActionType.SCROLL,
-                    params={"direction": "down", "amount": min(wheel_downs, 40)},
-                ))
-                time.sleep(0.5)
-            logger.info(
-                "  [resume] Restored scroll depth page_downs=%s wheel_downs=%s context=%s",
-                page_downs,
-                wheel_downs,
-                self._scroll_state.get("context", ""),
-            )
-        except Exception as e:
-            logger.warning("  [resume] Failed to restore scroll position: %s", e)
+    def _restore_scroll_position(self) -> None:
+        """Backward-compat shim — delegates to :class:`BrowserState`."""
+        self.browser_state.restore_scroll_position()
 
     def _resume_browser_state(self, url: str) -> bool:
-        if not url:
-            return False
-        logger.info("  [resume] Re-entering browser state at %s", url[:140])
-        try:
-            self.env.reset(task="resume", start_url=url)
-            time.sleep(12)
-            try:
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-                time.sleep(1)
-            except Exception:
-                pass
-            self._last_known_url = url
-            self._restore_scroll_position()
-            return True
-        except Exception as e:
-            logger.warning("  [resume] Failed to restore browser at %s: %s", url[:120], e)
-            return False
+        """Backward-compat shim — delegates to :class:`BrowserState`."""
+        return self.browser_state.resume_browser_state(url)
 
     def run(self, plan: MicroPlan, resume: bool = False) -> list[StepResult]:
         """Execute the full micro-plan.
