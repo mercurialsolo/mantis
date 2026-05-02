@@ -620,6 +620,14 @@ class GymRunner:
             if self._loop_detector.is_any_loop(self.soft_loop_window):
                 nudge = self._build_nudge(action_history, last_focused_input)
                 parts.append(nudge)
+                # #123: re-inject curriculum techniques scoped to whatever
+                # action type the model is repeating, so the form-filling /
+                # navigation hint is back in context after step 1.
+                refresher = self._curriculum_refresher(
+                    action_history, last_focused_input
+                )
+                if refresher:
+                    parts.append(f"\n\nRelevant techniques:\n{refresher}")
 
         return "\n".join(parts)
 
@@ -629,6 +637,49 @@ class GymRunner:
         try:
             from mantis_agent.curriculum import select_techniques
             return select_techniques(task, domain="chrome", max_topics=2)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _curriculum_refresher(
+        action_history: list[Action],
+        focused_input: dict | None,
+    ) -> str:
+        """Re-injection hint for #123 — pick a curriculum snippet based on
+        what action the model is currently looping on, NOT on the original
+        task. After step 1 the original "form-filling" technique is gone
+        from context; this brings back exactly the one that's relevant now.
+
+        Returns "" if curriculum lookup fails or has no match.
+        """
+        if not action_history:
+            return ""
+        last = action_history[-1]
+        # Build a small hint string the curriculum's TF-IDF + triggers can
+        # match against. Specific enough to pick form/scroll/navigation
+        # techniques apart, generic enough to share across tasks.
+        if last.action_type == ActionType.CLICK:
+            if focused_input:
+                hint = "form input field focused click type text"
+            else:
+                hint = "click button link"
+        elif last.action_type == ActionType.TYPE:
+            hint = "type text into focused input form"
+        elif last.action_type == ActionType.SCROLL:
+            hint = "scroll page reveal hidden content"
+        elif last.action_type == ActionType.KEY_PRESS:
+            keys = str(last.params.get("keys") or last.params.get("key") or "").lower()
+            if "tab" in keys or "enter" in keys:
+                hint = "form navigation tab enter submit"
+            elif "escape" in keys or "alt+left" in keys:
+                hint = "modal close back navigation"
+            else:
+                hint = "keyboard shortcut"
+        else:
+            return ""
+        try:
+            from mantis_agent.curriculum import select_techniques
+            return select_techniques(hint, domain="chrome", max_topics=1)
         except Exception:
             return ""
 
