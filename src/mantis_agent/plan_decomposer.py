@@ -1,8 +1,15 @@
 """Plan Decomposer — break plain text plans into executable micro-intents.
 
-Takes a human-written plan like "Search BoatTrader for private seller boats..."
-and decomposes it into an ordered list of atomic micro-intents, each executable
+Takes a human-written plan like "Log in to the CRM, find lead X, update status"
+or "Search a marketplace for items matching <criteria>, extract details" and
+decomposes it into an ordered list of atomic micro-intents, each executable
 by Holo3 in 3-8 steps.
+
+The decomposer is **plan-shape aware**: it heuristically detects whether the
+plan is a listings/extraction flow, a form-driven flow, a multi-step workflow,
+or an inspect-only flow, and adapts the guidance Claude sees accordingly. It
+does NOT hard-wire any specific domain (no boattrader / linkedin / shopify
+assumptions in the prompt).
 
 Architecture:
     Plain text plan → Claude Sonnet (one-time, ~$0.01)
@@ -78,9 +85,14 @@ class MicroPlan:
     steps: list[MicroIntent] = field(default_factory=list)
     source_plan: str = ""
     domain: str = ""
+    # Plan shapes Claude classified at decomposition time (subset of
+    # ``PlanDecomposer.KNOWN_PLAN_SHAPES``). Empty when Claude returned the
+    # legacy bare-array schema or when classification was unreliable.
+    shapes: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
-        lines = [f"MicroPlan: {len(self.steps)} steps for {self.domain}"]
+        shape_tag = f" [{','.join(self.shapes)}]" if self.shapes else ""
+        lines = [f"MicroPlan: {len(self.steps)} steps for {self.domain}{shape_tag}"]
         for i, s in enumerate(self.steps):
             tag = "🤖" if not s.claude_only else "🧠"
             lines.append(f"  [{i:2d}] {tag} {s.type:15s} {s.intent[:60]}")
@@ -100,6 +112,7 @@ class MicroPlan:
             ],
             "source_plan": self.source_plan,
             "domain": self.domain,
+            "shapes": list(self.shapes),
         }
 
     @classmethod
@@ -109,6 +122,7 @@ class MicroPlan:
         Accepts both shapes: ``{"steps": [...]}`` (full ``to_dict()`` output)
         and a bare list of step dicts at the top level.
         """
+        shapes_raw: Any = []
         if isinstance(payload, list):
             steps_raw = payload
             source_plan = ""
@@ -117,7 +131,9 @@ class MicroPlan:
             steps_raw = payload.get("steps", [])
             source_plan = payload.get("source_plan", "")
             domain = payload.get("domain", "")
+            shapes_raw = payload.get("shapes", [])
         plan = cls(source_plan=source_plan, domain=domain)
+        plan.shapes = PlanDecomposer._normalize_shapes(shapes_raw)
         for s in steps_raw:
             plan.steps.append(PlanDecomposer._build_intent(s))
         return plan
@@ -131,7 +147,12 @@ The executing model (Holo3, 3B params) can ONLY handle 1-sentence instructions w
 3-8 actions. It passes 100% on isolated tasks but fails when instructions are combined. \
 Your job: break a human plan into SECTIONS of atomic steps with DEPENDENCIES between sections.
 
-TWO PLAN SHAPES — pick the right step types:
+FOUR PLAN SHAPES — pick the right step types per step:
+
+STEP 0 — CLASSIFY THE PLAN'S SHAPE(S) BEFORE GENERATING STEPS.
+Read the source plan and decide which of these four shapes it matches.
+A plan can match multiple shapes (e.g. login=form + multi-page CRM=workflow).
+Use ONLY these tokens in your output: "listings", "form", "workflow", "inspect".
 
 A) LISTINGS / EXTRACTION FLOWS — search → click result → extract → loop.
    Use: navigate, filter, click, scroll, extract_url, extract_data, navigate_back,
@@ -147,8 +168,35 @@ B) FORM-DRIVEN FLOWS — login, edit pages, settings panels, dropdowns,
    "enter/type/fill X into the Y field", "set Y to X", "choose/select/pick X
    from Y", "click the {Save|Submit|Update|Continue|Login} button".
 
-A single plan can mix both shapes (e.g. log in, navigate, then extract a list).
-Decide step-by-step — DO NOT force a whole plan into one shape.
+C) WORKFLOW / MULTI-STEP TRANSITION FLOWS — log in → navigate → select an
+   existing record → edit → save. CRMs, admin consoles, ticket systems,
+   project boards, content editors, settings dashboards.
+   Use: navigate, fill_field, submit, select_option, extract_data.
+   Recognise this shape when the source says: "log in" + "go to/open the
+   <name> page/tab" + "select/click the <type> with <attribute>" + "edit/
+   change/update <field>" + "click <save/update/apply>". The hallmark is
+   navigating through several authenticated pages without an extraction
+   loop.
+   IMPORTANT: do NOT use the listings click for "select the lead/ticket/
+   record" — those usually open a single targeted item by visible text.
+   Use submit (with the visible label) for single-target picks like
+   "the first Qualified lead", "the open ticket from John", "the Acme
+   account".
+
+D) INSPECT-ONLY / VERIFICATION FLOWS — read the screen, confirm a value,
+   take a screenshot.
+   Use: navigate, extract_data (claude_only=true) for the read pass,
+   plus submit only when navigation is required to reach the inspection
+   target.
+   Recognise this shape when the source asks "verify that", "check
+   whether", "confirm X is Y", "what's the value of X" without any
+   write actions.
+
+A single plan can mix shapes (log in, navigate, then extract a list).
+Decide step-by-step — DO NOT force a whole plan into one shape. The
+runtime SHAPE HINT above tells you which shape(s) the heuristic
+detected; trust it as a strong default but override per-step when the
+source text contradicts.
 
 SECTIONS AND DEPENDENCIES — THIS IS CRITICAL:
 Plans MUST be organized into sections. Each section has a purpose and a gate:
@@ -284,7 +332,20 @@ STEP TYPES:
                  (budget=6, params={"dropdown_label": "<dropdown name>",
                                     "option_label": "<option text>"})
 
-Output ONLY valid JSON array of steps.
+OUTPUT FORMAT — emit ONLY one valid JSON object with these top-level keys:
+
+{
+  "shapes": ["listings" | "form" | "workflow" | "inspect", ...],
+  "steps": [ <list of step objects, same shape as before> ]
+}
+
+The "shapes" array MUST contain at least one of the four canonical tokens.
+Use multiple tokens when the plan mixes shapes (e.g. log in then extract
+listings → ["form", "listings"]).
+
+Backward-compatible fallback: if you cannot reliably classify the plan,
+emit a bare JSON array of step objects (no top-level "shapes"). The
+parser accepts both forms but prefers the object form.
 """
 
 
@@ -343,7 +404,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v14_in_app_nav"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v16_llm_shapes"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -353,8 +414,17 @@ class PlanDecomposer:
         if cache_path and os.path.exists(cache_path):
             try:
                 cached = json.loads(open(cache_path).read())
+                # Same dual-shape handling as the live path: either a bare
+                # list of steps, or {"shapes": [...], "steps": [...]}.
+                if isinstance(cached, dict):
+                    cached_steps = cached.get("steps", [])
+                    cached_shapes = cached.get("shapes", [])
+                else:
+                    cached_steps = cached
+                    cached_shapes = []
                 plan = MicroPlan(source_plan=plan_text, domain=domain)
-                for s in cached:
+                plan.shapes = self._normalize_shapes(cached_shapes)
+                for s in cached_steps:
                     plan.steps.append(self._build_intent(s))
 
                 logger.info(f"Loaded cached micro-plan: {cache_path} ({len(plan.steps)} steps)")
@@ -399,10 +469,30 @@ class PlanDecomposer:
             text = text.rsplit("```", 1)[0]
         text = text.strip()
 
-        steps_raw = json.loads(text)
+        parsed = json.loads(text)
+        # Two accepted response shapes:
+        #   {"shapes": [...], "steps": [...]}  ← preferred (LLM classified)
+        #   [...]                              ← legacy bare array
+        if isinstance(parsed, list):
+            steps_raw = parsed
+            shapes_raw: Any = []
+        elif isinstance(parsed, dict):
+            steps_raw = parsed.get("steps", [])
+            shapes_raw = parsed.get("shapes", [])
+        else:
+            raise ValueError(
+                f"Decomposer returned unexpected JSON type: {type(parsed).__name__}"
+            )
+
         plan = MicroPlan(source_plan=plan_text, domain=domain)
+        plan.shapes = self._normalize_shapes(shapes_raw)
         for s in steps_raw:
             plan.steps.append(self._build_intent(s))
+
+        if plan.shapes:
+            logger.info(f"  [decomposer] Claude classified shape(s): {plan.shapes}")
+        else:
+            logger.info("  [decomposer] no shape classification returned (legacy schema)")
 
         # Fix 3: Validate and fix loop targets — must point to the click step
         self._fix_loop_targets(plan)
@@ -410,11 +500,17 @@ class PlanDecomposer:
         # http(s):// URL into a `submit` step (#119 staffcrm verify finding).
         self._rewrite_urlless_navigates(plan)
 
-        # Cache
+        # Cache the full parsed structure (object or legacy array) so the
+        # cached path round-trips through both schemas.
+        cache_payload: Any = (
+            {"shapes": plan.shapes, "steps": steps_raw}
+            if plan.shapes
+            else steps_raw
+        )
         if cache_path:
             try:
                 with open(cache_path, "w") as f:
-                    json.dump(steps_raw, f, indent=2)
+                    json.dump(cache_payload, f, indent=2)
                 logger.info(f"Cached micro-plan: {cache_path}")
             except Exception:
                 pass
@@ -502,6 +598,30 @@ class PlanDecomposer:
                 if abs(s.loop_target - click_idx) <= 2:
                     logger.info(f"  [fix] Loop target {s.loop_target} → {click_idx} (click step)")
                     s.loop_target = click_idx
+
+    # ── Plan-shape extraction (parsed from Claude's JSON output) ────────
+
+    # Canonical shape vocabulary. The prompt asks Claude to populate
+    # ``shapes: [...]`` using only these tokens; the parser drops any
+    # other tokens silently so a model hallucination can't poison
+    # downstream observability.
+    KNOWN_PLAN_SHAPES: ClassVar[frozenset[str]] = frozenset(
+        {"listings", "form", "workflow", "inspect"}
+    )
+
+    @classmethod
+    def _normalize_shapes(cls, raw: Any) -> list[str]:
+        """Filter Claude's reported shapes to the canonical vocabulary,
+        preserving the canonical display order so consumers see a
+        deterministic ordering regardless of how Claude listed them.
+        """
+        canonical_order = ("listings", "form", "workflow", "inspect")
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple, set)):
+            return []
+        seen = {str(s).strip().lower() for s in raw}
+        return [s for s in canonical_order if s in seen and s in cls.KNOWN_PLAN_SHAPES]
 
     # ── In-app navigation rewrite ────────────────────────────────────────
 
