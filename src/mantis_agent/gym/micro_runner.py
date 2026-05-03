@@ -23,7 +23,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, TYPE_CHECKING
+from typing import Any, ClassVar, TYPE_CHECKING
 
 from ..actions import Action, ActionType
 from ..cost_config import CostConfig
@@ -317,6 +317,67 @@ class MicroPlanRunner:
             "  [diff] %s/%s step=%s: %s",
             step.type, outcome, step_result.step_index, delta.summary(),
         )
+
+    # ── Adaptive submit settle ────────────────────────────────────────
+
+    # Maximum total seconds to wait for a submit click's navigation /
+    # state change. Tuned to cover slow CRM logins (3-5s typical) plus
+    # headroom for high-latency tenants. Login redirects faster than
+    # this break out of the polling loop early; only genuinely slow
+    # actions pay the full budget.
+    _SUBMIT_SETTLE_MAX_SECONDS: ClassVar[float] = 8.0
+    _SUBMIT_SETTLE_POLL_SECONDS: ClassVar[float] = 0.5
+    _SUBMIT_SETTLE_MIN_SECONDS: ClassVar[float] = 1.0
+
+    def _best_effort_current_url(self) -> str:
+        """Fetch the env's current URL without raising. Empty string if
+        the env doesn't expose ``current_url`` or the read fails — the
+        adaptive settle then falls through to the timeout-based wait."""
+        env = self.env
+        try:
+            return str(getattr(env, "current_url", "") or "")
+        except Exception as exc:  # noqa: BLE001 — telemetry must never break runs
+            logger.debug("current_url read failed: %s", exc)
+            return ""
+
+    def _adaptive_submit_settle(self, *, url_before: str) -> float:
+        """Wait for a submit click's effect, breaking early on URL change.
+
+        Returns the actual seconds slept so the cost meter can record
+        accurate GPU-seconds.
+
+        Pure-observational: polls the env's CDP-backed ``current_url``,
+        no LLM call, no heuristic on intent text. If the URL never
+        changes the runner's separate state-change verifier (PR #150)
+        will demote the step to fail and the retry loop will kick in
+        with a fresh attempt.
+        """
+        deadline = time.time() + self._SUBMIT_SETTLE_MAX_SECONDS
+        # Always wait at least the minimum — covers fast-redirect SPAs
+        # where the URL changes within a few hundred ms but the page
+        # still needs DOM time to settle for the next find_form_target.
+        time.sleep(self._SUBMIT_SETTLE_MIN_SECONDS)
+        elapsed = self._SUBMIT_SETTLE_MIN_SECONDS
+
+        while time.time() < deadline:
+            current = self._best_effort_current_url()
+            if current and url_before and current != url_before:
+                # URL changed — submit triggered navigation, settle done.
+                logger.debug(
+                    "  [settle] url changed after %.1fs: %s → %s",
+                    elapsed, url_before[:40], current[:40],
+                )
+                return elapsed
+            time.sleep(self._SUBMIT_SETTLE_POLL_SECONDS)
+            elapsed += self._SUBMIT_SETTLE_POLL_SECONDS
+
+        # Hit the budget without observing a URL change. The state-change
+        # verifier downstream will catch this and trigger a retry.
+        logger.debug(
+            "  [settle] no url change within %.1fs (url=%s)",
+            self._SUBMIT_SETTLE_MAX_SECONDS, url_before[:60],
+        )
+        return self._SUBMIT_SETTLE_MAX_SECONDS
 
     def _current_results_page_url(self) -> str:
         """Backward-compat shim — delegates to :class:`BrowserState`."""
@@ -2011,10 +2072,14 @@ class MicroPlanRunner:
             x, y = target["x"], target["y"]
             try:
                 time.sleep(random.uniform(0.4, 0.9))
+                # Snapshot URL before click so the adaptive settle below
+                # can detect the moment the page actually navigates.
+                url_before = self._best_effort_current_url()
                 self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                self.costs["gpu_seconds"] += self._adaptive_submit_settle(
+                    url_before=url_before,
+                )
                 self.costs["gpu_steps"] += 1
-                # Submit usually triggers navigation / save — wait longer.
-                time.sleep(2.5)
                 logger.info(f"  [claude-form] submit '{label[:40]}'")
                 return StepResult(
                     step_index=index, intent=step.intent, success=True,
