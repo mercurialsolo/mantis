@@ -105,7 +105,7 @@ def test_rewrite_urlless_navigate_to_submit() -> None:
 
 def test_keeps_navigate_when_intent_has_https_url() -> None:
     plan = MicroPlan()
-    plan.steps.append(_navigate_step("Go to https://staffai-test-crm.exe.xyz/login"))
+    plan.steps.append(_navigate_step("Go to https://example.com/login"))
 
     PlanDecomposer._rewrite_urlless_navigates(plan)
 
