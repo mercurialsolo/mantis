@@ -340,6 +340,41 @@ class MicroPlanRunner:
             logger.debug("current_url read failed: %s", exc)
             return ""
 
+    def _safe_screenshot(self) -> Any:
+        """Capture one screenshot without raising. Returns None when the
+        env doesn't expose ``screenshot()`` or capture fails."""
+        env = self.env
+        try:
+            return env.screenshot() if hasattr(env, "screenshot") else None
+        except Exception as exc:  # noqa: BLE001 — observability never breaks runs
+            logger.debug("safe screenshot failed: %s", exc)
+            return None
+
+    def _dump_debug_screenshot(self, name_stem: str, screenshot: Any) -> None:
+        """Write a screenshot to ``$MANTIS_DEBUG_DUMP_DIR/<run_key>/<stem>.png``
+        when the env var is set. No-op otherwise. Useful for diagnosing
+        submit-failure cases (login click that never navigates) without
+        rerunning the full Modal pipeline.
+
+        Filenames carry the run key + caller-supplied stem so files from
+        concurrent runs don't collide.
+        """
+        if screenshot is None:
+            return
+        dump_dir = os.environ.get("MANTIS_DEBUG_DUMP_DIR", "").strip()
+        if not dump_dir:
+            return
+        try:
+            target_dir = os.path.join(
+                dump_dir, self.run_key or self.session_name or "default",
+            )
+            os.makedirs(target_dir, exist_ok=True)
+            target = os.path.join(target_dir, f"{name_stem}.png")
+            screenshot.save(target, format="PNG", optimize=True)
+            logger.debug("dumped debug screenshot: %s", target)
+        except Exception as exc:  # noqa: BLE001 — observability never breaks runs
+            logger.debug("debug screenshot dump failed: %s", exc)
+
     def _adaptive_submit_settle(self, *, url_before: str) -> float:
         """Wait for a submit click's effect, breaking early on URL change.
 
@@ -633,6 +668,15 @@ class MicroPlanRunner:
             self._record_step_costs(effective_step, step_result)
             self._log_progress(step_result, results)
             self._log_step_diff(pre_snapshot, effective_step, step_result)
+            # Debug screenshot dump (#152 follow-up) — when
+            # MANTIS_DEBUG_DUMP_DIR is set, save the post-step screenshot
+            # so failing runs can be inspected without re-running the
+            # whole Modal pipeline.
+            if not step_result.success:
+                self._dump_debug_screenshot(
+                    f"step{step_index}_post_{effective_step.type}",
+                    self._safe_screenshot(),
+                )
 
             # Verify form-shape steps actually produced an observable
             # state change (staffcrm verify follow-up). The handler can
@@ -2075,11 +2119,51 @@ class MicroPlanRunner:
                 # Snapshot URL before click so the adaptive settle below
                 # can detect the moment the page actually navigates.
                 url_before = self._best_effort_current_url()
+                self._dump_debug_screenshot(
+                    f"submit_step{index}_pre_click", screenshot,
+                )
                 self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
                 self.costs["gpu_seconds"] += self._adaptive_submit_settle(
                     url_before=url_before,
                 )
                 self.costs["gpu_steps"] += 1
+
+                # Enter-key fallback: HTML forms whose JS swallows the click
+                # event still submit on Return in a focused input (the
+                # browser's native form behaviour). When the click + adaptive
+                # settle didn't produce navigation, fire Enter and give it
+                # a short additional window. Common reason this is needed:
+                # the click landed on the right pixel but the button's
+                # onclick handler is conditioned on something we can't see
+                # from the screenshot (CSRF token, validation state).
+                url_after_click = self._best_effort_current_url()
+                if url_before and url_after_click == url_before:
+                    logger.info(
+                        "  [claude-form] click did not navigate — trying "
+                        "Enter-key fallback on focused field"
+                    )
+                    try:
+                        self.env.step(Action(
+                            action_type=ActionType.KEY_PRESS,
+                            params={"keys": "Return"},
+                        ))
+                    except Exception as enter_exc:  # noqa: BLE001
+                        logger.debug("Enter fallback failed: %s", enter_exc)
+                    else:
+                        self.costs["gpu_seconds"] += self._adaptive_submit_settle(
+                            url_before=url_before,
+                        )
+                        self.costs["gpu_steps"] += 1
+                    self._dump_debug_screenshot(
+                        f"submit_step{index}_post_enter",
+                        self._safe_screenshot(),
+                    )
+                else:
+                    self._dump_debug_screenshot(
+                        f"submit_step{index}_post_click",
+                        self._safe_screenshot(),
+                    )
+
                 logger.info(f"  [claude-form] submit '{label[:40]}'")
                 return StepResult(
                     step_index=index, intent=step.intent, success=True,
