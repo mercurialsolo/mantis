@@ -573,6 +573,39 @@ class MicroPlanRunner:
             self._log_progress(step_result, results)
             self._log_step_diff(pre_snapshot, effective_step, step_result)
 
+            # Verify form-shape steps actually produced an observable
+            # state change (staffcrm verify follow-up). The handler can
+            # report success because the click fired, but if NOTHING in
+            # the runner's snapshot changed (URL, focus, scroll, page,
+            # viewport, extraction, new URLs seen) the click missed or
+            # the page rejected it silently — common login failure mode.
+            # Demote to fail so the existing retry loop kicks in.
+            #
+            # Pure-observational: uses the #121 step_snapshot diff, no
+            # regex / heuristic / vision call. Skips fill_field (no
+            # state change is the normal case there — the field just
+            # gains focus).
+            if (
+                step_result.success
+                and effective_step.type in ("submit", "select_option")
+            ):
+                try:
+                    post_snapshot = step_snapshot.capture(self)
+                    delta = step_snapshot.diff(pre_snapshot, post_snapshot)
+                except Exception as exc:  # noqa: BLE001 — never break runs
+                    logger.debug("post-submit diff capture failed: %s", exc)
+                    delta = None
+                if delta is not None and not delta.has_changes:
+                    logger.warning(
+                        "  [%d] %s reported success but no observable state "
+                        "change — demoting to failure (will retry)",
+                        step_index, effective_step.type,
+                    )
+                    step_result.success = False
+                    step_result.data = (
+                        step_result.data or ""
+                    ) + ":no_state_change"
+
             # Handle dedup: extract_url returned DUPLICATE → skip to loop
             if step_result.data and "DUPLICATE" in step_result.data:
                 logger.info(f"  [{step_index}] DEDUP — skipping to next listing")
