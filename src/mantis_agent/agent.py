@@ -1,5 +1,16 @@
 """StreamingCUA — the main agent that fuses perception, reasoning, and action.
 
+.. note::
+   New streaming-mode callers should prefer
+   :func:`mantis_agent.gym.run_streaming.run_streaming` — it routes the
+   :class:`ScreenStreamer` + :class:`ActionExecutor` pair through the
+   canonical :class:`GymRunner` loop and inherits all of its features
+   (plan persistence, feedback strings, hybrid DOM execution, grounding,
+   loop detection, world-model trajectory schema, plan-aware reverse).
+   ``StreamingCUA`` is preserved for the existing async event-emission
+   contract used by the viewer and ``main.py``; we'll migrate those
+   callers incrementally as part of #119.
+
 This is the key architectural difference from Agent-S and other CUA frameworks:
 
 Traditional (decoupled):
