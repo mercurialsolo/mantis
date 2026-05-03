@@ -135,6 +135,10 @@ class MicroPlanRunner:
         self._last_extracted: dict[str, Any] = {}
         self._opened_detail_in_new_tab: bool = False
         self._active_checkpoint_context: dict[str, Any] | None = None
+        # #121 step 2: snapshot of runner state taken right before
+        # _execute_step, used by _reverse_step to skip undo actions
+        # when the diff shows nothing meaningful changed.
+        self._pre_step_snapshot: step_snapshot.StepStateSnapshot | None = None
         self._final_status: str = "running"
         self.max_cost = max_cost
         self.max_time = max_time_minutes * 60
@@ -550,11 +554,11 @@ class MicroPlanRunner:
                 "listings_on_page": listings_on_page,
                 "step_index": step_index,
             }
-            # #121 step 1: capture pre-step state for plan-aware reverse.
-            # Currently observation-only — the diff lands in logs so we can
-            # validate it on real traces before changing recovery behavior
-            # in the follow-on PR.
+            # #121 step 1+2: capture pre-step state. Step 1 logged it for
+            # validation; step 2 stashes it on self so _reverse_step can
+            # use the diff to skip undo work that wasn't needed.
             pre_snapshot = step_snapshot.capture(self)
+            self._pre_step_snapshot = pre_snapshot
             try:
                 step_result = self._execute_step(effective_step, step_index)
             finally:
@@ -2628,17 +2632,28 @@ class MicroPlanRunner:
         return data, controls_clicked
 
     def _reverse_step(self, step: MicroIntent):
-        """Undo a failed step using predefined reverse actions."""
-        actions = REVERSE_ACTIONS.get(step.type, [])
+        """Undo a failed step. Uses the pre-step snapshot from #121 step 1
+        to skip undo actions when the diff shows nothing meaningful
+        actually changed — preserving partial form-fill progress instead
+        of blanket-firing Escape + Alt+Left.
 
-        # Use step-specific reverse if provided
-        if step.reverse:
-            # Parse "Press Escape then Alt+Left" into actions
-            if "escape" in step.reverse.lower():
-                actions = [("key_press", "Escape")] + actions
-            if "alt+left" in step.reverse.lower():
-                actions.append(("key_press", "alt+Left"))
-
+        Decision tree:
+          • No snapshot available (legacy callers / object.__new__):
+              fall back to the static REVERSE_ACTIONS map exactly as
+              before. Same behavior as pre-#121.
+          • URL did not change AND nothing else meaningful changed:
+              skip reverse entirely. Step "failed" but the page state
+              is identical to what we entered with — there is nothing
+              to undo.
+          • URL did not change AND focus changed AND no scroll/extract
+              progress: light-touch Escape only. Likely a stuck modal
+              or autocomplete dropdown — Alt+Left would dismiss the
+              underlying form.
+          • URL changed: keep the legacy plan (Escape then Alt+Left)
+              because we need to navigate back.
+          • Otherwise: legacy plan.
+        """
+        actions = self._plan_aware_reverse_actions(step)
         for action_type, keys in actions:
             try:
                 self.env.step(Action(
@@ -2648,5 +2663,80 @@ class MicroPlanRunner:
                 time.sleep(0.5)
             except Exception:
                 pass
-
         logger.info(f"  [reverse] {len(actions)} actions applied")
+
+    def _plan_aware_reverse_actions(
+        self, step: MicroIntent
+    ) -> list[tuple[str, str]]:
+        """Decide which keystrokes to fire based on the pre/post-step diff.
+
+        Pure helper — easy to unit test. The runner calls this and then
+        executes whatever it returns.
+        """
+        # #121 step 2: use the diff when available to skip unneeded work.
+        pre = self._pre_step_snapshot
+        if pre is not None:
+            try:
+                post = step_snapshot.capture(self)
+                delta = step_snapshot.diff(pre, post)
+            except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+                logger.debug("plan-aware reverse diff failed: %s", exc)
+                delta = None
+            if delta is not None:
+                decision = self._reverse_decision_from_diff(step, delta)
+                if decision is not None:
+                    logger.info(
+                        "  [reverse:plan-aware] %s — diff: %s",
+                        "skip" if not decision else f"{len(decision)} action(s)",
+                        delta.summary(),
+                    )
+                    return decision
+
+        # No snapshot or diff couldn't be computed — fall back to the
+        # pre-#121 static map. Identical behavior for legacy callers.
+        actions = list(REVERSE_ACTIONS.get(step.type, []))
+        if step.reverse:
+            if "escape" in step.reverse.lower():
+                actions = [("key_press", "Escape")] + actions
+            if "alt+left" in step.reverse.lower():
+                actions.append(("key_press", "alt+Left"))
+        return actions
+
+    @staticmethod
+    def _reverse_decision_from_diff(
+        step: MicroIntent,
+        delta: "step_snapshot.StepDiff",
+    ) -> list[tuple[str, str]] | None:
+        """Translate a step diff into reverse keystrokes, or None to mean
+        "no plan-aware decision applicable — use the legacy fallback".
+
+        Returning ``[]`` (empty list) means "skip reverse entirely" —
+        nothing visibly changed so there's nothing to undo.
+        """
+        # Type-specific overrides go first. The runner's own ``step.reverse``
+        # hint is preserved by the legacy fallback path; here we only
+        # short-circuit when the diff is informative enough to act safely.
+        if delta.url_changed:
+            # Navigation happened (intentionally or not). Going back is
+            # the safe undo regardless of step type.
+            return [("key_press", "alt+Left")]
+
+        if delta.extraction_added or delta.new_urls_seen:
+            # Forward progress was made even though the step was marked
+            # "failed". Reverting would destroy the work; skip.
+            return []
+
+        if not delta.has_changes:
+            # Identical state pre/post — nothing happened. No-op skip.
+            return []
+
+        if delta.focus_changed and not (
+            delta.scroll_changed or delta.viewport_changed or delta.page_changed
+        ):
+            # Likely a stuck modal / autocomplete / focused-but-empty input.
+            # Escape dismisses without dropping form context.
+            return [("key_press", "Escape")]
+
+        # Diff was non-trivial but doesn't match a clear pattern — let
+        # the legacy fallback handle it.
+        return None
