@@ -27,8 +27,12 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from PIL import Image
+
+if TYPE_CHECKING:
+    from .grounding_cache import GroundingCache
 
 logger = logging.getLogger(__name__)
 
@@ -151,12 +155,32 @@ RULES:
 Output ONLY two numbers: x y
 Nothing else."""
 
-    def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-20250514"):
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = "claude-sonnet-4-20250514",
+        cache: "GroundingCache | None" = None,
+    ):
         import os
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
+        # #117 step 2: optional coordinate cache. When set, identical
+        # (frame-region + description) pairs short-circuit the API call.
+        self.cache = cache
 
     def ground(self, screenshot, description, initial_x=None, initial_y=None):
+        # #117 step 2: cache wrapper. Skip on empty description (caches
+        # nothing meaningful) and on no-API-key (would just return the
+        # fallback every time and pollute the cache).
+        if self.cache is not None and description and self.api_key:
+            return self.cache.lookup_or_compute(
+                screenshot, description,
+                lambda: self._ground_remote(screenshot, description, initial_x, initial_y),
+                initial_x=initial_x, initial_y=initial_y,
+            )
+        return self._ground_remote(screenshot, description, initial_x, initial_y)
+
+    def _ground_remote(self, screenshot, description, initial_x=None, initial_y=None):
         import base64
         import re
         from io import BytesIO
@@ -276,12 +300,23 @@ Nothing else."""
         base_url: str = "http://localhost:8080/v1",
         model: str = "gemma-4",
         max_retries: int = 2,
+        cache: "GroundingCache | None" = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.max_retries = max_retries
+        self.cache = cache
 
     def ground(self, screenshot, description, initial_x=None, initial_y=None):
+        if self.cache is not None and description:
+            return self.cache.lookup_or_compute(
+                screenshot, description,
+                lambda: self._ground_remote(screenshot, description, initial_x, initial_y),
+                initial_x=initial_x, initial_y=initial_y,
+            )
+        return self._ground_remote(screenshot, description, initial_x, initial_y)
+
+    def _ground_remote(self, screenshot, description, initial_x=None, initial_y=None):
         import base64
         from io import BytesIO
 
