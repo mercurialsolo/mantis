@@ -318,9 +318,44 @@ other repeated page items, structure the plan so the runtime can prove coverage:
    - Do not hardcode a fixed item count unless the user explicitly provides one;
      use a bounded loop with runtime exhaustion checks.
 
+CRITICAL — PRESERVE LITERAL VALUES FROM THE SOURCE PLAN.
+Whenever the source plan names a literal value the user wants entered
+(a username, password, email, API key, search term, comment, dropdown
+choice, etc.), that value MUST appear verbatim in `params.value` (or
+`params.option_label` for selects) of the corresponding step. Never
+emit a fill_field with an empty `value` when the source provided one
+— the runner will type "" into the field and the form will be empty.
+
+WORKED EXAMPLES — credential / value preservation:
+  Source: "Log in with user ID alice password hunter2"
+  → Two fill_field steps + one submit:
+      [{"type": "fill_field", "intent": "Enter alice in the user ID field",
+        "params": {"label": "user ID", "value": "alice"}, ...},
+       {"type": "fill_field", "intent": "Enter hunter2 in the password field",
+        "params": {"label": "password", "value": "hunter2"}, ...},
+       {"type": "submit", "intent": "Click the Sign In button to authenticate",
+        "params": {"label": "Sign In"}, ...}]
+  Source: "Set the search box to acme corp"
+  → {"type": "fill_field", "intent": "Type acme corp into the search box",
+     "params": {"label": "search box", "value": "acme corp"}, ...}
+  Source: "Update the Industry to Space Exploration"
+  → {"type": "select_option", "intent": "Pick Space Exploration from Industry",
+     "params": {"dropdown_label": "Industry",
+                "option_label": "Space Exploration"}, ...}
+
+Self-check after generation: for every fill_field/select_option step,
+look at the source phrase that produced it. Did it name a literal
+value? If yes, that string MUST appear in `params.value` /
+`params.option_label`. If the source didn't provide a value (e.g. the
+plan says "Enter your password" with no actual password), still emit
+`fill_field` but expect the runner to use a placeholder or fail with
+an explicit message — better than silently typing "".
+
 VERB → STEP-TYPE MAPPING (FORM FLOWS):
    "log in", "sign in", "authenticate"
-       → fill_field for each credential, then submit for the login button.
+       → fill_field for each credential (with the literal username and
+         password preserved in params.value as shown above), then
+         submit for the login button.
    "enter X in the Y field", "type X into Y", "fill in Y with X", "set Y to X",
    "input X for Y"
        → fill_field with params={"label": "Y", "value": "X"}.
@@ -501,7 +536,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v18_pure_llm"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v19_literal_values"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
