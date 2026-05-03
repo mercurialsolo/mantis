@@ -1,221 +1,89 @@
-"""Tests for the in-app-navigation rewrite (staffcrm verify follow-up).
+"""Tests for the in-app-navigation contract — LLM-driven only.
 
-The post-process guard ensures any ``navigate`` step without an http(s)://
-URL is rewritten to ``submit`` with the page label, so a single decomposer
-slip-up doesn't halt the whole run. Surfaced by the staffcrm Modal verify
-where "Go the Leads Page" was emitted as a ``navigate`` step and crashed
-with ``form_target_not_found``.
+The earlier branch of this work used regex post-processing to rewrite
+urlless ``navigate`` steps into ``submit`` steps. That regex pass was
+removed: per the project's no-regex-semantic-matching directive, only
+the LLM decides which step type fits a given source phrase.
+
+These tests now verify the **prompt** carries enough context for the LLM
+to follow the rule:
+
+  • The source plan must contain an http(s):// URL for a step to be
+    classified as ``navigate``.
+  • In-app phrases ("Go to the Leads page", "Open Settings") must be
+    classified as ``submit`` with params={"label": "<page name>"}.
+
+Behavior validation happens via Modal verify reruns, not via static
+regex tests.
 """
 
 from __future__ import annotations
 
-from mantis_agent.plan_decomposer import MicroIntent, MicroPlan, PlanDecomposer
+from mantis_agent.plan_decomposer import DECOMPOSE_PROMPT, PlanDecomposer
 
 
-# ── _extract_in_app_page_label ─────────────────────────────────────────
+# ── Prompt teaches the navigate-requires-URL contract ─────────────────
 
 
-def test_extract_label_from_go_to_phrase() -> None:
-    cases = [
-        ("Go to the Leads page", "Leads"),
-        ("Go to the Leads Page", "Leads"),
-        ("Go to Settings", "Settings"),
-        ("Go to the Reports tab", "Reports"),
-    ]
-    for intent, expected in cases:
-        assert PlanDecomposer._extract_in_app_page_label(intent) == expected, intent
+def test_prompt_states_navigate_requires_url() -> None:
+    """The CRITICAL RULE block names http:// and https:// explicitly."""
+    text = DECOMPOSE_PROMPT
+    assert "http://" in text and "https://" in text
+    # The phrase "REQUIRES" or "no exceptions" should appear to give the
+    # rule weight against Claude's tendency to be flexible.
+    text_lower = text.lower()
+    assert "requires" in text_lower or "no exceptions" in text_lower or "must" in text_lower
 
 
-def test_extract_label_from_navigate_to_phrase() -> None:
-    cases = [
-        ("Navigate to the Leads page", "Leads"),
-        ("Navigate to the Leads Page", "Leads"),
-        ("Navigate to Reports", "Reports"),
-        ("Navigate to the Settings section", "Settings"),
-    ]
-    for intent, expected in cases:
-        assert PlanDecomposer._extract_in_app_page_label(intent) == expected, intent
+def test_prompt_provides_in_app_to_submit_worked_examples() -> None:
+    """Worked examples show Claude exactly what to emit for in-app nav."""
+    text = DECOMPOSE_PROMPT
+    # The "Go the Leads Page" example should map to a submit with label
+    # "Leads" — that's the staffcrm shape.
+    assert "Leads" in text
+    assert '"submit"' in text
+    assert '"label"' in text
 
 
-def test_extract_label_from_open_phrase() -> None:
-    cases = [
-        ("Open the Leads page", "Leads"),
-        ("Open Settings", "Settings"),
-        ("Open the Reports view", "Reports"),
-    ]
-    for intent, expected in cases:
-        assert PlanDecomposer._extract_in_app_page_label(intent) == expected, intent
-
-
-def test_extract_label_from_switch_to_phrase() -> None:
-    cases = [
-        ("Switch to the Reports tab", "Reports"),
-        ("Switch to Dashboard", "Dashboard"),
-    ]
-    for intent, expected in cases:
-        assert PlanDecomposer._extract_in_app_page_label(intent) == expected, intent
-
-
-def test_extract_label_strips_trailing_punctuation() -> None:
-    assert (
-        PlanDecomposer._extract_in_app_page_label("Go to the Leads page.") == "Leads"
+def test_prompt_includes_self_check_invariant() -> None:
+    """A self-check rule lets Claude verify its own output without us
+    enforcing it via regex post-process."""
+    text_lower = DECOMPOSE_PROMPT.lower()
+    # Either phrasing works — what matters is the verifiable invariant
+    # ("every navigate step's intent contains http://").
+    assert "http://" in DECOMPOSE_PROMPT and (
+        "verify" in text_lower or "verifiable" in text_lower or "must contain" in text_lower
     )
 
 
-def test_extract_label_strips_quotes() -> None:
-    assert (
-        PlanDecomposer._extract_in_app_page_label('Go to the "Leads" page')
-        == "Leads"
-    )
+# ── No regex post-process exists ────────────────────────────────────────
 
 
-def test_extract_label_returns_empty_when_no_pattern_matches() -> None:
-    cases = [
-        "",
-        "Click the Update Lead button",
-        "Fill in the username field",
-        "Verify the page shows the saved record",
-    ]
-    for intent in cases:
-        assert PlanDecomposer._extract_in_app_page_label(intent) == "", intent
+def test_no_regex_in_app_nav_patterns() -> None:
+    """The regex-based post-process was removed. If a contributor adds it
+    back without converting to LLM, this catches it."""
+    assert not hasattr(PlanDecomposer, "_IN_APP_NAV_PATTERNS")
+    assert not hasattr(PlanDecomposer, "_extract_in_app_page_label")
+    assert not hasattr(PlanDecomposer, "_rewrite_urlless_navigates")
 
 
-# ── _rewrite_urlless_navigates ──────────────────────────────────────────
+def test_decomposer_module_documents_no_semantic_regex() -> None:
+    import mantis_agent.plan_decomposer as mod
+    src = mod.__file__
+    with open(src) as f:
+        text = f.read()
+    # The deprecation comment should be present so future readers
+    # understand why the regex helpers are gone.
+    assert "no regex" in text.lower() or "no semantic regex" in text.lower() \
+        or "llm-only generalization" in text.lower()
 
 
-def _navigate_step(intent: str) -> MicroIntent:
-    return MicroIntent(
-        intent=intent,
-        type="navigate",
-        section="setup",
-    )
+# ── Backward compat: existing decomposer dispatch still runs ────────────
 
 
-def test_rewrite_urlless_navigate_to_submit() -> None:
-    """The exact failure mode from the staffcrm verify run."""
-    plan = MicroPlan()
-    plan.steps.append(_navigate_step("Navigate to the Leads page"))
-
-    PlanDecomposer._rewrite_urlless_navigates(plan)
-
-    step = plan.steps[0]
-    assert step.type == "submit"
-    assert step.params == {"label": "Leads"}
-
-
-def test_keeps_navigate_when_intent_has_https_url() -> None:
-    plan = MicroPlan()
-    plan.steps.append(_navigate_step("Go to https://example.com/login"))
-
-    PlanDecomposer._rewrite_urlless_navigates(plan)
-
-    assert plan.steps[0].type == "navigate"
-    assert plan.steps[0].params == {}
-
-
-def test_keeps_navigate_when_intent_has_http_url() -> None:
-    plan = MicroPlan()
-    plan.steps.append(_navigate_step("Open http://localhost:3000/admin"))
-
-    PlanDecomposer._rewrite_urlless_navigates(plan)
-
-    assert plan.steps[0].type == "navigate"
-
-
-def test_does_not_rewrite_non_navigate_steps() -> None:
-    plan = MicroPlan()
-    plan.steps.append(MicroIntent(intent="Click the Update Lead button", type="submit"))
-
-    PlanDecomposer._rewrite_urlless_navigates(plan)
-
-    assert plan.steps[0].type == "submit"
-
-
-def test_leaves_intent_alone_when_no_label_recoverable() -> None:
-    """If the intent doesn't match any in-app-nav pattern AND has no URL,
-    we leave it as a navigate so the runner surfaces the planning error
-    rather than this rewrite hiding it."""
-    plan = MicroPlan()
-    plan.steps.append(_navigate_step("Just do something useful"))
-
-    PlanDecomposer._rewrite_urlless_navigates(plan)
-
-    assert plan.steps[0].type == "navigate"
-
-
-def test_rewrite_preserves_existing_params() -> None:
-    """If the decomposer already populated params, merge label rather than
-    overwriting unrelated keys."""
-    step = _navigate_step("Go to the Settings page")
-    step.params = {"wait_after_load_seconds": 30}
-    plan = MicroPlan()
-    plan.steps.append(step)
-
-    PlanDecomposer._rewrite_urlless_navigates(plan)
-
-    assert plan.steps[0].type == "submit"
-    # setdefault preserves the wait_after_load_seconds key.
-    assert plan.steps[0].params["wait_after_load_seconds"] == 30
-    assert plan.steps[0].params["label"] == "Settings"
-
-
-def test_rewrite_marks_step_required() -> None:
-    """Login + nav + form steps are required by default. Match that."""
-    plan = MicroPlan()
-    plan.steps.append(_navigate_step("Go to the Leads page"))
-
-    PlanDecomposer._rewrite_urlless_navigates(plan)
-
-    assert plan.steps[0].required is True
-
-
-def test_rewrite_handles_multiple_navigates_in_one_plan() -> None:
-    plan = MicroPlan()
-    plan.steps.append(_navigate_step("Go to https://x.test/login"))           # keep
-    plan.steps.append(_navigate_step("Go to the Leads page"))                 # rewrite
-    plan.steps.append(_navigate_step("Open Settings"))                        # rewrite
-    plan.steps.append(_navigate_step("Navigate to https://x.test/dashboard")) # keep
-
-    PlanDecomposer._rewrite_urlless_navigates(plan)
-
-    assert plan.steps[0].type == "navigate"
-    assert plan.steps[1].type == "submit"
-    assert plan.steps[1].params["label"] == "Leads"
-    assert plan.steps[2].type == "submit"
-    assert plan.steps[2].params["label"] == "Settings"
-    assert plan.steps[3].type == "navigate"
-
-
-# ── Prompt content (regression guard for the cache key) ────────────────
-
-
-def test_prompt_describes_navigate_url_requirement() -> None:
-    """The prompt must explicitly require an http(s):// URL for navigate."""
-    from mantis_agent.plan_decomposer import DECOMPOSE_PROMPT
-    text = DECOMPOSE_PROMPT.lower()
-    assert "http" in text and "https" in text
-    # Direct tokens from the new rule the prompt now contains.
-    assert "in-app" in text or "go to the leads" in text
-    assert "submit" in text
-
-
-# ── End-to-end via the dispatch path ────────────────────────────────────
-
-
-def test_dispatch_path_runs_rewrite_after_loop_target_fix() -> None:
-    """Smoke test: the runner-style ordered post-process (loop targets,
-    then in-app rewrite) leaves both fixes applied."""
-    plan = MicroPlan()
-    plan.steps.append(_navigate_step("Go to the Leads page"))
-    plan.steps.append(MicroIntent(
-        intent="Loop back to first step",
-        type="loop",
-        loop_target=99,  # Out-of-range; not "close enough" — ignore in fix.
-    ))
-
-    # Apply the dispatch chain manually (mirrors decompose_text).
-    PlanDecomposer._fix_loop_targets(plan)
-    PlanDecomposer._rewrite_urlless_navigates(plan)
-
-    assert plan.steps[0].type == "submit"
-    assert plan.steps[0].params["label"] == "Leads"
+def test_decomposer_dispatch_still_runs_loop_target_fix() -> None:
+    """Dispatch chain order changed (lost the urlless-nav rewrite) but
+    loop target validation must still run."""
+    import inspect
+    src = inspect.getsource(PlanDecomposer.decompose_text)
+    assert "_fix_loop_targets" in src
