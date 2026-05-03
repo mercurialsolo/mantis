@@ -31,6 +31,7 @@ from .browser_state import BrowserState
 from .checkpoint_manager import CheckpointManager
 from .cost_meter import CostMeter
 from .listing_dedup import ListingDedup
+from . import step_snapshot
 from .checkpoint import (
     REVERSE_ACTIONS,
     PauseRequested,
@@ -288,6 +289,31 @@ class MicroPlanRunner:
         """Backward-compat shim — delegates to :meth:`CostMeter.emit_inflight_gauges`."""
         self.cost_meter.emit_inflight_gauges(gpu_cost, claude_cost, proxy_cost, total_cost)
 
+    def _log_step_diff(
+        self,
+        pre_snapshot: "step_snapshot.StepStateSnapshot",
+        step: MicroIntent,
+        step_result: StepResult,
+    ) -> None:
+        """Compute pre/post step diff and log it (#121 step 1).
+
+        Observation-only for this PR — the next PR in #121 uses the diff
+        to drive plan-aware reverse decisions. Logging here lets us
+        validate the diff is correct on real traces before changing
+        recovery behavior.
+        """
+        try:
+            post_snapshot = step_snapshot.capture(self)
+            delta = step_snapshot.diff(pre_snapshot, post_snapshot)
+        except Exception as exc:  # noqa: BLE001 — observability must not break runs
+            logger.debug("step diff capture failed: %s", exc)
+            return
+        outcome = "ok" if step_result.success else "fail"
+        logger.info(
+            "  [diff] %s/%s step=%s: %s",
+            step.type, outcome, step_result.step_index, delta.summary(),
+        )
+
     def _current_results_page_url(self) -> str:
         """Backward-compat shim — delegates to :class:`BrowserState`."""
         return self.browser_state.current_results_page_url()
@@ -524,6 +550,11 @@ class MicroPlanRunner:
                 "listings_on_page": listings_on_page,
                 "step_index": step_index,
             }
+            # #121 step 1: capture pre-step state for plan-aware reverse.
+            # Currently observation-only — the diff lands in logs so we can
+            # validate it on real traces before changing recovery behavior
+            # in the follow-on PR.
+            pre_snapshot = step_snapshot.capture(self)
             try:
                 step_result = self._execute_step(effective_step, step_index)
             finally:
@@ -536,6 +567,7 @@ class MicroPlanRunner:
             self._invoke_step_callback(step_result)
             self._record_step_costs(effective_step, step_result)
             self._log_progress(step_result, results)
+            self._log_step_diff(pre_snapshot, effective_step, step_result)
 
             # Handle dedup: extract_url returned DUPLICATE → skip to loop
             if step_result.data and "DUPLICATE" in step_result.data:
