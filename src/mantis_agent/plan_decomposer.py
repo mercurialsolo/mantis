@@ -39,6 +39,83 @@ from typing import Any, ClassVar
 logger = logging.getLogger(__name__)
 
 
+def _extract_json_payload(text: str) -> Any:
+    """Robustly extract the first JSON object or array from a model response.
+
+    Handles three response shapes Claude empirically produces:
+
+      1. Pure JSON:           ``{"shapes": [...], "steps": [...]}``
+      2. Code-fenced JSON:    ``\\`\\`\\`json\\n {...} \\n\\`\\`\\``` (with or without ``json`` tag)
+      3. Prose-wrapped JSON:  ``"Here's the decomposition:\\n{...}\\nLet me know..."``
+
+    Returns the parsed Python object (dict or list), or ``None`` when no
+    JSON could be found. The caller decides what to do with None — typically
+    raises with the offending text so operators can debug.
+
+    Issue #112 documented Claude's habit of prepending prose before the
+    JSON fence. The previous parser only handled fence-wrapped output;
+    this version finds the outermost balanced ``{...}`` or ``[...]``.
+    """
+    if not text:
+        return None
+    s = text.strip()
+
+    # Strip code fences if present.
+    if s.startswith("```"):
+        # Drop the opening fence (which may include a language tag).
+        s = s.split("\n", 1)[1] if "\n" in s else s[3:]
+    if s.endswith("```"):
+        s = s.rsplit("```", 1)[0]
+    s = s.strip()
+
+    # Fast path: the cleaned text is already valid JSON.
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Fallback: scan left-to-right for the first balanced JSON object OR
+    # array. Either kind is acceptable — we prefer whichever comes first
+    # because Claude's typical preamble is "Here's the result:\n\n{...}"
+    # and we want the JSON immediately following it. String-literal state
+    # tracking prevents braces inside intent strings from confusing the
+    # depth counter.
+    closer_for = {"{": "}", "[": "]"}
+    for start in range(len(s)):
+        opener = s[start]
+        if opener not in closer_for:
+            continue
+        closer = closer_for[opener]
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(start, len(s)):
+            ch = s[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_str:
+                escape = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    candidate = s[start : i + 1]
+                    try:
+                        return json.loads(candidate)
+                    except (json.JSONDecodeError, ValueError):
+                        # Balanced but not valid JSON — keep scanning.
+                        break
+    return None
+
+
 @dataclass
 class MicroIntent:
     """A single atomic instruction for the CUA executor."""
@@ -332,7 +409,14 @@ STEP TYPES:
                  (budget=6, params={"dropdown_label": "<dropdown name>",
                                     "option_label": "<option text>"})
 
-OUTPUT FORMAT — emit ONLY one valid JSON object with these top-level keys:
+OUTPUT FORMAT — emit ONE valid JSON object and nothing else.
+
+CRITICAL: do NOT include prose preamble ("Here's the decomposition:"),
+classification commentary ("I'll classify this as..."), epilogue
+("Let me know if..."), or markdown fences. The first character of your
+response MUST be `{` and the last MUST be `}`.
+
+Schema:
 
 {
   "shapes": ["listings" | "form" | "workflow" | "inspect", ...],
@@ -404,7 +488,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v16_llm_shapes"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v17_strict_json"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -461,15 +545,18 @@ class PlanDecomposer:
                 text = block["text"].strip()
                 break
 
-        # Parse JSON
-        text = text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1]
-        if text.endswith("```"):
-            text = text.rsplit("```", 1)[0]
-        text = text.strip()
-
-        parsed = json.loads(text)
+        # Parse JSON — tolerant of:
+        #   • bare ```json / ``` fences (legacy)
+        #   • prose preamble before the JSON ("Here's the decomposition:")
+        #   • prose epilogue after the JSON
+        # Issue #112: Claude often prepends explanation text. Robustly find
+        # the outermost JSON object or array in the response.
+        parsed = _extract_json_payload(text)
+        if parsed is None:
+            raise RuntimeError(
+                f"Decomposer response did not contain parseable JSON. "
+                f"First 300 chars: {text[:300]!r}"
+            )
         # Two accepted response shapes:
         #   {"shapes": [...], "steps": [...]}  ← preferred (LLM classified)
         #   [...]                              ← legacy bare array
