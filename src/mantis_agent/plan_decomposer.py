@@ -352,11 +352,24 @@ RULES:
   results card) when it disambiguates. Use the labels the source plan
   itself names — never invent application-specific filter names.
 - For navigate steps: include the FULL URL (http:// or https://) in the intent.
-  CRITICAL: if the source plan does NOT contain an http(s):// URL for a step,
-  do NOT emit a navigate step. In-app page transitions like "Go to the Leads
-  page", "Open Settings", "Open the Reports tab" must be `submit` steps with
-  params={"label": "<page name>"}, because the runner needs to click the
-  matching nav link, not load a new URL.
+  CRITICAL RULE — no exceptions:
+    • If the source plan DOES contain an http(s):// URL, emit `navigate`
+      with the full URL in the intent.
+    • If the source plan does NOT contain an http(s):// URL for a step,
+      you MUST emit `submit` with params={"label": "<page name>"}.
+      The runner clicks the matching nav link — there is no URL to load.
+  WORKED EXAMPLES:
+    Source: "1. Go to https://app.example.com/login"
+    → {"type": "navigate", "intent": "Navigate to https://app.example.com/login", ...}
+    Source: "3. Go the Leads Page"
+    → {"type": "submit", "intent": "Open the Leads section",
+       "params": {"label": "Leads"}, ...}
+    Source: "5. Open Settings"
+    → {"type": "submit", "intent": "Open the Settings section",
+       "params": {"label": "Settings"}, ...}
+  This rule is verifiable by inspecting your own output: every `navigate`
+  step's intent string MUST contain the substring "http://" or "https://".
+  If it doesn't, the step type is wrong — switch it to `submit`.
 - Extraction steps (reading screen) use claude_only=true
 - For fill_field / submit / select_option, ALWAYS populate `params`
   (label/value/dropdown_label/option_label) using the labels the source
@@ -488,7 +501,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v17_strict_json"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v18_pure_llm"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -583,9 +596,6 @@ class PlanDecomposer:
 
         # Fix 3: Validate and fix loop targets — must point to the click step
         self._fix_loop_targets(plan)
-        # Fix 4: in-app navigation — convert any `navigate` step that has no
-        # http(s):// URL into a `submit` step (#119 staffcrm verify finding).
-        self._rewrite_urlless_navigates(plan)
 
         # Cache the full parsed structure (object or legacy array) so the
         # cached path round-trips through both schemas.
@@ -710,70 +720,23 @@ class PlanDecomposer:
         seen = {str(s).strip().lower() for s in raw}
         return [s for s in canonical_order if s in seen and s in cls.KNOWN_PLAN_SHAPES]
 
-    # ── In-app navigation rewrite ────────────────────────────────────────
-
-    # Patterns that introduce a page name in a "Go to / Open / Navigate to X"
-    # phrase. Each captures the page-name segment after the keyword, stopping
-    # before " page", " tab", " section" suffixes the phrasing tends to add.
-    _IN_APP_NAV_PATTERNS: ClassVar[tuple[re.Pattern[str], ...]] = (
-        re.compile(r"\bnavigate\s+to\s+(?:the\s+)?(.+?)(?:\s+(?:page|tab|section|view))?\s*$", re.IGNORECASE),
-        re.compile(r"\bgo\s+(?:to\s+)?(?:the\s+)?(.+?)(?:\s+(?:page|tab|section|view))?\s*$", re.IGNORECASE),
-        re.compile(r"\bopen\s+(?:the\s+)?(.+?)(?:\s+(?:page|tab|section|view))?\s*$", re.IGNORECASE),
-        re.compile(r"\bswitch\s+to\s+(?:the\s+)?(.+?)(?:\s+(?:page|tab|section|view))?\s*$", re.IGNORECASE),
-    )
-
-    @classmethod
-    def _extract_in_app_page_label(cls, intent_text: str) -> str:
-        """Pull the visible label out of "Go to the X page" / "Open Settings" /
-        "Navigate to Reports tab". Empty string when no pattern matches.
-        """
-        text = (intent_text or "").strip().rstrip(".")
-        for pat in cls._IN_APP_NAV_PATTERNS:
-            m = pat.search(text)
-            if m:
-                label = (m.group(1) or "").strip().strip('"\'.,;:')
-                if label:
-                    return label
-        return ""
-
-    @classmethod
-    def _rewrite_urlless_navigates(cls, plan: MicroPlan) -> None:
-        """Convert any ``navigate`` step whose intent has no http(s):// URL
-        into a ``submit`` step that clicks the matching nav link.
-
-        Belt-and-suspenders defense for the staffcrm verify finding
-        (#119 follow-up): the prompt now tells Claude that ``navigate``
-        requires a URL, but a deterministic post-process means a single
-        decomposer slip-up doesn't crash the whole run.
-        """
-        for s in plan.steps:
-            if s.type != "navigate":
-                continue
-            if re.search(r"https?://", s.intent or ""):
-                continue
-            label = cls._extract_in_app_page_label(s.intent)
-            if not label:
-                # Couldn't recover a page name — leave the step alone.
-                # The runner will surface the broken navigate naturally
-                # rather than this rewrite hiding a real planning error.
-                logger.warning(
-                    "  [decomposer] navigate step has no URL and no recoverable "
-                    "page label; leaving as-is: %s",
-                    (s.intent or "")[:80],
-                )
-                continue
-            logger.info(
-                "  [decomposer] rewriting urlless navigate → submit (label=%r): %s",
-                label, (s.intent or "")[:80],
-            )
-            s.type = "submit"
-            # Ensure params dict exists and carries the label so the runner's
-            # find_form_target locates the nav link by visible text.
-            if not isinstance(s.params, dict):
-                s.params = {}
-            s.params.setdefault("label", label)
-            # Form-shape steps default to required + setup — match the rest
-            # of the decomposer's form-step defaults.
-            if not s.section:
-                s.section = "setup"
-            s.required = True
+    # ── No regex semantic post-processing ───────────────────────────────
+    #
+    # The earlier branch of this work tried a regex-based
+    # ``_rewrite_urlless_navigates`` post-process to catch a urlless
+    # navigate (where the LLM emitted ``navigate`` for an in-app
+    # transition like "Go to the Leads page"). That regex pass was
+    # removed in favor of LLM-only generalization:
+    #
+    #   1. The prompt is strict — ``navigate`` REQUIRES an http(s):// URL.
+    #      In-app phrases must be ``submit`` with the visible label.
+    #      The four-shape classification + worked examples in the prompt
+    #      give Claude enough context to follow this rule reliably.
+    #
+    #   2. If the LLM still slips, the runner will surface the broken
+    #      step naturally rather than the decomposer silently rewriting
+    #      based on a brittle English-pattern regex. Operators see the
+    #      bad classification and can refine the prompt.
+    #
+    # No semantic matching by regex anywhere in the decomposer. Only the
+    # LLM decides which step type fits a given source phrase.
