@@ -82,6 +82,10 @@ Plus run options (all optional):
 | `video_format`    | `"mp4"` | One of `mp4`, `webm`, `gif`                                                   |
 | `video_fps`       | `5`     | Capture rate (clamped `[1, 30]`)                                              |
 | `callback_url`    | unset   | Per-request override of the tenant default webhook URL                        |
+| `cache_read`      | `false` | Skip the deep-extract Claude call (~$0.04/item) when the current URL is already cached fresh |
+| `cache_write`     | `false` | Persist every viable extraction so future runs (or loop iterations) hit the cache |
+| `cache_ttl_seconds` | `86400` | Entries older than this are treated as misses; 0 = never stale; max 30 days |
+| `cache_key`       | unset   | Cache namespace; defaults to `state_key`. Use one key per logical job to share extracted state |
 
 Detached response:
 
@@ -347,6 +351,51 @@ curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -H "Content-Type: application/json" \
   -d "{\"action\":\"result\",\"run_id\":\"$RUN_ID\"}"
 ```
+
+---
+
+## 4a. Extraction cache (saving Claude tokens on repeat runs)
+
+Two opt-in flags on `POST /v1/predict`:
+
+```jsonc
+{
+  "cache_read":  true,      // skip the deep-extract Claude call on cache hit
+  "cache_write": true,      // record every viable extraction to the cache file
+  "cache_ttl_seconds": 86400,   // entries older than this are misses (default 1 day)
+  "cache_key":   "luma_events"  // namespace; defaults to state_key
+}
+```
+
+Mechanism: in the `extract_data` step, the runner peeks
+`env.current_url` (cheap CDP read, no tokens) **before** the
+deep-extract. On a fresh cache hit it emits the cached lead summary
+directly and skips the entire Claude extraction pipeline. Saves
+~$0.04 per cached item (the dominant cost for events / brand-page
+extraction where GPU stays idle).
+
+Cache file lives at::
+
+    <data_root>/tenants/<tenant_id>/cache/<cache_key>.json
+
+with shape `{url: {summary, extracted_at, fields, item_label}}`. The
+runner pre-seeds its `_seen_urls` dedup set from the cache when
+`cache_read` is on, so even if the agent re-clicks a previously-extracted
+card the deep-extract still short-circuits at the URL level.
+
+Common patterns:
+
+- **Daily warm + re-run.** First run: `cache_read: false, cache_write:
+  true` to populate. Daily re-run: `cache_read: true, cache_write: true`
+  with `cache_ttl_seconds: 86400` so only new events get extracted.
+- **Read-only warm-cache test.** `cache_read: true, cache_write: false`
+  — never updates the cache; useful for replaying a known set without
+  drift.
+- **Force fresh.** Omit both flags (legacy default), or pass `cache_ttl_seconds: 0` while reading and writing — fresh extractions every time, but persist them for next run.
+
+The cache is **per-tenant**; no cross-tenant access. `cache_key` is
+sandboxed under the tenant dir, so callers can't read another tenant's
+cache even with the same key string.
 
 ---
 

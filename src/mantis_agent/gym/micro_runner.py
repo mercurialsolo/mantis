@@ -106,6 +106,7 @@ class MicroPlanRunner:
         cancel_event: Any = None,            # threading.Event-like (.is_set()) or callable for #76
         cost_config: CostConfig | None = None,  # rate overrides for cost reporting (#122)
         tenant_id: str = "",                 # label for Prometheus inflight cost gauge (#122)
+        extraction_cache: Any = None,        # ExtractionCache | None — see extraction.cache
     ):
         self.brain = brain
         self.env = env
@@ -121,7 +122,18 @@ class MicroPlanRunner:
         self.on_checkpoint = on_checkpoint
         self.dynamic_verifier = dynamic_verifier or DynamicPlanVerifier(plan_name=session_name)
         self.site_config = site_config or SiteConfig.default_boattrader()
+        # Per-request extraction cache. None = legacy behavior (no cache).
+        # When set, the extract_data branch consults it BEFORE the deep-extract
+        # Claude call to short-circuit on previously-seen URLs.
+        self.extraction_cache = extraction_cache
         self._seen_urls: set[str] = set()
+        # Pre-seed seen-URLs with cache contents so the deep-extract dedup
+        # short-circuits on previously-cached URLs even when cache_read is
+        # off and only cache_write is on (rare but coherent: warm cache for
+        # later runs without using existing entries this run).
+        if extraction_cache is not None and extraction_cache.read_enabled:
+            for url in extraction_cache.known_urls():
+                self._seen_urls.add(url)
         self._extracted_titles: list[str] = []  # Exact titles Claude returned, for skip list
         self._page_listings: list[tuple[int, int, str]] = []  # Cached card coords for current viewport
         self._page_listing_index: int = 0  # Next card to click from cache
@@ -2586,6 +2598,38 @@ class MicroPlanRunner:
             )
 
         elif step.type == "extract_data":
+            # Cache short-circuit BEFORE the expensive deep-extract Claude
+            # call. We peek the browser's current URL (cheap CDP read, no
+            # tokens). If it's a fresh cache hit, emit the cached lead and
+            # skip the Claude work entirely (~$0.04/item saved). When the
+            # URL isn't yet known (e.g. agent hasn't navigated into a card
+            # yet) we fall through to the normal deep-extract path.
+            if self.extraction_cache is not None and self.extraction_cache.read_enabled:
+                pre_url = self._best_effort_current_url()
+                cached = self.extraction_cache.get(pre_url) if pre_url else None
+                if cached is not None:
+                    logger.info("  [cache] hit for %s — skipping deep-extract", pre_url[:80])
+                    self._seen_urls.add(pre_url)
+                    self._last_known_url = pre_url
+                    self._last_extracted = {
+                        **self._last_extracted,
+                        "last_completed_url": pre_url,
+                        "last_completed_summary": cached.summary,
+                        "last_completed_step": index,
+                        "last_completed_at": time.time(),
+                    }
+                    self.dynamic_verifier.record_item_completed(
+                        page=self._current_page,
+                        item=cached.item_label or self._current_item_label(None),
+                        url=pre_url,
+                        success=True,
+                        reason="cache_hit",
+                    )
+                    return StepResult(
+                        step_index=index, intent=step.intent,
+                        success=True, data=cached.summary,
+                    )
+
             data, _actions_used = self._extract_listing_data_deep(screenshot)
             item_label = self._current_item_label(data)
 
@@ -2624,6 +2668,18 @@ class MicroPlanRunner:
                 if extracted_url:
                     self._seen_urls.add(extracted_url)
                 summary = data.to_summary()
+                # Persist to cache so subsequent runs (or loop iterations)
+                # can short-circuit. No-op when cache_write is disabled.
+                if self.extraction_cache is not None and extracted_url:
+                    try:
+                        self.extraction_cache.put(
+                            extracted_url,
+                            summary,
+                            fields=dict(getattr(data, "extracted_fields", {}) or {}),
+                            item_label=item_label,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — cache is best-effort
+                        logger.warning("extraction cache put failed: %s", exc)
                 self._last_extracted = {
                     **self._last_extracted,
                     "last_completed_url": data.url,

@@ -86,6 +86,19 @@ class PredictRequest(BaseModel):
     graph_learn: bool = False
     graph_learn_only: bool = False
 
+    # ── Extraction cache (saves Claude tokens on previously-seen URLs) ──
+    # When cache_read is true, the runner peeks env.current_url BEFORE the
+    # deep-extract Claude call; on hit, the cached lead is emitted and the
+    # extract is skipped (~$0.04/item saved). When cache_write is true,
+    # every viable extraction is persisted to a per-tenant file. The cache
+    # is keyed by (tenant_id, cache_key); cache_key defaults to state_key.
+    # TTL controls staleness — entries older than ttl_seconds are treated
+    # as misses and re-extracted.
+    cache_read: bool = False
+    cache_write: bool = False
+    cache_ttl_seconds: int = Field(default=86400, ge=0, le=2592000)  # 0..30d
+    cache_key: Optional[str] = None
+
     # Screencast recording (Tier 2 follow-up).
     # When record_video=True, the runtime spawns ffmpeg x11grab against the
     # Xvfb display while the agent loop runs and saves the output under
