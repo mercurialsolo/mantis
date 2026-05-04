@@ -31,6 +31,7 @@ from .browser_state import BrowserState
 from .checkpoint_manager import CheckpointManager
 from .cost_meter import CostMeter
 from .listing_dedup import ListingDedup
+from .listings_scanner import ListingsScanner
 from .run_reporter import RunReporter
 from . import step_snapshot
 from .checkpoint import (
@@ -127,21 +128,22 @@ class MicroPlanRunner:
         # When set, the extract_data branch consults it BEFORE the deep-extract
         # Claude call to short-circuit on previously-seen URLs.
         self.extraction_cache = extraction_cache
-        self._seen_urls: set[str] = set()
+        # All listings-scan state lives on a single dataclass so the
+        # eight related fields (seen URLs, viewport stage, cached cards,
+        # results base URL, required filter tokens) can be tested,
+        # persisted, and eventually have their mutation logic extracted
+        # together (EPIC #161 Phase 4). Property delegates below preserve
+        # the legacy ``self._seen_urls`` / ``self._viewport_stage`` /
+        # … access pattern for the 70+ internal call sites and external
+        # readers (CheckpointManager, BrowserState, tests).
+        self.scanner = ListingsScanner()
         # Pre-seed seen-URLs with cache contents so the deep-extract dedup
         # short-circuits on previously-cached URLs even when cache_read is
         # off and only cache_write is on (rare but coherent: warm cache for
         # later runs without using existing entries this run).
         if extraction_cache is not None and extraction_cache.read_enabled:
             for url in extraction_cache.known_urls():
-                self._seen_urls.add(url)
-        self._extracted_titles: list[str] = []  # Exact titles Claude returned, for skip list
-        self._page_listings: list[tuple[int, int, str]] = []  # Cached card coords for current viewport
-        self._page_listing_index: int = 0  # Next card to click from cache
-        self._viewport_stage: int = 0  # 0=Home, 1=Page_Down, 2=Page_Down×2
-        self._max_viewport_stages: int = 6
-        self._results_base_url: str = ""
-        self._required_filter_tokens: tuple[str, ...] = ()
+                self.scanner.seen_urls.add(url)
         self._current_page: int = 1
         self._last_known_url: str = ""
         self._scroll_state: dict[str, Any] = {}
@@ -187,6 +189,88 @@ class MicroPlanRunner:
         # live on CheckpointManager. Reads 14 different runner attributes
         # via self.parent — same back-reference pattern as BrowserState.
         self.checkpoint_manager = CheckpointManager(self)
+
+    # ── Listings-scan state — delegates to ``self.scanner`` (#161 Phase 1.2) ──
+    # 70+ internal call sites, external readers (checkpoint_manager,
+    # browser_state), and existing test fixtures (test_plan_aware_reverse,
+    # test_checkpoint_manager) keep using the legacy underscore-prefixed
+    # attribute names. Phase 4 will extract behaviour into ListingsScanner
+    # methods and move callers off these property shims.
+    #
+    # Tests construct runners via ``MicroPlanRunner.__new__(MicroPlanRunner)``
+    # which skips ``__init__``, so the scanner may not exist yet on attribute
+    # access. ``_ensure_scanner`` lazily creates one — same defaults as the
+    # __init__ path so a partially-constructed runner behaves identically.
+    def _ensure_scanner(self) -> ListingsScanner:
+        scanner = self.__dict__.get("scanner")
+        if scanner is None:
+            scanner = ListingsScanner()
+            self.__dict__["scanner"] = scanner
+        return scanner
+
+    @property
+    def _seen_urls(self) -> set[str]:
+        return self._ensure_scanner().seen_urls
+
+    @_seen_urls.setter
+    def _seen_urls(self, value: set[str]) -> None:
+        self._ensure_scanner().seen_urls = value
+
+    @property
+    def _extracted_titles(self) -> list[str]:
+        return self._ensure_scanner().extracted_titles
+
+    @_extracted_titles.setter
+    def _extracted_titles(self, value: list[str]) -> None:
+        self._ensure_scanner().extracted_titles = value
+
+    @property
+    def _page_listings(self) -> list[tuple[int, int, str]]:
+        return self._ensure_scanner().page_listings
+
+    @_page_listings.setter
+    def _page_listings(self, value: list[tuple[int, int, str]]) -> None:
+        self._ensure_scanner().page_listings = value
+
+    @property
+    def _page_listing_index(self) -> int:
+        return self._ensure_scanner().page_listing_index
+
+    @_page_listing_index.setter
+    def _page_listing_index(self, value: int) -> None:
+        self._ensure_scanner().page_listing_index = value
+
+    @property
+    def _viewport_stage(self) -> int:
+        return self._ensure_scanner().viewport_stage
+
+    @_viewport_stage.setter
+    def _viewport_stage(self, value: int) -> None:
+        self._ensure_scanner().viewport_stage = value
+
+    @property
+    def _max_viewport_stages(self) -> int:
+        return self._ensure_scanner().max_viewport_stages
+
+    @_max_viewport_stages.setter
+    def _max_viewport_stages(self, value: int) -> None:
+        self._ensure_scanner().max_viewport_stages = value
+
+    @property
+    def _results_base_url(self) -> str:
+        return self._ensure_scanner().results_base_url
+
+    @_results_base_url.setter
+    def _results_base_url(self, value: str) -> None:
+        self._ensure_scanner().results_base_url = value
+
+    @property
+    def _required_filter_tokens(self) -> tuple[str, ...]:
+        return self._ensure_scanner().required_filter_tokens
+
+    @_required_filter_tokens.setter
+    def _required_filter_tokens(self, value: tuple[str, ...]) -> None:
+        self._ensure_scanner().required_filter_tokens = value
 
     def dynamic_verification_report(self, status: str | None = None) -> dict[str, Any]:
         return self.dynamic_verifier.report(status=status or self._final_status)
