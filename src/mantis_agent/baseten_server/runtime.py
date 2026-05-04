@@ -772,6 +772,43 @@ class BasetenCUARuntime:
             cum += max(duration, 0.0)
         return timings
 
+    def _build_extraction_cache(
+        self,
+        task_suite: dict[str, Any],
+        payload: dict[str, Any],
+    ):
+        """Construct an ExtractionCache iff the request opted into caching.
+
+        Returns ``None`` when both ``cache_read`` and ``cache_write`` are
+        false (legacy behavior: no cache, no disk I/O). The cache file is
+        scoped to ``(tenant_id, cache_key)`` where ``cache_key`` falls
+        back to the resolved ``state_key``.
+        """
+        cache_read = bool(payload.get("cache_read", False))
+        cache_write = bool(payload.get("cache_write", False))
+        if not (cache_read or cache_write):
+            return None
+        from mantis_agent.extraction.cache import ExtractionCache
+
+        tenant_id = os.environ.get("MANTIS_TENANT_ID", "default")
+        cache_key = (
+            payload.get("cache_key")
+            or task_suite.get("_state_key")
+            or payload.get("state_key")
+            or task_suite.get("session_name")
+            or "default"
+        )
+        safe_key = _safe_state_key(str(cache_key)) or "default"
+        cache_dir = _data_root() / "tenants" / tenant_id / "cache"
+        path = cache_dir / f"{safe_key}.json"
+        ttl = int(payload.get("cache_ttl_seconds", 86400))
+        return ExtractionCache(
+            path,
+            read_enabled=cache_read,
+            write_enabled=cache_write,
+            ttl_seconds=ttl,
+        )
+
     def _run_micro(
         self,
         task_suite: dict[str, Any],
@@ -847,6 +884,17 @@ class BasetenCUARuntime:
             extractor = ClaudeExtractor(schema=schema)
             resume_state = bool(task_suite.get("_resume_state", False))
             checkpoint_path = task_suite.get("_checkpoint_path")
+            if not checkpoint_path:
+                # Inline task_suite._micro_plan submissions don't go through
+                # build_micro_suite, so no checkpoint path is set. Derive one
+                # under the run dir so the runner can persist incrementally.
+                checkpoint_path = str(_data_root() / "checkpoints" / f"{run_id}.json")
+
+            # Per-request extraction cache. Both flags default off so legacy
+            # callers see no behavior change; opt-in saves Claude tokens on
+            # previously-seen URLs (~$0.04/item per cache hit).
+            cache = self._build_extraction_cache(task_suite, payload)
+
             runner = MicroPlanRunner(
                 brain=self.brain,
                 env=env,
@@ -859,8 +907,14 @@ class BasetenCUARuntime:
                 resume_state=resume_state,
                 max_cost=task_suite.get("_max_cost", 10.0),
                 max_time_minutes=task_suite.get("_max_time_minutes", 180),
+                extraction_cache=cache,
             )
             step_results = runner.run(micro_plan, resume=resume_state)
+            if cache is not None:
+                try:
+                    cache.save()
+                except Exception as exc:  # noqa: BLE001 — cache persist is best-effort
+                    logger.warning("extraction cache save failed: %s", exc)
             result = build_micro_result(
                 runner,
                 step_results,

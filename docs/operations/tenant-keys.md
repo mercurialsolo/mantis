@@ -209,6 +209,44 @@ The default tenant entry can stay forever — it's harmless and gives existing c
       --dry-run=client -o yaml | kubectl apply -f -
     ```
 
+=== "Modal Secret"
+
+    Modal Secrets are env-var-shaped, so the keys file is shipped as a
+    single env var ``MANTIS_TENANT_KEYS_JSON`` that the container writes
+    to ``/tmp/tenant_keys.json`` at boot (see
+    ``deploy/modal/modal_mantis_server.py::_bootstrap_tenant_keys``).
+
+    ```bash
+    # Create / overwrite the secret with the contents of /tmp/keys.json
+    modal secret create --force mantis-tenant-keys \
+      MANTIS_TENANT_KEYS_JSON="$(cat /tmp/keys.json)"
+
+    # Force a fresh container to pick up the new secret on next request.
+    # Modal scales replicas at request time, so this is automatic after
+    # a few minutes of idle, but `app stop` makes it immediate.
+    modal app stop mantis-server
+    ```
+
+    To edit (e.g. add a domain to ``allowed_domains`` or rotate a token):
+
+    ```bash
+    # 1. Pull the current keys
+    modal secret get mantis-tenant-keys MANTIS_TENANT_KEYS_JSON > /tmp/keys.json
+
+    # 2. Edit /tmp/keys.json — add domains, change caps, rotate tokens
+
+    # 3. Push it back + restart replicas
+    modal secret create --force mantis-tenant-keys \
+      MANTIS_TENANT_KEYS_JSON="$(cat /tmp/keys.json)"
+    modal app stop mantis-server
+    ```
+
+    The 5-second hot-reload still works *within* a container (edits to the
+    file the bootstrap wrote), but secret updates require a new container
+    boot to pick up — that's what the ``app stop`` gives you. Don't
+    redeploy the function unless the code itself changed; ``app stop`` is
+    enough to retire all warm replicas.
+
 ## Auditing the live keys
 
 The runtime never logs tokens, only `tenant_id`. Every request emits:

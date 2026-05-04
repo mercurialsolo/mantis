@@ -22,21 +22,54 @@ here, so any host-side gateway-auth setting can be left empty.
 
     modal deploy deploy/modal/modal_mantis_server.py
 
-The first cold-start downloads the Holo3 GGUF (~37 GB) onto the persistent
-Modal volume. Subsequent containers reuse it — typical warm cold-start is
-~90s, cold-from-zero is ~10 minutes (model download).
+Then, to avoid the first user eating the 37 GB Holo3 download, pre-warm
+the volume once:
+
+    uv run modal run deploy/modal/modal_mantis_server.py::prewarm_weights
+
+After that, subsequent cold-starts are ~90 s (just llama-server boot +
+mmap), not ~10 min. Weights persist on the ``mantis-server-data`` volume
+and are reused by every container.
 
 ## Secrets
 
-Reads from the local ``.env`` file at deploy time (same shape as
-``deploy/modal/modal_cua_server.py``). The ``.env`` MUST include:
+Reads from the local ``.env`` file at deploy time. The ``.env`` MUST include:
 
-  - MANTIS_API_TOKEN   (X-Mantis-Token enforced by baseten_server.py)
   - ANTHROPIC_API_KEY  (used by ClaudeGrounding / ClaudeExtractor)
   - PROXY_URL / PROXY_USER / PROXY_PASS (optional IPRoyal residential proxy)
 
-If you need a managed Modal Secret instead, swap
-``modal.Secret.from_dotenv()`` below for ``modal.Secret.from_name(...)``.
+Plus a managed Modal Secret named ``mantis-tenant-keys`` containing a
+single env var ``MANTIS_TENANT_KEYS_JSON`` — the multi-tenant keys file
+(see ``docs/operations/tenant-keys.md`` for shape). Each tenant entry
+sets its own scopes, cost cap, time cap, concurrent-run cap, rate limit,
+allowed domain list, and Anthropic key — so a leaked token has bounded
+blast radius (cost + rate + domains all clamped per-tenant).
+
+If ``mantis-tenant-keys`` is missing, the server falls back to legacy
+single-tenant mode using ``MANTIS_API_TOKEN`` from ``.env`` — no caps,
+no allowlist, full blast radius. Avoid for any deployment you'd hand a
+token out for.
+
+To create / update the secret:
+
+    # write a keys file locally
+    cat > /tmp/tenant_keys.json <<'EOF'
+    {"tenant_keys": {"<token>": {"tenant_id": "...", ...}}}
+    EOF
+
+    # push it as a Modal Secret
+    modal secret create mantis-tenant-keys \\
+        MANTIS_TENANT_KEYS_JSON="$(cat /tmp/tenant_keys.json)"
+
+    # rotate / add tenants later
+    modal secret create --force mantis-tenant-keys \\
+        MANTIS_TENANT_KEYS_JSON="$(cat /tmp/tenant_keys.json)"
+
+The container writes the JSON to ``/tmp/tenant_keys.json`` at boot and
+points ``MANTIS_TENANT_KEYS_PATH`` there; the running FastAPI app then
+hot-reloads tenant config every 5 s. Secret updates require a container
+restart (Modal scales replicas at request time, so this is automatic
+after a few minutes of idle).
 
 ## Configure for a host integration
 
@@ -44,7 +77,7 @@ After deploy, the app URL is printed by Modal. Set on the host side:
 
 ```bash
 MANTIS_ENDPOINT=<the-modal-app-url>
-MANTIS_API_TOKEN=<MANTIS_API_TOKEN-from-the-secret>
+MANTIS_API_TOKEN=<one-of-the-tokens-from-mantis-tenant-keys>
 # Modal needs no gateway auth — leave any gateway-auth setting unset.
 ```
 """
@@ -146,10 +179,42 @@ def _start_llama_server() -> subprocess.Popen:
     )
 
 
+def _bootstrap_tenant_keys() -> None:
+    """Materialize the tenant keys JSON to a file the FastAPI app can read.
+
+    The keys live in a Modal Secret as the env var MANTIS_TENANT_KEYS_JSON;
+    we write it to /tmp/tenant_keys.json and point the server at that path.
+    Without this, the server falls back to single-tenant MANTIS_API_TOKEN
+    mode — fine for local dev, unsafe for any token you hand out.
+    """
+    raw = os.environ.get("MANTIS_TENANT_KEYS_JSON", "").strip()
+    if not raw:
+        return
+    path = "/tmp/tenant_keys.json"
+    try:
+        with open(path, "w") as fh:
+            fh.write(raw)
+        os.chmod(path, 0o600)
+    except OSError as exc:
+        print(f"[bootstrap] failed to write tenant keys: {exc}")
+        return
+    os.environ["MANTIS_TENANT_KEYS_PATH"] = path
+    print(f"[bootstrap] tenant keys written to {path} (multi-tenant mode active)")
+
+
+# Modal Secret containing MANTIS_TENANT_KEYS_JSON. Optional: if absent,
+# the container falls back to single-tenant MANTIS_API_TOKEN.
+def _tenant_keys_secret() -> list:
+    try:
+        return [modal.Secret.from_name("mantis-tenant-keys")]
+    except Exception:
+        return []
+
+
 @app.function(
     gpu="H100",
     volumes={"/data": vol},
-    secrets=[modal.Secret.from_dotenv()],
+    secrets=[modal.Secret.from_dotenv(), *_tenant_keys_secret()],
     timeout=86400,
     memory=65536,
     cpu=8,
@@ -171,6 +236,9 @@ def api():
     os.environ.setdefault("MANTIS_HOLO3_GGUF", os.path.join(MODEL_DIR, HOLO3_GGUF))
     os.environ.setdefault("MANTIS_HOLO3_MMPROJ", os.path.join(MODEL_DIR, HOLO3_MMPROJ))
 
+    # Materialize multi-tenant keys file if the secret is mounted.
+    _bootstrap_tenant_keys()
+
     # Start llama-server alongside the FastAPI app. baseten_server's
     # /v1/chat/completions proxies to http://127.0.0.1:$MANTIS_LLAMA_PORT.
     _start_llama_server()
@@ -178,3 +246,28 @@ def api():
     # Late import — only after env vars are set so module-level config picks them up.
     from mantis_agent.baseten_server import app as fastapi_app
     return fastapi_app
+
+
+@app.function(
+    volumes={"/data": vol},
+    timeout=3600,
+    memory=8192,
+    cpu=2,
+)
+def prewarm_weights() -> str:
+    """One-shot: download Holo3 GGUF + mmproj onto the persistent volume.
+
+    Run once after first deploy so the first real /v1/predict request
+    isn't blocked by a 10-minute model download.
+
+        uv run modal run deploy/modal/modal_mantis_server.py::prewarm_weights
+    """
+    model_dir = _ensure_holo3_weights()
+    gguf = os.path.join(model_dir, HOLO3_GGUF)
+    mmproj = os.path.join(model_dir, HOLO3_MMPROJ)
+    sizes = {
+        "gguf_bytes": os.path.getsize(gguf) if os.path.exists(gguf) else 0,
+        "mmproj_bytes": os.path.getsize(mmproj) if os.path.exists(mmproj) else 0,
+    }
+    print(f"prewarm complete: {sizes}")
+    return f"{model_dir}: gguf={sizes['gguf_bytes']} mmproj={sizes['mmproj_bytes']}"

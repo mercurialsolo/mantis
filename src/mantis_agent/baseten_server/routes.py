@@ -486,6 +486,13 @@ async def _handle_predict(
             tenant_id=tenant.tenant_id, mode="run", outcome="bad_request"
         ).inc()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        mantis_metrics.PREDICT_REQUESTS.labels(
+            tenant_id=tenant.tenant_id, mode=req.action or "run", outcome="not_found"
+        ).inc()
+        run_id = str(payload.get("run_id") or "")
+        detail = f"unknown run_id: {run_id}" if run_id else "run not found"
+        raise HTTPException(status_code=404, detail=detail) from exc
     except HTTPException:
         raise
     except Exception as exc:

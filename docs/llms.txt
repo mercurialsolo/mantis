@@ -1,0 +1,571 @@
+# Mantis CUA — LLM Integration Guide
+
+> A single-file spec for coding LLMs integrating with the Mantis CUA HTTP
+> API. Self-contained: paste this whole file into your context and you have
+> everything needed to author, submit, and consume runs. Spec format:
+> https://llmstxt.org/
+
+Mantis is a perception–reasoning–action agent for computer use. You send
+it a plan (free text or a structured micro-plan); it drives a real browser
+on a remote GPU container, extracts data, and returns a JSON result.
+
+The endpoint exposes a small surface that mirrors OpenAI conventions where
+useful (`/v1/chat/completions`, `/v1/models`) plus a single orchestration
+verb (`POST /v1/predict`) that handles run lifecycle.
+
+---
+
+## 1. Endpoint and auth
+
+```
+ENDPOINT  = https://<your-deployment>.<host>.<tld>            # set by your operator
+TOKEN     = <X-Mantis-Token value>                            # tenant-scoped bearer
+GATEWAY?  = Authorization: Api-Key <BASETEN_API_KEY>          # ONLY on Baseten
+```
+
+Two auth layers, host-dependent:
+
+| Header                              | When to send                        |
+|-------------------------------------|-------------------------------------|
+| `X-Mantis-Token: <token>`           | Always. Container-level tenant auth.|
+| `Authorization: Api-Key <key>`      | Baseten only. Gateway auth.         |
+
+On Modal / EKS / GKE / local, only `X-Mantis-Token` is required. The token
+maps to a tenant config that determines: scopes, per-run cost cap, time
+cap, concurrent-run cap, rate limit (token bucket), allowed domains,
+Anthropic key, webhook URL.
+
+Errors:
+
+| Status | Meaning |
+|--------|---------|
+| 400    | Bad request: missing plan shape, bad JSON, plan too large, missing intent/type |
+| 401    | Missing or invalid `X-Mantis-Token` |
+| 403    | Token valid but lacks `run` scope, OR plan references off-allowlist host |
+| 404    | Unknown `run_id` for `action=status\|result\|logs\|cancel` |
+| 429    | Rate limit (token bucket) or concurrent-run cap exceeded; check `Retry-After` |
+| 500    | Unhandled exception — fetch `action=logs` for the traceback |
+| 502    | Upstream Holo3 / Anthropic API unreachable |
+| 503    | Server auth not configured (operator side) |
+
+---
+
+## 2. The single endpoint: `POST /v1/predict`
+
+One verb, four modes, selected by the `action` field (or its absence).
+
+### 2.1 Run a new plan (no `action` field)
+
+Send exactly one of these plan-shape fields, in priority order:
+
+| Field                | Type   | Use when                                                                      |
+|----------------------|--------|-------------------------------------------------------------------------------|
+| `task_suite`         | object | You want full control: inline JSON dict with `tasks`, `verify` clauses, etc.  |
+| `task_file_contents` | string | Same as `task_suite` but pre-serialized JSON                                  |
+| `task_file`          | string | Path inside the container image (e.g. `tasks/crm/crm_tasks.json`)             |
+| `micro`              | string | Path to a hand-authored micro-plan JSON inside the image                      |
+| `plan_text`          | string | Free-text plain-English; server decomposes via Claude (~$0.01–0.02, cached)   |
+
+Plus run options (all optional):
+
+| Field             | Default | Effect                                                                       |
+|-------------------|---------|------------------------------------------------------------------------------|
+| `detached`        | `true`  | Return `run_id` immediately; work continues in the background                 |
+| `state_key`       | `""`    | Caller-chosen ID; server prefixes with tenant. Reuse to share Chrome profile  |
+| `resume_state`    | `false` | Reconstruct browser state from latest checkpoint at `state_key` before start  |
+| `max_cost`        | `25.0`  | USD cap; clamped against tenant cap                                           |
+| `max_time_minutes`| `60`    | Wall-clock cap; clamped against tenant cap                                    |
+| `proxy_disabled`  | `false` | Bypass the upstream residential proxy. Use for sites that don't bot-detect    |
+| `proxy_city`      | unset   | IPRoyal geo override (subject to allowlist)                                   |
+| `proxy_state`     | unset   | IPRoyal geo override                                                          |
+| `record_video`    | `false` | Capture screencast; fetch via `GET /v1/runs/{run_id}/video`                   |
+| `video_format`    | `"mp4"` | One of `mp4`, `webm`, `gif`                                                   |
+| `video_fps`       | `5`     | Capture rate (clamped `[1, 30]`)                                              |
+| `callback_url`    | unset   | Per-request override of the tenant default webhook URL                        |
+| `cache_read`      | `false` | Skip the deep-extract Claude call (~$0.04/item) when the current URL is already cached fresh |
+| `cache_write`     | `false` | Persist every viable extraction so future runs (or loop iterations) hit the cache |
+| `cache_ttl_seconds` | `86400` | Entries older than this are treated as misses; 0 = never stale; max 30 days |
+| `cache_key`       | unset   | Cache namespace; defaults to `state_key`. Use one key per logical job to share extracted state |
+
+Detached response:
+
+```jsonc
+{
+  "status": "queued",
+  "created_at": "2026-04-28T01:57:08.316Z",
+  "model": "holo3",
+  "mode": "detached",
+  "run_id": "20260428_021432_076255ef",
+  "payload": { /* echoed input */ },
+  "status_path":  "/data/mantis-runs/runs/<run_id>/status.json",
+  "result_path":  "/data/mantis-runs/runs/<run_id>/result.json",
+  "events_path":  "/data/mantis-runs/runs/<run_id>/events.log"
+}
+```
+
+The `*_path` fields are server-internal — fetch them via the polling actions.
+
+### 2.2 Poll / fetch / cancel an existing run
+
+```jsonc
+{ "action": "status", "run_id": "..." }
+{ "action": "result", "run_id": "..." }
+{ "action": "logs",   "run_id": "...", "tail": 200 }
+{ "action": "cancel", "run_id": "..." }
+```
+
+`status` returns the current state plus a `summary` block when terminal:
+
+```jsonc
+{
+  "status": "succeeded",          // running | succeeded | failed | cancelled
+  "run_id": "...",
+  "started_at": "...",
+  "finished_at": "...",
+  "summary": {
+    "total_time_s": 569,
+    "steps_executed": 17,
+    "viable": 3,
+    "leads_with_phone": 1,
+    "cost_total": 0.42,
+    "cost_breakdown": { "gpu": 0.12, "claude": 0.12, "proxy": 0.18 },
+    "dynamic_verification_summary": { /* per-page check results */ }
+  }
+}
+```
+
+**Important:** `status: "succeeded"` means the runtime *completed without
+crashing*, NOT that the agent achieved its goal. Always inspect
+`summary.dynamic_verification_summary.verdict` (or the per-step trace in
+the `result` payload) to determine actual success.
+
+`result` returns the full lead list and per-step trace.
+`logs` returns the last `tail` events written by the runner (default 200,
+max 10000).
+
+---
+
+## 3. Plan shapes — pick by use case
+
+### 3.1 `plan_text` — easy, decompose-via-Claude
+
+```jsonc
+{
+  "plan_text": "Go to https://example.com/ and read the heading and first paragraph.",
+  "max_cost": 0.5,
+  "max_time_minutes": 5,
+  "proxy_disabled": true
+}
+```
+
+`PlanDecomposer` runs once per unique plan text (~$0.01–0.02), caches by
+signature, and reuses the cached MicroPlan for subsequent identical
+requests. **Decomposition assumes a marketplace-listing extraction shape
+by default** — for non-marketplace targets (brand homepages, content
+sites), author a custom `micro` plan instead.
+
+### 3.2 `micro` — hand-authored micro-plan (recommended for production)
+
+A flat list of step objects executed by `MicroPlanRunner`:
+
+```jsonc
+[
+  {"intent": "Navigate to https://...", "type": "navigate",
+   "section": "setup", "required": true},
+  {"intent": "Verify filters applied",  "type": "extract_data",
+   "claude_only": true, "section": "setup", "gate": true,
+   "verify": "Page shows boat listings ..."},
+  {"intent": "Click listing title",     "type": "click",
+   "grounding": true, "section": "extraction"},
+  {"intent": "Read URL",                "type": "extract_url",
+   "claude_only": true, "section": "extraction"},
+  {"intent": "Extract data",            "type": "extract_data",
+   "claude_only": true, "section": "extraction"},
+  {"intent": "Go back",                 "type": "navigate_back",
+   "section": "extraction"},
+  {"intent": "Loop",                    "type": "loop",
+   "loop_target": 2, "loop_count": 3, "section": "extraction"}
+]
+```
+
+Step types: `navigate`, `filter`, `click`, `scroll`, `extract_url`,
+`extract_data`, `navigate_back`, `paginate`, `loop`.
+
+Step fields:
+
+| Field         | Effect |
+|---------------|--------|
+| `section`     | One of `setup`, `extraction`, `pagination`. Used by retry/halt logic. |
+| `required`    | If true, retry on fail then halt the whole run. |
+| `gate`        | Claude verifies a `verify` condition; halt on fail. |
+| `verify`      | Free-text condition Claude checks against the screenshot. |
+| `claude_only` | Skip Holo3; Claude does the perception. Use for extract / gate steps. |
+| `grounding`   | Refine click coordinates with `ClaudeGrounding`. |
+| `budget`      | Max actions Holo3 can take in this step (default 8). |
+| `loop_target` | Step index to jump back to. |
+| `loop_count`  | Max iterations (clamped to `MANTIS_MAX_LOOP_ITERATIONS`). |
+
+Submit by file path inside the image:
+
+```jsonc
+{ "micro": "plans/example/extract_listings.json", "max_cost": 2 }
+```
+
+Or inline as a `task_suite`:
+
+```jsonc
+{ "task_suite": {
+    "session_name": "my_workflow",
+    "_micro_plan": [ /* steps as above */ ]
+  }
+}
+```
+
+### 3.3 Non-marketplace targets (events, content, brand homepages)
+
+`plan_text` and the default `MicroPlanRunner` extraction path both assume a
+**marketplace listing schema** — they require `year` and `make` fields and
+will reject everything else with `Rejected incomplete lead: missing
+required field(s): year, make`. Don't fight this; opt out by passing a
+custom schema.
+
+The recipe — three things, all required:
+
+1. **Custom schema via `_objective`** — set `target_entity` and
+   `output_schema` so the extractor uses your fields.
+2. **Empty `start_url` in `_objective`** — the runtime probes when
+   `_objective.start_url` is set, and the probe-enhancer will rewrite your
+   plan into a filter+pagination flow that doesn't fit content sites.
+   Setting `start_url: ""` keeps the schema, skips the probe.
+3. **`loop` step** — the runner extracts ONE viable item per
+   `extract_data` step (deep-extract pattern: click in → extract → back).
+   Without a loop you get exactly one item. With `loop_count: N` you get
+   up to N. The runner now dedupes by extracted URL across loop
+   iterations, so successive loops always advance to a fresh item.
+
+Working events recipe (lu.ma, eventbrite, etc.):
+
+```jsonc
+{
+  "detached": true,
+  "task_suite": {
+    "session_name": "events_extract",
+    "_objective": {
+      "raw_text": "Extract events from the discover page",
+      "domains": ["lu.ma"],
+      "start_url": "",
+      "target_entity": "event",
+      "output_schema": [
+        {"name": "title",     "type": "str", "required": true,  "example": "Tech meetup"},
+        {"name": "date_time", "type": "str", "required": true,  "example": "Sat, Jun 7"},
+        {"name": "location",  "type": "str", "required": false, "example": "San Francisco"},
+        {"name": "url",       "type": "str", "required": false, "example": "https://lu.ma/abc"}
+      ]
+    },
+    "_micro_plan": [
+      {"intent": "Navigate to https://lu.ma/discover",
+       "type": "navigate", "section": "setup", "required": true},
+      {"intent": "Verify the events page has loaded with multiple event cards",
+       "type": "extract_data", "claude_only": true, "section": "setup",
+       "gate": true, "verify": "page shows event listings with titles and dates"},
+      {"intent": "Extract title, date_time, location, url of the next event",
+       "type": "extract_data", "claude_only": true, "section": "extraction"},
+      {"intent": "Loop back to extract more events", "type": "loop",
+       "loop_target": 2, "loop_count": 5, "section": "extraction"}
+    ]
+  },
+  "max_cost": 1.5,
+  "max_time_minutes": 12
+}
+```
+
+The result's `leads` field will contain N entries shaped per your
+`output_schema` instead of the marketplace-format. Cost scales linearly
+at ~$0.04 / extracted item (Claude vision + grounding).
+
+### 3.4 `task_suite` — multi-task autonomous
+
+For Claude-CUA-style autonomous-per-task workflows (each task = a Claude
+session with its own budget):
+
+```jsonc
+{
+  "session_name": "crm_demo",
+  "base_url": "https://crm.example.com",
+  "auth": { "user_id": "...", "password": "..." },
+  "tasks": [
+    {
+      "task_id": "login",
+      "intent": "Go to https://... and log in with user X and password Y",
+      "save_session": true,
+      "start_url": "https://...",
+      "verify": { "type": "url_not_contains", "value": "login" }
+    },
+    {
+      "task_id": "update_lead_industry",
+      "intent": "Update the qualified lead's industry to 'Space Exploration'.",
+      "require_session": true,
+      "start_url": "https://...",
+      "verify": { "type": "page_contains_text", "value": "Space Exploration" }
+    }
+  ]
+}
+```
+
+Verify clause types: `url_not_contains`, `url_contains`, `page_contains_text`.
+
+---
+
+## 4. End-to-end pattern (curl)
+
+```bash
+ENDPOINT="..."
+TOKEN="..."
+
+# 1. Submit detached
+RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
+  -H "X-Mantis-Token: $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "detached": true,
+    "plan_text": "Go to https://example.com/ and read the heading.",
+    "max_cost": 0.5,
+    "max_time_minutes": 5,
+    "proxy_disabled": true
+  }')
+RUN_ID=$(echo "$RESP" | jq -r .run_id)
+
+# 2. Poll until terminal
+while true; do
+  STATUS=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
+    -H "X-Mantis-Token: $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"action\":\"status\",\"run_id\":\"$RUN_ID\"}" | jq -r .status)
+  case "$STATUS" in succeeded|failed|cancelled) break ;; esac
+  sleep 15
+done
+
+# 3. Fetch result
+curl -fsS -X POST "$ENDPOINT/v1/predict" \
+  -H "X-Mantis-Token: $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"action\":\"result\",\"run_id\":\"$RUN_ID\"}"
+```
+
+---
+
+## 4a. Extraction cache (saving Claude tokens on repeat runs)
+
+Two opt-in flags on `POST /v1/predict`:
+
+```jsonc
+{
+  "cache_read":  true,      // skip the deep-extract Claude call on cache hit
+  "cache_write": true,      // record every viable extraction to the cache file
+  "cache_ttl_seconds": 86400,   // entries older than this are misses (default 1 day)
+  "cache_key":   "luma_events"  // namespace; defaults to state_key
+}
+```
+
+Mechanism: in the `extract_data` step, the runner peeks
+`env.current_url` (cheap CDP read, no tokens) **before** the
+deep-extract. On a fresh cache hit it emits the cached lead summary
+directly and skips the entire Claude extraction pipeline. Saves
+~$0.04 per cached item (the dominant cost for events / brand-page
+extraction where GPU stays idle).
+
+Cache file lives at::
+
+    <data_root>/tenants/<tenant_id>/cache/<cache_key>.json
+
+with shape `{url: {summary, extracted_at, fields, item_label}}`. The
+runner pre-seeds its `_seen_urls` dedup set from the cache when
+`cache_read` is on, so even if the agent re-clicks a previously-extracted
+card the deep-extract still short-circuits at the URL level.
+
+Common patterns:
+
+- **Daily warm + re-run.** First run: `cache_read: false, cache_write:
+  true` to populate. Daily re-run: `cache_read: true, cache_write: true`
+  with `cache_ttl_seconds: 86400` so only new events get extracted.
+- **Read-only warm-cache test.** `cache_read: true, cache_write: false`
+  — never updates the cache; useful for replaying a known set without
+  drift.
+- **Force fresh.** Omit both flags (legacy default), or pass `cache_ttl_seconds: 0` while reading and writing — fresh extractions every time, but persist them for next run.
+
+The cache is **per-tenant**; no cross-tenant access. `cache_key` is
+sandboxed under the tenant dir, so callers can't read another tenant's
+cache even with the same key string.
+
+---
+
+## 5. Idempotency, webhooks, video
+
+### 5.1 Idempotency
+
+Add `Idempotency-Key: <unique>` to `POST /v1/predict`. The server caches
+`(tenant_id, key) → run_id` for 24 h; retries with the same key return
+the original `run_id` without starting a new run. Use a stable per-job
+identifier from your side.
+
+### 5.2 Webhooks
+
+Either set `webhook_url` on the tenant config (operator), or pass
+`callback_url` per request. On terminal status the server POSTs:
+
+```jsonc
+{
+  "run_id": "...",
+  "tenant_id": "...",
+  "status": "succeeded",
+  "summary": { /* same as status response */ },
+  "delivered_at": "..."
+}
+```
+
+With HMAC-SHA256 signature in `X-Mantis-Signature: sha256=<hex>`. 3
+retries with exponential backoff (1s, 5s, 30s) on non-2xx.
+
+Verify:
+
+```python
+import hmac, hashlib
+def verify(body: bytes, header_sig: str, secret: str) -> bool:
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, header_sig)
+```
+
+### 5.3 Video
+
+Set `record_video: true` on submission, then download:
+
+```bash
+curl -fsS -o run.mp4 \
+  -H "X-Mantis-Token: $TOKEN" \
+  "$ENDPOINT/v1/runs/$RUN_ID/video"
+```
+
+`?raw=1` skips the polished overlay version and returns the raw screencast.
+
+---
+
+## 6. Cost model (rough)
+
+For a 3-listing marketplace-extraction run:
+
+| Item                                | Cost   |
+|-------------------------------------|--------|
+| GPU (Holo3 on H100, ~10 min)        | ~$0.12 |
+| Claude (gates + extract + grounding)| ~$0.12 |
+| Proxy (IPRoyal residential)         | ~$0.18 |
+| **Total per 3-listing run**         | **~$0.42** |
+
+For a single-page extraction (e.g. read homepage heading): ~$0.03.
+
+Always pass tight `max_cost` / `max_time_minutes` per submission. Tenant
+caps clamp these silently — your value is the lower bound, not an
+override.
+
+---
+
+## 7. Common pitfalls
+
+1. **`proxy_disabled` for non-marketplace sites.** The default IPRoyal
+   residential proxy is tuned for marketplace targets. Brand homepages
+   and developer sites (httpbin, etc.) often fail to tunnel through it —
+   use `"proxy_disabled": true` and accept that datacenter IPs may be
+   blocked by some bot-detection layers.
+2. **Free-text plans assume marketplace shape.** `plan_text` →
+   `PlanDecomposer` defaults to a lead-extraction schema (`year`,
+   `make`, `model` fields), and the runner enforces `year`+`make` as
+   required by default — extracts without those fields are rejected
+   with `Rejected incomplete lead: missing required field(s): year,
+   make`. For events / content / brand sites, use the recipe in §3.3
+   (custom `_objective.output_schema` + empty `start_url` + `loop`
+   step). Without all three, the run will halt at the lead-schema
+   gate.
+3. **`succeeded` ≠ goal achieved.** Always check
+   `summary.dynamic_verification_summary.verdict` AND the per-step trace
+   in `action=result`. The runtime returns `succeeded` even when steps
+   halted with errors.
+4. **Allowlist 403s are silent.** If your plan navigates to an
+   off-allowlist host, you get a 403 with `plan references host(s) not
+   in tenant allowlist: <host>` *before* any GPU work runs. Check the
+   tenant's `allowed_domains` first.
+5. **Concurrency cap is in-flight HTTP requests, not pending detached
+   runs.** Sequential detached submissions don't stack against
+   `max_concurrent_runs` — they each return `queued` quickly and release
+   the slot. The cap protects against parallel callers.
+6. **Cold-start on Modal/Baseten is ~50–90s.** First request after idle
+   pays Chrome + Xvfb + llama-server boot. Subsequent calls within the
+   scaledown window are ~instant.
+
+---
+
+## 8. Operator-side: editing the tenant allowlist
+
+The allowlist lives in the multi-tenant keys file at
+`MANTIS_TENANT_KEYS_PATH`. Per host:
+
+| Host             | Storage                                 | Edit                                                    | Restart                  |
+|------------------|------------------------------------------|---------------------------------------------------------|--------------------------|
+| Modal            | Modal Secret `mantis-tenant-keys` env    | `modal secret create --force mantis-tenant-keys MANTIS_TENANT_KEYS_JSON="$(cat keys.json)"` | `modal app stop mantis-server` |
+| Baseten          | Baseten Secret mounted as file           | `curl POST /v1/secrets`                                 | redeploy                 |
+| AWS / GCP        | Secrets Manager mounted as file          | `aws secretsmanager put-secret-value ...`               | none — 5s hot-reload     |
+| k8s              | Plain Secret mounted as file             | `kubectl create secret --dry-run \| apply`              | none — 5s hot-reload     |
+
+The keys file shape:
+
+```jsonc
+{
+  "tenant_keys": {
+    "<x-mantis-token-value>": {
+      "tenant_id": "tenant_a",
+      "scopes": ["run", "status", "result", "logs"],
+      "max_concurrent_runs": 3,
+      "max_cost_per_run": 5.0,
+      "max_time_minutes_per_run": 30,
+      "rate_limit_per_minute": 60,
+      "anthropic_secret_name": "anthropic_api_key_tenant_a",
+      "allowed_domains": ["*.example.com", "api.example.com"],
+      "webhook_url": "https://callbacks.example.com/mantis",
+      "webhook_secret_name": "webhook_secret_tenant_a"
+    }
+  }
+}
+```
+
+Wildcard support: `*.example.com` matches any subdomain but not
+`example.com.evil.com`. Empty `allowed_domains` (the default) disables
+the allowlist for that tenant. Always include both `example.com` and
+`*.example.com` if you want to allow both apex and subdomains.
+
+---
+
+## 9. Other endpoints
+
+| Path                          | Auth                  | Purpose                                                                      |
+|-------------------------------|-----------------------|------------------------------------------------------------------------------|
+| `POST /v1/chat/completions`   | `X-Mantis-Token`      | OpenAI-compat reverse proxy to in-pod Holo3. Raw inference, no orchestration.|
+| `GET /v1/models`              | open                  | Returns `{ "data": [{"id": "holo3", ...}] }`                                 |
+| `GET /v1/health`, `GET /health` | open                | Liveness probe. Returns `{ "ok": true, "model": "holo3" }`                   |
+| `GET /metrics`                | open                  | Prometheus text format. 503 if `prometheus_client` not installed.            |
+| `GET /v1/runs/{run_id}/video` | `X-Mantis-Token`      | Download screencast. 404 if `record_video` was not requested.                |
+
+For raw Holo3 inference (no plan orchestration), `POST /v1/chat/completions`
+is OpenAI-compatible — useful for clients that want to run their own
+perception-action loop and use Holo3 as the brain.
+
+---
+
+## 10. Pointers (for deeper reading)
+
+- [docs/api.md](api.md) — full HTTP API reference with all flags
+- [docs/getting-started/quickstart.md](getting-started/quickstart.md) — 5-minute curl onboarding
+- [docs/operations/tenant-keys.md](operations/tenant-keys.md) — issuing / rotating / revoking tokens
+- [docs/operations/allowlist.md](operations/allowlist.md) — `allowed_domains` enforcement detail
+- [docs/client/auth.md](client/auth.md) — caller-side auth setup
+- [docs/integrations/embedding-microplanrunner.md](integrations/embedding-microplanrunner.md) — library-shaped integration (driving `MicroPlanRunner` in your own process)
+- [docs/architecture.md](architecture.md) — internals and data flow
+- [src/mantis_agent/api_schemas.py](../src/mantis_agent/api_schemas.py) — authoritative pydantic schemas for the request body
+- [src/mantis_agent/baseten_server/routes.py](../src/mantis_agent/baseten_server/routes.py) — authoritative route handlers
