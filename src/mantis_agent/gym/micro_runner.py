@@ -52,6 +52,7 @@ from ..verification.dynamic_plan_verifier import DynamicPlanVerifier
 
 if TYPE_CHECKING:
     from ..extraction import ClaudeExtractor
+    from .step_context import StepContext
 
 logger = logging.getLogger(__name__)
 

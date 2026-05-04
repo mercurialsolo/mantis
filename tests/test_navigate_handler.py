@@ -16,11 +16,8 @@ Asserts that the handler:
 
 from __future__ import annotations
 
-import os
 from typing import Any
 from unittest.mock import MagicMock
-
-import pytest
 
 from mantis_agent.actions import ActionType
 from mantis_agent.gym.checkpoint import StepResult
