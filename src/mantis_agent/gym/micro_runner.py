@@ -52,6 +52,7 @@ from ..verification.dynamic_plan_verifier import DynamicPlanVerifier
 
 if TYPE_CHECKING:
     from ..extraction import ClaudeExtractor
+    from .step_context import StepContext
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,13 @@ class MicroPlanRunner:
         # live on CheckpointManager. Reads 14 different runner attributes
         # via self.parent — same back-reference pattern as BrowserState.
         self.checkpoint_manager = CheckpointManager(self)
+
+        # #161 Phase 2: per-type step handler registry. Dispatch in
+        # ``_execute_step`` consults this first; types without a handler
+        # fall through to the legacy if/elif. Handlers are migrated one
+        # at a time as separate PRs land.
+        from .step_handlers import default_registry as _default_registry
+        self._handler_registry = _default_registry(self)
 
     # ── Listings-scan state — delegates to ``self.scanner`` (#161 Phase 1.2) ──
     # 70+ internal call sites, external readers (checkpoint_manager,
@@ -1339,8 +1347,42 @@ class MicroPlanRunner:
             )
             return False
 
+    def _build_step_context(self, index: int) -> "StepContext":
+        """Build a :class:`~.step_context.StepContext` for the next step.
+
+        Handlers are pure functions of (step, ctx); the runner is the
+        only thing that knows the current step index. We tuck it into
+        ``ctx.state["index"]`` so the handler signature stays
+        ``execute(step, ctx) -> StepResult`` per the protocol.
+        """
+        from .step_context import StepContext
+        return StepContext(
+            env=self.env,
+            brain=self.brain,
+            extractor=self.extractor,
+            grounding=self.grounding,
+            cost_meter=self.cost_meter,
+            dynamic_verifier=self.dynamic_verifier,
+            scanner=self.scanner,
+            site_config=self.site_config,
+            tool_channel=self.tool_channel,
+            extraction_cache=self.extraction_cache,
+            state={"index": index},
+        )
+
     def _execute_step(self, step: MicroIntent, index: int) -> StepResult:
-        """Execute a single micro-intent."""
+        """Execute a single micro-intent.
+
+        Registry-first dispatch (#161 Phase 2): step types whose handler
+        has been migrated to ``step_handlers/<type>.py`` are dispatched
+        through the registry. Types without a registered handler fall
+        through to the legacy if/elif below — that branch shrinks one
+        handler at a time as Phase 2 progresses.
+        """
+        registered = self._handler_registry.get(step.type)
+        if registered is not None:
+            ctx = self._build_step_context(index)
+            return registered.execute(step, ctx)
 
         # Navigate steps: use env.reset() with URL instead of Holo3
         if step.type == "navigate":
@@ -1508,53 +1550,21 @@ class MicroPlanRunner:
         return ""
 
     def _execute_navigate(self, step: MicroIntent, index: int) -> StepResult:
-        """Navigate to a URL using env.reset() — no Holo3 steps needed.
+        """Backwards-compat shim — delegates to :class:`NavigateHandler`.
 
-        Waits for page load and handles Cloudflare challenges (auto-solve in 5-10s).
-
-        First-paint wait resolution order (first hit wins):
-          1. step.params["wait_after_load_seconds"] — plan-driven override
-          2. env MANTIS_NAV_WAIT_SECONDS                — deployment-wide override
-          3. 18s default                                — covers Cloudflare auto-solve
+        Kept on the runner so external callers (tests, host integrations)
+        that invoke ``runner._execute_navigate(step, index)`` directly
+        continue to work. Phase 2 cleanup PR will remove this once all
+        callers go through the registry.
         """
-        import re
-        url_match = re.search(r'https?://[^\s"]+', step.intent)
-        url = url_match.group() if url_match else ""
-
-        if not url:
-            logger.warning(f"  [navigate] No URL found in intent: {step.intent[:60]}")
-            return StepResult(step_index=index, intent=step.intent, success=False)
-
-        try:
-            wait_seconds = float(
-                (step.params or {}).get("wait_after_load_seconds")
-                or os.environ.get("MANTIS_NAV_WAIT_SECONDS")
-                or 18
-            )
-        except (TypeError, ValueError):
-            wait_seconds = 18.0
-        wait_seconds = max(0.0, min(wait_seconds, 120.0))
-
-        logger.info(f"  [navigate] Loading {url} (first-paint wait {wait_seconds:.0f}s)")
-        try:
-            self.env.reset(task="navigate", start_url=url)
-            # Wait for Cloudflare challenge to auto-solve + page render
-            time.sleep(wait_seconds)
-            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(2)
-            # Store as base URL for pagination (results page, not detail page)
-            self._results_base_url = url
-            self._required_filter_tokens = self._derive_filter_tokens(url)
-            self._current_page = 1
-            self._last_known_url = url
-            self._reset_results_scan_state()
-            self._set_scroll_state(context="results_top", url=url, page_downs=0, wheel_downs=0)
-            self.dynamic_verifier.set_required_filter_tokens(self._required_filter_tokens)
-            self.dynamic_verifier.record_page_start(page=self._current_page, url=url)
-            return StepResult(step_index=index, intent=step.intent, success=True)
-        except Exception as e:
-            logger.error(f"  [navigate] Failed: {e}")
-            return StepResult(step_index=index, intent=step.intent, success=False)
+        handler = self._handler_registry.get("navigate")
+        if handler is None:
+            # Registry didn't include navigate — shouldn't happen in production
+            # but keep a safe fallback for tests that strip the registry.
+            from .step_handlers.navigate import NavigateHandler
+            handler = NavigateHandler(self)
+        ctx = self._build_step_context(index)
+        return handler.execute(step, ctx)
 
     def _execute_claude_guided_click(self, step: MicroIntent, index: int) -> StepResult:
         """Claude finds ALL listings once per page, clicks them one by one.
