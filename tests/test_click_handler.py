@@ -23,7 +23,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
-from mantis_agent.gym.checkpoint import StepResult
 from mantis_agent.gym.listings_scanner import ListingsScanner
 from mantis_agent.gym.step_context import StepContext
 from mantis_agent.gym.step_handlers.click import ClaudeGuidedClickHandler
