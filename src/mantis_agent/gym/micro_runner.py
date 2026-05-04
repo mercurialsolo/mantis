@@ -2588,6 +2588,30 @@ class MicroPlanRunner:
         elif step.type == "extract_data":
             data, _actions_used = self._extract_listing_data_deep(screenshot)
             item_label = self._current_item_label(data)
+
+            # Dedup: short-circuit if this URL was extracted in a prior loop
+            # iteration. Mirrors the extract_url dedup above so loop_count
+            # iterations always advance to a fresh item instead of re-clicking
+            # the same card. Without this the runner can re-extract the same
+            # listing and produce duplicate entries in the lead set.
+            extracted_url = getattr(data, "url", "") if data else ""
+            if extracted_url and extracted_url in self._seen_urls:
+                logger.info(
+                    "  [dedup] extract_data skip already-seen: %s",
+                    extracted_url[:80],
+                )
+                self.dynamic_verifier.record_item_completed(
+                    page=self._current_page,
+                    item=item_label,
+                    url=extracted_url,
+                    success=True,
+                    reason="duplicate_url_skipped",
+                )
+                return StepResult(
+                    step_index=index, intent=step.intent,
+                    success=False, data=f"DUPLICATE|{extracted_url}",
+                )
+
             if data and getattr(data, "url", ""):
                 self._last_known_url = data.url
                 self._last_extracted = {
@@ -2597,6 +2621,8 @@ class MicroPlanRunner:
                     "last_attempted_at": time.time(),
                 }
             if data and data.is_viable():
+                if extracted_url:
+                    self._seen_urls.add(extracted_url)
                 summary = data.to_summary()
                 self._last_extracted = {
                     **self._last_extracted,

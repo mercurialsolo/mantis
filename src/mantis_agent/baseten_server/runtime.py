@@ -847,6 +847,11 @@ class BasetenCUARuntime:
             extractor = ClaudeExtractor(schema=schema)
             resume_state = bool(task_suite.get("_resume_state", False))
             checkpoint_path = task_suite.get("_checkpoint_path")
+            if not checkpoint_path:
+                # Inline task_suite._micro_plan submissions don't go through
+                # build_micro_suite, so no checkpoint path is set. Derive one
+                # under the run dir so the runner can persist incrementally.
+                checkpoint_path = str(_data_root() / "checkpoints" / f"{run_id}.json")
             runner = MicroPlanRunner(
                 brain=self.brain,
                 env=env,
