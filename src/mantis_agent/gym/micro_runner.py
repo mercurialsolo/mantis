@@ -31,6 +31,7 @@ from .browser_state import BrowserState
 from .checkpoint_manager import CheckpointManager
 from .cost_meter import CostMeter
 from .listing_dedup import ListingDedup
+from .run_reporter import RunReporter
 from . import step_snapshot
 from .checkpoint import (
     REVERSE_ACTIONS,
@@ -286,17 +287,17 @@ class MicroPlanRunner:
 
     def _log_progress(self, step_result: StepResult, results: list[StepResult]) -> None:
         gpu_cost, claude_cost, proxy_cost, total_cost = self._cost_totals()
-        unique_leads, phone_leads = self._lead_counts(results)
         elapsed = time.time() - self._run_start
-        cost_per_lead = total_cost / max(unique_leads, 1)
-        cost_per_phone_lead = total_cost / max(phone_leads, 1)
-        print(
-            f"  [{step_result.step_index:2d}] {'OK' if step_result.success else 'FAIL'} "
-            f"| {unique_leads} leads ({phone_leads} phone) | ${total_cost:.2f} total "
-            f"(${cost_per_lead:.2f}/lead, ${cost_per_phone_lead:.2f}/phone lead) | "
-            f"GPU ${gpu_cost:.2f} Claude ${claude_cost:.2f} Proxy ${proxy_cost:.2f} | "
-            f"{elapsed/60:.0f}m"
-        )
+        print(RunReporter.step_progress_line(
+            step_index=step_result.step_index,
+            success=step_result.success,
+            results=results,
+            gpu_cost=gpu_cost,
+            claude_cost=claude_cost,
+            proxy_cost=proxy_cost,
+            total_cost=total_cost,
+            elapsed_seconds=elapsed,
+        ))
         self._emit_cost_gauges(gpu_cost, claude_cost, proxy_cost, total_cost)
 
     def _emit_cost_gauges(
@@ -976,38 +977,34 @@ class MicroPlanRunner:
         self._last_listings_on_page = listings_on_page
 
         gpu_cost, claude_cost, proxy_cost, total_cost = self._cost_totals()
-        viable_count, phone_leads = self._lead_counts(results)
         elapsed = time.time() - self._run_start
 
-        print(f"\n{'='*60}")
-        print("MICRO-PLAN COMPLETE")
-        print(f"  Time:     {elapsed/60:.0f}m")
-        print(f"  Steps:    {len(results)}")
-        print(f"  Leads:    {viable_count}")
-        print(f"  Phone:    {phone_leads}")
-        print(
-            f"  Cost:     ${total_cost:.2f} total "
-            f"(${total_cost/max(viable_count,1):.2f}/lead, "
-            f"${total_cost/max(phone_leads,1):.2f}/phone lead)"
-        )
-        print(f"    GPU:    ${gpu_cost:.2f} ({self.costs['gpu_steps']} steps)")
-        print(f"    Claude: ${claude_cost:.2f} ({self.costs['claude_extract']} extract + {self.costs['claude_grounding']} grounding)")
-        print(f"    Proxy:  ${proxy_cost:.2f} ({self.costs['proxy_mb']:.0f} MB)")
-        print(f"{'='*60}")
+        # Final summary block — leading newline preserves pre-refactor output.
+        print()
+        for line in RunReporter.final_summary_lines(
+            results=results,
+            gpu_cost=gpu_cost,
+            claude_cost=claude_cost,
+            proxy_cost=proxy_cost,
+            total_cost=total_cost,
+            elapsed_seconds=elapsed,
+            gpu_steps=int(self.costs.get("gpu_steps", 0)),
+            claude_extract_calls=int(self.costs.get("claude_extract", 0)),
+            claude_grounding_calls=int(self.costs.get("claude_grounding", 0)),
+            proxy_mb=float(self.costs.get("proxy_mb", 0.0)),
+        ):
+            print(line)
 
-        # Attach costs to results for saving
-        self._final_costs = {
-            "total": round(total_cost, 3),
-            "gpu": round(gpu_cost, 3),
-            "claude": round(claude_cost, 3),
-            "proxy": round(proxy_cost, 3),
-            "leads": viable_count,
-            "leads_with_phone": phone_leads,
-            "per_lead": round(total_cost / max(viable_count, 1), 3),
-            "per_phone_lead": round(total_cost / max(phone_leads, 1), 3),
-            "status": self._final_status,
-            "checkpoint_path": self.checkpoint_path,
-        }
+        # Attach costs to results for saving (consumed by build_micro_result).
+        self._final_costs = RunReporter.final_costs_dict(
+            results=results,
+            gpu_cost=gpu_cost,
+            claude_cost=claude_cost,
+            proxy_cost=proxy_cost,
+            total_cost=total_cost,
+            final_status=self._final_status,
+            checkpoint_path=self.checkpoint_path,
+        )
 
         return results
 
