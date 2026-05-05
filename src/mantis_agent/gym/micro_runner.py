@@ -1207,14 +1207,19 @@ class MicroPlanRunner:
 
     @property
     def _listings_on_page(self):
-        """Track listings processed on current page."""
-        if not hasattr(self, '_page_listing_count'):
-            self._page_listing_count = 0
-        return self._page_listing_count
+        """Track listings processed on current page.
+
+        Phase 4 of EPIC #161: storage lives on the scanner now
+        (``scanner.listings_attempted``). Property kept for the 6+
+        runner / handler call sites that read/write it via
+        ``self._listings_on_page``; the canonical state owner is the
+        scanner.
+        """
+        return self._ensure_scanner().listings_attempted
 
     @_listings_on_page.setter
     def _listings_on_page(self, value):
-        self._page_listing_count = value
+        self._ensure_scanner().listings_attempted = value
 
     def _execute_holo3_step(self, step: MicroIntent, index: int) -> StepResult:
         """Backwards-compat shim — delegates to :class:`Holo3StepHandler`.

@@ -24,6 +24,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from mantis_agent.gym.checkpoint import RunCheckpoint, StepResult
+from mantis_agent.gym.listings_scanner import ListingsScanner
 from mantis_agent.gym.run_executor import RunExecutor, RunState
 from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
 
@@ -64,6 +65,10 @@ def _runner_stub(monkeypatch=None) -> MagicMock:
     runner._extract_url_from_intent.return_value = ""
     runner._derive_filter_tokens.return_value = ()
     runner._compute_plan_signature.return_value = "sig"
+    # Phase 4: use a real ListingsScanner so scroll_directive_for / is_duplicate
+    # / mark_seen / on_page_change return real values rather than MagicMock
+    # placeholders.
+    runner.scanner = ListingsScanner()
     return runner
 
 
@@ -196,34 +201,37 @@ def test_loop_step_advances_when_max_count_reached():
 
 
 def test_build_effective_step_no_listings_uses_original_intent():
+    runner = _runner_stub()
     state = _state()
     state.listings_on_page = 0
     step = MicroIntent(intent="Click the next title", type="click", section="extraction")
 
-    eff = RunExecutor._build_effective_step(step, state)
+    eff = RunExecutor(runner)._build_effective_step(step, state)
     assert eff.intent == "Click the next title"
     assert eff.type == "click"
 
 
 def test_build_effective_step_with_listings_injects_scroll_directive():
+    runner = _runner_stub()
     state = _state()
     state.listings_on_page = 3
     step = MicroIntent(intent="Click the next title", type="click", section="extraction")
 
-    eff = RunExecutor._build_effective_step(step, state)
+    eff = RunExecutor(runner)._build_effective_step(step, state)
     assert "Scroll down past the first 3 listings" in eff.intent
     assert "Then click the next listing title" in eff.intent
     assert eff.type == "click"
 
 
 def test_build_effective_step_preserves_params_and_hints():
+    runner = _runner_stub()
     state = _state()
     step = MicroIntent(
         intent="Submit", type="submit",
         params={"label": "Login"},
         hints={"layout": "single"},
     )
-    eff = RunExecutor._build_effective_step(step, state)
+    eff = RunExecutor(runner)._build_effective_step(step, state)
     assert eff.params == {"label": "Login"}
     assert eff.hints == {"layout": "single"}
 

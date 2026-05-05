@@ -31,24 +31,33 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+from mantis_agent.gym.listings_scanner import ListingsScanner
 from mantis_agent.gym.step_context import StepContext
 from mantis_agent.gym.step_handlers.claude_step import ClaudeStepHandler
 from mantis_agent.plan_decomposer import MicroIntent
 
 
 class _FakeRunner:
-    """Minimal back-reference. Tests poke ``costs`` / ``_seen_urls`` /
+    """Minimal back-reference. Tests poke ``costs`` / ``scanner`` /
     ``_last_known_url`` / ``_last_extracted`` and rely on ``_lead_key``
     / ``_lead_has_phone`` / ``_current_item_label`` being callable.
+
+    Phase 4 of EPIC #161: dedup state lives on a real ListingsScanner
+    instance now (was a bare ``_seen_urls`` set on the runner).
     """
 
     def __init__(self) -> None:
         self.costs: dict[str, float] = {"claude_extract": 0}
-        self._seen_urls: set[str] = set()
+        self.scanner = ListingsScanner()
         self._current_page = 1
         self._last_known_url = ""
         self._last_extracted: dict[str, Any] = {}
         self.scroll_state_calls: list[dict] = []
+
+    @property
+    def _seen_urls(self) -> set[str]:
+        """Backward-compat shim mirroring the runner's property delegate."""
+        return self.scanner.seen_urls
 
     def _lead_key(self, summary: str) -> str:
         return summary[:32]
