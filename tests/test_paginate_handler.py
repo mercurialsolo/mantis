@@ -22,7 +22,6 @@ No Xvfb, no GymRunner, no real ClaudeExtractor.
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock
 
 from mantis_agent.gym.step_context import StepContext
