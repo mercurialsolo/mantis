@@ -197,6 +197,12 @@ class MicroPlanRunner:
         from .step_handlers import default_registry as _default_registry
         self._handler_registry = _default_registry(self)
 
+        # #161 Phase 1.3: failure-recovery dispatch lifted off run() into
+        # StepRecoveryPolicy.handle_failure. The runner's else-branch is
+        # now a thin "ask the policy, persist, break-or-continue" wrapper.
+        from .step_recovery import StepRecoveryPolicy
+        self._recovery_policy = StepRecoveryPolicy(self)
+
     # ── Listings-scan state — delegates to ``self.scanner`` (#161 Phase 1.2) ──
     # 70+ internal call sites, external readers (checkpoint_manager,
     # browser_state), and existing test fixtures (test_plan_aware_reverse,
@@ -885,172 +891,28 @@ class MicroPlanRunner:
                 step_index += 1
                 persist(step_index, status="running")
             else:
-                # Check required/gate constraints FIRST
-                if step.required:
-                    attempt = step_retry_counts.get(step_index, 0) + 1
-                    if attempt <= self.max_retries:
-                        step_retry_counts[step_index] = attempt
-                        logger.warning(f"  [{step_index}] REQUIRED step failed — retry {attempt}/{self.max_retries}")
-                        persist(step_index, status="running", halt_reason=f"required_retry:{step.type}:{attempt}")
-                        time.sleep(3)
-                        continue  # Retry the same step
-                    else:
-                        logger.error(f"  [{step_index}] REQUIRED step failed after {self.max_retries} retries — HALTING")
-                        print(f"  HALT: Required step '{step.intent[:50]}' failed. Cannot proceed.")
-                        persist(step_index, status="halted", halt_reason=f"required_failed:{step.type}")
-                        break
-
-                if step.gate:
-                    # If Cloudflare/anti-bot detected, retry navigate + gate once
-                    gate_data = step_result.data or ""
-                    gate_retry_key = f"gate_retry_{step_index}"
-                    if (
-                        "cloudflare" in gate_data.lower()
-                        or "blocked" in gate_data.lower()
-                        or "security" in gate_data.lower()
-                        or "something went wrong" in gate_data.lower()
-                        or "request fail" in gate_data.lower()
-                    ):
-                        if not step_retry_counts.get(gate_retry_key):
-                            step_retry_counts[gate_retry_key] = 1
-                            print("  [gate] Anti-bot detected — waiting 15s and retrying from navigate")
-                            time.sleep(15)
-                            # Re-run navigate step (step 0) then retry gate
-                            nav_step = plan.steps[0] if plan.steps[0].type == "navigate" else None
-                            if nav_step:
-                                self._execute_navigate(nav_step, 0)
-                                time.sleep(5)
-                            persist(step_index, status="running", halt_reason="gate_retry")
-                            continue  # Retry the gate step
-                    logger.error(f"  [{step_index}] GATE FAILED: {step.verify[:60]} — HALTING")
-                    print(f"  HALT: Gate verification '{step.verify[:50]}' failed. Setup incomplete.")
-                    persist(step_index, status="halted", halt_reason="gate_failed")
+                # EPIC #161 Phase 1.3 dispatch lift: failure-recovery
+                # if/elif (165 LOC pre-cleanup) lives on
+                # ``StepRecoveryPolicy.handle_failure``. Side effects
+                # (sleeps, env.step, _reverse_step, _execute_navigate,
+                # _ensure_results_filters, retry-count mutations,
+                # loop_counters updates) happen inside the method;
+                # the runner just persists + advances per the outcome.
+                outcome = self._recovery_policy.handle_failure(
+                    step=step,
+                    step_result=step_result,
+                    plan=plan,
+                    step_index=step_index,
+                    step_retry_counts=step_retry_counts,
+                    loop_counters=loop_counters,
+                    max_retries=self.max_retries,
+                    listings_on_page=listings_on_page,
+                )
+                step_index = outcome.step_index
+                if outcome.halt:
+                    persist(step_index, status="halted", halt_reason=outcome.halt_reason)
                     break
-
-                # Handle failure based on step type
-                if step.type in ("navigate",):
-                    logger.error(f"  [{step_index}] NAVIGATE FAILED — cannot proceed")
-                    self._reverse_step(step)
-                    persist(step_index, status="halted", halt_reason="navigate_failed")
-                    break
-                elif step.type in ("click",):
-                    # Check if page exhausted (no more listings)
-                    if step_result.data == "page_exhausted":
-                        logger.info(f"  [{step_index}] PAGE EXHAUSTED — jumping to paginate")
-                        # Find paginate step and jump there
-                        for j in range(step_index + 1, len(plan.steps)):
-                            if plan.steps[j].type == "paginate":
-                                step_index = j
-                                break
-                        else:
-                            # No paginate step — find next loop
-                            for j in range(step_index + 1, len(plan.steps)):
-                                if plan.steps[j].type == "loop":
-                                    step_index = j
-                                    break
-                            else:
-                                step_index += 1
-                        persist(step_index, status="running", halt_reason="page_exhausted")
-                        continue
-                    if step_result.data in ("scan_error", "page_blocked"):
-                        attempt = step_retry_counts.get(step_index, 0) + 1
-                        if attempt <= self.max_retries:
-                            step_retry_counts[step_index] = attempt
-                            wait_s = 12 if step_result.data == "page_blocked" else 4
-                            logger.warning(
-                                f"  [{step_index}] {step_result.data.upper()} — "
-                                f"waiting {wait_s}s and retrying ({attempt}/{self.max_retries})"
-                            )
-                            persist(step_index, status="running", halt_reason=f"{step_result.data}_retry:{attempt}")
-                            time.sleep(wait_s)
-                            continue
-                        logger.warning(f"  [{step_index}] {step_result.data.upper()} — retry budget exhausted")
-                        if step_result.data == "page_blocked":
-                            reload_key = f"page_blocked_reload_{step_index}"
-                            reload_attempt = step_retry_counts.get(reload_key, 0) + 1
-                            if reload_attempt <= 1 and self._ensure_results_filters(
-                                step_index, force_reload=True
-                            ):
-                                step_retry_counts[reload_key] = reload_attempt
-                                step_retry_counts[step_index] = 0
-                                logger.warning(
-                                    f"  [{step_index}] PAGE_BLOCKED — reloaded filtered URL, retrying click"
-                                )
-                                persist(step_index, status="running", halt_reason="page_blocked_reload")
-                                continue
-                            logger.error(
-                                f"  [{step_index}] PAGE_BLOCKED after filtered reload — halting"
-                            )
-                            print("  HALT: Filtered results page is blocked/erroring.")
-                            persist(step_index, status="halted", halt_reason="page_blocked")
-                            break
-                    # Click failed — skip extraction cycle to loop
-                    logger.warning(f"  [{step_index}] CLICK FAILED — skipping to next")
-                    try:
-                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
-                        time.sleep(0.5)
-                    except Exception:
-                        pass
-                    for j in range(step_index + 1, len(plan.steps)):
-                        if plan.steps[j].type == "loop":
-                            step_index = j
-                            break
-                    else:
-                        step_index += 1
-                    persist(step_index, status="running", halt_reason="click_failed")
-                    continue
-                elif step.type in ("filter",):
-                    # Filter failure is non-fatal — skip and try next filter
-                    logger.warning(f"  [{step_index}] FILTER FAILED — skipping")
-                    self._reverse_step(step)
-                    step_index += 1
-                    persist(step_index, status="running", halt_reason="filter_failed")
-                elif step.type in ("scroll",):
-                    # Scroll "failure" usually means the model didn't call done()
-                    # but the page DID scroll — treat as success
-                    logger.info(f"  [{step_index}] Scroll completed (no done() but page changed)")
-                    step_index += 1
-                    persist(step_index, status="running", halt_reason="scroll_no_done")
-                elif step.type in ("navigate_back",):
-                    # Back failure — try multiple times and verify
-                    logger.warning(f"  [{step_index}] BACK FAILED — retrying Alt+Left")
-                    for back_attempt in range(3):
-                        try:
-                            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"}))
-                            time.sleep(3)
-                        except Exception:
-                            pass
-                        # Verify: check if URL is back on search results
-                        if self.extractor:
-                            screenshot = self.env.screenshot()
-                            check = self.extractor.extract(screenshot)
-                            url = check.url if check else ""
-                            if url:
-                                self._last_known_url = url
-                            if url and self.site_config.is_results_page(url) and not self.site_config.is_detail_page(url):
-                                logger.info(f"  [back] Verified on results page after {back_attempt+1} attempts")
-                                break
-                    step_index += 1
-                    persist(step_index, status="running", halt_reason="navigate_back_recovered")
-                elif step.type in ("paginate",):
-                    # Paginate failed — no new page loaded, stop the pipeline
-                    logger.warning(f"  [{step_index}] PAGINATE FAILED — no more pages, ending")
-                    # Exhaust the outer loop so it doesn't restart on the same page
-                    for k in list(loop_counters.keys()):
-                        loop_counters[k] = 999999
-                    step_index += 1
-                    persist(step_index, status="running", halt_reason="paginate_exhausted")
-                elif step.type in ("extract_url", "extract_data"):
-                    # Claude-only step failed — skip
-                    step_index += 1
-                    persist(step_index, status="running", halt_reason=f"{step.type}_failed")
-                else:
-                    # Generic failure — reverse and skip
-                    self._reverse_step(step)
-                    step_result.reversed = True
-                    logger.warning(f"  [{step_index}] FAILED + reversed — skipping")
-                    step_index += 1
-                    persist(step_index, status="running", halt_reason=f"{step.type}_failed")
+                persist(step_index, status="running", halt_reason=outcome.halt_reason)
 
         logger.info(f"MicroPlan complete: {len(results)} steps executed")
         # Final cost summary
