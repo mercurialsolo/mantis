@@ -1747,213 +1747,30 @@ class MicroPlanRunner:
         return handler.execute(step, ctx)
 
     def _execute_paginate_layered(self, step: MicroIntent, index: int) -> StepResult:
-        """Layered pagination: URL-based → Claude-guided → Holo3 fallback.
+        """Backwards-compat shim — delegates to :class:`PaginateHandler`.
 
-        Layer 1: URL-based — if we can detect the current page URL pattern,
-                 construct page N+1 URL and navigate directly. Fastest, no
-                 risk of clicking sidebar filters.
-        Layer 2: Claude-guided — End key then Page_Up to get pagination bar
-                 in view. Claude finds Next button coordinates.
-        Layer 3: Holo3 — simple 1-sentence task as last resort.
+        Phase 2 of EPIC #161: layered pagination (URL-based →
+        Claude-guided → Holo3 fallback) lives in
+        ``step_handlers/paginate.py`` so it's unit-testable in
+        isolation. The runner shim stays so external callers (test
+        fixtures, host integrations) keep working unchanged.
         """
-
-        # Track current page number
-        if not hasattr(self, '_current_page'):
-            self._current_page = 1
-        current_page = self._current_page
-
-        # ── Layer 1: URL-based pagination ──
-        # Use the stored results base URL (from initial navigate), NOT the current page URL
-        # (which might be a detail page after extraction)
-        base_url = getattr(self, '_results_base_url', '')
-        if base_url and self.site_config.pagination_format:
-            next_page = self._current_page + 1
-            next_url = self.site_config.paginated_url(base_url, next_page)
-
-            # Ensure full URL
-            if not next_url.startswith("http"):
-                next_url = f"https://www.{next_url}"
-
-            logger.info(f"  [paginate] Layer 1: URL-based → {next_url[:80]}")
-            try:
-                self.env.reset(task="paginate_url", start_url=next_url)
-                time.sleep(10)
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-                time.sleep(2)
-                self._current_page = next_page
-                self._last_known_url = next_url
-                self._set_scroll_state(context="results_top", url=next_url, page_downs=0, wheel_downs=0)
-                self.dynamic_verifier.record_pagination(
-                    page=current_page,
-                    success=True,
-                    method="url",
-                    next_url=next_url,
-                )
-                self.dynamic_verifier.record_page_start(page=next_page, url=next_url)
-                return StepResult(step_index=index, intent=step.intent, success=True,
-                                steps_used=0, data=f"url_paginate_page{next_page}")
-            except Exception as e:
-                logger.warning(f"  [paginate] Layer 1 failed: {e}")
-                self.dynamic_verifier.record_pagination(
-                    page=current_page,
-                    success=False,
-                    method="url",
-                    next_url=next_url,
-                    reason=f"url_navigation_failed:{e}",
-                )
-
-        # ── Layer 2: Claude-guided ──
-        logger.info("  [paginate] Layer 2: Claude-guided (End → Page_Up)")
-        claude_result = self._execute_claude_guided_paginate(step, index)
-        if claude_result.success:
-            self._current_page += 1
-            self._last_known_url = self._current_results_page_url()
-            self._set_scroll_state(context="results_top", url=self._last_known_url, page_downs=0, wheel_downs=0)
-            self.dynamic_verifier.record_pagination(
-                page=current_page,
-                success=True,
-                method="claude_guided",
-                next_url=self._last_known_url,
-            )
-            self.dynamic_verifier.record_page_start(page=self._current_page, url=self._last_known_url)
-            return claude_result
-
-        # ── Layer 3: Holo3 fallback ──
-        logger.info("  [paginate] Layer 3: Holo3 fallback")
-        # Scroll to a calculated position: End then 2x Page_Up to avoid sidebar
-        try:
-            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(0.5)
-            # Scroll down ~80% of the page (past listings, before footer/sidebar bottom)
-            for _ in range(6):
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
-                time.sleep(0.5)
-        except Exception:
-            pass
-
-        holo_result = self._execute_holo3_step(
-            MicroIntent(
-                intent="Click the Next page button or the next page number.",
-                type="paginate",
-                budget=8,
-                grounding=True,
-            ),
-            index,
-        )
-        if holo_result.success:
-            self._current_page += 1
-            self._last_known_url = self._current_results_page_url()
-            self._set_scroll_state(context="results_top", url=self._last_known_url, page_downs=0, wheel_downs=0)
-            self.dynamic_verifier.record_pagination(
-                page=current_page,
-                success=True,
-                method="holo3",
-                next_url=self._last_known_url,
-            )
-            self.dynamic_verifier.record_page_start(page=self._current_page, url=self._last_known_url)
-        else:
-            self.dynamic_verifier.record_pagination(
-                page=current_page,
-                success=False,
-                method="all_layers",
-                reason="next_control_not_found",
-            )
-        return holo_result
+        from .step_handlers.paginate import PaginateHandler
+        handler = PaginateHandler(self)
+        ctx = self._build_step_context(index)
+        return handler.execute(step, ctx)
 
     def _execute_claude_guided_paginate(self, step: MicroIntent, index: int) -> StepResult:
-        """Claude finds Next button → Holo3 clicks it.
+        """Backwards-compat shim — delegates to :meth:`PaginateHandler._claude_guided_paginate`.
 
-        Scrolls near the bottom, Claude finds pagination, retry on error, bounded grounding.
+        Layer 2 of the layered pagination strategy. Some tests
+        previously exercised this directly; the shim keeps that path
+        working while the body is unit-testable on the handler.
         """
-        # Clear focus traps such as open menus or overlays before repositioning.
-        try:
-            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
-            time.sleep(0.5)
-        except Exception:
-            pass
-
-        # Go to bottom first so the pagination bar is likely on screen.
-        try:
-            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
-            time.sleep(3)
-        except Exception:
-            pass
-
-        # Find pagination target with retry. On retry, move slightly up so the
-        # pagination bar is not flush with the screen edge or hidden by footer UI.
-        target = None
-        screenshot = None
-        for attempt in range(3):
-            if attempt == 1:
-                try:
-                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Up"}))
-                    time.sleep(1.5)
-                except Exception:
-                    pass
-            elif attempt == 2:
-                try:
-                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
-                    time.sleep(2)
-                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Up"}))
-                    time.sleep(1.5)
-                except Exception:
-                    pass
-
-            screenshot = self.env.screenshot()
-            target = self.extractor.find_paginate_target(screenshot)
-            self.costs["claude_extract"] += 1
-
-            if isinstance(target, tuple) and len(target) == 3:
-                break
-            if isinstance(target, tuple) and target[0] == "not_found":
-                logger.warning(f"  [claude-paginate] no control visible on attempt {attempt+1}/3")
-                continue
-            if isinstance(target, tuple) and target[0] == "error":
-                logger.warning(f"  [claude-paginate] parse/error on attempt {attempt+1}/3")
-                continue
-
-            logger.warning(f"  [claude-paginate] empty response on attempt {attempt+1}/3")
-
-        if not isinstance(target, tuple) or len(target) != 3:
-            logger.info("  [claude-paginate] No Next control found after retries")
-            return StepResult(step_index=index, intent=step.intent, success=False)
-
-        x, y, label = target
-
-        # Grounding with delta bound
-        if self.grounding:
-            grounding_result = self.grounding.ground(screenshot, f"pagination control {label or 'Next'}", x, y)
-            self.costs["claude_grounding"] += 1
-            dx = abs(grounding_result.x - x)
-            dy = abs(grounding_result.y - y)
-            if grounding_result.confidence > 0.5 and dx < 150 and dy < 150:
-                x, y = grounding_result.x, grounding_result.y
-                logger.info(f"  [grounding] paginate refined to ({x}, {y}) delta=({dx},{dy})")
-            else:
-                logger.info(f"  [grounding] paginate rejected: delta=({dx},{dy}) conf={grounding_result.confidence}")
-
-        # Click
-        try:
-            self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
-            self.costs["gpu_steps"] += 1
-            self.costs["gpu_seconds"] += 4
-            self.costs["proxy_mb"] += 5.0
-        except Exception as e:
-            logger.warning(f"  [claude-paginate] Click failed: {e}")
-            return StepResult(step_index=index, intent=step.intent, success=False)
-
-        # Wait for page load, then scroll to top
-        time.sleep(8)
-        try:
-            self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(2)
-        except Exception:
-            pass
-
-        logger.info(f"  [claude-paginate] Clicked '{label[:20]}' at ({x}, {y})")
-        self._listings_on_page = 0  # Reset for new page
-        self._set_scroll_state(context="pagination_clicked", page_downs=0, wheel_downs=0)
-        return StepResult(step_index=index, intent=step.intent, success=True, steps_used=1)
+        from .step_handlers.paginate import PaginateHandler
+        handler = PaginateHandler(self)
+        ctx = self._build_step_context(index)
+        return handler._claude_guided_paginate(step, ctx, index)
 
     @property
     def _listings_on_page(self):
