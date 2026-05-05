@@ -283,7 +283,10 @@ def test_select_option_option_not_found_dismisses_open_dropdown():
 
 def test_execute_step_routes_fill_field_to_form_dispatch():
     """The wiring: when _execute_step sees fill_field, it dispatches to
-    _execute_claude_guided_form (not _execute_holo3_step, not _execute_claude_step)."""
+    the registered FormHandler (not Holo3StepHandler, not ClaudeStepHandler).
+    EPIC #161 Phase 2 cleanup moved dispatch from runner-method shims to
+    registry-driven; the spy now sits on the registered handler instead
+    of the runner method."""
     env = _FakeEnv()
     extractor = MagicMock()
     extractor.find_form_target.return_value = {
@@ -291,15 +294,21 @@ def test_execute_step_routes_fill_field_to_form_dispatch():
     }
     runner = _runner_with_extractor(env, extractor)
 
-    # Spy on the dispatch so we don't run the actual form logic — just verify it's reached.
-    runner._execute_claude_guided_form = MagicMock(  # type: ignore[method-assign]
-        return_value=StepResult(step_index=0, intent="x", success=True),
+    # Replace the registered FormHandler with a spy stub so we don't run
+    # the actual form logic — just verify the dispatch reaches it.
+    spy = MagicMock(
+        step_type="submit",
+        execute=MagicMock(return_value=StepResult(step_index=0, intent="x", success=True)),
     )
+    runner._handler_registry.register_for_types(spy, ("fill_field", "submit", "select_option"))
 
     intent = MicroIntent(intent="x", type="fill_field", params={"label": "x", "value": "y"})
     result = runner._execute_step(intent, index=0)
 
-    runner._execute_claude_guided_form.assert_called_once()
+    spy.execute.assert_called_once()
+    # The dispatched MicroIntent retains its native type (no synthesised submit
+    # for native fill_field steps; that synthesis is only for click→form).
+    assert spy.execute.call_args.args[0].type == "fill_field"
     assert result.success is True
 
 
@@ -356,14 +365,18 @@ def test_click_with_layout_single_routes_to_form_dispatch():
 def test_click_with_no_hint_in_extraction_section_uses_listings_dispatch():
     """A click step with no layout hint in section=extraction is the
     canonical listings-flow case and must keep routing through
-    find_all_listings — no regression on existing BoatTrader-style plans."""
+    ClaudeGuidedClickHandler (find_all_listings) — no regression on
+    existing BoatTrader-style plans. Cleanup-PR equivalent: spy sits on
+    the registered click handler, not the runner shim."""
     env = _FakeEnv()
     extractor = MagicMock()
     runner = _runner_with_extractor(env, extractor)
     runner._ensure_results_filters = MagicMock(return_value=True)  # type: ignore[method-assign]
-    runner._execute_claude_guided_click = MagicMock(  # type: ignore[method-assign]
-        return_value=StepResult(step_index=0, intent="x", success=True),
+    spy = MagicMock(
+        step_type="click",
+        execute=MagicMock(return_value=StepResult(step_index=0, intent="x", success=True)),
     )
+    runner._handler_registry.register(spy)
 
     intent = MicroIntent(
         intent="Click the next un-extracted listing",
@@ -373,7 +386,7 @@ def test_click_with_no_hint_in_extraction_section_uses_listings_dispatch():
     )
     result = runner._execute_step(intent, index=0)
 
-    runner._execute_claude_guided_click.assert_called_once()
+    spy.execute.assert_called_once()
     assert result.success is True
 
 
@@ -667,6 +680,9 @@ def test_run_loop_preserves_params_on_effective_step():
     params dict and no value to type / button label to find. Caught in
     production E2E against host-test-crm where login fired but typed empty
     strings into the User ID and Password fields.
+
+    EPIC #161 Phase 2 cleanup: dispatch goes through registry-driven
+    FormHandler, so the spy sits on the registered handler's ``execute``.
     """
     env = _FakeEnv()
     extractor = MagicMock()
@@ -678,11 +694,12 @@ def test_run_loop_preserves_params_on_effective_step():
     # Capture every dispatch invocation so we can inspect the effective_step.
     dispatched: list[MicroIntent] = []
 
-    def spy(step: MicroIntent, index: int) -> StepResult:
+    def _spy_execute(step, ctx):
         dispatched.append(step)
-        return StepResult(step_index=index, intent=step.intent, success=True)
+        return StepResult(step_index=int(ctx.state.get("index", 0)), intent=step.intent, success=True)
 
-    runner._execute_claude_guided_form = spy  # type: ignore[method-assign]
+    spy = MagicMock(step_type="submit", execute=_spy_execute)
+    runner._handler_registry.register_for_types(spy, ("fill_field", "submit", "select_option"))
 
     plan = MicroPlan(domain="test")
     plan.steps.append(

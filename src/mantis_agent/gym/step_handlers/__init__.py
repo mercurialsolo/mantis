@@ -27,39 +27,76 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..step_context import HandlerRegistry
+from .claude_step import ClaudeStepHandler
+from .click import ClaudeGuidedClickHandler
+from .filter import ClaudeGuidedFilterHandler
 from .form import ClaudeGuidedFormHandler
+from .holo3 import Holo3StepHandler
 from .navigate import NavigateHandler
+from .paginate import PaginateHandler
 
 if TYPE_CHECKING:
     from ..micro_runner import MicroPlanRunner
 
 
-__all__ = ["ClaudeGuidedFormHandler", "NavigateHandler", "default_registry"]
+__all__ = [
+    "ClaudeGuidedClickHandler",
+    "ClaudeGuidedFilterHandler",
+    "ClaudeGuidedFormHandler",
+    "ClaudeStepHandler",
+    "Holo3StepHandler",
+    "NavigateHandler",
+    "PaginateHandler",
+    "default_registry",
+]
 
 
 def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
     """Build the default registry bound to one runner instance.
 
-    Handlers that need access to runner-only state (e.g.
-    ``_current_page``, ``_last_known_url``, ``_reset_results_scan_state``)
-    take the runner as a back-reference at construction. This mirrors the
-    BrowserState / CheckpointManager pattern from #115 — a thin shim that
-    can be tested with a fake parent.
+    Every handler that's been extracted under EPIC #161 Phase 2 is
+    registered here. Pre-settle sleeps that used to live in
+    ``MicroPlanRunner._execute_step``'s if/elif have been moved into
+    each handler's ``execute()`` so registry-first dispatch produces
+    identical timing behavior.
 
-    Returns a registry with the handlers that have been migrated so far.
-    Step types not in the returned registry continue to be dispatched by
-    the legacy branches in ``MicroPlanRunner._execute_step``.
+    Multi-binding (one handler instance for several step types) uses
+    ``register_for_types``:
 
-    Form handler is constructed but NOT registered for fill_field /
-    submit / select_option in this PR — the dispatch in
-    ``_execute_step`` adds an extra ``time.sleep(2)`` pre-settle on
-    those branches that registry-first dispatch would bypass. Merging
-    the two settles requires updating the dispatch and the handler in
-    one step; that move happens when the click branch's layout-hint
-    branching collapses into a router. The form handler is reachable
-    today only through the runner shim, which preserves the existing
-    dispatch + handler total settle (2s + 2s = 4s).
+    - ``ClaudeGuidedFormHandler`` → ``fill_field`` / ``submit`` /
+      ``select_option`` (form-shaped dispatch)
+    - ``ClaudeStepHandler`` → ``extract_url`` / ``extract_data``
+      (Claude-only steps)
+    - ``Holo3StepHandler`` → ``scroll`` / ``navigate_back`` (the only
+      types that fall through to Holo3 today)
+
+    The ``click`` type is registered to ``ClaudeGuidedClickHandler``
+    BUT the dispatch in ``_execute_step`` keeps a small layout-hint
+    router that decides between listings click (this handler) and
+    single-element form click (synthesises a ``submit``-typed
+    ``MicroIntent`` and dispatches to FormHandler). That router can't
+    move into the registry without a meta-handler abstraction; it stays
+    on the runner for now.
+
+    Step types not in the returned registry (gate flag, claude_only
+    flag, navigate_back-with-detail-tab special case) continue to be
+    dispatched inline by ``_execute_step``.
     """
     reg = HandlerRegistry()
     reg.register(NavigateHandler(runner))
+    reg.register(ClaudeGuidedClickHandler(runner))
+    reg.register(PaginateHandler(runner))
+    reg.register(ClaudeGuidedFilterHandler(runner))
+    reg.register_for_types(
+        ClaudeGuidedFormHandler(runner),
+        ("fill_field", "submit", "select_option"),
+    )
+    reg.register_for_types(
+        ClaudeStepHandler(runner),
+        ("extract_url", "extract_data"),
+    )
+    reg.register_for_types(
+        Holo3StepHandler(runner),
+        ("scroll", "navigate_back"),
+    )
     return reg

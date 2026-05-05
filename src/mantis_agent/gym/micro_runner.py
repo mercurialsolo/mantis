@@ -1370,55 +1370,61 @@ class MicroPlanRunner:
         )
 
     def _execute_step(self, step: MicroIntent, index: int) -> StepResult:
-        """Execute a single micro-intent.
+        """Execute a single micro-intent — registry-first dispatch.
 
-        Registry-first dispatch (#161 Phase 2): step types whose handler
-        has been migrated to ``step_handlers/<type>.py`` are dispatched
-        through the registry. Types without a registered handler fall
-        through to the legacy if/elif below — that branch shrinks one
-        handler at a time as Phase 2 progresses.
+        EPIC #161 Phase 2 cleanup: every per-type handler (Navigate,
+        Click, Form, ClaudeStep, Paginate, Filter, Holo3) is registered
+        in ``self._handler_registry`` and reachable by step type. The
+        if/elif fan-out collapsed to four explicit special cases:
+
+        1. **Click layout router** — type="click" branches to listings
+           click (ClaudeGuidedClickHandler) or single-element click
+           (FormHandler with a synthesised submit MicroIntent) based
+           on ``step.hints["layout"]`` and ``step.section``.
+        2. **Gate verify** — ``step.gate=True`` runs Claude's
+           verify_gate inline (10 LOC, not worth a handler module).
+        3. **claude_only flag** — promotes any step type to
+           ClaudeStepHandler regardless of step.type.
+        4. **navigate_back close-tab** — when a previous click opened
+           a detail in a new tab, navigate_back closes the tab instead
+           of going through history.
+
+        Pre-settle sleeps that used to live in this method's branches
+        have been moved into each handler's ``execute()`` so the timing
+        is identical.
         """
-        registered = self._handler_registry.get(step.type)
-        if registered is not None:
-            ctx = self._build_step_context(index)
-            return registered.execute(step, ctx)
+        registry = self._handler_registry
 
-        # Navigate steps: use env.reset() with URL instead of Holo3
-        if step.type == "navigate":
-            return self._execute_navigate(step, index)
-
-        # Click steps: dispatch by hints["layout"] (plan-driven, see issue #86).
-        # Default for click in an "extraction" section = listings click. Pages
-        # outside the extraction section, or steps that explicitly hint
-        # layout="single", route through find_form_target instead.
+        # ── Special case: click layout router ────────────────────────────
+        # Listings click vs single-element click can't both bind to "click"
+        # in the registry, so the runner keeps the layout decision. Both
+        # branches end at a registered handler.
         if step.type == "click" and self.extractor:
             layout_hint = (step.hints or {}).get("layout", "")
             is_listings = (
                 layout_hint == "listings"
                 or (not layout_hint and step.section == "extraction")
             )
+            ctx = self._build_step_context(index)
             if is_listings:
                 if not self._ensure_results_filters(index):
                     return StepResult(
                         step_index=index, intent=step.intent, success=False,
                         data="filters_not_applied",
                     )
-                # Brief settle — page may still be loading after navigate/paginate
-                time.sleep(2)
-                return self._execute_claude_guided_click(step, index)
-            # Single-element click (nav link, button, anything labelled).
-            time.sleep(2)
-            return self._execute_claude_guided_form(
-                MicroIntent(
-                    intent=step.intent, type="submit",  # reuse submit dispatch
-                    budget=step.budget, section=step.section,
-                    required=step.required,
-                    params={"label": (step.params or {}).get("label", "")},
-                ),
-                index,
+                return registry.get("click").execute(step, ctx)
+            # Single-element click — synthesise a submit MicroIntent and
+            # dispatch to the form handler (same code path the form-shaped
+            # types use natively).
+            synthesised = MicroIntent(
+                intent=step.intent, type="submit",
+                budget=step.budget, section=step.section,
+                required=step.required,
+                params={"label": (step.params or {}).get("label", "")},
             )
+            return registry.get("submit").execute(synthesised, ctx)
 
-        # Gate steps: dedicated verifier (not extract_data)
+        # ── Special case: gate verify ────────────────────────────────────
         if step.gate and self.extractor:
             print(f"  [gate] Verifying: {(step.verify or step.intent)[:80]}")
             time.sleep(2)
@@ -1431,41 +1437,32 @@ class MicroPlanRunner:
                 success=passed, data=f"gate:{'PASS' if passed else 'FAIL'}:{reason[:100]}",
             )
 
-        # Claude-only steps (extract_url, extract_data)
+        # ── Special case: claude_only flag promotes to ClaudeStepHandler ──
         if step.claude_only:
-            # Brief settle — page may still be rendering after scroll
-            time.sleep(1)
-            return self._execute_claude_step(step, index)
+            ctx = self._build_step_context(index)
+            return registry.get("extract_url").execute(step, ctx)
 
-        # Paginate: layered strategy
-        # 1. URL-based (fastest, most reliable if URL pattern known)
-        # 2. Claude-guided with End→Page_Up viewport
-        # 3. Holo3 with calculated scroll (fallback)
+        # ── Paginate guard: ensure_results_filters before handler ────────
         if step.type == "paginate":
             if not self._ensure_results_filters(index):
                 return StepResult(
                     step_index=index, intent=step.intent, success=False,
                     data="filters_not_applied",
                 )
-            result = self._execute_paginate_layered(step, index)
-            return result
+            ctx = self._build_step_context(index)
+            return registry.get("paginate").execute(step, ctx)
 
-        # Filter steps: Claude identifies target → direct click/type (Holo3 can't handle sidebar)
-        if step.type == "filter" and self.extractor:
-            time.sleep(3)  # Longer wait — page filters may lazy-load
-            return self._execute_claude_guided_filter(step, index)
-
-        # Form-shaped steps (issue #80): login forms, edit pages, dropdowns,
-        # single labelled buttons. Use find_form_target instead of find_all_listings
-        # so non-listings pages don't return "0 cards".
-        if step.type in ("fill_field", "submit", "select_option") and self.extractor:
-            time.sleep(2)  # form pages may finish hydrating
-            return self._execute_claude_guided_form(step, index)
-
+        # ── Special case: navigate_back close-tab ─────────────────────────
         if step.type == "navigate_back" and self._opened_detail_in_new_tab:
             return self._execute_close_detail_tab(step, index)
 
-        # Holo3 steps (scroll, navigate_back, paginate)
+        # ── Registry-first for the remaining types ────────────────────────
+        handler = registry.get(step.type)
+        if handler is not None:
+            ctx = self._build_step_context(index)
+            return handler.execute(step, ctx)
+
+        # ── Fallback: unknown step type → Holo3 ──────────────────────────
         return self._execute_holo3_step(step, index)
 
     def _return_to_results_page(self) -> None:
