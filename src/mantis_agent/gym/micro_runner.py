@@ -203,6 +203,12 @@ class MicroPlanRunner:
         from .step_recovery import StepRecoveryPolicy
         self._recovery_policy = StepRecoveryPolicy(self)
 
+        # #161 Phase 3: while-loop body lifted off run() into
+        # RunExecutor.execute. The runner's run() collapses to:
+        #   build state → drive executor → run reporter → return
+        from .run_executor import RunExecutor
+        self._executor = RunExecutor(self)
+
     # ── Listings-scan state — delegates to ``self.scanner`` (#161 Phase 1.2) ──
     # 70+ internal call sites, external readers (checkpoint_manager,
     # browser_state), and existing test fixtures (test_plan_aware_reverse,
@@ -603,6 +609,12 @@ class MicroPlanRunner:
     def run(self, plan: MicroPlan, resume: bool = False) -> list[StepResult]:
         """Execute the full micro-plan.
 
+        Phase 3 of EPIC #161: the while-loop body and its surrounding
+        init / resume / finalize plumbing live in
+        :class:`~.run_executor.RunExecutor`. This method is now a thin
+        wrapper: build state, drive the executor, run the reporter,
+        return.
+
         Args:
             plan: Decomposed plan with ordered micro-intents.
             resume: If True, load checkpoint and resume from last step.
@@ -610,325 +622,27 @@ class MicroPlanRunner:
         Returns:
             List of StepResult for each executed step.
         """
-        self._final_status = "running"
+        from .run_executor import RunState
+
         if not self.plan_signature:
             self.plan_signature = self._compute_plan_signature(plan)
-
-        results: list[StepResult] = []
-        loop_counters: dict[int, int] = {}
-        listings_on_page = 0  # Track how many listings processed on current page
-        checkpoint = RunCheckpoint(
+        state = RunState.fresh(
             run_key=self.run_key,
-            plan_signature=self.plan_signature,
             session_name=self.session_name,
+            plan_signature=self.plan_signature,
         )
+        self._executor.execute(plan, state, resume=resume)
+        self._final_summary(state.results)
+        return state.results
 
-        should_resume = resume or self.resume_state
-        if should_resume:
-            loaded = RunCheckpoint.load(self.checkpoint_path)
-            if loaded:
-                if (
-                    loaded.plan_signature
-                    and self.plan_signature
-                    and loaded.plan_signature != self.plan_signature
-                ):
-                    logger.warning(
-                        "Checkpoint signature mismatch at %s; starting fresh",
-                        self.checkpoint_path,
-                    )
-                else:
-                    checkpoint = loaded
-                    results, loop_counters, listings_on_page = self._restore_from_checkpoint(checkpoint)
-                    logger.info(
-                        "Resumed from step %s, page %s, %s URLs seen, status=%s",
-                        checkpoint.step_index,
-                        checkpoint.current_page or checkpoint.page,
-                        len(self._seen_urls),
-                        checkpoint.status,
-                    )
-                    if checkpoint.status == "completed":
-                        logger.info("Checkpoint already marked complete; returning cached results")
-                        return results
+    def _final_summary(self, results: list[StepResult]) -> None:
+        """Print the MICRO-PLAN COMPLETE block and stash _final_costs.
 
-                    reentry_url = (
-                        checkpoint.reentry_url
-                        or checkpoint.current_url
-                        or self._reentry_url_for_step(plan, checkpoint.step_index)
-                    )
-                    if checkpoint.step_index > 0 and reentry_url:
-                        self._resume_browser_state(reentry_url)
-
-        step_index = checkpoint.step_index
-        step_retry_counts: dict[int, int] = {}
-        max_loop_iterations = 200  # Safety cap
-
-        if not self._results_base_url and plan.steps:
-            self._results_base_url = self._extract_url_from_intent(plan.steps[0].intent)
-            self._required_filter_tokens = self._derive_filter_tokens(self._results_base_url)
-            self.dynamic_verifier.set_required_filter_tokens(self._required_filter_tokens)
-            if self._results_base_url:
-                self.dynamic_verifier.record_page_start(
-                    page=self._current_page,
-                    url=self._current_results_page_url() or self._results_base_url,
-                )
-
-        def persist(next_step_index: int, status: str = "running", halt_reason: str = "") -> None:
-            self._persist_checkpoint(
-                checkpoint=checkpoint,
-                plan=plan,
-                results=results,
-                loop_counters=loop_counters,
-                listings_on_page=listings_on_page,
-                next_step_index=next_step_index,
-                status=status,
-                halt_reason=halt_reason,
-            )
-
-        while step_index < len(plan.steps):
-            # External cancellation (#76) — check at every step boundary.
-            if self._is_cancelled():
-                logger.info("  CANCEL_EVENT set — stopping at step %s", step_index)
-                print(f"  CANCEL: external cancel_event fired — stopping at step {step_index}")
-                persist(step_index, status="cancelled", halt_reason="cancel_event")
-                self._final_status = "cancelled"
-                break
-
-            # Pending pause (#73) — surface as paused, build PauseState in
-            # _build_runner_result.
-            if self.tool_channel.is_paused():
-                persist(step_index, status="paused", halt_reason="user_input")
-                self._final_status = "paused"
-                break
-
-            # Budget + time checks
-            elapsed = time.time() - self._run_start
-            _gpu_cost, _claude_cost, _proxy_cost, total_cost = self._cost_totals()
-
-            if total_cost >= self.max_cost:
-                print(f"  BUDGET CAP: ${total_cost:.2f} >= ${self.max_cost:.2f} — stopping")
-                persist(step_index, status="halted", halt_reason="budget_cap")
-                break
-            if elapsed >= self.max_time:
-                print(f"  TIME CAP: {elapsed/60:.0f}m >= {self.max_time/60:.0f}m — stopping")
-                persist(step_index, status="halted", halt_reason="time_cap")
-                break
-
-            step = plan.steps[step_index]
-
-            # Dynamic intent: inject listing position for click steps
-            dynamic_intent = step.intent
-            if step.type == "click" and listings_on_page > 0:
-                dynamic_intent = (
-                    f"Scroll down past the first {listings_on_page} listings. "
-                    f"Then click the next listing title text below a photo."
-                )
-            effective_step = MicroIntent(
-                intent=dynamic_intent, type=step.type, verify=step.verify,
-                budget=step.budget, reverse=step.reverse, grounding=step.grounding,
-                claude_only=step.claude_only, loop_target=step.loop_target,
-                loop_count=step.loop_count,
-                section=step.section, required=step.required, gate=step.gate,
-                params=dict(step.params or {}),  # form-vocab fill_field/submit/select_option payload
-                hints=dict(getattr(step, "hints", {}) or {}),  # plan-driven grounding hints
-            )
-
-            logger.info(f"  [{step_index:2d}] {step.type:15s} {dynamic_intent[:60]}")
-
-            # Handle loop steps — each loop step has its own counter
-            if step.type == "loop":
-                loop_counters[step_index] = loop_counters.get(step_index, 0) + 1
-                count = loop_counters[step_index]
-                max_count = step.loop_count or max_loop_iterations
-                if count < max_count:
-                    target = step.loop_target if step.loop_target >= 0 else step_index
-                    step_index = target
-                    logger.info(f"  [loop@{step_index}] iteration {count}/{max_count} → step {step_index}")
-                    persist(step_index, status="running")
-                    continue
-                else:
-                    logger.info("  [loop] max iterations reached")
-                    step_index += 1
-                    persist(step_index, status="running")
-                    continue
-
-            # Execute step
-            self._active_checkpoint_context = {
-                "checkpoint": checkpoint,
-                "plan": plan,
-                "results": results,
-                "loop_counters": loop_counters,
-                "listings_on_page": listings_on_page,
-                "step_index": step_index,
-            }
-            # #121 step 1+2: capture pre-step state. Step 1 logged it for
-            # validation; step 2 stashes it on self so _reverse_step can
-            # use the diff to skip undo work that wasn't needed.
-            pre_snapshot = step_snapshot.capture(self)
-            self._pre_step_snapshot = pre_snapshot
-            try:
-                step_result = self._execute_step(effective_step, step_index)
-            finally:
-                self._active_checkpoint_context = None
-            # Observability extras (#74): capture screenshot + invoke callback.
-            if step_result.screenshot_png is None:
-                step_result.screenshot_png = self._capture_screenshot_bytes()
-            results.append(step_result)
-            self._enforce_screenshot_cap(results)
-            self._invoke_step_callback(step_result)
-            self._record_step_costs(effective_step, step_result)
-            self._log_progress(step_result, results)
-            self._log_step_diff(pre_snapshot, effective_step, step_result)
-            # Debug screenshot dump (#152 follow-up) — when
-            # MANTIS_DEBUG_DUMP_DIR is set, save the post-step screenshot
-            # so failing runs can be inspected without re-running the
-            # whole Modal pipeline.
-            if not step_result.success:
-                self._dump_debug_screenshot(
-                    f"step{step_index}_post_{effective_step.type}",
-                    self._safe_screenshot(),
-                )
-
-            # Verify form-shape steps actually produced an observable
-            # state change (staffcrm verify follow-up). The handler can
-            # report success because the click fired, but if NOTHING in
-            # the runner's snapshot changed (URL, focus, scroll, page,
-            # viewport, extraction, new URLs seen) the click missed or
-            # the page rejected it silently — common login failure mode.
-            # Demote to fail so the existing retry loop kicks in.
-            #
-            # Pure-observational: uses the #121 step_snapshot diff, no
-            # regex / heuristic / vision call. Skips fill_field (no
-            # state change is the normal case there — the field just
-            # gains focus).
-            if (
-                step_result.success
-                and effective_step.type in ("submit", "select_option")
-            ):
-                try:
-                    post_snapshot = step_snapshot.capture(self)
-                    delta = step_snapshot.diff(pre_snapshot, post_snapshot)
-                except Exception as exc:  # noqa: BLE001 — never break runs
-                    logger.debug("post-submit diff capture failed: %s", exc)
-                    delta = None
-                if delta is not None and not delta.has_changes:
-                    logger.warning(
-                        "  [%d] %s reported success but no observable state "
-                        "change — demoting to failure (will retry)",
-                        step_index, effective_step.type,
-                    )
-                    step_result.success = False
-                    step_result.data = (
-                        step_result.data or ""
-                    ) + ":no_state_change"
-
-            # Handle dedup: extract_url returned DUPLICATE → skip to loop
-            if step_result.data and "DUPLICATE" in step_result.data:
-                logger.info(f"  [{step_index}] DEDUP — skipping to next listing")
-                # Go back to results page first
-                try:
-                    self._return_to_results_page()
-                except Exception:
-                    pass
-                # Jump to loop step
-                for j in range(step_index + 1, len(plan.steps)):
-                    if plan.steps[j].type == "loop":
-                        step_index = j
-                        break
-                else:
-                    step_index += 1
-                listings_on_page += 1  # Count it as "processed" for scroll-past
-                persist(step_index, status="running", halt_reason="duplicate_listing")
-                continue
-
-            if step_result.success:
-                step_retry_counts.pop(step_index, None)
-                # Track listing progress
-                if step.type == "paginate":
-                    listings_on_page = 0
-                    self._listings_on_page = 0
-                    self._extracted_titles = []  # New page = new listings
-                    self._page_listings = []   # Reset card cache
-                    self._page_listing_index = 0
-                    self._viewport_stage = 0  # Start from Home on new page
-                    # Reset inner loop counters — new page means fresh listing loop
-                    for k in list(loop_counters.keys()):
-                        if k != step_index:  # Don't reset the outer loop's own counter
-                            loop_counters[k] = 0
-                    # Scroll to top of new page + wait for load
-                    try:
-                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-                        time.sleep(8)
-                    except Exception:
-                        pass
-                    logger.info("  [paginate] Success — reset to top of new page")
-                    self._last_known_url = self._current_results_page_url() or self._last_known_url
-
-                # Verify navigate_back: check if we left the detail page
-                if step.type == "navigate_back" and self.extractor:
-                    time.sleep(2)
-                    screenshot = self.env.screenshot()
-                    check = self.extractor.extract(screenshot)
-                    self.costs["claude_extract"] += 1
-                    url = check.url if check else ""
-                    if url:
-                        self._last_known_url = url
-                    if url and self.site_config.is_detail_page(url):
-                        # Still on detail page — give the CUA a recovery task
-                        # Use the plan's reverse intent, not hardcoded site knowledge
-                        recovery_intent = step.reverse or "Go back to the previous page."
-                        logger.warning(f"  [back-verify] Still on detail page — CUA recovery: {recovery_intent[:50]}")
-                        recovery = self._execute_holo3_step(
-                            MicroIntent(
-                                intent=recovery_intent,
-                                type="navigate_back",
-                                budget=8,
-                                grounding=True,
-                            ),
-                            step_index,
-                        )
-                        self.costs["gpu_steps"] += recovery.steps_used
-
-                step_index += 1
-                persist(step_index, status="running")
-            else:
-                # EPIC #161 Phase 1.3 dispatch lift: failure-recovery
-                # if/elif (165 LOC pre-cleanup) lives on
-                # ``StepRecoveryPolicy.handle_failure``. Side effects
-                # (sleeps, env.step, _reverse_step, _execute_navigate,
-                # _ensure_results_filters, retry-count mutations,
-                # loop_counters updates) happen inside the method;
-                # the runner just persists + advances per the outcome.
-                outcome = self._recovery_policy.handle_failure(
-                    step=step,
-                    step_result=step_result,
-                    plan=plan,
-                    step_index=step_index,
-                    step_retry_counts=step_retry_counts,
-                    loop_counters=loop_counters,
-                    max_retries=self.max_retries,
-                    listings_on_page=listings_on_page,
-                )
-                step_index = outcome.step_index
-                if outcome.halt:
-                    persist(step_index, status="halted", halt_reason=outcome.halt_reason)
-                    break
-                persist(step_index, status="running", halt_reason=outcome.halt_reason)
-
-        logger.info(f"MicroPlan complete: {len(results)} steps executed")
-        # Final cost summary
-        if step_index >= len(plan.steps):
-            persist(step_index, status="completed")
-            self._final_status = "completed"
-        elif self._final_status == "running":
-            persist(step_index, status="halted", halt_reason="stopped")
-            self._final_status = "halted"
-
-        # Stash final loop counters / progress so resume() / run_with_status()
-        # can reconstruct PauseState without re-walking the loop.
-        self._last_run_step_index = step_index
-        self._last_loop_counters = dict(loop_counters)
-        self._last_listings_on_page = listings_on_page
-
+        Called once per run, right before ``run`` returns. Kept on the
+        runner (rather than the executor) because callers like
+        ``run_with_status`` and the result-builder expect ``_final_costs``
+        as a runner attribute.
+        """
         gpu_cost, claude_cost, proxy_cost, total_cost = self._cost_totals()
         elapsed = time.time() - self._run_start
 
@@ -958,8 +672,6 @@ class MicroPlanRunner:
             final_status=self._final_status,
             checkpoint_path=self.checkpoint_path,
         )
-
-        return results
 
     def run_with_status(self, plan: MicroPlan, resume: bool = False) -> RunnerResult:
         """Same as ``run(plan)``, but returns the rich :class:`RunnerResult`.
