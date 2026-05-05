@@ -271,15 +271,24 @@ class RunExecutor:
 
     # ── Effective step + loop step ──────────────────────────────────────
 
-    @staticmethod
-    def _build_effective_step(step: MicroIntent, state: RunState) -> MicroIntent:
-        """Inject listing-position scroll directive on click steps."""
+    def _build_effective_step(
+        self, step: MicroIntent, state: RunState,
+    ) -> MicroIntent:
+        """Inject listing-position scroll directive on click steps.
+
+        EPIC #161 Phase 4: the directive string is now built by
+        :meth:`ListingsScanner.scroll_directive` so the listings-specific
+        wording lives where the scanner does. Called only for ``click``
+        steps; other types short-circuit and use ``step.intent`` as-is.
+        """
+        runner = self.parent
         dynamic_intent = step.intent
-        if step.type == "click" and state.listings_on_page > 0:
-            dynamic_intent = (
-                f"Scroll down past the first {state.listings_on_page} listings. "
-                f"Then click the next listing title text below a photo."
+        if step.type == "click":
+            scanner_directive = (
+                runner.scanner.scroll_directive_for(state.listings_on_page)
             )
+            if scanner_directive:
+                dynamic_intent = scanner_directive
         return MicroIntent(
             intent=dynamic_intent, type=step.type, verify=step.verify,
             budget=step.budget, reverse=step.reverse, grounding=step.grounding,
@@ -404,12 +413,10 @@ class RunExecutor:
         state.step_retry_counts.pop(state.step_index, None)
 
         if step.type == "paginate":
+            # Phase 4: listings-scan reset is one method on the scanner now,
+            # rather than 7 lines of mutation across runner properties.
             state.listings_on_page = 0
-            runner._listings_on_page = 0
-            runner._extracted_titles = []
-            runner._page_listings = []
-            runner._page_listing_index = 0
-            runner._viewport_stage = 0
+            runner.scanner.on_page_change()
             for k in list(state.loop_counters.keys()):
                 if k != state.step_index:
                     state.loop_counters[k] = 0

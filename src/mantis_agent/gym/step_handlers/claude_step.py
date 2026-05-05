@@ -98,8 +98,8 @@ class ClaudeStepHandler:
             data = extractor.extract(screenshot)
             url = data.url if data else ""
 
-            # Dedup check
-            if url and url in runner._seen_urls:
+            # Dedup check (Phase 4: scanner owns the predicate now).
+            if runner.scanner.is_duplicate(url):
                 logger.info(f"  [dedup] Already seen: {url[:50]}")
                 dynamic_verifier.record_item_completed(
                     page=runner._current_page,
@@ -113,7 +113,7 @@ class ClaudeStepHandler:
                     success=False, data=f"DUPLICATE|{url}",
                 )
             if url:
-                runner._seen_urls.add(url)
+                runner.scanner.mark_seen(url)
                 runner._last_known_url = url
                 runner._last_extracted = {
                     **runner._last_extracted,
@@ -139,7 +139,7 @@ class ClaudeStepHandler:
                 cached = extraction_cache.get(pre_url) if pre_url else None
                 if cached is not None:
                     logger.info("  [cache] hit for %s — skipping deep-extract", pre_url[:80])
-                    runner._seen_urls.add(pre_url)
+                    runner.scanner.mark_seen(pre_url)
                     runner._last_known_url = pre_url
                     runner._last_extracted = {
                         **runner._last_extracted,
@@ -169,7 +169,7 @@ class ClaudeStepHandler:
             # the same card. Without this the runner can re-extract the same
             # listing and produce duplicate entries in the lead set.
             extracted_url = getattr(data, "url", "") if data else ""
-            if extracted_url and extracted_url in runner._seen_urls:
+            if runner.scanner.is_duplicate(extracted_url):
                 logger.info(
                     "  [dedup] extract_data skip already-seen: %s",
                     extracted_url[:80],
@@ -195,8 +195,7 @@ class ClaudeStepHandler:
                     "last_attempted_at": time.time(),
                 }
             if data and data.is_viable():
-                if extracted_url:
-                    runner._seen_urls.add(extracted_url)
+                runner.scanner.mark_seen(extracted_url)
                 summary = data.to_summary()
                 # Persist to cache so subsequent runs (or loop iterations)
                 # can short-circuit. No-op when cache_write is disabled.
