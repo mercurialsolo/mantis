@@ -823,6 +823,16 @@ class BasetenCUARuntime:
         run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         t0 = time.time()
         session_name = task_suite.get("session_name", "baseten_micro")
+        # Propagate top-level proxy_disabled from the request body onto the
+        # inline task_suite so _make_env honors it. Inline _micro_plan
+        # submissions don't go through build_micro_suite (which would set
+        # _proxy_disabled), so without this propagation _make_env reads
+        # task_suite.get("_proxy_disabled", False) → False even when the
+        # caller asked to disable. Caught when news.ycombinator.com
+        # extracts halted with ERR_TUNNEL_CONNECTION_FAILED despite
+        # proxy_disabled: true.
+        if "proxy_disabled" in payload and "_proxy_disabled" not in task_suite:
+            task_suite["_proxy_disabled"] = bool(payload.get("proxy_disabled", False))
         env, proxy_proc = self._make_env(
             task_suite,
             run_id,
