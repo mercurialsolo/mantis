@@ -84,9 +84,14 @@ class ClaudeGuidedFormHandler:
         index = int(ctx.state.get("index", 0))
 
         params = dict(getattr(step, "params", {}) or {})
-        # Brief settle — form pages frequently finish hydrating after the
-        # navigate that brought us here.
-        time.sleep(2)
+        # Combined settle — form pages frequently finish hydrating after the
+        # navigate that brought us here. EPIC #161 cleanup merges the
+        # pre-handler 2s sleep that used to live in MicroPlanRunner
+        # ._execute_step's form-types branch with the existing 2s settle
+        # at the top of this method, preserving the legacy 4s total. The
+        # synthesised click→submit path that calls form via the runner
+        # shim no longer adds its own pre-settle either.
+        time.sleep(4)
         screenshot = env.screenshot()
 
         if step.type == "fill_field":

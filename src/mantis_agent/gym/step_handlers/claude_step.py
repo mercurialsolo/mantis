@@ -87,6 +87,11 @@ class ClaudeStepHandler:
         if not extractor:
             return StepResult(step_index=index, intent=step.intent, success=False)
 
+        # Pre-settle — page may still be rendering after scroll. Lifted
+        # from MicroPlanRunner._execute_step's claude_only branch in EPIC
+        # #161 cleanup so registry-first dispatch produces identical timing.
+        time.sleep(1)
+
         screenshot = env.screenshot()
 
         if step.type == "extract_url":

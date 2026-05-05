@@ -65,6 +65,12 @@ class ClaudeGuidedFilterHandler:
         grounding = ctx.grounding
         index = int(ctx.state.get("index", 0))
 
+        # Pre-settle — page filters may lazy-load after navigate.
+        # Lifted from MicroPlanRunner._execute_step's "filter" branch in
+        # EPIC #161 cleanup so registry-first dispatch produces identical
+        # timing.
+        time.sleep(3)
+
         # Reset sidebar to top before each filter step (scroll persists between steps).
         # Filters are spread across the sidebar: Location near top, Seller Type near bottom.
         try:

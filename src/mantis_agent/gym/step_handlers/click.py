@@ -89,6 +89,11 @@ class ClaudeGuidedClickHandler:
         site_config = ctx.site_config
         index = int(ctx.state.get("index", 0))
 
+        # Pre-settle — page may still be loading after navigate/paginate.
+        # Lifted from MicroPlanRunner._execute_step's "click" branch in EPIC #161
+        # cleanup so registry-first dispatch produces identical timing.
+        time.sleep(2)
+
         # If no cached listings, scan the page (one Claude call for ALL cards)
         if runner._page_listing_index >= len(runner._page_listings):
             # Staged per-viewport scan: scan ONE viewport, cache its cards.
