@@ -71,7 +71,7 @@ Plus run options (all optional):
 | Field             | Default | Effect                                                                       |
 |-------------------|---------|------------------------------------------------------------------------------|
 | `detached`        | `true`  | Return `run_id` immediately; work continues in the background                 |
-| `state_key`       | `""`    | Caller-chosen ID; server prefixes with tenant. Reuse to share Chrome profile  |
+| `state_key`       | `""`    | Caller-chosen ID; server prefixes with tenant. Reuse to share Chrome profile + checkpoint. **Not safe for concurrent runs — see §4b** |
 | `resume_state`    | `false` | Reconstruct browser state from latest checkpoint at `state_key` before start  |
 | `max_cost`        | `25.0`  | USD cap; clamped against tenant cap                                           |
 | `max_time_minutes`| `60`    | Wall-clock cap; clamped against tenant cap                                    |
@@ -399,6 +399,64 @@ cache even with the same key string.
 
 ---
 
+## 4b. `state_key` concurrency — one key per logical session
+
+**Two parallel runs with the same `state_key` will collide.** The
+state_key is the unit of *shared session state* across runs — it
+identifies a Chrome profile + checkpoint + (by default) extraction
+cache pool. Concurrent runs sharing it step on three things:
+
+1. **Chrome profile dir** — `<data_root>/tenants/<tenant>/chrome-profile/<state_key>/`.
+   Chrome holds an exclusive file lock per profile; the second
+   concurrent launch either fails or boots in a fallback mode that
+   silently corrupts cookies / session tokens.
+2. **Checkpoint file** — `<data_root>/tenants/<tenant>/checkpoints/<state_key>.json`.
+   Both runs persist incrementally; last-write-wins → a parallel
+   run can stomp the first's progress mid-step.
+3. **Extraction cache** — when `cache_key` defaults to `state_key`,
+   parallel writers can interleave puts and lose entries. Pull
+   `cache_key` out to share cache across parallel runs (see below).
+
+### Pick the right `state_key` shape for your use case
+
+| Use case | state_key shape |
+|---|---|
+| Per-end-user session (their own Chrome profile, cookies, login) | `user:<user_id>` |
+| Per-workflow type, multi-tenant, no shared cookies | `workflow:<workflow_id>` |
+| Stateless one-shot extraction with no resume | omit / unique per call (e.g. UUID) |
+| Idempotent retry of a failed run | reuse the same `state_key` to resume from checkpoint |
+
+### Pattern for parallel calls that should share extraction state but not browser state
+
+Generate a unique `state_key` per call (so Chrome profiles + checkpoints
+are isolated), but pin `cache_key` to a shared pool:
+
+```jsonc
+{
+  "state_key":  "user-42:job-abc-123",   // unique per parallel call
+  "cache_key":  "user-42",               // shared cache pool
+  "cache_read":  true,
+  "cache_write": true
+}
+```
+
+Any number of concurrent runs under `user-42` then read/write the same
+cache file (which is internally append-friendly per URL) without
+fighting over Chrome locks or checkpoints. The cache lookup is keyed by
+URL, so cache-hit short-circuits work even when the parallel runs
+extract overlapping listings.
+
+### What if I need both?
+
+If you genuinely need two concurrent runs to share a Chrome session
+(rare — usually you just need the cookies once and can replay them),
+**queue the calls instead of running them in parallel**. The Tier-2
+concurrency cap (`max_concurrent_runs` per tenant) is a safety net for
+parallel HTTP submissions; it's not a serializer for state-sharing
+runs. Sequencing on the caller side is the right shape.
+
+---
+
 ## 5. Idempotency, webhooks, video
 
 ### 5.1 Idempotency
@@ -496,7 +554,13 @@ override.
    runs.** Sequential detached submissions don't stack against
    `max_concurrent_runs` — they each return `queued` quickly and release
    the slot. The cap protects against parallel callers.
-6. **Cold-start on Modal/Baseten is ~50–90s.** First request after idle
+6. **Parallel runs MUST use unique `state_key`s.** Two concurrent
+   runs sharing a `state_key` collide on the Chrome profile lock,
+   the checkpoint file, and (by default) the extraction cache.
+   See §4b for the pattern: unique `state_key` per call + shared
+   `cache_key` lets parallel runs share extraction-cache hits while
+   keeping browser state isolated.
+7. **Cold-start on Modal/Baseten is ~50–90s.** First request after idle
    pays Chrome + Xvfb + llama-server boot. Subsequent calls within the
    scaledown window are ~instant.
 
