@@ -43,7 +43,6 @@ from .checkpoint import (
     StepResult,
     _PauseRequested,
 )
-from .runner import GymRunner
 from .tool_channel import ToolChannel
 
 from ..plan_decomposer import MicroIntent, MicroPlan
@@ -1584,152 +1583,15 @@ class MicroPlanRunner:
         return handler.execute(step, ctx)
 
     def _execute_claude_guided_filter(self, step: MicroIntent, index: int) -> StepResult:
-        """Claude identifies filter element → direct click/type via env.step().
+        """Backwards-compat shim — delegates to :class:`ClaudeGuidedFilterHandler`.
 
-        Holo3 is 0% reliable on sidebar filters (clicks wrong elements).
-        Claude reads the screenshot, identifies exact coordinates and action type,
-        then we execute directly — no Holo3 involved.
-
-        If not found in current viewport, scrolls down and retries.
+        Phase 2 of EPIC #161: sidebar filter dispatch lives in
+        ``step_handlers/filter.py`` so it's unit-testable in isolation.
         """
-        import random
-
-        # Reset sidebar to top before each filter step (scroll persists between steps).
-        # Filters are spread across the sidebar: Location near top, Seller Type near bottom.
-        try:
-            for _ in range(10):
-                self.env.step(Action(action_type=ActionType.SCROLL,
-                                   params={"direction": "up", "amount": 5,
-                                           "x": 150, "y": 400}))
-                time.sleep(0.3)
-        except Exception:
-            pass
-        time.sleep(1)
-
-        # Scan sidebar top-to-bottom with small scroll increments.
-        # Check each viewport position for the target filter element.
-        target = None
-        for scroll_attempt in range(8):
-            if scroll_attempt > 0:
-                # Scroll sidebar down in small increments (3 clicks ≈ ~100px)
-                try:
-                    self.env.step(Action(action_type=ActionType.SCROLL,
-                                       params={"direction": "down", "amount": 3,
-                                               "x": 150, "y": 400}))
-                    time.sleep(1)
-                except Exception:
-                    pass
-
-            screenshot = self.env.screenshot()
-            target = self.extractor.find_filter_target(screenshot, step.intent)
-            self.costs["claude_extract"] += 1
-
-            if target:
-                break
-            print(f"  [claude-filter] Not found in viewport {scroll_attempt}, scrolling sidebar")
-
-        if not target:
-            logger.warning("  [claude-filter] Could not find filter element")
-            return StepResult(step_index=index, intent=step.intent, success=False)
-
-        x, y = target["x"], target["y"]
-        action = target["action"]
-        value = target["value"]
-        label = target["label"]
-
-        # Grounding refines coordinates (bounded delta)
-        if self.grounding:
-            grounding_result = self.grounding.ground(screenshot, label or step.intent, x, y)
-            self.costs["claude_grounding"] += 1
-            dx = abs(grounding_result.x - x)
-            dy = abs(grounding_result.y - y)
-            if grounding_result.confidence > 0.5 and dx < 150 and dy < 150:
-                x, y = grounding_result.x, grounding_result.y
-                logger.info(f"  [grounding] filter refined to ({x},{y}) delta=({dx},{dy})")
-            else:
-                logger.info(f"  [grounding] filter rejected: delta=({dx},{dy}) conf={grounding_result.confidence}")
-
-        # Human-like delay before interaction
-        time.sleep(random.uniform(0.5, 1.5))
-
-        try:
-            if action == "click":
-                # Simple click — checkbox, radio, toggle
-                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
-                self.costs["gpu_steps"] += 1
-                time.sleep(2)  # Wait for filter to apply
-
-            elif action == "type":
-                # Click input → clear → type value → Enter
-                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
-                time.sleep(0.5)
-                # Triple-click to select all existing text
-                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
-                time.sleep(0.1)
-                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
-                time.sleep(0.3)
-                # Select all and delete
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+a"}))
-                time.sleep(0.2)
-                self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Delete"}))
-                time.sleep(0.3)
-                # Type the value
-                if value:
-                    self.env.step(Action(action_type=ActionType.TYPE, params={"text": value}))
-                    time.sleep(0.5)
-                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Return"}))
-                    time.sleep(3)  # Wait for results to update
-                self.costs["gpu_steps"] += 1
-
-            elif action == "select":
-                # Click dropdown to open → wait → screenshot → find option → click
-                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
-                self.costs["gpu_steps"] += 1
-                time.sleep(1.5)
-
-                # Take new screenshot with dropdown open
-                dropdown_shot = self.env.screenshot()
-                # Ask Claude to find the specific option in the dropdown
-                option_target = self.extractor.find_filter_target(
-                    dropdown_shot,
-                    f"Find and click the option '{value}' in the open dropdown menu"
-                )
-                self.costs["claude_extract"] += 1
-
-                if option_target:
-                    ox, oy = option_target["x"], option_target["y"]
-                    time.sleep(random.uniform(0.3, 0.8))
-                    self.env.step(Action(action_type=ActionType.CLICK, params={"x": ox, "y": oy}))
-                    time.sleep(2)
-                else:
-                    # Dropdown option not found — close dropdown
-                    self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
-                    time.sleep(0.5)
-                    logger.warning(f"  [claude-filter] Dropdown option '{value}' not found")
-                    return StepResult(step_index=index, intent=step.intent, success=False)
-
-            else:
-                # Unknown action — fall back to click
-                self.env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
-                self.costs["gpu_steps"] += 1
-                time.sleep(2)
-
-        except Exception as e:
-            logger.warning(f"  [claude-filter] Action failed: {e}")
-            return StepResult(step_index=index, intent=step.intent, success=False)
-
-        logger.info(f"  [claude-filter] {action}@({x},{y}) '{label[:30]}' value='{value[:20]}'")
-        self._last_known_url = self._current_results_page_url() or self._results_base_url
-        self._set_scroll_state(
-            context="results_after_filter",
-            url=self._last_known_url,
-            page_downs=0,
-            wheel_downs=0,
-        )
-        return StepResult(
-            step_index=index, intent=step.intent, success=True,
-            steps_used=1, duration=3.0,
-        )
+        from .step_handlers.filter import ClaudeGuidedFilterHandler
+        handler = ClaudeGuidedFilterHandler(self)
+        ctx = self._build_step_context(index)
+        return handler.execute(step, ctx)
 
     # ── Form-shaped step types (issue #80) ────────────────────────────
     def _execute_claude_guided_form(self, step: MicroIntent, index: int) -> StepResult:
@@ -1784,43 +1646,18 @@ class MicroPlanRunner:
         self._page_listing_count = value
 
     def _execute_holo3_step(self, step: MicroIntent, index: int) -> StepResult:
-        """Execute a Holo3 micro-intent with fresh GymRunner."""
-        runner = GymRunner(
-            brain=self.brain,
-            env=self.env,
-            max_steps=step.budget,
-            frames_per_inference=1,
-            grounding=self.grounding if step.grounding else None,
-            on_step=self.on_step,
-        )
+        """Backwards-compat shim — delegates to :class:`Holo3StepHandler`.
 
-        result = runner.run(task=step.intent, task_id=f"step_{index}_{step.type}")
-
-        success = result.success
-        self._update_scroll_state_from_trajectory(result, context=f"holo3_{step.type}")
-        current_url = getattr(self.env, "current_url", "") or ""
-        if current_url:
-            self._last_known_url = current_url
-
-        # Post-step verification using Claude (if extractor available)
-        if success and step.verify and self.extractor:
-            screenshot = self.env.screenshot()
-            verify_data = self.extractor.extract(screenshot)
-            self.costs["claude_extract"] += 1
-            if verify_data and getattr(verify_data, "url", ""):
-                self._last_known_url = verify_data.url
-            verified = self._check_verify(step.verify, verify_data, screenshot)
-            if not verified:
-                logger.warning(f"  [verify] Step {index} claimed success but verification FAILED: {step.verify[:60]}")
-                success = False
-
-        return StepResult(
-            step_index=index,
-            intent=step.intent,
-            success=success,
-            steps_used=result.total_steps,
-            duration=result.total_time,
-        )
+        Phase 2 of EPIC #161: Holo3 micro-intent execution (fresh
+        GymRunner + post-step Claude verify) lives in
+        ``step_handlers/holo3.py`` so it's unit-testable in isolation.
+        ``PaginateHandler`` Layer 3 calls this shim until the cleanup
+        PR registers Holo3StepHandler in the registry directly.
+        """
+        from .step_handlers.holo3 import Holo3StepHandler
+        handler = Holo3StepHandler(self)
+        ctx = self._build_step_context(index)
+        return handler.execute(step, ctx)
 
     def _check_verify(self, verify_condition: str, extract_data, screenshot) -> bool:
         """Check if a step's verify condition is met using Claude extraction data.
