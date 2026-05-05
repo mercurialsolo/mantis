@@ -165,11 +165,14 @@ def test_dump_creates_concurrent_run_subdirs(tmp_path, monkeypatch) -> None:
 def test_dump_filename_carries_step_and_action() -> None:
     """The naming convention encodes step index + step type so a debug
     folder of N runs is greppable."""
-    # Naming pattern from the runner: f"step{index}_post_{step_type}"
-    # and f"submit_step{index}_pre_click" — assert via documentation
-    # that these stems appear in the runner source.
+    # Naming pattern from the form handler: f"submit_step{index}_pre_click"
+    # / f"submit_step{index}_post_click" / f"submit_step{index}_post_enter"
+    # — assert these stems appear in the handler source. Form-shaped
+    # dispatch was lifted off MicroPlanRunner into ClaudeGuidedFormHandler
+    # in EPIC #161 Phase 2 (PR #170).
     import inspect
-    src = inspect.getsource(MicroPlanRunner)
+    from mantis_agent.gym.step_handlers.form import ClaudeGuidedFormHandler
+    src = inspect.getsource(ClaudeGuidedFormHandler)
     assert "submit_step" in src
     assert "post_click" in src or "post_enter" in src
     assert "pre_click" in src

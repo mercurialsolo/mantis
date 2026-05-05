@@ -27,13 +27,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..step_context import HandlerRegistry
+from .form import ClaudeGuidedFormHandler
 from .navigate import NavigateHandler
 
 if TYPE_CHECKING:
     from ..micro_runner import MicroPlanRunner
 
 
-__all__ = ["default_registry", "NavigateHandler"]
+__all__ = ["ClaudeGuidedFormHandler", "NavigateHandler", "default_registry"]
 
 
 def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
@@ -48,6 +49,16 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
     Returns a registry with the handlers that have been migrated so far.
     Step types not in the returned registry continue to be dispatched by
     the legacy branches in ``MicroPlanRunner._execute_step``.
+
+    Form handler is constructed but NOT registered for fill_field /
+    submit / select_option in this PR — the dispatch in
+    ``_execute_step`` adds an extra ``time.sleep(2)`` pre-settle on
+    those branches that registry-first dispatch would bypass. Merging
+    the two settles requires updating the dispatch and the handler in
+    one step; that move happens when the click branch's layout-hint
+    branching collapses into a router. The form handler is reachable
+    today only through the runner shim, which preserves the existing
+    dispatch + handler total settle (2s + 2s = 4s).
     """
     reg = HandlerRegistry()
     reg.register(NavigateHandler(runner))
