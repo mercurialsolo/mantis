@@ -93,6 +93,7 @@ nav:
       - Use cases: getting-started/use-cases.md
       - Concepts: getting-started/concepts.md
       - Plan formats: getting-started/plan-formats.md
+      - CLI: getting-started/cli.md
   - Hosting:
       - hosting/index.md
       - Baseten: hosting/baseten.md
