@@ -189,6 +189,7 @@ class GymRunner:
         page_discovery: Any = None,
         grounding: Any = None,
         on_step: Any = None,
+        site_config: Any = None,
     ):
         self.brain = brain
         self.env = env
@@ -200,6 +201,12 @@ class GymRunner:
         self.plan_executor = plan_executor
         self.page_discovery = page_discovery
         self.on_step = on_step  # Optional: fn(dict) -> None for live viewer
+        # #117 step 1: when site_config.prefer_som_grounding is True, the
+        # runner tries SoM (page_discovery + brain choice) BEFORE direct
+        # executor — saves a Claude grounding call (~$0.005, ~5-10s) on
+        # SoM-friendly sites. Default None → flag is False → behaviour
+        # unchanged.
+        self.site_config = site_config
         self._loop_detector = LoopDetector()
 
     def _emit(self, event_type: str, **data: Any) -> None:
@@ -331,6 +338,38 @@ class GymRunner:
             if plan and self.plan_executor and plan_step_idx < len(plan.steps):
                 current_plan_step = plan.steps[plan_step_idx]
                 print(f"  [executor] trying step {plan_step_idx + 1}/{len(plan.steps)}: {current_plan_step.action} target='{current_plan_step.target}' params={current_plan_step.params}")
+
+                # #117 step 1: SoM promotion. When site_config.prefer_som_grounding
+                # is True, try DOM-discovery + brain choice BEFORE the direct
+                # executor. SoM = 1 brain.think() call; the fallback chain
+                # (direct → SoM → brain+grounding) costs 1 think + 1 Claude
+                # grounding (~$0.005, ~5-10 s). On SoM-friendly sites this
+                # short-circuits the whole grounding round-trip.
+                if self._should_prefer_som() and self.page_discovery:
+                    print("  [som] prefer_som_grounding=True — trying SoM first")
+                    discovery_result = self._try_discovery_execution(
+                        current_plan_step, plan_inputs, step_log, frame_history,
+                    )
+                    self._emit_som_branch_metric(
+                        "taken" if discovery_result else "skipped",
+                    )
+                    if discovery_result:
+                        plan_step_idx += 1
+                        direct_executed = True
+                        obs_after = self.env._capture() if hasattr(self.env, '_capture') else None
+                        if obs_after:
+                            frame_history.append(obs_after.screenshot)
+                        feedback = f"[SOM] {discovery_result}"
+                        step_log.append(f"Step {step_num}: plan step {plan_step_idx} → {feedback}")
+                        trajectory.append(TrajectoryStep(
+                            step=step_num,
+                            action=Action(ActionType.WAIT, {}),
+                            thinking=f"SoM-promoted execution: {current_plan_step.action}",
+                            reward=0.0, done=False, inference_time=0.0,
+                            feedback=feedback,
+                        ))
+                        last_url = self.env.current_url if hasattr(self.env, 'current_url') else last_url
+                        continue
 
                 if self.plan_executor.can_execute(current_plan_step):
                     step_result = self.plan_executor.execute(current_plan_step, plan_inputs)
@@ -854,6 +893,37 @@ class GymRunner:
             return select_techniques(hint, domain="chrome", max_topics=1)
         except Exception:
             return ""
+
+    def _should_prefer_som(self) -> bool:
+        """Return True when the site config opts into SoM-first dispatch.
+
+        SoM-first only fires when both ``site_config.prefer_som_grounding``
+        is True AND a ``page_discovery`` instance is available — without
+        DOM access there's no SoM candidate set to choose from.
+        """
+        cfg = self.site_config
+        return bool(cfg is not None and getattr(cfg, "prefer_som_grounding", False))
+
+    def _emit_som_branch_metric(self, outcome: str) -> None:
+        """Emit ``mantis_plan_branch_total{branch=som_promotion, outcome=...}``.
+
+        ``outcome`` ∈ ``taken | skipped | aborted``. ``taken`` = SoM picked
+        a candidate; ``skipped`` = no candidate matched and the executor
+        falls through to the direct path; ``aborted`` = SoM raised. Wrapped
+        in try/except so a metric failure never breaks the runner.
+        """
+        try:
+            from ..metrics import PLAN_BRANCH_TOTAL
+            tenant_id = getattr(
+                getattr(self.env, "tenant_id", None), "__str__", lambda: ""
+            )()
+            PLAN_BRANCH_TOTAL.labels(
+                tenant_id=tenant_id or "",
+                branch="som_promotion",
+                outcome=outcome,
+            ).inc()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("som branch metric emit failed: %s", exc)
 
     def _try_discovery_execution(
         self,
