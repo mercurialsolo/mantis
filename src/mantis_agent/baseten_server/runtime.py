@@ -106,6 +106,13 @@ class BasetenCUARuntime:
         self.lock = threading.Lock()
         self.detached_threads: dict[str, threading.Thread] = {}
         self.loaded = False
+        # #117: process-level shared grounding cache. Listing-card layouts
+        # repeat both across pages within a run AND across runs / tenants on
+        # the same site, so a single cache amortises Claude grounding cost
+        # across the whole server lifetime. Bounded by GroundingCache's LRU
+        # cap; entries TTL out at 1 h by default.
+        from ..grounding_cache import GroundingCache
+        self.grounding_cache: GroundingCache = GroundingCache()
 
     def load(self) -> None:
         if self.loaded:
@@ -883,7 +890,7 @@ class BasetenCUARuntime:
                 except Exception as e:
                     logger.warning("Baseten: probe enhancement failed: %s", e)
 
-            grounding = ClaudeGrounding()
+            grounding = ClaudeGrounding(cache=self.grounding_cache)
             schema = None
             objective_data = task_suite.get("_objective")
             if objective_data:
@@ -976,7 +983,7 @@ class BasetenCUARuntime:
         if click_log is not None:
             from mantis_agent.presentation import ClickRecordingEnv
             env = ClickRecordingEnv(env, click_log)
-        grounding = ClaudeGrounding()
+        grounding = ClaudeGrounding(cache=self.grounding_cache)
 
         try:
             config = TaskLoopConfig(

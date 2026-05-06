@@ -73,6 +73,7 @@ class GroundingCache:
         max_entries: int = DEFAULT_MAX_ENTRIES,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
         crop_half: int = DEFAULT_CROP_HALF,
+        tenant_id: str = "",
     ) -> None:
         if max_entries < 1:
             raise ValueError(f"max_entries must be >= 1 (got {max_entries})")
@@ -83,6 +84,8 @@ class GroundingCache:
         self.max_entries = max_entries
         self.ttl_seconds = ttl_seconds
         self.crop_half = crop_half
+        # #117: Prometheus label for hits/misses/size. Empty = cross-tenant.
+        self.tenant_id = tenant_id
         self._entries: OrderedDict[str, _CacheEntry] = OrderedDict()
         self.hits: int = 0
         self.misses: int = 0
@@ -135,16 +138,20 @@ class GroundingCache:
         entry = self._entries.get(key)
         if entry is None:
             self.misses += 1
+            self._emit_miss()
             return None
         if entry.expires_at <= time.time():
             # Expired — drop it so stale layouts don't keep returning.
             del self._entries[key]
             self.expirations += 1
             self.misses += 1
+            self._emit_miss()
+            self._emit_size()
             return None
         # Touch for LRU.
         self._entries.move_to_end(key)
         self.hits += 1
+        self._emit_hit()
         return entry.result
 
     def put(self, key: str, result: GroundingResult) -> None:
@@ -159,9 +166,47 @@ class GroundingCache:
         if len(self._entries) >= self.max_entries:
             self._entries.popitem(last=False)
             self.evictions += 1
+            self._emit_eviction()
         self._entries[key] = _CacheEntry(
             result=result, expires_at=time.time() + self.ttl_seconds
         )
+        self._emit_size()
+
+    # ── Prometheus emission ─────────────────────────────────────────────
+    #
+    # Wrapped in try/except so a metrics-config failure (prometheus_client
+    # missing, registry exhausted, label cardinality error) never breaks
+    # the grounding hot path.
+
+    def _emit_hit(self) -> None:
+        try:
+            from .metrics import GROUNDING_CACHE_HITS_TOTAL
+            GROUNDING_CACHE_HITS_TOTAL.labels(tenant_id=self.tenant_id).inc()
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug("grounding cache hit metric emit failed: %s", exc)
+
+    def _emit_miss(self) -> None:
+        try:
+            from .metrics import GROUNDING_CACHE_MISSES_TOTAL
+            GROUNDING_CACHE_MISSES_TOTAL.labels(tenant_id=self.tenant_id).inc()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("grounding cache miss metric emit failed: %s", exc)
+
+    def _emit_eviction(self) -> None:
+        try:
+            from .metrics import GROUNDING_CACHE_EVICTIONS_TOTAL
+            GROUNDING_CACHE_EVICTIONS_TOTAL.labels(tenant_id=self.tenant_id).inc()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("grounding cache eviction metric emit failed: %s", exc)
+
+    def _emit_size(self) -> None:
+        try:
+            from .metrics import GROUNDING_CACHE_SIZE
+            GROUNDING_CACHE_SIZE.labels(tenant_id=self.tenant_id).set(
+                len(self._entries)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("grounding cache size metric emit failed: %s", exc)
 
     # ── Convenience wrapper ─────────────────────────────────────────────
 
