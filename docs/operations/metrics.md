@@ -12,6 +12,11 @@
 | `mantis_run_cost_usd` | histogram | `tenant_id`, `model`, `status` | Buckets: $0.01, $0.05, $0.10, $0.25, $0.50, $1, $2.5, $5, $10, $25 |
 | `mantis_concurrent_runs` | gauge | `tenant_id` | Currently in-flight runs |
 | `mantis_rate_limit_rejections_total` | counter | `tenant_id`, `kind` | kind = `rate\|concurrent` |
+| `mantis_action_total` | counter | `tenant_id`, `step_kind`, `outcome` | step_kind = MicroIntent.type (`navigate\|click\|paginate\|extract_url\|extract_data\|submit\|fill_field\|select_option\|scroll\|navigate_back`); outcome = `success\|failed\|duplicate\|filters_not_applied` |
+| `mantis_brain_escalation_total` | counter | `tenant_id`, `from_brain`, `to_brain` | One increment per `BrainLadder.think()`. `to_brain` = `primary\|fallback` |
+| `mantis_loop_termination_total` | counter | `tenant_id`, `reason` | One increment per run. reason = `completed\|halted\|cancelled\|paused\|budget_cap\|time_cap` |
+| `mantis_plan_branch_total` | counter | `tenant_id`, `branch`, `outcome` | Special-case dispatch routes: `gate_verify\|claude_only\|navigate_back_close_tab\|click_listings\|click_single_element` × `taken\|skipped\|aborted` |
+| `mantis_step_latency_seconds` | histogram | `tenant_id`, `phase` | phase = `perceive\|think\|act\|settle`. Buckets: 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 20s, 30s |
 
 ## Setup
 
@@ -116,7 +121,38 @@ sum(rate(mantis_chat_completions_total{outcome="ok"}[5m]))
   / sum(rate(mantis_chat_completions_total[5m]))
 ```
 
+## Per-action triage queries (#156)
+
+```promql
+# Per-action success rate, last 15m, broken down by step_kind
+sum by (step_kind) (rate(mantis_action_total{outcome="success"}[15m]))
+  / sum by (step_kind) (rate(mantis_action_total[15m]))
+
+# Top failing step types per tenant — surfaces tenant-specific regressions
+topk(5,
+  sum by (tenant_id, step_kind) (
+    rate(mantis_action_total{outcome="failed"}[1h])
+  )
+)
+
+# Brain escalation rate — what fraction of think() calls fall back?
+sum(rate(mantis_brain_escalation_total{to_brain="fallback"}[10m]))
+  / sum(rate(mantis_brain_escalation_total[10m]))
+
+# Run-termination breakdown — how often do runs hit caps vs complete cleanly?
+sum by (reason) (increase(mantis_loop_termination_total[1h]))
+
+# Plan-branch hit rate — gate verify usage, listings vs single-element click split
+sum by (branch, outcome) (rate(mantis_plan_branch_total[15m]))
+
+# p95 step latency by phase — pinpoint where the time goes
+histogram_quantile(0.95,
+  sum by (phase, le) (rate(mantis_step_latency_seconds_bucket[10m]))
+)
+```
+
 ## See also
 
 - [Client / Errors](../client/errors.md) — what each error outcome means
 - [Rate limits](rate-limits.md) — what `kind=rate\|concurrent` rejection means
+- [Per-action observability dashboard](per-action-dashboard.json) — Grafana JSON
