@@ -168,6 +168,54 @@ def test_plan_adherence_episode_includes_plan_progress() -> None:
     assert pytest.approx(float(sig)) == 1.15
 
 
+# ── #120 world-model accuracy wiring ───────────────────────────────────
+
+
+def _wm_step(action: Action, predicted: str, observed: str) -> TrajectoryStep:
+    return TrajectoryStep(
+        step=1, action=action, thinking="", reward=0.0, done=False,
+        inference_time=0.0,
+        predicted_outcome=predicted, observed_outcome=observed,
+    )
+
+
+def test_plan_adherence_episode_emits_world_model_when_traj_has_predictions() -> None:
+    """Per-step Jaccard contributions sum into a single ``world_model_accuracy``
+    component on the episode reward when at least one step carries both a
+    predicted_outcome and an observed_outcome."""
+    r = PlanAdherenceReward(world_model_weight=0.05)
+    traj = [
+        # Perfect prediction: identical wording → max contribution.
+        _wm_step(_click(), "modal closes", "modal closes"),
+        # Partial overlap (~50%): "URL navigates to detail page" vs the actual
+        # feedback — Jaccard fires but doesn't max out.
+        _wm_step(_click(),
+                 "URL navigates to detail page",
+                 "page navigated and detail loaded"),
+        # No prediction → contributes 0, doesn't drag the count up artificially.
+        _wm_step(_done(True, "ok"), "", "task complete"),
+    ]
+    sig = r.episode(run_result=_run(traj), state=EpisodeState())
+    assert "world_model_accuracy" in sig.components
+    assert sig.components["world_model_accuracy"] > 0.0
+
+
+def test_plan_adherence_episode_skips_world_model_when_no_predictions() -> None:
+    """Legacy trajectories with no predicted_outcome don't emit a zero
+    ``world_model_accuracy`` entry — keeps log distributions clean."""
+    r = PlanAdherenceReward()
+    traj = _trajectory(_click(), _done(True, "ok"))  # no predictions populated
+    sig = r.episode(run_result=_run(traj), state=EpisodeState())
+    assert "world_model_accuracy" not in sig.components
+
+
+def test_plan_adherence_world_model_weight_zero_disables_signal() -> None:
+    r = PlanAdherenceReward(world_model_weight=0.0)
+    traj = [_wm_step(_click(), "modal closes", "modal closes")]
+    sig = r.episode(run_result=_run(traj), state=EpisodeState())
+    assert sig.components.get("world_model_accuracy", 0.0) == 0.0
+
+
 # ── BoatTraderReward ────────────────────────────────────────────────────
 
 
