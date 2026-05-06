@@ -159,6 +159,62 @@ def test_loop_termination_metric_increments_for_each_status():
 # ── BRAIN_ESCALATION_TOTAL ─────────────────────────────────────────────
 
 
+# ── GroundingCache metrics (#117) ──────────────────────────────────────
+
+
+def test_grounding_cache_emits_hit_and_miss_counters():
+    """Cache get/put cycles bump the labelled counters."""
+    from PIL import Image
+
+    from mantis_agent.grounding import GroundingResult
+    from mantis_agent.grounding_cache import GroundingCache
+    from mantis_agent.metrics import (
+        GROUNDING_CACHE_HITS_TOTAL,
+        GROUNDING_CACHE_MISSES_TOTAL,
+    )
+
+    cache = GroundingCache(tenant_id="t-grounding")
+    img = Image.new("RGB", (256, 256), (50, 50, 50))
+    result = GroundingResult(x=10, y=20, confidence=0.9, description="d")
+
+    miss_before = _counter_value(
+        GROUNDING_CACHE_MISSES_TOTAL, tenant_id="t-grounding",
+    )
+    hit_before = _counter_value(
+        GROUNDING_CACHE_HITS_TOTAL, tenant_id="t-grounding",
+    )
+
+    key = cache.make_key(img, "click first card", initial_x=80, initial_y=80)
+    assert cache.get(key) is None  # miss
+    cache.put(key, result)
+    assert cache.get(key) is not None  # hit
+
+    miss_after = _counter_value(
+        GROUNDING_CACHE_MISSES_TOTAL, tenant_id="t-grounding",
+    )
+    hit_after = _counter_value(
+        GROUNDING_CACHE_HITS_TOTAL, tenant_id="t-grounding",
+    )
+    assert miss_after - miss_before == pytest.approx(1.0)
+    assert hit_after - hit_before == pytest.approx(1.0)
+
+
+def test_grounding_cache_emits_eviction_counter_at_capacity():
+    from mantis_agent.grounding import GroundingResult
+    from mantis_agent.grounding_cache import GroundingCache
+    from mantis_agent.metrics import GROUNDING_CACHE_EVICTIONS_TOTAL
+
+    cache = GroundingCache(max_entries=2, tenant_id="t-evict")
+    r = GroundingResult(x=1, y=1, confidence=0.9)
+
+    before = _counter_value(GROUNDING_CACHE_EVICTIONS_TOTAL, tenant_id="t-evict")
+    cache.put("a", r)
+    cache.put("b", r)
+    cache.put("c", r)  # evicts "a"
+    after = _counter_value(GROUNDING_CACHE_EVICTIONS_TOTAL, tenant_id="t-evict")
+    assert after - before == pytest.approx(1.0)
+
+
 def test_brain_escalation_metric_increments_on_ladder_think():
     """Smoke test the brain ladder emits one escalation counter per
     ``think()`` call, labelled with which brain handled the call."""

@@ -216,6 +216,37 @@ STEP_LATENCY_SECONDS = _histogram(
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0),
 )
 
+# ── Grounding cache (#117) ──────────────────────────────────────────────
+#
+# Each ClaudeGrounding call costs ~$0.003-0.01 and ~5-10s. Listing-card
+# layouts repeat across pages so caching by perceptual_hash(crop) +
+# description_hash short-circuits the API call. These counters let
+# operators dashboard hit-rate + cost savings.
+
+GROUNDING_CACHE_HITS_TOTAL = _counter(
+    "mantis_grounding_cache_hits_total",
+    "Cache hits on the grounding coordinate cache.",
+    ("tenant_id",),
+)
+
+GROUNDING_CACHE_MISSES_TOTAL = _counter(
+    "mantis_grounding_cache_misses_total",
+    "Cache misses on the grounding coordinate cache (incl. expirations).",
+    ("tenant_id",),
+)
+
+GROUNDING_CACHE_SIZE = _gauge(
+    "mantis_grounding_cache_size",
+    "Current number of entries in the grounding cache.",
+    ("tenant_id",),
+)
+
+GROUNDING_CACHE_EVICTIONS_TOTAL = _counter(
+    "mantis_grounding_cache_evictions_total",
+    "LRU evictions from the grounding cache (capacity hits).",
+    ("tenant_id",),
+)
+
 
 def publish_prompt_versions() -> None:
     """Set the prompt-version gauge for every registered prompt (#127).

@@ -43,6 +43,15 @@ class SiteConfig:
     # Filter recovery
     filtered_results_url: str = ""  # URL to navigate to if filters are lost
 
+    # #117: opt-in Set-of-Mark grounding promotion. When True, the runner
+    # should overlay numbered DOM-derived candidate boxes and ask the
+    # brain "which N?" instead of going through Claude grounding. Default
+    # False because SoM is layout-sensitive and only safe on sites whose
+    # DOM exposes stable, click-able candidate elements (cards, buttons,
+    # links). Lays the groundwork for a follow-up PR that wires the
+    # promotion path through gym/runner.py:_try_discovery_execution.
+    prefer_som_grounding: bool = False
+
     def is_detail_page(self, url: str) -> bool:
         """Check if URL matches the detail page pattern."""
         if not self.detail_page_pattern:
@@ -139,7 +148,7 @@ class SiteConfig:
             pagination_strip_pattern=pagination_strip,
         )
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | bool]:
         return {
             "domain": self.domain,
             "detail_page_pattern": self.detail_page_pattern,
@@ -149,6 +158,7 @@ class SiteConfig:
             "pagination_strip_pattern": self.pagination_strip_pattern,
             "gate_verify_prompt": self.gate_verify_prompt,
             "filtered_results_url": self.filtered_results_url,
+            "prefer_som_grounding": self.prefer_som_grounding,
         }
 
     @classmethod
