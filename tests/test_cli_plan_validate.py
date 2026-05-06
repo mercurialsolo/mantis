@@ -170,3 +170,81 @@ def test_no_args_prints_help_and_errors():
 def test_plan_with_no_subcommand_errors():
     with pytest.raises(SystemExit):
         main(["plan"])
+
+
+# ── plan dry-run ───────────────────────────────────────────────────────
+
+
+def test_dry_run_clean_plan_exits_zero(tmp_plan, capsys):
+    path = tmp_plan(_good_plan())
+    assert main(["plan", "dry-run", path]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "3 steps" in out
+    # Header columns present
+    assert "idx" in out and "type" in out
+    # Each numbered step row appears
+    assert "[00]" in out and "[01]" in out and "[02]" in out
+
+
+def test_dry_run_annotates_required_and_gate(tmp_plan, capsys):
+    path = tmp_plan(_good_plan())
+    main(["plan", "dry-run", path])
+    out = capsys.readouterr().out
+    # required navigate: !req
+    assert "!req" in out
+    # gate verify on the second step
+    assert "gate" in out
+
+
+def test_dry_run_shows_loop_target_and_count(tmp_plan, capsys):
+    payload = {
+        "steps": [
+            {"intent": "Navigate to https://x.test", "type": "navigate", "section": "setup"},
+            {"intent": "Click an item", "type": "click", "section": "extraction"},
+            {"intent": "Loop back to step 1", "type": "loop",
+             "loop_target": 1, "loop_count": 10},
+        ],
+    }
+    path = tmp_plan(payload)
+    rc = main(["plan", "dry-run", path])
+    assert rc == EXIT_OK
+    out = capsys.readouterr().out
+    assert "→ step [01]" in out
+    assert "count=10" in out
+
+
+def test_dry_run_warns_on_out_of_range_loop_target(tmp_plan, capsys):
+    payload = {
+        "steps": [
+            {"intent": "Navigate to https://x.test", "type": "navigate", "section": "setup"},
+            {"intent": "Loop", "type": "loop", "loop_target": 99, "loop_count": 1},
+        ],
+    }
+    path = tmp_plan(payload)
+    rc = main(["plan", "dry-run", path])
+    # Out-of-range targets are a WARNING, not an exit-code failure — dry-run
+    # is informational.
+    assert rc == EXIT_OK
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "out of range" in out
+
+
+def test_dry_run_json_output_shape(tmp_plan, capsys):
+    path = tmp_plan(_good_plan())
+    rc = main(["plan", "dry-run", path, "--json"])
+    assert rc == EXIT_OK
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["step_count"] == 3
+    assert parsed["domain"] == "example.com"
+    assert isinstance(parsed["sections"], dict)
+    # Each step has the structured fields the human view also surfaces.
+    for step in parsed["steps"]:
+        assert "type" in step and "section" in step and "required" in step
+
+
+def test_dry_run_handles_missing_path(capsys):
+    rc = main(["plan", "dry-run", "/does/not/exist.json"])
+    assert rc == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "not found" in err
