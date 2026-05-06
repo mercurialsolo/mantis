@@ -17,6 +17,10 @@
 | `mantis_loop_termination_total` | counter | `tenant_id`, `reason` | One increment per run. reason = `completed\|halted\|cancelled\|paused\|budget_cap\|time_cap` |
 | `mantis_plan_branch_total` | counter | `tenant_id`, `branch`, `outcome` | Special-case dispatch routes: `gate_verify\|claude_only\|navigate_back_close_tab\|click_listings\|click_single_element` × `taken\|skipped\|aborted` |
 | `mantis_step_latency_seconds` | histogram | `tenant_id`, `phase` | phase = `perceive\|think\|act\|settle`. Buckets: 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 20s, 30s |
+| `mantis_grounding_cache_hits_total` | counter | `tenant_id` | Cache hits on the (frame-region + description) coordinate cache (#117) |
+| `mantis_grounding_cache_misses_total` | counter | `tenant_id` | Cache misses (incl. expirations) |
+| `mantis_grounding_cache_evictions_total` | counter | `tenant_id` | LRU evictions (capacity hit) |
+| `mantis_grounding_cache_size` | gauge | `tenant_id` | Current entry count |
 
 ## Setup
 
@@ -149,6 +153,14 @@ sum by (branch, outcome) (rate(mantis_plan_branch_total[15m]))
 histogram_quantile(0.95,
   sum by (phase, le) (rate(mantis_step_latency_seconds_bucket[10m]))
 )
+
+# Grounding cache hit-rate (#117) — cost-savings dashboard
+sum(rate(mantis_grounding_cache_hits_total[15m]))
+  / (sum(rate(mantis_grounding_cache_hits_total[15m]))
+     + sum(rate(mantis_grounding_cache_misses_total[15m])))
+
+# Estimated $$ saved per minute (1 hit ≈ $0.005 + 7s saved)
+sum(rate(mantis_grounding_cache_hits_total[5m])) * 0.005 * 60
 ```
 
 ## See also

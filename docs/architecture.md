@@ -48,9 +48,13 @@ ExtractionResult               Structured output (fields, viability, spam check)
 | `brain_claude.py` | Claude Sonnet/Opus via Anthropic API |
 | `actions.py` | Action enum (click, type, scroll, done) and tool schemas |
 | `extraction.py` | ClaudeExtractor + ExtractionSchema -- schema-driven data extraction |
-| `grounding.py` | ClaudeGrounding -- pixel-level click targeting via Claude |
+| `grounding.py` | ClaudeGrounding / LLMGrounding -- pixel-level click targeting (cache-aware via `cache=` kwarg) |
+| `grounding_cache.py` | GroundingCache -- TTL+LRU cache keyed by `(perceptual_hash(crop), description_hash)` (#117) |
 | `plan_decomposer.py` | Text plan -> MicroPlan via Claude Sonnet |
-| `site_config.py` | SiteConfig -- URL patterns, pagination format, gate prompts |
+| `site_config.py` | SiteConfig -- URL patterns, pagination, gate prompts, `prefer_som_grounding` flag (#117) |
+| `loop_detector.py` | LoopDetector -- byte-equal / drift / state-loop signals (#116) |
+| `brain_ladder.py` | BrainLadder -- primary/fallback escalation, emits `mantis_brain_escalation_total` (#156) |
+| `metrics.py` | Prometheus handles -- per-action / brain / loop / grounding-cache (#156, #117) |
 | `server_utils.py` | Shared utilities -- proxy, plan signatures, result builders |
 | `task_loop.py` | TaskLoopConfig + run_task_loop -- shared executor lifecycle |
 
@@ -70,14 +74,25 @@ ExtractionResult               Structured output (fields, viability, spam check)
 
 | Module | Purpose |
 |--------|---------|
-| `runner.py` | GymRunner -- step-level agent loop with feedback and loop detection |
-| `micro_runner.py` | MicroPlanRunner -- execute MicroPlan with checkpoint/verify/reverse |
+| `runner.py` | GymRunner -- step-level agent loop, SoM-promotion dispatch (#117), plan-step loop reset (#116) |
+| `micro_runner.py` | MicroPlanRunner -- 200 LOC coordinator post-#161; delegates via `__getattr__` |
+| `_runner_helpers.py` | Module-level helpers (dispatch, settle, observability, reverse, filters) -- EPIC #161 |
+| `run_executor.py` | RunExecutor + RunState -- run loop body, emits `mantis_action_total` / `mantis_loop_termination_total` (#156) |
+| `step_handlers/` | Per-type handlers (NavigateHandler, ClaudeGuidedClickHandler, PaginateHandler, ...) |
+| `step_recovery.py` | StepRecoveryPolicy -- failure → RecoveryAction dispatch table |
+| `step_context.py` | StepContext + HandlerRegistry -- mocking surface for handler unit tests |
+| `listings_scanner.py` | ListingsScanner -- per-page card cache + dedup, `is_duplicate` / `mark_seen` / `on_page_change` |
+| `browser_state.py` | BrowserState -- scroll position, viewport, results-page URL composition |
+| `checkpoint_manager.py` | CheckpointManager -- persist/restore + plan-signature flow |
+| `cost_meter.py` | CostMeter -- gpu/claude/proxy cost rollup, Prometheus inflight gauge |
+| `run_reporter.py` | RunReporter -- final summary block + costs dict |
+| `tool_channel.py` | ToolChannel -- pause/resume tool invocation |
 | `workflow_runner.py` | WorkflowRunner -- dynamic loops and pagination over GymRunner |
 | `learning_runner.py` | LearningRunner -- verified execution for building playbooks |
 | `xdotool_env.py` | XdotoolGymEnv -- real Chrome + xdotool (zero automation fingerprints) |
 | `playwright_env.py` | PlaywrightGymEnv -- headless Chromium via Playwright |
 | `plan_executor.py` | PlanExecutor -- deterministic DOM-based step execution |
-| `page_discovery.py` | PageDiscovery -- DOM inspection for element selection |
+| `page_discovery.py` | PageDiscovery -- DOM inspection for SoM-style element selection |
 
 ### Verification (`src/mantis_agent/verification/`)
 
@@ -139,9 +154,43 @@ class SiteConfig:
     pagination_format: str        # "/page-{n}/" or "?page={n}"
     gate_verify_prompt: str       # what to check after filters
     filtered_results_url: str     # recovery URL if filters lost
+    prefer_som_grounding: bool    # #117 — promote SoM dispatch over Claude grounding
 ```
 
-Used by MicroPlanRunner for URL checks instead of hardcoded patterns.
+Used by MicroPlanRunner for URL checks instead of hardcoded patterns. The
+`prefer_som_grounding` flag is read by `GymRunner` to decide whether to try
+DOM-discovery + brain choice **before** the direct executor; on SoM-friendly
+sites this saves a Claude grounding round-trip per click.
+
+### Grounding cache (#117)
+
+```python
+from mantis_agent.grounding import ClaudeGrounding
+from mantis_agent.grounding_cache import GroundingCache
+
+cache = GroundingCache()  # default: 1024 entries, 1 h TTL
+grounder = ClaudeGrounding(cache=cache)
+```
+
+Identical `(perceptual_hash(crop), description_hash)` pairs short-circuit the
+Claude API call. The `Runtime` class in `baseten_server/runtime.py` constructs
+a single process-level cache and shares it across both `ClaudeGrounding`
+instantiations so layouts hit cache across pages, runs, and tenants.
+
+### RewardFn (#120, #155)
+
+```python
+class RewardFn(Protocol):
+    def step(*, action, gym_result, state) -> RewardSignal: ...
+    def episode(*, run_result, state, ground_truth=None) -> RewardSignal: ...
+```
+
+Per-step shaping + terminal grading. `PlanAdherenceReward` composes
+`format_reward`, `off_site_penalty`, `loop_penalty`, `task_success_reward`,
+and (post-#120) `world_model_accuracy_reward` — Jaccard similarity between
+each step's `predicted_outcome` (parsed from the brain's `Predicted:` line)
+and `observed_outcome` (the runtime's feedback string). Set
+`world_model_weight=0.0` to disable; default `0.05`.
 
 ## Execution Flow
 
