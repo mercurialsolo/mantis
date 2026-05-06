@@ -29,6 +29,7 @@ from PIL import Image
 from ..actions import Action, ActionType
 from ..loop_detector import LoopDetector, phash_64
 from .base import GymEnvironment
+from .gallery_trap import detect_gallery_trap, gallery_recovery_actions
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,19 @@ def _observed_state(info: dict | None) -> dict:
     if not info:
         return {}
     return {k: info[k] for k in _OBSERVED_STATE_KEYS if k in info}
+
+
+def _gallery_observed_state(recovery: dict[str, Any] | None) -> dict[str, Any]:
+    """Small trajectory metadata block for gallery-trap recovery."""
+    if not recovery:
+        return {}
+    return {
+        "gallery_trap_detected": True,
+        "gallery_trap_confidence": recovery["confidence"],
+        "gallery_trap_reason": recovery["reason"],
+        "gallery_recovery_actions": recovery["actions"],
+        "gallery_recovery_success": recovery["success"],
+    }
 
 
 @dataclass
@@ -510,6 +524,18 @@ class GymRunner:
                     frame=gym_result.observation.screenshot,
                 )
 
+                gallery_recovery: dict[str, Any] = {}
+                if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+                    gallery_recovery = self._recover_gallery_trap(
+                        gym_result=gym_result,
+                        detection_text=thinking,
+                        action_history=action_history,
+                        frame_history=frame_history,
+                    )
+                    if gallery_recovery:
+                        gym_result = gallery_recovery["result"]
+                        _save_frame(gym_result.observation.screenshot, step_num)
+
                 # Reward — apply before mutating step_reward / components so the
                 # signal includes this step's action in any history-based terms.
                 step_reward = gym_result.reward
@@ -528,6 +554,12 @@ class GymRunner:
                     action=action, gym_result=gym_result,
                     last_url=last_url, last_title=last_title,
                 )
+                if gallery_recovery:
+                    feedback = (
+                        f"{feedback}; gallery trap detected "
+                        f"({gallery_recovery['confidence']:.2f}); "
+                        f"recovery {'succeeded' if gallery_recovery['success'] else 'failed'}"
+                    )
 
                 focused_input = gym_result.info.get("focused_input")
                 if focused_input is not None:
@@ -551,7 +583,10 @@ class GymRunner:
                     inference_time=inference_time, feedback=feedback,
                     reward_components=step_components,
                     frame_hash=phash_64(gym_result.observation.screenshot),
-                    observed_state=_observed_state(gym_result.info),
+                    observed_state={
+                        **_observed_state(gym_result.info),
+                        **_gallery_observed_state(gallery_recovery),
+                    },
                     observed_outcome=feedback,
                     predicted_outcome=predicted_outcome,
                 ))
@@ -607,6 +642,60 @@ class GymRunner:
             result.total_reward += float(terminal)
 
         return result
+
+    def _recover_gallery_trap(
+        self,
+        *,
+        gym_result: Any,
+        detection_text: str,
+        action_history: list[Action],
+        frame_history: list[Image.Image],
+    ) -> dict[str, Any]:
+        """Detect gallery/lightbox state after a click and recover once.
+
+        Recovery is deliberately bounded: Escape, then Alt+Left only if the
+        gallery is still detected. The original model step remains one
+        trajectory entry; recovery details are stored in observed_state.
+        """
+        detection = detect_gallery_trap(
+            gym_result.observation.screenshot,
+            text=detection_text,
+        )
+        if not detection.detected:
+            return {}
+
+        self._emit(
+            "gallery_trap",
+            confidence=round(detection.confidence, 3),
+            reason=detection.reason,
+        )
+
+        latest = gym_result
+        actions_run: list[str] = []
+        success = False
+        for recovery_action in gallery_recovery_actions():
+            latest = self.env.step(recovery_action)
+            action_history.append(recovery_action)
+            frame_history.append(latest.observation.screenshot)
+            actions_run.append(recovery_action.params.get("keys", ""))
+            self._loop_detector.record(
+                recovery_action,
+                url=latest.info.get("url", ""),
+                frame=latest.observation.screenshot,
+            )
+
+            followup = detect_gallery_trap(latest.observation.screenshot)
+            if not followup.detected:
+                success = True
+                break
+
+        return {
+            "result": latest,
+            "confidence": detection.confidence,
+            "reason": detection.reason,
+            "actions": actions_run,
+            "success": success,
+        }
 
     # ── Prompt construction ──────────────────────────────────────────────
 
