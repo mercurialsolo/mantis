@@ -1,4 +1,20 @@
-"""CLI entry point for the Mantis agent."""
+"""CLI entry point for the Mantis agent.
+
+Two top-level usage modes:
+
+1. **Plan-authoring subcommands** (#154) — fast, no model load:
+
+       mantis plan validate <path>
+       mantis plan validate -            # read JSON from stdin
+
+2. **Streaming agent run** (legacy default):
+
+       mantis "<task>"
+
+Subcommand dispatch happens in :func:`main` before any heavy imports
+(``transformers``, ``torch``, ``mss``) are pulled in, so ``mantis plan
+...`` invocations don't pay the model-loading import cost.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +23,13 @@ import asyncio
 import logging
 import sys
 
-from .agent import StreamingCUA
-from .brain import DEFAULT_MODEL, Gemma4Brain
-from .executor import ActionExecutor
-from .streamer import ScreenStreamer
-
 
 def parse_args() -> argparse.Namespace:
+    # Defer the brain import: importing transformers / torch eagerly bricks
+    # the fast plan-authoring path (`mantis plan validate ...`) with seconds
+    # of startup cost.
+    from .brain import DEFAULT_MODEL
+
     p = argparse.ArgumentParser(
         prog="mantis",
         description="Mantis agent — watches your screen with precision and acts.",
@@ -96,7 +112,21 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    # #154: dispatch plan-authoring subcommands before any heavy import. The
+    # streaming-agent path below still pulls in transformers / torch / mss /
+    # pyautogui — none of those should load when the user runs
+    # ``mantis plan validate``.
+    if len(sys.argv) >= 2 and sys.argv[1] == "plan":
+        from .cli import main as cli_main
+        sys.exit(cli_main(sys.argv[1:]))
+
     args = parse_args()
+
+    # Heavy imports only after we know we're on the agent-run path.
+    from .agent import StreamingCUA
+    from .brain import Gemma4Brain
+    from .executor import ActionExecutor
+    from .streamer import ScreenStreamer
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
