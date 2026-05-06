@@ -24,6 +24,7 @@ from .components import (
     task_success_reward,
     type_verified_reward,
     url_progress_reward,
+    world_model_accuracy_reward,
 )
 from .plan_adherence import PlanAdherenceReward
 
@@ -38,6 +39,7 @@ __all__ = [
     "task_success_reward",
     "type_verified_reward",
     "url_progress_reward",
+    "world_model_accuracy_reward",
     # Reward fns
     "PlanAdherenceReward",
     # Deprecated — see module docstring

@@ -26,6 +26,7 @@ from .components import (
     loop_penalty,
     off_site_penalty,
     task_success_reward,
+    world_model_accuracy_reward,
 )
 
 if TYPE_CHECKING:
@@ -57,6 +58,12 @@ class PlanAdherenceReward:
     loop_window: int = 3
     success_weight: float = 1.0
     plan_progress_weight: float = 0.3
+    # #120 step 3: per-step world-model accuracy contribution at episode time.
+    # Computed from each TrajectoryStep's predicted_outcome vs observed_outcome
+    # via Jaccard overlap of stemmed tokens. Brains that don't emit a
+    # ``Predicted:`` line contribute 0.0, so this is non-disruptive to
+    # legacy trajectories.
+    world_model_weight: float = 0.05
 
     def step(
         self,
@@ -114,5 +121,22 @@ class PlanAdherenceReward:
         if state.plan_steps_total > 0:
             frac = state.plan_step_idx / state.plan_steps_total
             components["plan_progress"] = self.plan_progress_weight * frac
+
+        # #120: world-model accuracy summed over the trajectory. Only emitted
+        # when at least one step has a non-empty ``predicted_outcome`` so old
+        # trajectories don't grow a zero entry that pollutes log distributions.
+        wm_total = 0.0
+        wm_count = 0
+        for tstep in run_result.trajectory:
+            pred = getattr(tstep, "predicted_outcome", "") or ""
+            obs = getattr(tstep, "observed_outcome", "") or ""
+            if not pred or not obs:
+                continue
+            wm_total += world_model_accuracy_reward(
+                pred, obs, value=self.world_model_weight,
+            )
+            wm_count += 1
+        if wm_count:
+            components["world_model_accuracy"] = wm_total
 
         return RewardSignal(value=sum(components.values()), components=components)
