@@ -355,6 +355,10 @@ class GymRunner:
                     )
                     if discovery_result:
                         plan_step_idx += 1
+                        # #116: reset loop detector at plan-step boundary so
+                        # repeated actions across distinct plan steps don't
+                        # accidentally trip the cross-step loop guard.
+                        self._loop_detector.reset()
                         direct_executed = True
                         obs_after = self.env._capture() if hasattr(self.env, '_capture') else None
                         if obs_after:
@@ -378,6 +382,10 @@ class GymRunner:
                     if step_result.success:
                         logger.info(f"  Direct exec OK: {step_result.detail}")
                         plan_step_idx += 1
+                        # #116: reset loop detector at plan-step boundary so
+                        # repeated actions across distinct plan steps don't
+                        # accidentally trip the cross-step loop guard.
+                        self._loop_detector.reset()
                         direct_executed = True
 
                         # Capture screenshot after direct execution
@@ -424,6 +432,10 @@ class GymRunner:
                             )
                             if discovery_result:
                                 plan_step_idx += 1
+                                # #116: reset loop detector at plan-step boundary
+                                # so repeated actions across distinct plan steps
+                                # don't accidentally trip the cross-step loop guard.
+                                self._loop_detector.reset()
                                 direct_executed = True
 
                                 obs_after = self.env._capture() if hasattr(self.env, '_capture') else None

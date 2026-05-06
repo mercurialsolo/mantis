@@ -30,6 +30,43 @@ def test_repeat_loop_byte_equal() -> None:
     assert d.is_repeat_loop(window=5) is True
 
 
+# ── #116: cross-step false positives clear after reset ──────────────────
+
+
+def test_reset_clears_cross_step_false_positive() -> None:
+    """Plan-step boundary semantics: actions recorded before reset() must
+    not contribute to is_any_loop() afterwards. Otherwise a runner that
+    legitimately repeats a click on plan step N+1 (e.g. clicking the
+    next listing card) could be misflagged as a loop because the same
+    click pattern happened on plan step N."""
+    d = LoopDetector()
+    # Plan step N: 4 identical clicks at (100, 100). Window of 5 won't
+    # fire yet (only 4 samples).
+    for _ in range(4):
+        d.record(_click(100, 100), url="https://x.test/a")
+    assert d.is_any_loop(window=5) is False
+    # Boundary crossed → reset.
+    d.reset()
+    # Plan step N+1: 1 more click at (100, 100). With cross-step memory
+    # this would total 5 → trip is_any_loop. After reset, only 1 sample
+    # exists → must not fire.
+    d.record(_click(100, 100), url="https://x.test/b")
+    assert d.is_any_loop(window=5) is False
+    assert d.is_any_loop(window=2) is False  # only 1 sample after reset
+
+
+def test_reset_resumes_loop_detection_on_new_window_inside_one_step() -> None:
+    """After reset, the detector still fires correctly for *new* loops
+    that occur entirely after the boundary."""
+    d = LoopDetector()
+    d.record(_click(50, 50))
+    d.record(_click(50, 50))
+    d.reset()
+    for _ in range(5):
+        d.record(_click(200, 200), url="https://x.test/")
+    assert d.is_repeat_loop(window=5) is True
+
+
 def test_repeat_loop_below_window_returns_false() -> None:
     d = LoopDetector()
     for _ in range(2):
