@@ -348,6 +348,7 @@ class RunExecutor:
         runner._record_step_costs(effective_step, step_result)
         runner._log_progress(step_result, state.results)
         runner._log_step_diff(pre_snapshot, effective_step, step_result)
+        _emit_action_metric(runner, effective_step, step_result)
         if not step_result.success:
             runner._dump_debug_screenshot(
                 f"step{state.step_index}_post_{effective_step.type}",
@@ -504,6 +505,16 @@ class RunExecutor:
         runner._last_loop_counters = dict(state.loop_counters)
         runner._last_listings_on_page = state.listings_on_page
 
+        # #156 loop-termination observability — one increment per run.
+        try:
+            from ..metrics import LOOP_TERMINATION_TOTAL
+            LOOP_TERMINATION_TOTAL.labels(
+                tenant_id=getattr(runner, "tenant_id", "") or "",
+                reason=runner._final_status or "unknown",
+            ).inc()
+        except Exception as exc:  # noqa: BLE001 — telemetry must not break runs
+            logger.debug("loop termination metric emit failed: %s", exc)
+
     # ── Helpers ─────────────────────────────────────────────────────────
 
     def _persist(
@@ -534,3 +545,37 @@ class RunExecutor:
             if plan.steps[j].type == step_type:
                 return j
         return None
+
+
+# ── #156 per-action observability ──────────────────────────────────────
+
+
+def _emit_action_metric(
+    runner: Any, step: MicroIntent, step_result: StepResult,
+) -> None:
+    """Emit ``mantis_action_total`` once per dispatched step.
+
+    Outcome bucketing matches the executor's downstream branching:
+    ``duplicate`` → handled by ``_handle_duplicate``; ``filters_not_applied``
+    → ``_ensure_results_filters`` short-circuit; ``success`` /  ``failed``
+    → the standard happy / sad path. Any new bucket the executor learns
+    should also surface here so dashboards stay coherent.
+    """
+    try:
+        from ..metrics import ACTION_TOTAL
+        data = (step_result.data or "")
+        if "DUPLICATE" in data:
+            outcome = "duplicate"
+        elif data == "filters_not_applied":
+            outcome = "filters_not_applied"
+        elif step_result.success:
+            outcome = "success"
+        else:
+            outcome = "failed"
+        ACTION_TOTAL.labels(
+            tenant_id=getattr(runner, "tenant_id", "") or "",
+            step_kind=step.type or "unknown",
+            outcome=outcome,
+        ).inc()
+    except Exception as exc:  # noqa: BLE001 — telemetry must not break runs
+        logger.debug("action metric emit failed: %s", exc)

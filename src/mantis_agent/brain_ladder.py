@@ -167,6 +167,17 @@ class BrainLadder:
                 "BrainLadder could not annotate result with brain_used "
                 "(immutable type?); cost attribution will rely on .attempts",
             )
+        # #156 escalation observability: emit one counter per think() so
+        # operators can dashboard primary/fallback split. Tenant label is
+        # not known here (the ladder is shared); leave it empty so the
+        # metric is queryable cross-tenant.
+        try:
+            from .metrics import BRAIN_ESCALATION_TOTAL
+            BRAIN_ESCALATION_TOTAL.labels(
+                tenant_id="", from_brain="primary", to_brain=brain_used,
+            ).inc()
+        except Exception as exc:  # noqa: BLE001 — telemetry must not break runs
+            logger.debug("brain escalation metric emit failed: %s", exc)
         return result
 
     # ── Escalation control ─────────────────────────────────────────────

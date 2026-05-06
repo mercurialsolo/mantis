@@ -1,0 +1,108 @@
+{
+  "title": "Mantis — Per-Action Observability (#156)",
+  "uid": "mantis-per-action",
+  "schemaVersion": 36,
+  "tags": ["mantis", "cua", "observability"],
+  "description": "Triage view for which step types are failing, how often the brain ladder escalates, and where runs terminate. Source: mantis_action_total, mantis_brain_escalation_total, mantis_loop_termination_total, mantis_step_latency_seconds.",
+  "templating": {
+    "list": [
+      {
+        "name": "tenant_id",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(mantis_action_total, tenant_id)",
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Per-action success rate (last 15m)",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (step_kind) (rate(mantis_action_total{tenant_id=~\"$tenant_id\", outcome=\"success\"}[15m])) / sum by (step_kind) (rate(mantis_action_total{tenant_id=~\"$tenant_id\"}[15m]))",
+          "legendFormat": "{{step_kind}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}}
+    },
+    {
+      "id": 2,
+      "title": "Failed actions per minute, by step_kind",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (step_kind) (rate(mantis_action_total{tenant_id=~\"$tenant_id\", outcome=\"failed\"}[5m]) * 60)",
+          "legendFormat": "{{step_kind}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Brain ladder escalation rate",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 8, "w": 6, "h": 6},
+      "targets": [
+        {
+          "expr": "sum(rate(mantis_brain_escalation_total{to_brain=\"fallback\"}[10m])) / sum(rate(mantis_brain_escalation_total[10m]))"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "decimals": 1}}
+    },
+    {
+      "id": 4,
+      "title": "Run terminations (1h, by reason)",
+      "type": "piechart",
+      "gridPos": {"x": 6, "y": 8, "w": 6, "h": 6},
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(mantis_loop_termination_total{tenant_id=~\"$tenant_id\"}[1h]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Action outcome distribution (1h)",
+      "type": "piechart",
+      "gridPos": {"x": 12, "y": 8, "w": 6, "h": 6},
+      "targets": [
+        {
+          "expr": "sum by (outcome) (increase(mantis_action_total{tenant_id=~\"$tenant_id\"}[1h]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "p95 step latency by phase",
+      "type": "timeseries",
+      "gridPos": {"x": 18, "y": 8, "w": 6, "h": 6},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (phase, le) (rate(mantis_step_latency_seconds_bucket{tenant_id=~\"$tenant_id\"}[10m])))",
+          "legendFormat": "{{phase}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 7,
+      "title": "Plan-branch dispatch hit rate",
+      "type": "table",
+      "gridPos": {"x": 0, "y": 14, "w": 24, "h": 8},
+      "targets": [
+        {
+          "expr": "sum by (branch, outcome) (increase(mantis_plan_branch_total{tenant_id=~\"$tenant_id\"}[1h]))",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    }
+  ]
+}

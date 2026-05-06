@@ -158,6 +158,64 @@ PROMPT_VERSION = _gauge(
     ("prompt_name", "sha"),
 )
 
+# ── Per-action observability (#156) ─────────────────────────────────────
+#
+# Triage signal for "why did this run fail?" / "is this a tenant regression
+# or a flaky site?". Labels are intentionally low-cardinality (the
+# action_type / step_kind / branch sets are bounded by the StepHandler
+# registry) so cardinality doesn't blow up across tenants.
+
+# Per-step terminal outcome for every dispatched MicroIntent. ``outcome``
+# is one of ``success | failed | duplicate | filters_not_applied``. The
+# ``step_kind`` label is the MicroIntent.type (navigate / click / paginate
+# / extract_url / extract_data / submit / scroll / fill_field / ...).
+ACTION_TOTAL = _counter(
+    "mantis_action_total",
+    "Per-step outcome of MicroIntent dispatch — one increment per executed step.",
+    ("tenant_id", "step_kind", "outcome"),
+)
+
+# Brain ladder escalation. Incremented every BrainLadder.think() call so
+# operators can track primary/fallback split and alert on excessive
+# escalation. ``from_brain`` is always the brain the caller asked for;
+# ``to_brain`` is the brain that actually answered (same value for the
+# non-escalating path, different on a forced fallback).
+BRAIN_ESCALATION_TOTAL = _counter(
+    "mantis_brain_escalation_total",
+    "BrainLadder.think() calls labelled by which brain handled the call.",
+    ("tenant_id", "from_brain", "to_brain"),
+)
+
+# How a run terminated. ``reason`` is one of: ``completed | halted |
+# cancelled | paused | budget_cap | time_cap | cancel_event``. The
+# ``status`` label additionally distinguishes the high-level final
+# status the runner returned to the caller.
+LOOP_TERMINATION_TOTAL = _counter(
+    "mantis_loop_termination_total",
+    "Run-loop terminations grouped by reason.",
+    ("tenant_id", "reason"),
+)
+
+# Plan-branch dispatch outcome — captures the special-case branches in
+# step dispatch (gate verify, claude_only, navigate_back close-tab,
+# click layout listings vs single-element). ``branch`` names the
+# special-case path; ``outcome`` is taken / skipped / aborted.
+PLAN_BRANCH_TOTAL = _counter(
+    "mantis_plan_branch_total",
+    "Plan-branch dispatch outcomes for special-case routing decisions.",
+    ("tenant_id", "branch", "outcome"),
+)
+
+# Per-step latency histogram, labelled by phase. ``phase`` is one of
+# ``perceive | think | act | settle``. Buckets cover the 50ms – 30s
+# window most browser CUA steps land in.
+STEP_LATENCY_SECONDS = _histogram(
+    "mantis_step_latency_seconds",
+    "Latency of one step phase (perceive | think | act | settle).",
+    ("tenant_id", "phase"),
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0),
+)
+
 
 def publish_prompt_versions() -> None:
     """Set the prompt-version gauge for every registered prompt (#127).
