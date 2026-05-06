@@ -472,6 +472,10 @@ class ClaudeExtractor:
         Returns a dict with x/y/action/label/reason, or None if no safe target
         is visible. This intentionally avoids generic Contact Seller forms.
         """
+        if self.schema is not None and not self.schema.allowed_controls:
+            logger.info("  [content-control] schema has no allowed controls; skipping")
+            return None
+
         debug_stem = "claude_listing_content_control"
         try:
             screenshot.save(self._debug_path(debug_stem, ".png"))

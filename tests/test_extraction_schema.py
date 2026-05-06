@@ -257,6 +257,21 @@ def test_extractor_dynamic_content_control_prompt():
     assert "Contact Agent" in prompt
 
 
+def test_extractor_skips_content_control_without_allowed_controls(monkeypatch):
+    schema = ExtractionSchema(
+        entity_name="news page",
+        fields=[{"name": "stories", "type": "str", "required": True}],
+        allowed_controls=[],
+    )
+    extractor = ClaudeExtractor(schema=schema)
+
+    def fail_call(*_args, **_kwargs):
+        raise AssertionError("content-control Claude call should be skipped")
+
+    monkeypatch.setattr(extractor, "_call", fail_call)
+    assert extractor.find_listing_content_control(object()) is None
+
+
 def test_extractor_parse_schema_result():
     schema = ExtractionSchema(
         fields=[
