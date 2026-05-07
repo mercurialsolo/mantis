@@ -56,6 +56,8 @@ class GroundingModel(ABC):
         description: str,
         initial_x: int | None = None,
         initial_y: int | None = None,
+        *,
+        force_compute: bool = False,
     ) -> GroundingResult:
         """Refine a click target from description + approximate coords.
 
@@ -64,6 +66,11 @@ class GroundingModel(ABC):
             description: What to click (from brain's reasoning).
             initial_x: Brain's approximate X coordinate (may be None).
             initial_y: Brain's approximate Y coordinate (may be None).
+            force_compute: When True, bypass any attached
+                :class:`~.grounding_cache.GroundingCache` and force a
+                fresh remote call. High-risk click paths (#181) opt in
+                so a stale cached coordinate doesn't pin a regression.
+                Default False — caches remain hot for routine clicks.
 
         Returns:
             GroundingResult with refined coordinates.
@@ -74,7 +81,7 @@ class GroundingModel(ABC):
 class PassthroughGrounding(GroundingModel):
     """No grounding — use brain's coordinates as-is. For testing."""
 
-    def ground(self, screenshot, description, initial_x=None, initial_y=None):
+    def ground(self, screenshot, description, initial_x=None, initial_y=None, *, force_compute=False):
         return GroundingResult(
             x=initial_x or screenshot.width // 2,
             y=initial_y or screenshot.height // 2,
@@ -100,7 +107,7 @@ class RegionGrounding(GroundingModel):
         self.safe_left = 20
         self.safe_right = self.w - 20
 
-    def ground(self, screenshot, description, initial_x=None, initial_y=None):
+    def ground(self, screenshot, description, initial_x=None, initial_y=None, *, force_compute=False):
         x = initial_x or self.w // 2
         y = initial_y or self.h // 2
 
@@ -168,11 +175,13 @@ Nothing else."""
         # (frame-region + description) pairs short-circuit the API call.
         self.cache = cache
 
-    def ground(self, screenshot, description, initial_x=None, initial_y=None):
+    def ground(self, screenshot, description, initial_x=None, initial_y=None, *, force_compute=False):
         # #117 step 2: cache wrapper. Skip on empty description (caches
         # nothing meaningful) and on no-API-key (would just return the
         # fallback every time and pollute the cache).
-        if self.cache is not None and description and self.api_key:
+        # #181: ``force_compute=True`` bypasses the cache so high-risk
+        # clicks never inherit a stale coordinate.
+        if not force_compute and self.cache is not None and description and self.api_key:
             return self.cache.lookup_or_compute(
                 screenshot, description,
                 lambda: self._ground_remote(screenshot, description, initial_x, initial_y),
@@ -307,8 +316,10 @@ Nothing else."""
         self.max_retries = max_retries
         self.cache = cache
 
-    def ground(self, screenshot, description, initial_x=None, initial_y=None):
-        if self.cache is not None and description:
+    def ground(self, screenshot, description, initial_x=None, initial_y=None, *, force_compute=False):
+        # #181: ``force_compute=True`` bypasses the cache for high-risk
+        # clicks so a stale cached coordinate cannot pin a regression.
+        if not force_compute and self.cache is not None and description:
             return self.cache.lookup_or_compute(
                 screenshot, description,
                 lambda: self._ground_remote(screenshot, description, initial_x, initial_y),

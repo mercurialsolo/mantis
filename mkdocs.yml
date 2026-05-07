@@ -118,6 +118,7 @@ nav:
       - Metrics: operations/metrics.md
       - Continual fine-tuning: operations/continual-finetuning.md
       - Model promotion: operations/model-promotion.md
+      - Independent grounding: operations/independent-grounding.md
   - Integrations:
       - integrations/index.md
       - Generic CUA over HTTP: integrations/generic-cua.md

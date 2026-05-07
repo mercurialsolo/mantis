@@ -52,6 +52,14 @@ class SiteConfig:
     # promotion path through gym/runner.py:_try_discovery_execution.
     prefer_som_grounding: bool = False
 
+    # #181: layouts (or step contexts) where the click handler must
+    # bypass the GroundingCache and force a fresh independent grounding
+    # call. Listing-card title clicks are the canonical case — same-model
+    # grounding inherits the same visual bias and a stale cache hit can
+    # pin a regression on photo coordinates. Empty tuple = no forced
+    # grounding (default; routine clicks still benefit from #117 cache).
+    require_independent_grounding: tuple[str, ...] = ()
+
     def is_detail_page(self, url: str) -> bool:
         """Check if URL matches the detail page pattern."""
         if not self.detail_page_pattern:
@@ -159,8 +167,19 @@ class SiteConfig:
             "gate_verify_prompt": self.gate_verify_prompt,
             "filtered_results_url": self.filtered_results_url,
             "prefer_som_grounding": self.prefer_som_grounding,
+            "require_independent_grounding": list(self.require_independent_grounding),
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, str]) -> SiteConfig:
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+    def from_dict(cls, data: dict[str, Any]) -> SiteConfig:
+        cleaned = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        # ``require_independent_grounding`` round-trips as JSON, which
+        # decodes lists rather than tuples. Coerce here so the dataclass
+        # default (tuple) shape is preserved end-to-end.
+        if "require_independent_grounding" in cleaned and isinstance(
+            cleaned["require_independent_grounding"], list,
+        ):
+            cleaned["require_independent_grounding"] = tuple(
+                cleaned["require_independent_grounding"]
+            )
+        return cls(**cleaned)
