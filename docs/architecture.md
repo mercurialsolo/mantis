@@ -87,6 +87,7 @@ ExtractionResult               Structured output (fields, viability, spam check)
 | `cost_meter.py` | CostMeter -- gpu/claude/proxy cost rollup, Prometheus inflight gauge |
 | `run_reporter.py` | RunReporter -- final summary block + costs dict |
 | `tool_channel.py` | ToolChannel -- pause/resume tool invocation |
+| `trace_exporter.py` | TraceExporter -- per-run JSON trace dump for SFT/DPO labelling, gated on `MANTIS_TRACE_EXPORT_DIR` (#155) |
 | `workflow_runner.py` | WorkflowRunner -- dynamic loops and pagination over GymRunner |
 | `learning_runner.py` | LearningRunner -- verified execution for building playbooks |
 | `xdotool_env.py` | XdotoolGymEnv -- real Chrome + xdotool (zero automation fingerprints) |

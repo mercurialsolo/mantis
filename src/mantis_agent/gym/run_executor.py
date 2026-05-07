@@ -515,6 +515,16 @@ class RunExecutor:
         except Exception as exc:  # noqa: BLE001 — telemetry must not break runs
             logger.debug("loop termination metric emit failed: %s", exc)
 
+        # #155 step 1 — production trace export (gated on MANTIS_TRACE_EXPORT_DIR).
+        # No-op when the env var is unset, so legacy deployments pay nothing.
+        try:
+            from .trace_exporter import TraceExporter
+            TraceExporter.from_env().maybe_export(
+                runner, state.results, status=runner._final_status,
+            )
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug("trace export failed: %s", exc)
+
     # ── Helpers ─────────────────────────────────────────────────────────
 
     def _persist(
