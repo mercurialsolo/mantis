@@ -5,11 +5,10 @@ Subcommands:
                             Exits 0 on clean, 1 on errors, 2 on warnings only.
     plan dry-run <path>     Walk the plan graph and print the step sequence
                             the runner would attempt — no browser, no API
-                            calls, no model load. Annotates gates, loops,
-                            required steps, sections.
-
-Planned follow-up (#154):
-    init <url> [--task ...] Scaffold a starter plan via PlanDecomposer.
+                            calls, no model load.
+    plan init <url>         Scaffold a starter plan via PlanDecomposer
+        --task "<desc>"     (Claude API call; ~\$0.005 per scaffold).
+                            Validates and dry-runs before writing.
 
 The CLI is wired through ``mantis_agent/main.py``: ``mantis plan ...``
 invocations dispatch to this module BEFORE any heavy import (no
@@ -18,7 +17,7 @@ stays fast.
 
     mantis plan validate examples/extract_listings.json
     mantis plan dry-run examples/extract_jobs.json
-    mantis plan validate path.json --json   # machine-readable output
+    mantis plan init https://news.ycombinator.com --task "Extract top 10 stories"
 """
 
 from __future__ import annotations
@@ -261,6 +260,112 @@ def cmd_plan_dry_run(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ── plan init ──────────────────────────────────────────────────────────
+
+
+def _default_output_path(url: str) -> str:
+    """Derive a sensible filename from a URL, e.g. https://news.ycombinator.com/
+    → news_ycombinator_com_plan.json. Hostname-only — no path / query salt
+    so authors writing one plan per site get predictable names.
+    """
+    from urllib.parse import urlparse
+
+    host = urlparse(url).netloc or url
+    # Strip leading www., replace dots / dashes with underscores so the
+    # filename is identifier-shaped (works as a Python module name later
+    # if anyone uses it for code-gen).
+    host = host.lower().lstrip(".")
+    if host.startswith("www."):
+        host = host[len("www."):]
+    safe = "".join(c if c.isalnum() else "_" for c in host).strip("_")
+    return f"{safe or 'plan'}_plan.json"
+
+
+def _build_seed_plan_text(url: str, task: str) -> str:
+    """Compose the prompt PlanDecomposer ingests.
+
+    The decomposer expects free-form text; ``"{task} at {url}"`` is the
+    minimal viable shape. Authors who want richer context (auth
+    requirements, filters, output schema) can post-process the resulting
+    JSON or hand-author from there.
+    """
+    if not task.strip():
+        return f"Open {url} and describe what you see."
+    return f"{task.strip()}\n\nTarget URL: {url}"
+
+
+def cmd_plan_init(args: argparse.Namespace) -> int:
+    """``mantis plan init <url> --task "..."`` — scaffold a starter plan.
+
+    Calls :class:`PlanDecomposer` (one Claude API call, ~\$0.005), writes
+    the resulting plan JSON to ``--output`` (or a derived path),
+    optionally validates and dry-runs the result inline so authors see
+    structural feedback at scaffold-time.
+
+    Exits 0 on a written-and-validated plan, 1 on any error, 2 if the
+    written plan has validation warnings only.
+    """
+    from .plan_decomposer import PlanDecomposer
+
+    if not args.task:
+        print("error: --task is required", file=sys.stderr)
+        return EXIT_ERROR
+
+    output_path = Path(args.output or _default_output_path(args.url))
+    if output_path.exists() and not args.overwrite:
+        print(
+            f"error: {output_path} already exists — pass --overwrite to replace",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    plan_text = _build_seed_plan_text(args.url, args.task)
+    print(f"Decomposing via Claude (api={args.model})…")
+
+    decomposer = PlanDecomposer(model=args.model)
+    try:
+        plan = decomposer.decompose_text(plan_text)
+    except RuntimeError as exc:
+        # decompose_text raises RuntimeError when ANTHROPIC_API_KEY is unset.
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    except Exception as exc:  # noqa: BLE001 — surface decomposer errors verbatim
+        print(f"error: decomposer failed: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    payload = plan.to_dict()
+    output_path.write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"  wrote {output_path}  ({len(plan.steps)} steps)")
+
+    if not args.no_validate:
+        from .graph.plan_validator import PlanValidator
+        issues = PlanValidator().validate(plan)
+        errors = [i for i in issues if i.severity == "error"]
+        warnings = [i for i in issues if i.severity == "warning"]
+        if issues:
+            print("\nValidator findings:")
+            for issue in issues:
+                print(_format_issue(issue, str(output_path)))
+            print(
+                f"  result: {len(errors)} error(s), {len(warnings)} warning(s)"
+            )
+            if errors:
+                return EXIT_ERROR
+            if warnings:
+                return EXIT_WARNING
+        else:
+            print("  ✓ validator clean")
+
+    if not args.no_dry_run:
+        print("\nDry-run preview:")
+        # Reuse the same renderer the dry-run subcommand uses so authors see
+        # the identical row format they'll see if they re-run later.
+        for i, step in enumerate(plan.steps):
+            print(_annotate_step(i, step))
+
+    return EXIT_OK
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mantis",
@@ -300,6 +405,46 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Emit machine-readable JSON instead of human-formatted lines",
     )
     dry_run.set_defaults(func=cmd_plan_dry_run)
+
+    init = plan_sub.add_parser(
+        "init",
+        help="Scaffold a starter plan via PlanDecomposer (Claude API call)",
+    )
+    init.add_argument(
+        "url",
+        help="Target URL for the new plan (used as the navigate destination)",
+    )
+    init.add_argument(
+        "--task",
+        required=True,
+        help="One-sentence description of what the plan should accomplish",
+    )
+    init.add_argument(
+        "--output", "-o",
+        default=None,
+        help="Output JSON path (default: derived from URL hostname)",
+    )
+    init.add_argument(
+        "--model",
+        default="claude-sonnet-4-20250514",
+        help="Claude model to use for decomposition",
+    )
+    init.add_argument(
+        "--no-validate",
+        action="store_true",
+        help="Skip the post-decompose PlanValidator run",
+    )
+    init.add_argument(
+        "--no-dry-run",
+        action="store_true",
+        help="Skip the post-decompose dry-run preview",
+    )
+    init.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite the output file if it already exists",
+    )
+    init.set_defaults(func=cmd_plan_init)
 
     return parser
 
