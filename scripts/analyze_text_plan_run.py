@@ -300,7 +300,6 @@ def render_report(
     lines.append(f"- **Plan**: `{plan_path}` ({len(plan)} numbered steps)")
     lines.append(f"- **Final status**: `{status.get('status','?')}`")
     lines.append(f"- **Started**: {status.get('started_at','?')}  →  **Finished**: {status.get('finished_at') or status.get('updated_at','?')}")
-    cost = status.get("cost_total") or payload.get("max_cost")
     lines.append(f"- **Caps applied**: max_steps={payload.get('max_steps','?')}, max_cost=${payload.get('max_cost','?')}, max_time={payload.get('max_time_minutes','?')}min")
     lines.append("")
 

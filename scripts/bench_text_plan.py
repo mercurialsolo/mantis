@@ -12,7 +12,6 @@ text-plan file. Skips ``PlanDecomposer`` entirely (see runtime.py:_run_tasks).
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
