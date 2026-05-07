@@ -48,7 +48,7 @@ def _first_json(text: str, pattern: re.Pattern[str]) -> Any | None:
         return None
 
 
-def _log_extracted(values: list[dict]) -> None:
+def _log_extracted(values: list[dict[str, str]]) -> None:
     """Log each extracted value (label only — never log secret values)."""
     if not values:
         return
@@ -56,7 +56,7 @@ def _log_extracted(values: list[dict]) -> None:
     logger.info("extract_form_values: %d values: %s", len(values), pairs)
 
 
-def extract_form_values(brain: Any, task: str) -> list[dict]:
+def extract_form_values(brain: Any, task: str) -> list[dict[str, str]]:
     """Ask Holo3 to extract every {label, value} the plan instructs to type.
 
     Returns a list of ``{"label": str, "value": str}`` dicts in the order
@@ -94,7 +94,7 @@ def extract_form_values(brain: Any, task: str) -> list[dict]:
     parsed = _first_json(raw, _JSON_ARR_RE)
     if not isinstance(parsed, list):
         return []
-    out: list[dict] = []
+    out: list[dict[str, str]] = []
     for item in parsed:
         if not isinstance(item, dict):
             continue
@@ -214,7 +214,7 @@ def find_submit_button(
     brain: Any,
     screenshot: Image.Image,
     plan_intent: str | None = None,
-) -> dict | None:
+) -> dict[str, int | str] | None:
     """Ask Holo3 to locate a submit / login / update button on screen.
 
     Returns ``{x, y, label}`` (absolute pixel coords at the button center)
