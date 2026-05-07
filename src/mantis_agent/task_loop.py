@@ -87,6 +87,7 @@ def setup_env(
     settle_time: float = 2.0,
     proxy_city: str = "miami",
     proxy_state: str = "",
+    proxy_provider: str = "",
     proxy_disabled: bool = False,
     display: str | None = None,
     start_xvfb: bool = False,
@@ -115,10 +116,12 @@ def setup_env(
             city=proxy_city,
             state=proxy_state,
             session_id=f"mantis{run_id.replace('_', '')}",
+            provider=proxy_provider,
         )
         proxy_server, proxy_proc = resolve_proxy_server(proxy)
         if proxy:
-            print(f"  Proxy: {proxy.get('server', '')}")
+            provider = proxy_provider or os.environ.get("MANTIS_PROXY_PROVIDER") or "iproyal"
+            print(f"  Proxy: {provider} via {proxy.get('server', '')}")
 
     if start_xvfb and display:
         subprocess.Popen(

@@ -83,6 +83,65 @@ class TestBuildProxyConfig:
         finally:
             os.environ["PROXY_PASS"] = "basepass"
 
+    def test_oxylabs_provider_uses_oxylabs_credentials_without_suffixes(self, monkeypatch):
+        monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:10000")
+        monkeypatch.setenv("OXYLABS_USERNAME", "oxy_user")
+        monkeypatch.setenv("OXYLABS_PASSWORD", "oxy_pass")
+
+        cfg = build_proxy_config(
+            city="miami",
+            state="Florida",
+            session_id="abc123",
+            provider="oxylabs",
+        )
+
+        assert cfg == {
+            "server": "http://pr.oxylabs.io:10000",
+            "username": "oxy_user",
+            "password": "oxy_pass",
+        }
+
+    def test_oxylabs_provider_can_be_selected_by_env(self, monkeypatch):
+        monkeypatch.setenv("MANTIS_PROXY_PROVIDER", "oxylabs")
+        monkeypatch.setenv("OXYLABS_ENTRYPOINT", "http://pr.oxylabs.io:10000")
+        monkeypatch.setenv("OXYLABS_USERNAME", "oxy_user")
+        monkeypatch.setenv("OXYLABS_PASSWORD", "oxy_pass")
+
+        cfg = build_proxy_config(city="miami")
+
+        assert cfg["server"] == "http://pr.oxylabs.io:10000"
+        assert cfg["username"] == "oxy_user"
+        assert cfg["password"] == "oxy_pass"
+
+    def test_privateproxy_provider_uses_privateproxy_credentials(self, monkeypatch):
+        monkeypatch.setenv("PRIVATEPROXY_ENTRYPOINT", "privateproxy.example:8080")
+        monkeypatch.setenv("PRIVATEPROXY_USERNAME", "private_user")
+        monkeypatch.setenv("PRIVATEPROXY_PASSWORD", "private_pass")
+
+        cfg = build_proxy_config(city="miami", state="Florida", provider="privateproxy")
+
+        assert cfg == {
+            "server": "http://privateproxy.example:8080",
+            "username": "private_user",
+            "password": "private_pass",
+        }
+
+    def test_privateproxy_provider_accepts_four_part_endpoint(self, monkeypatch):
+        monkeypatch.setenv(
+            "PRIVATEPROXY_ENTRYPOINT",
+            "privateproxy.example:8080:private_user:private_pass",
+        )
+        monkeypatch.delenv("PRIVATEPROXY_USERNAME", raising=False)
+        monkeypatch.delenv("PRIVATEPROXY_PASSWORD", raising=False)
+
+        cfg = build_proxy_config(provider="privateproxy")
+
+        assert cfg == {
+            "server": "http://privateproxy.example:8080",
+            "username": "private_user",
+            "password": "private_pass",
+        }
+
 
 class FakeStepResult:
     def __init__(self, step_index, intent, success, data="", steps_used=3):

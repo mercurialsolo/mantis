@@ -410,6 +410,7 @@ def _run_executor(
     env, proxy_proc = setup_env(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name, settle_time=2.0,
+        proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
     viewer_ctx, viewer_event_bus = setup_viewer(viewer)
@@ -577,6 +578,7 @@ def _run_holo3_executor(
     env, proxy_proc = setup_env(
         base_url=base_url, run_id=run_id, session_name=session_name,
         settle_time=4.0,  # Holo3 needs longer settle — sees black screen with 2s
+        proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
     from mantis_agent.extraction import ClaudeExtractor, ExtractionSchema
@@ -964,6 +966,7 @@ def _run_gemma4_cua_executor(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name,
         settle_time=2.0, display=":99", start_xvfb=True,
+        proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
     viewer_ctx, viewer_event_bus = setup_viewer(viewer)
@@ -1089,6 +1092,7 @@ def _run_claude_executor(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name,
         settle_time=2.0, display=":99", start_xvfb=True,
+        proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
     viewer_ctx, viewer_event_bus = setup_viewer(viewer)
@@ -1304,6 +1308,7 @@ def main(
     state_key: str = "",
     graph_learn: bool = False,
     graph_learn_only: bool = False,
+    proxy_provider: str = "oxylabs",
     disable_proxy: bool = False,
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
@@ -1326,6 +1331,7 @@ def main(
     Micro: --micro plan.txt   (decompose → micro-intents → execute with checkpoint/reverse)
     Resume: --resume-state --state-key my-run   (reuse externalized micro state across sessions)
     Graph: --graph-learn   (probe + graph + compile + execute) --graph-learn-only (no execution)
+    Proxy: --proxy-provider privateproxy|oxylabs|iproyal   (Modal defaults to Oxylabs)
     """
     cua_config = CUA_MODELS.get(model, CUA_MODELS["evocua-8b"])
     print(f"Mantis CUA Server — {cua_config['name']}")
@@ -1520,6 +1526,11 @@ def main(
         print("\n  Proxy disabled for this run")
         task_suite_obj = json.loads(task_file_contents)
         task_suite_obj["_proxy_disabled"] = True
+        task_file_contents = json.dumps(task_suite_obj)
+    elif proxy_provider:
+        print(f"\n  Proxy provider: {proxy_provider}")
+        task_suite_obj = json.loads(task_file_contents)
+        task_suite_obj["_proxy_provider"] = proxy_provider
         task_file_contents = json.dumps(task_suite_obj)
 
     # ── Auto-parallelize looped tasks ──────────────────────────────

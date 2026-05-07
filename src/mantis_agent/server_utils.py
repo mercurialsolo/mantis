@@ -36,8 +36,14 @@ def build_proxy_config(
     city: str = "",
     state: str = "",
     session_id: str = "",
+    provider: str = "",
 ) -> dict[str, str] | None:
     """Build proxy config from environment variables.
+
+    Providers:
+      iproyal  -> PROXY_URL / PROXY_USER / PROXY_PASS
+      oxylabs  -> OXYLABS_ENTRYPOINT / OXYLABS_USERNAME / OXYLABS_PASSWORD
+      privateproxy -> PRIVATEPROXY_ENTRYPOINT / PRIVATEPROXY_USERNAME / PRIVATEPROXY_PASSWORD
 
     IPRoyal residential proxy supports geo-targeting via password suffixes:
       _country-us          -> US IPs (default in .env)
@@ -50,6 +56,56 @@ def build_proxy_config(
     lowercase name (`_state-florida`) or omit the state entirely (city +
     country alone is plenty of geo-targeting for most use cases).
     """
+    provider = (provider or os.environ.get("MANTIS_PROXY_PROVIDER") or "iproyal").strip().lower()
+    if provider in {"privateproxy", "private_proxy", "private"}:
+        proxy_endpoint = os.environ.get("PRIVATEPROXY_ENTRYPOINT", "").strip()
+        proxy_user = os.environ.get("PRIVATEPROXY_USERNAME", "")
+        proxy_pass = os.environ.get("PRIVATEPROXY_PASSWORD", "")
+        # PrivateProxy commonly exports proxies as IP:port:username:password.
+        # Support that shape as well as separate env vars.
+        if "://" not in proxy_endpoint:
+            host, port, user, password = (proxy_endpoint.split(":", 3) + ["", "", "", ""])[:4]
+            if host and port and user and password and not proxy_user:
+                proxy_endpoint = f"{host}:{port}"
+                proxy_user = user
+                proxy_pass = password
+
+        proxy_url = proxy_endpoint
+        if not proxy_url:
+            return None
+        if "://" not in proxy_url:
+            proxy_url = f"http://{proxy_url}"
+
+        proxy: dict[str, str] = {"server": proxy_url}
+        if proxy_user:
+            proxy["username"] = proxy_user
+            proxy["password"] = proxy_pass
+        return proxy
+
+    if provider in {"oxylabs", "oxy"}:
+        proxy_url = os.environ.get("OXYLABS_ENTRYPOINT", "").strip()
+        if not proxy_url:
+            return None
+        if "://" not in proxy_url:
+            proxy_url = f"http://{proxy_url}"
+
+        proxy: dict[str, str] = {"server": proxy_url}
+        proxy_user = (
+            os.environ.get("OXYLABS_USERNAME", "")
+            or os.environ.get("OXYLABS_USER", "")
+        )
+        proxy_pass = (
+            os.environ.get("OXYLABS_PASSWORD", "")
+            or os.environ.get("OXYLABS_PASS", "")
+        )
+        if proxy_user:
+            proxy["username"] = proxy_user
+            proxy["password"] = proxy_pass
+        return proxy
+
+    if provider not in {"iproyal", "iproyal_residential"}:
+        raise ValueError(f"unknown proxy provider: {provider}")
+
     proxy_url = os.environ.get("PROXY_URL", "")
     if not proxy_url:
         return None
