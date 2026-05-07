@@ -112,11 +112,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    # #154: dispatch plan-authoring subcommands before any heavy import. The
-    # streaming-agent path below still pulls in transformers / torch / mss /
-    # pyautogui — none of those should load when the user runs
-    # ``mantis plan validate``.
-    if len(sys.argv) >= 2 and sys.argv[1] == "plan":
+    # #154 / #155: dispatch plan-authoring + trace subcommands before any
+    # heavy import. The streaming-agent path below still pulls in
+    # transformers / torch / mss / pyautogui — none of those should load
+    # when the user runs ``mantis plan validate`` or ``mantis trace label``.
+    if len(sys.argv) >= 2 and sys.argv[1] in {"plan", "trace"}:
         from .cli import main as cli_main
         sys.exit(cli_main(sys.argv[1:]))
 

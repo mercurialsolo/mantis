@@ -1,4 +1,4 @@
-"""``mantis`` command-line interface — first-class plan-authoring product surface (#154).
+"""``mantis`` command-line interface — plan authoring + trace tooling (#154, #155).
 
 Subcommands:
     plan validate <path>    Run PlanValidator on a JSON micro-plan.
@@ -9,15 +9,22 @@ Subcommands:
     plan init <url>         Scaffold a starter plan via PlanDecomposer
         --task "<desc>"     (Claude API call; ~\$0.005 per scaffold).
                             Validates and dry-runs before writing.
+    trace label <input>     Batch-label exported run traces (#155 step 2).
+        --output <dir>      Emits one labelled JSON per input, with each
+                            step tagged positive / negative / neutral.
+    trace review <path>     Print a labelled summary of one trace JSON
+                            for human inspection.
 
 The CLI is wired through ``mantis_agent/main.py``: ``mantis plan ...``
-invocations dispatch to this module BEFORE any heavy import (no
-transformers / torch / mss / pyautogui), so the plan-authoring surface
-stays fast.
+and ``mantis trace ...`` invocations dispatch to this module BEFORE any
+heavy import (no transformers / torch / mss / pyautogui), so the
+plan-authoring + trace tooling surfaces stay fast.
 
     mantis plan validate examples/extract_listings.json
     mantis plan dry-run examples/extract_jobs.json
     mantis plan init https://news.ycombinator.com --task "Extract top 10 stories"
+    mantis trace label /data/traces --output /data/labelled
+    mantis trace review /data/traces/__shared__/run123.json
 """
 
 from __future__ import annotations
@@ -366,6 +373,104 @@ def cmd_plan_init(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ── trace label / review ──────────────────────────────────────────────
+
+
+def cmd_trace_label(args: argparse.Namespace) -> int:
+    """``mantis trace label <input> --output <dir>`` — batch-label traces.
+
+    Walks ``input`` for ``*.json`` trace files and writes labelled
+    versions to ``output`` mirroring the input subtree (so tenant
+    directories survive the round-trip). Returns 0 on at least one
+    successful label, 1 on any error.
+    """
+    from .gym.trace_labeller import TraceLabeller
+
+    input_path = Path(args.input)
+    output_path = Path(args.output)
+    if not input_path.exists():
+        print(f"error: input not found: {args.input}", file=sys.stderr)
+        return EXIT_ERROR
+
+    labeller = TraceLabeller()
+    if input_path.is_file():
+        labelled = labeller.label_trace_file(input_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        target = (
+            output_path
+            if output_path.suffix == ".json"
+            else output_path / input_path.name
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(labelled.to_dict(), indent=2) + "\n")
+        if args.json:
+            print(json.dumps({str(input_path): labelled.summary()}, indent=2))
+        else:
+            print(f"  {input_path} → {target}  {labelled.summary()}")
+        return EXIT_OK
+
+    summary = labeller.label_directory(input_path, output_path)
+    if not summary:
+        print(f"warning: no traces found under {args.input}", file=sys.stderr)
+        return EXIT_OK
+    if args.json:
+        print(json.dumps(summary, indent=2))
+    else:
+        for rel, counts in summary.items():
+            total = sum(counts.values())
+            print(
+                f"  {rel}  total={total}  pos={counts.get('positive', 0)}  "
+                f"neg={counts.get('negative', 0)}  neu={counts.get('neutral', 0)}"
+            )
+        print(f"\n  labelled {len(summary)} traces → {output_path}")
+    return EXIT_OK
+
+
+def cmd_trace_review(args: argparse.Namespace) -> int:
+    """``mantis trace review <path>`` — human-readable summary of one labelled trace.
+
+    Read-only: applies the same heuristics as ``trace label`` but prints
+    a per-step table to stdout instead of writing files. Useful for
+    spot-checking a single run before committing the batch labels to a
+    training set.
+    """
+    from .gym.trace_labeller import TraceLabeller
+
+    path = Path(args.path)
+    if not path.exists():
+        print(f"error: trace not found: {args.path}", file=sys.stderr)
+        return EXIT_ERROR
+    try:
+        labelled = TraceLabeller().label_trace_file(path)
+    except json.JSONDecodeError as exc:
+        print(f"error: invalid JSON in {args.path}: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    if args.json:
+        print(json.dumps(labelled.to_dict(), indent=2))
+        return EXIT_OK
+
+    rollup = labelled.summary()
+    print(
+        f"{path}: run_id={labelled.run_id or '—'}  "
+        f"tenant={labelled.tenant_id or '—'}  status={labelled.status or '—'}"
+    )
+    print(
+        f"  totals: pos={rollup.get('positive', 0)}  "
+        f"neg={rollup.get('negative', 0)}  neu={rollup.get('neutral', 0)}"
+    )
+    print()
+    print(f"  {'idx':4s} {'label':9s} {'reason':24s} {'type':12s} intent / data")
+    print(f"  {'-'*4} {'-'*9} {'-'*24} {'-'*12} {'-'*40}")
+    for s in labelled.steps:
+        intent = (s.intent or s.data or "").replace("\n", " ").strip()[:60]
+        print(
+            f"  [{s.step_index:02d}] {s.label:9s} {s.label_reason:24s} "
+            f"{(s.type or '—'):12s} {intent}"
+        )
+    return EXIT_OK
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mantis",
@@ -445,6 +550,41 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Overwrite the output file if it already exists",
     )
     init.set_defaults(func=cmd_plan_init)
+
+    trace = sub.add_parser("trace", help="Trace tooling subcommands (#155)")
+    trace_sub = trace.add_subparsers(dest="trace_command", required=True)
+
+    label = trace_sub.add_parser(
+        "label",
+        help="Batch-label exported run traces using automatic heuristics",
+    )
+    label.add_argument(
+        "input",
+        help="Trace file or directory (recurses for *.json under directories)",
+    )
+    label.add_argument(
+        "--output", "-o",
+        required=True,
+        help="Output directory (subtree mirrors the input)",
+    )
+    label.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit summary as machine-readable JSON",
+    )
+    label.set_defaults(func=cmd_trace_label)
+
+    review = trace_sub.add_parser(
+        "review",
+        help="Print a labelled summary of one trace JSON for human inspection",
+    )
+    review.add_argument("path", help="Path to a single trace JSON file")
+    review.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the labelled trace as JSON",
+    )
+    review.set_defaults(func=cmd_trace_review)
 
     return parser
 

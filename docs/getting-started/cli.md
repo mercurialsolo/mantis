@@ -159,3 +159,59 @@ See `mantis --help` for the full streaming-agent option set.
 
 All three plan-authoring deliverables from #154 are now shipped
 (`validate` + `dry-run` + `init`).
+
+## Trace tooling (#155)
+
+After enabling trace export with `MANTIS_TRACE_EXPORT_DIR`, the CLI provides
+two helpers for downstream SFT/DPO labelling.
+
+### `mantis trace label <input> --output <dir>`
+
+Batch-label trace files with the automatic heuristic ladder. Walks
+`<input>` for `*.json` files (or labels a single file) and writes one
+labelled JSON per input under `<output>`. The output mirrors the input
+subtree so tenant-scoped directories survive the round-trip.
+
+```
+mantis trace label /data/traces --output /data/labelled
+```
+
+```
+  acme/run123.json  total=8  pos=5  neg=2  neu=1
+  globex/run456.json  total=3  pos=2  neg=0  neu=1
+
+  labelled 2 traces → /data/labelled
+```
+
+Heuristic ladder (first match wins):
+
+| Label | Reason | Trigger |
+|---|---|---|
+| `negative` | `escalation` | `data` matches `cloudflare` / `page_blocked` / `REJECTED_INCOMPLETE` / `antibot` / `page_exhausted` / `scan_error` |
+| `negative` | `failed_step` | `success: false` (after retries) |
+| `positive` | `gate_verify_pass` | `data` starts with `gate:PASS` |
+| `positive` | `success_with_observed_delta` | `success: true` with non-empty `observed_outcome` |
+| `neutral` | `success_no_delta` | Anything else |
+
+### `mantis trace review <path>`
+
+Read-only inspection of a single trace. Prints the per-step label table
+to stdout for spot-checking before committing labels to a training set.
+
+```
+mantis trace review /data/traces/__shared__/run123.json
+```
+
+```
+/data/traces/__shared__/run123.json: run_id=20260506_…  tenant=—  status=completed
+  totals: pos=2  neg=1  neu=0
+
+  idx  label     reason                   type         intent / data
+  ---- --------- ------------------------ ------------ ----------------------------------------
+  [00] positive  gate_verify_pass         extract_data Verify the front page has loaded...
+  [01] negative  escalation               click        Click first listing
+  [02] positive  success_with_observed_d… click        Click second listing
+```
+
+`--json` emits the labelled trace as machine-readable output for piping
+into the next step of the SFT/DPO pipeline.
