@@ -116,6 +116,7 @@ nav:
       - Webhooks: operations/webhooks.md
       - URL allowlist: operations/allowlist.md
       - Metrics: operations/metrics.md
+      - Continual fine-tuning: operations/continual-finetuning.md
   - Integrations:
       - integrations/index.md
       - Generic CUA over HTTP: integrations/generic-cua.md
