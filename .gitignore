@@ -39,6 +39,7 @@ logs/
 cache/
 results/
 outputs/
+reports/
 screenshots/
 
 # Run output artifacts (CSVs at repo root); CSVs under tasks/ and plans/ stay tracked
