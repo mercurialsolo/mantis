@@ -57,6 +57,19 @@ These are global hard caps; tenant config can be tighter, never looser.
 |---|---|---|
 | `MANTIS_WEBHOOK_SECRET_DEFAULT` | unset | Fallback HMAC signing secret when a tenant's `webhook_secret_name` doesn't resolve |
 
+## Cost model (#122)
+
+| Var | Default | Effect |
+|---|---|---|
+| `MANTIS_COST_GPU_HOURLY_USD` | `3.25` | GPU compute, $/hour. Used by `CostConfig.gpu_cost`. |
+| `MANTIS_COST_CLAUDE_CALL_USD` | `0.003` | Per-Claude-API-call rate. Multiplied by `claude_extract` + `claude_grounding` counters. |
+| `MANTIS_COST_PROXY_PER_GB_USD` | `5.00` | Egress proxy bandwidth $/GB. |
+| `MANTIS_COST_GPU_SECONDS_PER_STEP` | `3.0` | Per-step GPU seconds when the runner doesn't measure exact wall time. |
+| `MANTIS_COST_PROXY_MB_PER_NAV` | `5.0` | Estimated proxy MB per page load. |
+| `MANTIS_COST_PROXY_MB_PER_SCROLL` | `0.5` | Estimated proxy MB per scroll. |
+
+See [operations/cost.md](../operations/cost.md) for the full rate-tuning workflow.
+
 ## Trace export (#155)
 
 | Var | Default | Effect |
