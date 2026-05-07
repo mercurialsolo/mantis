@@ -248,3 +248,122 @@ def test_dry_run_handles_missing_path(capsys):
     assert rc == EXIT_ERROR
     err = capsys.readouterr().err
     assert "not found" in err
+
+
+# ── plan init ──────────────────────────────────────────────────────────
+
+
+def _stub_decompose_text(plan_text: str, *_, **__):
+    """Stand in for PlanDecomposer.decompose_text — returns a clean MicroPlan
+    that the validator accepts. Lets the init test cover the file-write +
+    validate + dry-run pipeline without touching Anthropic.
+    """
+    from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
+
+    plan = MicroPlan(source_plan=plan_text, domain="example.com")
+    plan.steps = [
+        MicroIntent(
+            intent="Navigate to https://example.com",
+            type="navigate", section="setup", required=True,
+        ),
+        MicroIntent(
+            intent="Verify page loaded",
+            type="extract_data", section="setup",
+            claude_only=True, gate=True, verify="page shows content",
+        ),
+        MicroIntent(
+            intent="Extract data",
+            type="extract_data", section="extraction", claude_only=True,
+        ),
+    ]
+    return plan
+
+
+def test_init_writes_plan_and_exits_zero(tmp_path, monkeypatch, capsys):
+    """End-to-end happy path: init scaffolds a plan, writes it, validates clean."""
+    monkeypatch.setattr(
+        "mantis_agent.plan_decomposer.PlanDecomposer.decompose_text",
+        lambda self, plan_text, **__: _stub_decompose_text(plan_text),
+    )
+    out = tmp_path / "out.json"
+    rc = main([
+        "plan", "init", "https://example.com",
+        "--task", "Extract listings",
+        "--output", str(out),
+    ])
+    assert rc == EXIT_OK
+    assert out.exists()
+    payload = json.loads(out.read_text())
+    assert payload["domain"] == "example.com"
+    assert len(payload["steps"]) == 3
+    out_text = capsys.readouterr().out
+    assert "wrote" in out_text
+    assert "validator clean" in out_text
+    assert "Dry-run preview" in out_text
+
+
+def test_init_default_output_path_derived_from_url(tmp_path, monkeypatch, capsys):
+    """Without --output, init writes to <hostname-slug>_plan.json in cwd."""
+    monkeypatch.setattr(
+        "mantis_agent.plan_decomposer.PlanDecomposer.decompose_text",
+        lambda self, plan_text, **__: _stub_decompose_text(plan_text),
+    )
+    monkeypatch.chdir(tmp_path)
+    rc = main([
+        "plan", "init", "https://news.ycombinator.com",
+        "--task", "Extract stories",
+    ])
+    assert rc == EXIT_OK
+    assert (tmp_path / "news_ycombinator_com_plan.json").exists()
+
+
+def test_init_refuses_to_overwrite_without_flag(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "existing.json"
+    target.write_text("{}")
+    rc = main([
+        "plan", "init", "https://example.com",
+        "--task", "x", "--output", str(target),
+    ])
+    assert rc == EXIT_ERROR
+    assert "already exists" in capsys.readouterr().err
+    # File must be untouched.
+    assert target.read_text() == "{}"
+
+
+def test_init_no_validate_skips_validation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        "mantis_agent.plan_decomposer.PlanDecomposer.decompose_text",
+        lambda self, plan_text, **__: _stub_decompose_text(plan_text),
+    )
+    out = tmp_path / "out.json"
+    rc = main([
+        "plan", "init", "https://example.com", "--task", "x",
+        "--output", str(out), "--no-validate", "--no-dry-run",
+    ])
+    assert rc == EXIT_OK
+    out_text = capsys.readouterr().out
+    assert "validator clean" not in out_text
+    assert "Dry-run preview" not in out_text
+
+
+def test_init_returns_error_on_missing_api_key(tmp_path, monkeypatch, capsys):
+    """The decomposer raises RuntimeError when ANTHROPIC_API_KEY is unset.
+    The CLI must surface that as a clean exit-1 with the upstream error
+    text — not a stack trace."""
+    def _raise(self, plan_text, **_):
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
+
+    monkeypatch.setattr(
+        "mantis_agent.plan_decomposer.PlanDecomposer.decompose_text", _raise,
+    )
+    rc = main([
+        "plan", "init", "https://example.com", "--task", "x",
+    ])
+    assert rc == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "ANTHROPIC_API_KEY" in err
+
+
+def test_init_requires_task_arg():
+    with pytest.raises(SystemExit):
+        main(["plan", "init", "https://example.com"])  # missing --task
