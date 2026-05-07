@@ -26,6 +26,7 @@ import base64
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from io import BytesIO
 
@@ -346,6 +347,28 @@ class ClaudeBrain:
         elif text:
             full_thinking = text
 
+        if action.action_type == ActionType.KEY_PRESS and not str(
+            action.params.get("keys") or ""
+        ).strip():
+            inferred_key = _infer_key_from_reasoning(full_thinking)
+            if inferred_key:
+                logger.warning(
+                    "Claude returned an empty key action; inferred %r from reasoning",
+                    inferred_key,
+                )
+                action = Action(
+                    ActionType.KEY_PRESS,
+                    {"keys": _normalize_claude_key(inferred_key)},
+                    reasoning=action.reasoning,
+                )
+            else:
+                logger.warning("Claude returned an empty key action; treating as wait")
+                action = Action(
+                    ActionType.WAIT,
+                    {"seconds": 1.0},
+                    reasoning="Claude returned empty key action",
+                )
+
         action.reasoning = action.reasoning or full_thinking[:500]
 
         tokens_used = data.get("usage", {})
@@ -389,7 +412,12 @@ class ClaudeBrain:
 
         elif action_type == "key":
             # Claude uses Return/Tab/Escape etc. Normalize.
-            key = tool_input.get("key", "")
+            key = (
+                tool_input.get("key")
+                or tool_input.get("text")
+                or tool_input.get("keys")
+                or ""
+            )
             key = _normalize_claude_key(key)
             return Action(ActionType.KEY_PRESS, {"keys": key})
 
@@ -472,3 +500,26 @@ def _normalize_claude_key(key: str) -> str:
         part = part.strip()
         normalized.append(key_map.get(part, part.lower()))
     return "+".join(normalized)
+
+
+def _infer_key_from_reasoning(text: str) -> str:
+    """Recover an intended key when Claude emits ``{"action": "key"}`` empty.
+
+    This has shown up with computer-use responses whose reasoning clearly says
+    "press Tab" while the structured key payload is empty. Treat it as a
+    narrow repair for common navigation keys rather than guessing arbitrary
+    keyboard input.
+    """
+    if not text:
+        return ""
+
+    patterns = [
+        ("Tab", r"\b(?:press|use|using|hit|send|tap|try)\s+(?:the\s+)?[`'\"]?tab(?:\s+key)?[`'\"]?\b"),
+        ("Return", r"\b(?:press|use|using|hit|send|tap|try)\s+(?:the\s+)?[`'\"]?(?:enter|return)(?:\s+key)?[`'\"]?\b"),
+        ("Escape", r"\b(?:press|use|using|hit|send|tap|try)\s+(?:the\s+)?[`'\"]?escape(?:\s+key)?[`'\"]?\b"),
+        ("BackSpace", r"\b(?:press|use|using|hit|send|tap|try)\s+(?:the\s+)?[`'\"]?(?:backspace|back space)(?:\s+key)?[`'\"]?\b"),
+    ]
+    for key, pattern in patterns:
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            return key
+    return ""

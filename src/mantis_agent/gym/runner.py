@@ -336,6 +336,10 @@ class GymRunner:
         last_director_step: int = -100
         director_cooldown_steps: int = 3
         anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "") or ""
+        director_enabled = (
+            bool(anthropic_api_key)
+            and type(self.brain).__name__ != "ClaudeBrain"
+        )
 
         # Done-verification: Holo3 sometimes emits done(success=True) with a
         # fabricated summary (run 023: claimed "Updated lead industry to Space
@@ -699,7 +703,7 @@ class GymRunner:
                 # the model's stuck output. Cool-down avoids calling
                 # Claude on every step of a long loop.
                 elif (
-                    anthropic_api_key
+                    director_enabled
                     and step_num - last_director_step >= director_cooldown_steps
                     and self._loop_detector.is_any_loop(self.soft_loop_window)
                 ):
