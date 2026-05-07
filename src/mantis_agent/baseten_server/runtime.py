@@ -430,11 +430,16 @@ class BasetenCUARuntime:
         if "task_file" in payload:
             path = self._resolve_path(payload["task_file"])
             return json.loads(path.read_text())
+        decompose = bool(payload.get("decompose", True))
         # plan_text: free-text → PlanDecomposer.decompose_text → micro suite.
         # Documented in onboarding docs as the one-shot ad-hoc shape; build the
         # suite here so callers get the same dispatch as the file-based path.
+        # decompose=False short-circuits the rewrite and runs the raw text as
+        # a single-intent task_suite — used by long-plan-following benchmarks.
         plan_text = payload.get("plan_text")
         if plan_text:
+            if not decompose:
+                return self._raw_text_suite(str(plan_text), payload)
             return self._micro_suite_from_text(str(plan_text), payload)
 
         micro_path = (
@@ -448,7 +453,26 @@ class BasetenCUARuntime:
                 "'micro_path', or set MANTIS_DEFAULT_MICRO on the deployment. "
                 "No default plan ships with the public image."
             )
+        # .txt micro paths are free-text; honor the same decompose flag.
+        if not decompose:
+            resolved = self._resolve_path(str(micro_path))
+            if resolved.exists() and resolved.suffix != ".json":
+                return self._raw_text_suite(resolved.read_text(), payload)
         return self._micro_suite_from_path(str(micro_path), payload)
+
+    def _raw_text_suite(self, plan_text: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Wrap raw free-text in a single-task task_suite without decomposition."""
+        return {
+            "session_name": str(payload.get("session_name") or "plan_text_raw"),
+            "base_url": str(payload.get("base_url") or ""),
+            "tasks": [
+                {
+                    "task_id": "plan_text",
+                    "intent": plan_text,
+                    "start_url": str(payload.get("start_url") or ""),
+                }
+            ],
+        }
 
     def _micro_suite_from_text(self, plan_text: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Decompose free-text → MicroPlan → suite. Used by the plan_text shape."""
@@ -974,6 +998,11 @@ class BasetenCUARuntime:
         run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         t0 = time.time()
         session_name = task_suite.get("session_name", "baseten_tasks")
+        # Mirror _run_micro: surface payload-level proxy/start_url controls into
+        # the task_suite dict so _make_env honors them. Otherwise these flags
+        # are silently dropped on the task_suite path.
+        if "proxy_disabled" in payload and "_proxy_disabled" not in task_suite:
+            task_suite["_proxy_disabled"] = bool(payload.get("proxy_disabled", False))
         env, proxy_proc = self._make_env(
             task_suite,
             run_id,
@@ -1002,6 +1031,8 @@ class BasetenCUARuntime:
                 task_suite, config,
                 proxy_proc=proxy_proc, t0=t0,
             )
+            result["run_id"] = run_id
+            result["session_name"] = session_name
             result["provider"] = "baseten"
             self._attach_recording_metadata(result, recorder, click_log=click_log)
             self._save_result(result, prefix=self.model_kind.replace("-", "_"))

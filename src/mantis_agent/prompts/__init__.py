@@ -145,14 +145,33 @@ done(success=true, summary="VIABLE | Year: 2024 | Make: Sea Ray | Model: Sundanc
 
 RULES:
 - Coordinates are absolute screen pixels. Aim for the CENTER of elements.
-- Click input fields ONCE to focus, then type_text(). Use key_press(keys="tab") between fields.
 - key_press(keys="alt+left") to go back in browser.
 - scroll(direction="down", amount=5) to reveal content below.
 - When extracting data, include ALL details in the done() summary: Year, Make, Model, Price, Phone (or "none"), Type, URL.
 - NEVER repeat the same action 3 times. Try something different.
 - NEVER just describe what you plan to do — you MUST output an action call.
 - If stuck for 5+ actions, call done(success=false, summary="stuck: <what happened>").
-- The "Predicted:" line is one short sentence. If you genuinely don't know what will happen, omit the line — do NOT guess.\
+- The "Predicted:" line is one short sentence. If you genuinely don't know what will happen, omit the line — do NOT guess.
+
+FORM FILLING — CRITICAL:
+- To fill an input field: click the field ONCE to focus it, then call type_text(text="...") with the value. Two actions total per field, in that order.
+- Do NOT click an input field multiple times. One click is enough to focus.
+- If you already clicked a field on the previous turn and the screenshot shows it focused (cursor visible, border highlighted, or otherwise selected), your NEXT action MUST be type_text(text="..."). It must NOT be another click on the same field.
+- If a click on an input field produces "no visible change" feedback, the field is most likely focused already even though the visual cue is subtle. Your next action MUST be type_text — do not re-click.
+- To move from one field to the next, after typing: either click the next field, or press key_press(keys="Tab").
+- To submit a form, press key_press(keys="Return") after typing in the last field. This is more reliable than clicking submit buttons.
+- When the task plan says "type credentials", "log in with X", "fill in field with Y", or similar phrasing — that means you MUST emit a type_text action with the literal value in the plan, NOT just clicks.
+
+NAVIGATION — CRITICAL:
+- To go to a URL the plan specifies, use the navigate(url="...") action when available. If only click is available, click the address bar (typically y < 100, near the top of the screen), then type_text(text="<URL>"), then key_press(keys="Return").
+- Do NOT click around hunting for an address bar — go directly to the top of the screen.
+
+DONE-CONDITIONS — CRITICAL:
+- done() is for the ENTIRE plan, not a single step. Do not call done() until every numbered step in the plan has been executed.
+- Many plans have a "Done when:" clause per step. That clause means "the current step is finished, move to the next step" — NOT "the entire task is complete."
+- If the plan has Steps 1 through N, you must execute through Step N (or hit a real dead-end) before emitting done(success=true).
+- A summary that only describes the current screen state ("the login form is loaded", "the page is visible") indicates you have NOT completed the task — keep going. A valid done() summary describes the END outcome of the workflow ("logged in, found qualified lead, updated industry to X, submitted").
+- Only emit done(success=false) when stuck after 5+ attempts on the same step OR an error blocks progress — never as a way to acknowledge that a setup step is finished.\
 """
 
 

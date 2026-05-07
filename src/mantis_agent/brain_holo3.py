@@ -259,6 +259,41 @@ class Holo3Brain:
             logger.error(f"query failed: {e}")
             return ""
 
+    def detect_with_image(self, prompt: str, image: Image.Image, max_tokens: int = 256) -> str:
+        """Send a vision prompt (image + question) and return raw text.
+
+        Used by the runner for element-aware decisions: "is this a focused
+        input?", "find the submit button". Returns "" on failure so callers
+        fall back gracefully. Disables tool calling so the model emits free
+        text instead of trying to call click()/type_text().
+        """
+        image_data = _image_to_base64(image)
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}},
+                {"type": "text", "text": prompt},
+            ],
+        }]
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.0,
+        }
+        if not self.enable_thinking:
+            payload["thinking"] = False
+        try:
+            resp = requests.post(
+                f"{self.base_url}/chat/completions",
+                json=payload, headers=self._headers, timeout=30,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"].get("content", "") or ""
+        except Exception as e:
+            logger.warning(f"detect_with_image failed: {e}")
+            return ""
+
     def think(
         self,
         frames: list[Image.Image],

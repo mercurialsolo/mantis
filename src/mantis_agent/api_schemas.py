@@ -86,6 +86,13 @@ class PredictRequest(BaseModel):
     graph_learn: bool = False
     graph_learn_only: bool = False
 
+    # When False, free-text plans (`plan_text` or a `.txt` `micro` path) skip
+    # PlanDecomposer / heuristic-objective rewriting and run the raw text as a
+    # single-intent task_suite. Lets benchmarks measure the brain's intrinsic
+    # plan-following without Claude pre-chunking. No effect on `task_suite` /
+    # `.json` `micro` shapes (they never decompose anyway).
+    decompose: bool = True
+
     # ── Extraction cache (saves Claude tokens on previously-seen URLs) ──
     # When cache_read is true, the runner peeks env.current_url BEFORE the
     # deep-extract Claude call; on hit, the cached lead is emitted and the
