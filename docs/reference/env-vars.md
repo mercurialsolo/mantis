@@ -57,6 +57,13 @@ These are global hard caps; tenant config can be tighter, never looser.
 |---|---|---|
 | `MANTIS_WEBHOOK_SECRET_DEFAULT` | unset | Fallback HMAC signing secret when a tenant's `webhook_secret_name` doesn't resolve |
 
+## Trace export (#155)
+
+| Var | Default | Effect |
+|---|---|---|
+| `MANTIS_TRACE_EXPORT_DIR` | unset | Enable per-run trace export. When set, every completed / halted / cancelled / paused run writes `<dir>/<tenant_id>/<run_id>.json` with the full step list, costs, status, and predicted/observed outcomes. Empty `tenant_id` falls back to `__shared__/`. Off by default — feature flag for the continual-fine-tuning pipeline. |
+| `MANTIS_TRACE_INCLUDE_SCREENSHOTS` | unset | When truthy (`1`/`true`/`yes`/`on`) and trace export is enabled, also persists per-step PNG screenshots to `<dir>/<tenant_id>/<run_id>_screens/<step:04d>.png`. Default off because screenshot bytes ~100× the on-disk trace size. |
+
 ## Logging
 
 | Var | Default | Effect |
