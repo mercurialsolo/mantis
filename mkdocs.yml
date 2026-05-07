@@ -116,6 +116,7 @@ nav:
       - Webhooks: operations/webhooks.md
       - URL allowlist: operations/allowlist.md
       - Metrics: operations/metrics.md
+      - Cost model: operations/cost.md
       - Continual fine-tuning: operations/continual-finetuning.md
       - Model promotion: operations/model-promotion.md
       - Independent grounding: operations/independent-grounding.md
