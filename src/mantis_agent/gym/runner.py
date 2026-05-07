@@ -306,12 +306,13 @@ class GymRunner:
         # Force-fill state: when Holo3 click-loops on a form field, the runner
         # substitutes the click with type_text using a value extracted from
         # the plan. Values come from Holo3 itself (one-shot LLM extraction,
-        # CUA-pure — no regex, no DOM access). When the queue empties, the
-        # runner makes one Holo3 vision call to find the submit button and
-        # injects a click on it (the well-known "doesn't submit after
-        # typing" failure mode).
+        # CUA-pure — no regex, no DOM access). When enough form fields have
+        # been filled, the runner asks Holo3 vision for the visible submit
+        # button and falls back to Return if the detector cannot find one.
         from . import holo3_detector
-        force_fill_values: list[str] = holo3_detector.extract_form_values(self.brain, task)
+        force_fill_values: list[dict[str, str]] = holo3_detector.extract_form_values(
+            self.brain, task,
+        )
         force_fill_used_regions: list[tuple[int, int]] = []
         force_fill_submitted: bool = False
         # Snapshot the initial labels so the Claude director can compute
@@ -644,16 +645,50 @@ class GymRunner:
                     and not force_fill_submitted
                     and action.action_type == ActionType.CLICK
                 ):
-                    logger.warning(
-                        "force-submit: substituting %s → key_press(Return) "
-                        "(form fully filled, Enter submits the focused input)",
-                        f"click({action.params})",
-                    )
-                    action = Action(
-                        ActionType.KEY_PRESS,
-                        {"keys": "Return"},
-                        reasoning="force-submit: Enter on focused input",
-                    )
+                    submit_button: dict[str, int | str] | None = None
+                    screenshot = frame_history[-1] if frame_history else None
+                    if screenshot is not None:
+                        try:
+                            submit_button = holo3_detector.find_submit_button(
+                                self.brain,
+                                screenshot,
+                                plan_intent=task,
+                            )
+                        except Exception as exc:
+                            logger.warning("force-submit detector raised: %s", exc)
+
+                    if submit_button is not None:
+                        logger.warning(
+                            "force-submit: substituting %s → click submit button %r "
+                            "at (%s,%s)",
+                            f"click({action.params})",
+                            submit_button.get("label"),
+                            submit_button.get("x"),
+                            submit_button.get("y"),
+                        )
+                        action = Action(
+                            ActionType.CLICK,
+                            {
+                                "x": int(submit_button["x"]),
+                                "y": int(submit_button["y"]),
+                                "button": "left",
+                            },
+                            reasoning=(
+                                "force-submit: click detected submit button "
+                                f"{submit_button.get('label')!r}"
+                            ),
+                        )
+                    else:
+                        logger.warning(
+                            "force-submit: substituting %s → key_press(Return) "
+                            "(form fully filled; submit button not detected)",
+                            f"click({action.params})",
+                        )
+                        action = Action(
+                            ActionType.KEY_PRESS,
+                            {"keys": "Return"},
+                            reasoning="force-submit: Enter on focused input",
+                        )
                     force_fill_submitted = True
                 # Claude-director escalation: only fires when no other
                 # substitution kicked in AND the soft-loop detector says
