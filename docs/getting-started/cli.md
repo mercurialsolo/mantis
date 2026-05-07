@@ -64,6 +64,45 @@ Issues are returned as ``PlanIssue`` records with ``severity``, ``code``,
 auto-fix pass are reusable as a library: ``from
 mantis_agent.graph.plan_validator import PlanValidator``.
 
+### `mantis plan dry-run <path>`
+
+Walk the plan graph and print the step sequence the runner would attempt
+— **no browser, no API calls, no model load**. Pure structural walk.
+Use as the inner authoring loop before paying the 9–13 min Modal/Baseten
+roundtrip.
+
+```
+mantis plan dry-run examples/extract_jobs.json
+```
+
+```
+examples/extract_jobs.json: 3 steps
+  sections: setup=1, —=2
+
+  idx  type               flags          section     intent / target
+  ---- ------------------ -------------- ----------- ----------------------------------------
+  [00] navigate           —              setup       "Open a public Greenhouse-hosted careers page."
+  [01] wait               —              —           "Wait for the listings to render."
+  [02] loop               —              —           "→ step [?] (count=5)"
+```
+
+Annotations:
+
+| Column | Meaning |
+|---|---|
+| **idx** | Zero-based step index — what the runner sees as `step_index`. |
+| **type** | The step's `type` field (navigate, click, paginate, extract_url, ...). |
+| **flags** | `!req` = required (halt on failure), `gate` = verification gate, `cl` = `claude_only`. |
+| **section** | The step's `section` (setup / extraction / pagination / —). |
+| **intent / target** | First 60 chars of `intent`, except for `loop` rows which show `→ step [N] (count=K)`. |
+
+Out-of-range `loop_target` references emit a non-fatal `WARNING` line so
+authors can spot misconfigured loops at dry-run rather than at first
+execution.
+
+`--json` emits the structured form (full step list + section rollup) for
+editor integrations and CI gates.
+
 ## Streaming-agent run (legacy default)
 
 `mantis "<task description>"` continues to work as before — running the
@@ -79,7 +118,5 @@ See `mantis --help` for the full streaming-agent option set.
 
 ## Roadmap (#154)
 
-- `mantis plan dry-run <path>` — walk the plan graph without spawning a
-  browser; emit a flow diagram of branches, gates, loops, max-loops bounds.
 - `mantis init <url> --task "<description>"` — scaffold a starter plan
   via PlanDecomposer; validate and dry-run before writing.
