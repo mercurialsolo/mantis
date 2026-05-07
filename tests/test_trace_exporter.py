@@ -145,6 +145,33 @@ def test_export_handles_predicted_observed_outcomes(tmp_path):
     assert payload["steps"][0]["observed_outcome"] == "page navigated"
 
 
+def test_export_records_shadow_variant_when_set(tmp_path):
+    """#155 step 5: when ``runner.shadow_variant`` is set, the trace
+    JSON gains a top-level ``variant`` field. Lets shadow-deploy
+    analytics attribute escalation rate per variant."""
+    exp = TraceExporter(export_dir=str(tmp_path))
+    runner = _runner_stub()
+    runner.shadow_variant = "candidate"
+    out = exp.maybe_export(runner, [_step(0)], status="completed")
+    payload = json.loads(Path(out).read_text())
+    assert payload["variant"] == "candidate"
+
+
+def test_export_variant_field_empty_when_runner_has_no_attr(tmp_path):
+    """Legacy runners without the shadow_variant attribute still emit
+    a (blank) ``variant`` field — analytics treats blank as
+    ``__unassigned__``."""
+    exp = TraceExporter(export_dir=str(tmp_path))
+    runner = _runner_stub()
+    # Set shadow_variant to empty string, mirroring the legacy default
+    # (a real MicroPlanRunner without the shadow router would have ``""``;
+    # MagicMock would otherwise auto-vivify a Mock object).
+    runner.shadow_variant = ""
+    out = exp.maybe_export(runner, [_step(0)], status="completed")
+    payload = json.loads(Path(out).read_text())
+    assert payload["variant"] == ""
+
+
 def test_export_empty_tenant_id_falls_back_to_shared(tmp_path):
     exp = TraceExporter(export_dir=str(tmp_path))
     runner = _runner_stub(tenant_id="")

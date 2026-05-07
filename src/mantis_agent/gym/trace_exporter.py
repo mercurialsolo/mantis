@@ -55,7 +55,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
+"""``v1`` was the initial export shape (PR #194). ``v2`` (PR for #155
+step 5) adds the optional top-level ``variant`` field for
+shadow-deploy attribution. ``v1`` consumers can still read ``v2`` —
+they just ignore the new key."""
+
 ENV_DIR: str = "MANTIS_TRACE_EXPORT_DIR"
 ENV_INCLUDE_SCREENSHOTS: str = "MANTIS_TRACE_INCLUDE_SCREENSHOTS"
 
@@ -163,6 +168,11 @@ class TraceExporter:
             "tenant_id": tenant_id if tenant_id != "__shared__" else "",
             "session_name": getattr(runner, "session_name", ""),
             "plan_signature": getattr(runner, "plan_signature", ""),
+            # #155 step 5: shadow-deploy variant tag. Empty string when
+            # the runtime isn't running an A/B split; populated to
+            # ``baseline`` or ``candidate`` (or any custom variant id)
+            # when the ShadowRouter assigned this run.
+            "variant": str(getattr(runner, "shadow_variant", "") or ""),
             "status": status or getattr(runner, "_final_status", "unknown"),
             "started_at": started_at,
             "ended_at": ended_at,

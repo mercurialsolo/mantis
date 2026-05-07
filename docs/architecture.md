@@ -89,6 +89,7 @@ ExtractionResult               Structured output (fields, viability, spam check)
 | `tool_channel.py` | ToolChannel -- pause/resume tool invocation |
 | `trace_exporter.py` | TraceExporter -- per-run JSON trace dump for SFT/DPO labelling, gated on `MANTIS_TRACE_EXPORT_DIR` (#155) |
 | `trace_labeller.py` | TraceLabeller -- heuristic labels (positive/negative/neutral) over exported traces (#155 step 2) |
+| `shadow_router.py` | ShadowRouter -- deterministic A/B variant assignment for shadow-deploy (#155 step 5) |
 | `workflow_runner.py` | WorkflowRunner -- dynamic loops and pagination over GymRunner |
 | `learning_runner.py` | LearningRunner -- verified execution for building playbooks |
 | `xdotool_env.py` | XdotoolGymEnv -- real Chrome + xdotool (zero automation fingerprints) |
