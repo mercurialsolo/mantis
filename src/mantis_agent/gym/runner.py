@@ -20,6 +20,7 @@ from scratch. Each step's task prompt includes:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -302,6 +303,46 @@ class GymRunner:
         last_focused_input: dict | None = None
         last_thinking: str = ""  # Model's reasoning from previous step
         dom_hint: str = ""  # Extra DOM context hint when direct exec fails
+        # Force-fill state: when Holo3 click-loops on a form field, the runner
+        # substitutes the click with type_text using a value extracted from
+        # the plan. Values come from Holo3 itself (one-shot LLM extraction,
+        # CUA-pure — no regex, no DOM access). When the queue empties, the
+        # runner makes one Holo3 vision call to find the submit button and
+        # injects a click on it (the well-known "doesn't submit after
+        # typing" failure mode).
+        from . import holo3_detector
+        force_fill_values: list[str] = holo3_detector.extract_form_values(self.brain, task)
+        force_fill_used_regions: list[tuple[int, int]] = []
+        force_fill_submitted: bool = False
+        # Snapshot the initial labels so the Claude director can compute
+        # which have already been consumed (initial - current_pending).
+        # Holds field labels only — never values.
+        force_fill_initial_labels: list[str] = [
+            str(v.get("label") or "") for v in force_fill_values
+        ]
+        if force_fill_values:
+            logger.info(
+                "force-fill: extracted %d form values from plan via Holo3",
+                len(force_fill_values),
+            )
+
+        # Claude-director escalation: only fires when Holo3 is demonstrably
+        # stuck (soft-loop detector triggered) AND no force-fill/force-submit
+        # already substituted on this step. Cool-down prevents calling Claude
+        # every step inside a long loop. Set initial value far below 0 so the
+        # very first stuck step is immediately eligible.
+        last_director_step: int = -100
+        director_cooldown_steps: int = 3
+        anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "") or ""
+
+        # Done-verification: Holo3 sometimes emits done(success=True) with a
+        # fabricated summary (run 023: claimed "Updated lead industry to Space
+        # Exploration" after only completing login). Before accepting a
+        # success-done, ask Holo3 to verify on-screen evidence. Up to N
+        # rejections allowed before we accept anyway (avoid infinite loop
+        # if the model is genuinely done but the verifier is wrong).
+        done_rejections: int = 0
+        max_done_rejections: int = 2
 
         # Reset environment
         reset_kwargs: dict[str, Any] = {"task_id": task_id}
@@ -522,23 +563,158 @@ class GymRunner:
 
                 if action.action_type == ActionType.DONE:
                     success = action.params.get("success", False)
-                    trajectory.append(TrajectoryStep(
-                        step=step_num, action=action, thinking=thinking,
-                        reward=0.0, done=True, inference_time=inference_time,
-                    ))
-                    termination_reason = "done"
-                    break
+                    summary = str(action.params.get("summary", ""))
+                    # Verify success-done against the screenshot. Reject if
+                    # the verifier says the screen doesn't evidence completion.
+                    if (
+                        success
+                        and done_rejections < max_done_rejections
+                        and frame_history
+                    ):
+                        verification = holo3_detector.verify_done(
+                            self.brain,
+                            frame_history[-1],
+                            plan=task,
+                            summary=summary,
+                        )
+                        if verification and not verification.get("valid"):
+                            done_rejections += 1
+                            logger.warning(
+                                "done-verify: rejecting done(success=True) "
+                                "(rejection %d/%d) — %s. Continuing.",
+                                done_rejections, max_done_rejections,
+                                verification.get("reason", ""),
+                            )
+                            # Substitute with a no-op wait so the loop keeps
+                            # going. The model gets another shot at producing
+                            # a real action on the next inference.
+                            action = Action(
+                                ActionType.WAIT,
+                                {"seconds": 1.0},
+                                reasoning=(
+                                    "done-verify: rejected — "
+                                    f"{verification.get('reason', '')}"
+                                ),
+                            )
+                        else:
+                            trajectory.append(TrajectoryStep(
+                                step=step_num, action=action, thinking=thinking,
+                                reward=0.0, done=True, inference_time=inference_time,
+                            ))
+                            termination_reason = "done"
+                            break
+                    else:
+                        trajectory.append(TrajectoryStep(
+                            step=step_num, action=action, thinking=thinking,
+                            reward=0.0, done=True, inference_time=inference_time,
+                        ))
+                        termination_reason = "done"
+                        break
+
+                # Force-fill substitution (Holo3-as-detector): when the model
+                # is about to click and Holo3's vision detector confirms an
+                # editable input is currently focused, substitute the click
+                # with type_text using the next unconsumed plan value.
+                # Falls back to None (no substitution) on detector failure
+                # so we never substitute incorrectly.
+                forced = self._maybe_force_type_text(
+                    action,
+                    action_history,
+                    force_fill_values,
+                    force_fill_used_regions,
+                    self.brain,
+                    frame_history[-1] if frame_history else None,
+                )
+                if forced is not None:
+                    logger.warning(
+                        "force-fill: substituting %s → type_text(%r)",
+                        f"click({action.params})",
+                        forced.params.get("text", ""),
+                    )
+                    action = forced
+                # Auto-submit: once at least two form fields have been
+                # filled, press Enter on the still-focused last input field.
+                # Run 027 showed the old "queue must be empty" gate never
+                # tripped when the plan extracted 3 values (user_id +
+                # password + industry_vertical, the latter for a later
+                # step). Login forms typically have 2 fields — fire submit
+                # then. The remaining values stay queued for later steps.
+                elif (
+                    len(force_fill_used_regions) >= 2
+                    and not force_fill_submitted
+                    and action.action_type == ActionType.CLICK
+                ):
+                    logger.warning(
+                        "force-submit: substituting %s → key_press(Return) "
+                        "(form fully filled, Enter submits the focused input)",
+                        f"click({action.params})",
+                    )
+                    action = Action(
+                        ActionType.KEY_PRESS,
+                        {"keys": "Return"},
+                        reasoning="force-submit: Enter on focused input",
+                    )
+                    force_fill_submitted = True
+                # Claude-director escalation: only fires when no other
+                # substitution kicked in AND the soft-loop detector says
+                # Holo3 is stuck. Asks Claude for the next single action
+                # given the current screenshot and plan; substitutes for
+                # the model's stuck output. Cool-down avoids calling
+                # Claude on every step of a long loop.
+                elif (
+                    anthropic_api_key
+                    and step_num - last_director_step >= director_cooldown_steps
+                    and self._loop_detector.is_any_loop(self.soft_loop_window)
+                ):
+                    from . import claude_director
+                    # Reconstruct what's been filled so the director doesn't
+                    # re-suggest already-completed actions. We don't ship
+                    # the values themselves (passwords leak in API logs);
+                    # we only ship labels — Claude needs to know what's
+                    # outstanding, not what was typed.
+                    pending_labels = [
+                        str(v.get("label") or "") for v in force_fill_values
+                        if v.get("label")
+                    ]
+                    fill_done_labels = [
+                        lbl for lbl in force_fill_initial_labels
+                        if lbl and lbl not in pending_labels
+                    ]
+                    directive = claude_director.suggest_unstuck_action(
+                        plan=task,
+                        screenshot=frame_history[-1] if frame_history else None,
+                        recent_actions=action_history,
+                        api_key=anthropic_api_key,
+                        fill_done=fill_done_labels,
+                        fill_pending=pending_labels,
+                        submitted=force_fill_submitted,
+                    )
+                    if directive is not None:
+                        logger.warning(
+                            "claude-director: substituting %s(%s) → %s(%s) | %s",
+                            action.action_type.value, action.params,
+                            directive.action_type.value, directive.params,
+                            directive.reasoning or "",
+                        )
+                        action = directive
+                        last_director_step = step_num
 
                 # Grounded click refinement — if grounding model available,
                 # refine click coordinates before execution
                 if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
                     print(f"  [click] ({action.params.get('x')},{action.params.get('y')}) grounding={'YES' if self.grounding else 'NO'}")
                 # Only ground clicks that look like listing-selection, not escape/close/back actions
+                # Force-substituted clicks (force-fill, force-submit) carry coords
+                # picked by Holo3's detector and must NOT be re-grounded — grounding
+                # would refine the description text and move the click to the wrong
+                # spot (run 015 bug: submit click moved from button to (752,420)).
                 should_ground = (
                     self.grounding
                     and action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK)
                     and not any(kw in (action.reasoning or "").lower() for kw in
-                                ["close", "escape", "back", "dismiss", "x button", "gallery", "exit"])
+                                ["close", "escape", "back", "dismiss", "x button",
+                                 "gallery", "exit", "force-submit", "force-fill",
+                                 "claude-director"])
                 )
                 if should_ground:
                     orig_x, orig_y = action.params.get("x"), action.params.get("y")
@@ -824,18 +1000,81 @@ class GymRunner:
                         "terminate('success') with: SKIPPED | page error or 404."
                     )
 
-                # Image gallery trap — model clicked a photo instead of title
-                if any(sig in think_lower for sig in [
-                    "image gallery", "image viewer", "lightbox", "photo viewer",
-                    "1 of ", "2 of ", "fullscreen photo", "close the gallery",
-                    "exit the gallery", "close the viewer", "gallery",
-                ]):
+                # Image gallery trap — model clicked a photo instead of title.
+                # Multi-token signals only: the bare word "gallery" alone fires
+                # too often (run 017 derailed a staff-crm login because Holo3's
+                # thinking incidentally said "gallery"). Also gate on a
+                # listing-style task — gallery traps only matter when the
+                # workflow involves browsing listings/photos.
+                listing_task = any(
+                    kw in task.lower()
+                    for kw in (
+                        "listing", "boat", "marketplace", "photos",
+                        "image gallery", "view details",
+                    )
+                )
+                gallery_strong = (
+                    "image gallery", "image viewer", "lightbox",
+                    "photo viewer", "fullscreen photo",
+                    "close the gallery", "exit the gallery",
+                    "close the viewer",
+                )
+                gallery_weak = ("1 of ", "2 of ")  # photo-counter chrome
+                gallery_match = any(s in think_lower for s in gallery_strong) or (
+                    listing_task and any(s in think_lower for s in gallery_weak)
+                )
+                if gallery_match:
                     parts.append(
                         "\n\nIMPORTANT: You are in a photo gallery. "
                         "Do key_press(keys='Escape') then key_press(keys='alt+left') to go back. "
                         "Then done(success=true, summary='SKIPPED | gallery trap'). "
                         "NEXT listing: click the boat NAME TEXT or PRICE or 'View Details' link, "
                         "NOT the photo."
+                    )
+
+            # Click-on-form fast-fix (does NOT depend on last_thinking).
+            # Holo3 click-loops on input fields when the click produces no
+            # visible delta. Fires when (a) ≥2 prior clicks at near-equal
+            # coords AND (b) the task mentions form-filling intent. Logs
+            # firing so we can confirm via events.log whether it triggered.
+            task_lower = task.lower() if isinstance(task, str) else ""
+            form_signals = (
+                "type ", "log in", "login", "sign in", "credentials",
+                "user id", "username", "email", "password", "fill in",
+                "enter the", "type the", "type into",
+            )
+            recent_clicks = [
+                a for a in action_history[-3:]
+                if a.action_type == ActionType.CLICK
+            ]
+            if (
+                len(recent_clicks) >= 2
+                and any(sig in task_lower for sig in form_signals)
+            ):
+                a, b = recent_clicks[-2], recent_clicks[-1]
+                pa, pb = a.params or {}, b.params or {}
+                near_equal = (
+                    abs(int(pa.get("x", 0)) - int(pb.get("x", 0))) <= 6
+                    and abs(int(pa.get("y", 0)) - int(pb.get("y", 0))) <= 6
+                )
+                if near_equal:
+                    logger.info(
+                        "click-on-form nudge firing at step %d, coords=(%s,%s)",
+                        step_num,
+                        pb.get("x"),
+                        pb.get("y"),
+                    )
+                    parts.append(
+                        "\n\nIMPORTANT: You have clicked on or near "
+                        f"({int(pb.get('x', 0))}, {int(pb.get('y', 0))}) "
+                        "twice with no visible change. The click likely "
+                        "focused an input field already (the cursor indicator "
+                        "can be too subtle to register as a visible change). "
+                        "Your NEXT action MUST be type_text(text=\"...\") "
+                        "with the value the plan asks you to type — DO NOT "
+                        "click the same coordinates a third time. After "
+                        "typing, use key_press(keys=\"Tab\") to move to the "
+                        "next field, or click on the next field to focus it."
                     )
 
             # Soft loop nudge — fires on byte-equal repeats, coordinate-drift
@@ -1040,6 +1279,105 @@ class GymRunner:
 
         print(f"  [discovery] execution failed for [{idx}]")
         return None
+
+    @staticmethod
+    def _maybe_force_type_text(
+        action: "Action",
+        action_history: list["Action"],
+        force_fill_values: list[dict],
+        force_fill_used_regions: list[tuple[int, int]],
+        brain: Any | None = None,
+        screenshot: Image.Image | None = None,
+    ) -> "Action | None":
+        """Decide whether to override a click with type_text using Holo3 vision.
+
+        Substitution fires when:
+
+        1. Action is a click and the click region isn't already filled.
+        2. Holo3 confirms an editable input is focused (CUA-pure detection
+           — only the agent's screenshot, no DOM).
+        3. The focused field's visible label/type matches an unconsumed
+           ``{label, value}`` pair from the plan-extracted queue.
+
+        Each entry in ``force_fill_values`` is ``{"label": str, "value": str}``.
+        Matching: case-insensitive substring overlap between the focused
+        field's label/type and the queue entry's label. If exactly one
+        unconsumed value remains and no labels match, fall back to FIFO
+        on the assumption that the last value belongs to the last field.
+
+        Returns ``None`` (no substitution) when the detector fails, no
+        labels match, or the click region was already used.
+        """
+        from ..actions import Action, ActionType
+        from . import holo3_detector
+
+        if action.action_type != ActionType.CLICK:
+            return None
+        if not force_fill_values:
+            return None
+
+        px = int((action.params or {}).get("x", 0))
+        py = int((action.params or {}).get("y", 0))
+
+        # Already filled this region? Don't double-consume.
+        for ux, uy in force_fill_used_regions:
+            if abs(ux - px) <= 20 and abs(uy - py) <= 20:
+                return None
+
+        # Holo3 vision detection on the current screenshot.
+        focused: dict | None = None
+        if brain is not None and screenshot is not None:
+            try:
+                focused = holo3_detector.detect_focused_field(
+                    brain, screenshot, click_coords=(px, py),
+                )
+            except Exception as exc:
+                logger.warning("force-fill detector raised: %s", exc)
+                focused = None
+
+        if not focused or not focused.get("focused"):
+            return None
+
+        field_label = str(focused.get("label") or "").lower()
+        field_type = str(focused.get("type") or "").lower()
+        haystack = f"{field_label} {field_type}".strip()
+
+        # Match by label/type overlap. Each token is short (1-3 words);
+        # bidirectional substring covers "password" ↔ "password field"
+        # and "user id" ↔ "username" reasonably well.
+        chosen_idx: int | None = None
+        for idx, entry in enumerate(force_fill_values):
+            entry_label = str(entry.get("label") or "").lower()
+            if not entry_label:
+                continue
+            if entry_label in haystack or any(
+                tok in haystack for tok in entry_label.split() if len(tok) >= 3
+            ):
+                chosen_idx = idx
+                break
+            # Special case: password fields are always the password value.
+            if field_type == "password" and "password" in entry_label:
+                chosen_idx = idx
+                break
+
+        # No label match: don't substitute. The "last-value fallback" was
+        # tempting (always type something) but exactly that fallback caused
+        # run 015's wrong-field bug — Industry Vertical typed on the login
+        # page. Labels must match; otherwise wait for the right field.
+        if chosen_idx is None:
+            return None
+
+        entry = force_fill_values.pop(chosen_idx)
+        force_fill_used_regions.append((px, py))
+        value = entry.get("value", "")
+        return Action(
+            ActionType.TYPE,
+            {"text": value},
+            reasoning=(
+                f"force-fill: focused {field_label or field_type or 'input'!r} "
+                f"matched plan label {entry.get('label')!r}"
+            ),
+        )
 
     @staticmethod
     def _extract_plan(thinking: str) -> str | None:

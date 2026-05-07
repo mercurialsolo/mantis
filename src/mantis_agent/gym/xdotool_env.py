@@ -171,10 +171,19 @@ class XdotoolGymEnv(GymEnvironment):
             "--disable-features=InfiniteSessionRestore",
             "--disable-blink-features=AutomationControlled",  # Hide navigator.webdriver
             "--disable-dev-shm-usage",
-            # CDP for read-only current_url. Bound to localhost only.
-            # No automation control beyond URL inspection.
+            # Suppress Chrome's "Save password?" / autofill prompts that
+            # block the CUA after login (run 033 hit this on staff-crm).
+            "--password-store=basic",
+            "--disable-save-password-bubble",
+            "--disable-features=PasswordManagerOnboarding,AutofillEnableAccountWalletStorage,AutofillServerCommunication",
+            # CDP for current_url + Input.insertText (run 032 found Chrome
+            # rejects WS connections with 403 Forbidden without explicit
+            # --remote-allow-origins). Bound to localhost only — wildcard
+            # origin is safe because the port itself is unreachable from
+            # outside the container.
             f"--remote-debugging-port={self._cdp_port}",
             "--remote-debugging-address=127.0.0.1",
+            "--remote-allow-origins=*",
             f"--window-size={self._viewport[0]},{self._viewport[1]}",
             "--start-maximized",
             f"--user-data-dir={self._profile_dir}",
@@ -227,8 +236,158 @@ class XdotoolGymEnv(GymEnvironment):
             env=self._env, capture_output=True, timeout=5,
         )
 
+    def _cdp_insert_text(self, text: str) -> bool:
+        """Type text via Chrome DevTools Protocol's Input.insertText.
+
+        Returns True on success, False on any failure (caller falls back).
+        Uses the same `--remote-debugging-port` Chrome was launched with
+        (`current_url` already uses the same port). Dispatches a native
+        input event, which React's controlled-input onChange registers
+        cleanly — same outcome as Playwright's ``el.type()``.
+
+        This is the preferred typing path because xdotool's keypress
+        events don't reliably round-trip through React's value binding
+        (run 020-031, b3b4364 commit history). Click/scroll/screenshot
+        stay xdotool; only the type-text execution moves to CDP.
+        """
+        try:
+            import json as _json
+            import urllib.request
+            try:
+                import websocket  # websocket-client package
+            except ImportError:
+                return False
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self._cdp_port}/json/list",
+                timeout=2,
+            ) as resp:
+                tabs = _json.loads(resp.read().decode())
+            ws_url = None
+            for tab in tabs:
+                if tab.get("type") != "page":
+                    continue
+                url = str(tab.get("url") or "")
+                if not url or url.startswith("chrome://") or url.startswith("about:"):
+                    continue
+                ws_url = tab.get("webSocketDebuggerUrl")
+                if ws_url:
+                    break
+            if not ws_url:
+                return False
+            ws = websocket.create_connection(ws_url, timeout=3)
+            try:
+                req_id = int(time.time() * 1000) % 1_000_000
+                ws.send(_json.dumps({
+                    "id": req_id,
+                    "method": "Input.insertText",
+                    "params": {"text": text},
+                }))
+                ws.settimeout(3)
+                for _ in range(8):
+                    raw = ws.recv()
+                    if not raw:
+                        continue
+                    resp = _json.loads(raw)
+                    if resp.get("id") != req_id:
+                        continue
+                    if resp.get("error"):
+                        return False
+                    return True
+                return False
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.warning("CDP insertText failed: %s", exc)
+            return False
+
     def _xdotool_type(self, text: str) -> None:
-        """Type text via xdotool."""
+        """Type text via clipboard-paste (preferred) or xdotool fallback.
+
+        Diagnosed empirically across runs 020-029 + the claude-in-chrome
+        MCP comparison: xdotool's ``type`` emits X-level keypress events
+        that Chrome translates to JS ``KeyboardEvent``s, but React's
+        controlled inputs frequently fail to flush those into component
+        state — the typed text shows visually in the field but the form's
+        internal state stays empty, so submit produces ``AUTH_FAIL_001``.
+
+        Commit b3b4364 (Apr 2026) documented this exact issue on the
+        Playwright path and fixed it via ``el.type()``. When xdotool
+        replaced Playwright for "pure screen-level CUA", the React
+        compatibility was lost.
+
+        Clipboard-paste sidesteps the issue: xclip writes the text to
+        the X clipboard and xdotool sends ``ctrl+v``. The browser fires
+        a proper ``paste`` event which React registers, populating state
+        correctly. Falls back to xdotool ``type`` for environments
+        without xclip or when human-speed mode is requested.
+        """
+        if not text:
+            return
+
+        # Preferred path: CDP Input.insertText fires a synthesized input
+        # event that React's onChange picks up reliably — same mechanism
+        # MCP form_input / Playwright el.type() use. Falls through to
+        # clipboard-paste then xdotool type if CDP is unreachable.
+        if (
+            not self._human_speed
+            and os.environ.get("MANTIS_DISABLE_CDP_TYPE", "") != "1"
+        ):
+            if self._cdp_insert_text(text):
+                return
+            logger.info("CDP insertText unavailable; trying clipboard paste")
+
+        # Prefer clipboard-paste for React/Vue/framework compatibility.
+        # Disabled by setting MANTIS_DISABLE_PASTE_TYPE=1 or in human-speed mode
+        # (which intentionally simulates per-keystroke typing).
+        use_paste = (
+            not self._human_speed
+            and os.environ.get("MANTIS_DISABLE_PASTE_TYPE", "") != "1"
+        )
+        if use_paste:
+            try:
+                # xclip stays alive as the X-selection owner until a paste
+                # reads from it — using subprocess.run waits for that exit
+                # and times out (run 030). Popen + close stdin lets xclip
+                # background itself; -loops 1 makes it exit after one read.
+                xclip_proc = subprocess.Popen(
+                    ["xclip", "-selection", "clipboard", "-loops", "1"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=self._env,
+                )
+                xclip_proc.stdin.write(text.encode())
+                xclip_proc.stdin.close()
+                # Tiny pause so xclip is registered as selection owner
+                # before xdotool requests the paste.
+                time.sleep(0.05)
+                subprocess.run(
+                    ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+                    env=self._env, timeout=5, check=True,
+                    capture_output=True,
+                )
+                # xclip should self-exit after the paste consumed the
+                # selection (-loops 1). Reap it; if it overstays, kill.
+                try:
+                    xclip_proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    xclip_proc.terminate()
+                    try:
+                        xclip_proc.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        xclip_proc.kill()
+                return
+            except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+                logger.warning(
+                    "xclip paste failed (%s), falling back to xdotool type", exc,
+                )
+
+        # Fallback: xdotool type with configurable delay. The default 60ms
+        # is what landed when paste was unavailable (run 027/029 era).
+        delay_ms = int(os.environ.get("MANTIS_TYPE_DELAY_MS", "60"))
         if self._human_speed:
             for char in text:
                 subprocess.run(
@@ -237,8 +396,8 @@ class XdotoolGymEnv(GymEnvironment):
                 )
         else:
             subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", "--delay", "0", text],
-                env=self._env, capture_output=True, timeout=10,
+                ["xdotool", "type", "--clearmodifiers", "--delay", str(delay_ms), text],
+                env=self._env, capture_output=True, timeout=20,
             )
 
     # ── GymEnvironment interface ─────────────────────────────────────
