@@ -20,8 +20,8 @@ are JSON / JSONL on disk so the stages can be moved between machines
               current production at 5% traffic before full rollout
 ```
 
-Steps 1–4 ship today. Step 5 (shadow-deploy harness) is tracked as a
-separate deliverable under #155.
+All five steps ship today. The pipeline is end-to-end usable:
+runtime export → label → convert → train → eval gate → shadow-deploy.
 
 ## 1. Trace export
 
@@ -154,8 +154,59 @@ custom Modal-side launcher::
 
 ## 6. Shadow-deploy
 
-Pending — the pattern is described in #155 (5% traffic split + escalation
-rate compare) but the deployment harness is a follow-up PR.
+Once a candidate clears the eval gate, run it alongside the baseline at
+a small traffic share. Production traces from both variants land in the
+same export directory; analytics computes escalation-rate-per-variant.
+
+### Wire the router
+
+```python
+from mantis_agent.gym.shadow_router import ShadowRouter
+
+router = ShadowRouter(candidate_pct=5.0, salt="rollout-2026-05")
+# Per request:
+variant = router.route(run_key)            # "baseline" | "candidate"
+runner.shadow_variant = variant            # stamps the trace
+brain = candidate_brain if variant == "candidate" else baseline_brain
+```
+
+The router is **deterministic**: the same key always lands on the same
+variant. Pin a tenant to the candidate for the full evaluation window
+by passing the tenant id as the key.
+
+The variant lands on the trace file's top-level ``variant`` field. With
+``MANTIS_TRACE_EXPORT_DIR`` set, every run is now attributable.
+
+### Compute the gap
+
+```
+mantis trace label /data/traces --output /data/labelled
+python -m training.shadow_analytics \
+    --labelled /data/labelled \
+    --output reports/shadow_summary.json \
+    --tolerance 0.0
+```
+
+Output (one row per variant + a baseline-vs-candidate comparison):
+
+```jsonc
+{
+  "variants": {
+    "baseline":  {"run_count": 200, "step_count": 1240, "escalation_count": 38, "escalation_rate": 0.0306, ...},
+    "candidate": {"run_count":  10, "step_count":   62, "escalation_count":  1, "escalation_rate": 0.0161, ...}
+  },
+  "comparison": {
+    "escalation_rate_delta": -0.0145,
+    "candidate_escalation_rate_lower": true,
+    "baseline_runs": 200,
+    "candidate_runs": 10
+  }
+}
+```
+
+The script exits **0** when the candidate's escalation rate is ≤ baseline
+(within the configurable ``--tolerance``), **1** otherwise — drop into
+CI to gate the next traffic-share bump.
 
 ## Putting it together
 
