@@ -14,12 +14,14 @@ are JSON / JSONL on disk so the stages can be moved between machines
                        — Holo3 chat format, label-filtered
 [4] train     training/train_holo3_distill.py → weights/
                        — single-A100 SFT
-[5] deploy    swap weights into the runtime; shadow-test against
+[5] eval      training/eval_harness.py → reports/{baseline,candidate}.json
+                       → compare → win-rate gate
+[6] deploy    swap weights into the runtime; shadow-test against
               current production at 5% traffic before full rollout
 ```
 
-Steps 1–3 ship today. Steps 4 (recipe wiring) and 5 (shadow-deploy
-harness) are tracked as separate deliverables under #155.
+Steps 1–4 ship today. Step 5 (shadow-deploy harness) is tracked as a
+separate deliverable under #155.
 
 ## 1. Trace export
 
@@ -95,7 +97,62 @@ python training/train_holo3_distill.py \
 
 (See `training/modal_train_holo3.py` for the Modal-managed variant.)
 
-## 5. Shadow-deploy
+## 5. Eval harness
+
+`training/eval_harness.py` (#155 step 4) gates promotion on win-rate
+against the current production weights. Two-stage protocol:
+
+```
+# 1. Evaluate the baseline (current production endpoint).
+python -m training.eval_harness run \
+    --tasks tasks/eval_set.json \
+    --output reports/baseline.json \
+    --runner https://prod--mantis-server-api.modal.run \
+    --token "$BASELINE_TOKEN"
+
+# 2. Evaluate the candidate (new weights mounted on a separate endpoint).
+python -m training.eval_harness run \
+    --tasks tasks/eval_set.json \
+    --output reports/candidate.json \
+    --runner https://candidate--mantis-server-api.modal.run \
+    --token "$CANDIDATE_TOKEN"
+
+# 3. Compare. Exits 1 when candidate has more losses than wins.
+python -m training.eval_harness compare \
+    --baseline reports/baseline.json \
+    --candidate reports/candidate.json \
+    --output reports/compare.json
+```
+
+Eval task shape (one JSON file with a list of tasks):
+
+```jsonc
+[
+  {
+    "task_id": "hn_extract_top_3",
+    "task_text": "Extract the top 3 stories",
+    "url": "https://news.ycombinator.com",
+    "criteria": [
+      {"type": "task_success"},
+      {"type": "output_contains", "value": "Show HN"}
+    ]
+  }
+]
+```
+
+Criteria types: `task_success`, `status_eq`, `url_contains`,
+`output_contains`. A task passes when **every** criterion is
+satisfied. Unknown types fail closed so a malformed task can never
+silently green-light a regression.
+
+The Python API lets you swap the runner for a unit-test stub or a
+custom Modal-side launcher::
+
+    from training.eval_harness import EvalTask, run_eval, compare
+    report = run_eval(my_runner, tasks, name="my_eval")
+    delta = compare(baseline_report, report)
+
+## 6. Shadow-deploy
 
 Pending — the pattern is described in #155 (5% traffic split + escalation
 rate compare) but the deployment harness is a follow-up PR.
