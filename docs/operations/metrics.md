@@ -21,6 +21,8 @@
 | `mantis_grounding_cache_misses_total` | counter | `tenant_id` | Cache misses (incl. expirations) |
 | `mantis_grounding_cache_evictions_total` | counter | `tenant_id` | LRU evictions (capacity hit) |
 | `mantis_grounding_cache_size` | gauge | `tenant_id` | Current entry count |
+| `mantis_grounding_call_total` | counter | `tenant_id`, `outcome`, `force_compute` | Click-handler grounding calls. outcome = `accepted\|rejected`. `force_compute` = `true\|false` (cache bypassed for high-risk clicks per #181) |
+| `mantis_grounding_correction_distance_pixels` | histogram | `tenant_id`, `force_compute` | Pixel distance between brain coords and grounded coords. Buckets: 2, 5, 10, 25, 50, 100, 200, 500, 1000 |
 
 ## Setup
 

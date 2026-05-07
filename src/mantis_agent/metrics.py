@@ -247,6 +247,25 @@ GROUNDING_CACHE_EVICTIONS_TOTAL = _counter(
     ("tenant_id",),
 )
 
+# ── High-risk independent grounding (#181) ──────────────────────────────
+#
+# Click handler grounding pass — separate from the cache-only counters
+# above so operators can dashboard "how often do we ground vs how often
+# do we hit cache?" alongside the correction-distance distribution.
+
+GROUNDING_CALL_TOTAL = _counter(
+    "mantis_grounding_call_total",
+    "Click-handler grounding calls labelled by outcome and whether the cache was bypassed.",
+    ("tenant_id", "outcome", "force_compute"),
+)
+
+GROUNDING_CORRECTION_DISTANCE = _histogram(
+    "mantis_grounding_correction_distance_pixels",
+    "Pixel distance between brain coordinates and grounded coordinates.",
+    ("tenant_id", "force_compute"),
+    buckets=(2, 5, 10, 25, 50, 100, 200, 500, 1000),
+)
+
 
 def publish_prompt_versions() -> None:
     """Set the prompt-version gauge for every registered prompt (#127).

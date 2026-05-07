@@ -51,7 +51,7 @@ from __future__ import annotations
 import logging
 import random
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...actions import Action, ActionType
 from ..checkpoint import StepResult
@@ -268,18 +268,37 @@ class ClaudeGuidedClickHandler:
         # Delay before the final screenshot so grounding sees the frame we will actually click.
         time.sleep(random.uniform(1.5, 3.5))
 
-        # Grounding refines — but only accept if the delta is small
+        # Grounding refines — but only accept if the delta is small.
+        # #181: high-risk listing-card title clicks bypass the grounding
+        # cache so a stale cached coordinate doesn't pin a regression on
+        # the photo region. Per-step ``hints["independent_grounding"]``
+        # overrides on a single step; site_config.require_independent_grounding
+        # opts whole layouts in.
+        force_compute = _should_force_independent_grounding(step, site_config)
         if grounding and title.strip().lower() != "unknown":
             screenshot = env.screenshot()
-            grounding_result = grounding.ground(screenshot, title, x, y)
+            grounding_result = grounding.ground(
+                screenshot, title, x, y, force_compute=force_compute,
+            )
             runner.costs["claude_grounding"] += 1
             dx = abs(grounding_result.x - x)
             dy = abs(grounding_result.y - y)
+            outcome = "rejected"
             if grounding_result.confidence > 0.5 and dx < 200 and dy < 200:
                 x, y = grounding_result.x, grounding_result.y
-                logger.info(f"  [grounding] refined to ({x}, {y}) delta=({dx},{dy})")
+                outcome = "accepted"
+                logger.info(
+                    f"  [grounding] refined to ({x}, {y}) delta=({dx},{dy}) "
+                    f"force={force_compute}"
+                )
             else:
-                logger.info(f"  [grounding] rejected: delta=({dx},{dy}) conf={grounding_result.confidence}")
+                logger.info(
+                    f"  [grounding] rejected: delta=({dx},{dy}) "
+                    f"conf={grounding_result.confidence} force={force_compute}"
+                )
+            _emit_grounding_metrics(
+                runner, dx=dx, dy=dy, outcome=outcome, force=force_compute,
+            )
         elif title.strip().lower() == "unknown":
             logger.info("  [grounding] skipped for unknown-title card; using scan coordinates")
 
@@ -456,3 +475,55 @@ class ClaudeGuidedClickHandler:
         if hasattr(runner, '_last_click_title') and runner._last_click_title:
             runner._extracted_titles.append(runner._last_click_title)
         return StepResult(step_index=index, intent=step.intent, success=False)
+
+
+# ── #181 helpers — independent grounding routing + metric emission ────
+
+
+def _should_force_independent_grounding(step: Any, site_config: Any) -> bool:
+    """Decide whether a click step bypasses the grounding cache.
+
+    Two opt-in surfaces — either is sufficient:
+
+    1. Per-step hint: ``step.hints["independent_grounding"] = True``
+       (or any truthy value). Lets a plan author pin a single step.
+    2. Site config: any of ``step.hints["layout"]`` / ``step.section``
+       / the literal ``step.type`` matches an entry in
+       ``site_config.require_independent_grounding``. Lets a recipe
+       opt whole layouts in.
+
+    Defaults to False so routine clicks still benefit from the
+    GroundingCache cost-savings shipped in #117.
+    """
+    hints = getattr(step, "hints", None) or {}
+    if hints.get("independent_grounding"):
+        return True
+    require = tuple(getattr(site_config, "require_independent_grounding", ()) or ())
+    if not require:
+        return False
+    layout = str(hints.get("layout", "") or "")
+    section = str(getattr(step, "section", "") or "")
+    type_ = str(getattr(step, "type", "") or "")
+    return any(tag in require for tag in (layout, section, type_) if tag)
+
+
+def _emit_grounding_metrics(
+    runner: Any, *, dx: int, dy: int, outcome: str, force: bool,
+) -> None:
+    """Emit ``mantis_grounding_correction_distance_pixels`` +
+    ``mantis_grounding_call_total`` for one click-handler grounding
+    pass. Wrapped in try/except — telemetry must never break a run."""
+    try:
+        from ...metrics import GROUNDING_CALL_TOTAL, GROUNDING_CORRECTION_DISTANCE
+        tenant_id = getattr(runner, "tenant_id", "") or ""
+        magnitude = (dx * dx + dy * dy) ** 0.5
+        GROUNDING_CORRECTION_DISTANCE.labels(
+            tenant_id=tenant_id, force_compute=str(bool(force)).lower(),
+        ).observe(magnitude)
+        GROUNDING_CALL_TOTAL.labels(
+            tenant_id=tenant_id,
+            outcome=outcome,
+            force_compute=str(bool(force)).lower(),
+        ).inc()
+    except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+        logger.debug("grounding metric emit failed: %s", exc)
