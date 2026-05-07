@@ -277,6 +277,7 @@ class GymRunner:
         trajectory: list[TrajectoryStep] = []
         total_reward = 0.0
         plan_inputs = dict(plan_inputs or {})
+        done_success: bool | None = None
 
         # Reward state — only populated when reward_fn is provided.
         episode_state: Any = None
@@ -564,6 +565,7 @@ class GymRunner:
 
                 if action.action_type == ActionType.DONE:
                     success = action.params.get("success", False)
+                    done_success = bool(success)
                     summary = str(action.params.get("summary", ""))
                     # Verify success-done against the screenshot. Reject if
                     # the verifier says the screen doesn't evidence completion.
@@ -874,7 +876,11 @@ class GymRunner:
                 frame_history = frame_history[-min_keep * 2:]
 
         total_time = time.time() - t0
-        success = termination_reason == "done" or (termination_reason == "env_done" and total_reward > 0)
+        success = (
+            done_success
+            if termination_reason == "done" and done_success is not None
+            else (termination_reason == "env_done" and total_reward > 0)
+        )
         logger.info(f"Task finished: {termination_reason}, {len(trajectory)} steps, {total_time:.1f}s")
 
         self._emit(
