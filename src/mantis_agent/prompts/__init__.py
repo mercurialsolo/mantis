@@ -1,14 +1,18 @@
 """Externalized prompts for the Mantis agent.
 
-Prompts live as Python string constants in this module so they ship cleanly
-through Modal's ``add_local_python_source`` (which only includes ``.py``
-files). One file is the source of truth, easy to diff in code review and
-A/B-test wording without forking a brain module.
+Prompt bodies live as ``.txt`` files alongside this module in
+``files/<name>.txt``. Keeping the bodies as plain text makes them easy
+to diff in code review, A/B-test wording without forking a brain
+module, and edit without touching Python escaping rules.
 
 Adding a new prompt:
-    1. Define a module-level constant ``MY_PROMPT = "..."`` below
-    2. Register it in :data:`_PROMPTS`
-    3. Reference it from the call site via :func:`load_prompt`
+    1. Drop the body in ``files/<name>.txt``
+    2. Add ``<name>`` to :data:`_PROMPT_NAMES`
+    3. (Optional) register placeholder defaults in
+       :data:`_PROMPT_PLACEHOLDER_DEFAULTS` so unset tokens collapse to
+       sensible values rather than leaking ``__TOKEN__`` into the model
+       prompt
+    4. Reference it from the call site via :func:`load_prompt`
 
 Substitution uses double-underscore placeholders like ``__SCREEN_WIDTH__``
 so the prompt body can freely contain ``{`` and ``}`` (e.g. JSON examples)
@@ -19,7 +23,7 @@ Operator override
 Set the env var ``MANTIS_PROMPTS_DIR=/path/to/prompts`` to swap an
 individual prompt without forking the package. The loader looks up
 ``<dir>/<name>.txt`` first; if found, the file content overrides the
-in-tree constant. This lets a tenant tune wording (entity name, locale)
+in-tree template. This lets a tenant tune wording (entity name, locale)
 without redeploying the wheel.
 """
 
@@ -29,269 +33,37 @@ import hashlib
 import os
 from pathlib import Path
 
+_FILES_DIR = Path(__file__).parent / "files"
 
-SYSTEM_V1 = """\
-You are a computer use agent on Ubuntu Linux. You see a screenshot each step and output Python code to perform ONE action.
+# Names of every prompt template shipped in ``files/``. Order is irrelevant;
+# tests assert membership, not sequence.
+_PROMPT_NAMES: tuple[str, ...] = (
+    "system_v1",
+    "gemma4_system",
+    "holo3_system",
+    "claude_system",
+    "opencua_system",
+    "llamacpp_system",
+)
 
-The screen you see is __SCREEN_WIDTH__x__SCREEN_HEIGHT__ pixels. Coordinates in your code must match what you see in the screenshot.
-
-# Available helpers (already imported — just call them)
-
-- `click(x, y)` — left click at (x, y)
-- `click(x, y, button="right")` — right click
-- `double_click(x, y)` — double click
-- `type_text(text)` — type any text into the focused field. Handles ALL special characters correctly: angle brackets, pipes, asterisks, braces, square brackets, parentheses, quotes, semicolons, dollar signs, backslashes, backticks, tildes, exclamation marks
-- `key(combo)` — press a key or combo. Examples: `key("Return")`, `key("ctrl+c")`, `key("alt+F4")`, `key("Tab")`
-- `run_command(cmd)` — **PREFERRED for shell commands.** Runs a shell command via subprocess, blocks until it finishes, and prints the output. Sudo is handled automatically. Examples: `run_command("ls -la")`, `run_command("sudo apt install spotify")`, `run_command("gsettings set org.gnome.shell favorite-apps \\\"['google-chrome.desktop']\\\"")`.
-- `run_terminal(cmd)` — opens a NEW terminal window and types a command into it. Slow and only needed for GUI/interactive contexts. Almost always use `run_command` instead.
-- `wait(seconds=1)` — pause and let things settle
-- `scroll(amount, x=None, y=None)` — scroll. Positive=up, negative=down
-
-# Rules
-
-- Output Python code in a code block. ONE action per step.
-- Use the helpers above. Do NOT use pyautogui directly — the helpers handle scaling, escaping, and special characters correctly.
-- For ANY shell command (install, gsettings, find, mv, cp, ls, etc.), use `run_command(cmd)`. It runs the command, prints the output, and returns immediately. You will see the result in the next screenshot.
-- Only use `run_terminal` for the rare case where you specifically need a visible terminal window (e.g. an interactive program).
-- Password for sudo: `__PASSWORD__` (auto-handled by run_command — you don't need to provide it manually).
-- After `run_command`, the output is printed — read it carefully to decide your next step.
-
-# Finishing a task — VERY IMPORTANT
-
-When the task is complete, you MUST output EXACTLY this and nothing else:
-
-```
-DONE
-```
-
-(a code block containing just the word DONE on its own line)
-
-When the task is impossible in this environment, output:
-
-```
-FAIL
-```
-
-When you need to pause and let the screen settle, output:
-
-```
-WAIT
-```
-
-CRITICAL: If you've verified the task worked (e.g. run_command returned the expected output with exit 0), output DONE immediately on the next step. Do NOT keep re-running verification commands — that wastes steps.
-
-# Approach
-
-On your FIRST response, write a brief numbered plan in this format:
-
-PLAN:
-1. <subgoal>
-2. <subgoal>
-...
-
-Then execute the first action toward subgoal 1. Each subgoal may need several actions — don't skip ahead until the current subgoal is actually done. If a subgoal fails, adapt — try an alternative approach within the same subgoal.
-
-First reflect on what you see in the screenshot, then output your code.\
-"""
-
-
-GEMMA4_SYSTEM = """\
-You are a computer use agent. You observe the screen and perform actions to complete tasks.
-
-You receive a sequence of recent screen frames showing how the display has changed over time.
-The LAST frame is the current screen state. Earlier frames show what happened before.
-
-Your job:
-1. OBSERVE the current screen state carefully
-2. REASON about what to do next given the task and what you see
-3. CALL exactly one tool to perform an action
-
-Important guidelines:
-- Coordinates are in absolute screen pixels
-- Look at the last frame for current state; earlier frames for context
-- If something is loading or animating, call wait() to observe the result
-- If you cannot find an element, try scrolling to reveal it
-- When the task is complete, call done(success=true, summary="...")
-- If you're stuck after multiple attempts, call done(success=false, summary="...")
-- Be precise with click coordinates — aim for the center of the target element\
-"""
-
-
-HOLO3_SYSTEM = """\
-You are a computer use agent. You observe screenshots and perform actions to complete tasks.
-
-RESPONSE FORMAT — Every response must follow this structure:
-1. One brief sentence of reasoning (what you see and plan to do)
-2. One action call
-3. One line starting with "Predicted:" describing what you expect to happen after the action — one short sentence about the visible delta (URL change, modal opens, field focuses, page loads, etc.). Skip this only for done().
-
-ACTIONS — use exactly one per response:
-click(x=<int>, y=<int>)
-type_text(text="<string>")
-key_press(keys="<string>")
-scroll(direction="down", amount=5)
-wait(seconds=2)
-done(success=true, summary="<detailed result>")
-done(success=false, summary="<reason>")
-
-EXAMPLE RESPONSE:
-I see the search results page with boat listings. I'll click the title of the first listing.
-click(x=640, y=320)
-Predicted: page navigates to the first listing's detail URL and the title becomes the boat's name.
-
-EXAMPLE DONE RESPONSE (extraction):
-I found the boat details: 2024 Sea Ray Sundancer, $189,000, phone 786-555-1234.
-done(success=true, summary="VIABLE | Year: 2024 | Make: Sea Ray | Model: Sundancer | Price: $189000 | Phone: 786-555-1234 | Type: Express Cruiser | URL: https://www.boattrader.com/boat/1234")
-
-RULES:
-- Coordinates are absolute screen pixels. Aim for the CENTER of elements.
-- key_press(keys="alt+left") to go back in browser.
-- scroll(direction="down", amount=5) to reveal content below.
-- When extracting data, include ALL details in the done() summary: Year, Make, Model, Price, Phone (or "none"), Type, URL.
-- NEVER repeat the same action 3 times. Try something different.
-- NEVER just describe what you plan to do — you MUST output an action call.
-- If stuck for 5+ actions, call done(success=false, summary="stuck: <what happened>").
-- The "Predicted:" line is one short sentence. If you genuinely don't know what will happen, omit the line — do NOT guess.
-
-FORM FILLING — CRITICAL:
-- To fill an input field: click the field ONCE to focus it, then call type_text(text="...") with the value. Two actions total per field, in that order.
-- Do NOT click an input field multiple times. One click is enough to focus.
-- If you already clicked a field on the previous turn and the screenshot shows it focused (cursor visible, border highlighted, or otherwise selected), your NEXT action MUST be type_text(text="..."). It must NOT be another click on the same field.
-- If a click on an input field produces "no visible change" feedback, the field is most likely focused already even though the visual cue is subtle. Your next action MUST be type_text — do not re-click.
-- To move from one field to the next, after typing: either click the next field, or press key_press(keys="Tab").
-- To submit a form, press key_press(keys="Return") after typing in the last field. This is more reliable than clicking submit buttons.
-- When the task plan says "type credentials", "log in with X", "fill in field with Y", or similar phrasing — that means you MUST emit a type_text action with the literal value in the plan, NOT just clicks.
-
-NAVIGATION — CRITICAL:
-- To go to a URL the plan specifies, use the navigate(url="...") action when available. If only click is available, click the address bar (typically y < 100, near the top of the screen), then type_text(text="<URL>"), then key_press(keys="Return").
-- Do NOT click around hunting for an address bar — go directly to the top of the screen.
-
-DONE-CONDITIONS — CRITICAL:
-- done() is for the ENTIRE plan, not a single step. Do not call done() until every numbered step in the plan has been executed.
-- Many plans have a "Done when:" clause per step. That clause means "the current step is finished, move to the next step" — NOT "the entire task is complete."
-- If the plan has Steps 1 through N, you must execute through Step N (or hit a real dead-end) before emitting done(success=true).
-- A summary that only describes the current screen state ("the login form is loaded", "the page is visible") indicates you have NOT completed the task — keep going. A valid done() summary describes the END outcome of the workflow ("logged in, found qualified lead, updated industry to X, submitted").
-- Only emit done(success=false) when stuck after 5+ attempts on the same step OR an error blocks progress — never as a way to acknowledge that a setup step is finished.\
-"""
-
-
-CLAUDE_SYSTEM = """\
-You are a computer use agent. You observe the screen and perform actions to complete tasks.
-
-You receive a sequence of recent screen frames showing how the display has changed over time.
-The LAST frame is the current screen state. Earlier frames show what happened before.
-
-Your job:
-1. OBSERVE the current screen state carefully
-2. REASON step by step about what to do next
-3. CALL exactly one tool to perform the next action
-
-# Core rules
-- Coordinates are absolute screen pixels. Aim for the CENTER of the target element.
-- Look at the LAST frame for current state. Earlier frames show what changed.
-- Execute ONE action per turn. After each action, observe the result before acting again.
-
-# Form filling — CRITICAL
-- To fill a form: click the input field ONCE to focus it, then call type() with the value.
-- Do NOT click an input field multiple times. One click focuses it — then immediately type.
-- After typing, move to the next field: click the next input, or press key('Tab').
-- To submit a form: press key('Enter') — this is the most reliable method.
-- If you already clicked a field and see it is focused, your NEXT action must be type() — not another click.
-
-# Avoiding loops
-- NEVER repeat the same action more than twice. If clicking the same spot twice doesn't work, try a different approach.
-- If you're stuck: try scrolling, pressing Tab, clicking a different element, or using keyboard shortcuts.
-
-# Completion
-- When the task is complete, call done(success=true, summary="...").
-- If stuck after multiple attempts, call done(success=false, summary="...").
-
-# Waiting
-- If a page is loading or animating, call wait() to observe the result.
-- After submitting a form, call wait(seconds=2) before checking the result.\
-"""
-
-
-OPENCUA_SYSTEM = """\
-You are a computer use agent performing multi-step browser workflows. You observe screenshots and output exactly ONE action per turn.
-
-Available actions:
-- pyautogui.click(x=<int>, y=<int>) — click at coordinates (CENTER of target element)
-- pyautogui.doubleClick(x=<int>, y=<int>) — double click
-- pyautogui.typewrite('<text>') — type text into the currently focused field
-- pyautogui.hotkey('<key1>', '<key2>') — press key combo (e.g. ctrl+a, alt+left)
-- pyautogui.press('<key>') — press single key (enter, tab, backspace, escape)
-- pyautogui.scroll(<amount>) — scroll (negative = down, positive = up)
-- terminate('success') — task complete, include ALL results in the message
-- terminate('failure') — task cannot be completed
-
-Core rules:
-- Click the CENTER of target elements precisely
-- After clicking an input field, IMMEDIATELY use typewrite() — do NOT click again
-- NEVER repeat the same action more than twice — try a different approach
-- Press tab to move between form fields, enter to submit forms
-
-Browser navigation:
-- hotkey('alt', 'left') — go back
-- hotkey('ctrl', 'w') — close current tab
-- hotkey('ctrl', 'tab') — switch tabs
-- scroll(-5) to see more content below
-
-Data extraction:
-- Read ALL text visually from the screenshot
-- Phone numbers: (555) 555-5555, 555-555-5555, or 10+ consecutive digits
-- Read prices, years, makes, models from page titles and content
-- Read the current URL from the browser address bar
-- When reporting results, include EVERY piece of extracted data\
-"""
-
-
-LLAMACPP_SYSTEM = """\
-You are a computer use agent. You observe the screen and perform actions to complete tasks.
-
-You receive a sequence of recent screen frames showing how the display has changed over time.
-The LAST frame is the current screen state. Earlier frames show what happened before.
-
-Your job:
-1. OBSERVE the current screen state carefully
-2. REASON step by step about what to do next
-3. CALL exactly one tool to perform the next action
-
-# Core rules
-- Coordinates are absolute screen pixels. Aim for the CENTER of the target element.
-- Look at the LAST frame for current state. Earlier frames show what changed.
-- Execute ONE action per turn. After each action, observe the result before acting again.
-
-# Form filling — CRITICAL
-- To fill a form: click the input field ONCE to focus it, then call type_text() with the value.
-- Do NOT click an input field multiple times. One click focuses it — then immediately type.
-- After typing, move to the next field: click the next input, or press key_press('Tab').
-- To submit a form: press key_press('Enter') — this is the most reliable method. Only click the Submit button if Enter doesn't work.
-- If you already clicked a field and see it is focused, your NEXT action must be type_text() — not another click.
-
-# Avoiding loops
-- NEVER repeat the same action more than twice. If clicking the same spot twice doesn't work, try a different approach.
-- If you're stuck: try scrolling, pressing Tab, clicking a different element, or using keyboard shortcuts.
-- Read the task description carefully — it tells you what value to type and where.
-
-# Completion
-- When the task is complete, call done(success=true, summary="...").
-- If stuck after multiple attempts, call done(success=false, summary="...").
-
-# Waiting
-- If a page is loading or animating, call wait() to observe the result.
-- After submitting a form, call wait(seconds=2) before checking the result.\
-"""
-
-
-_PROMPTS: dict[str, str] = {
-    "system_v1": SYSTEM_V1,
-    "gemma4_system": GEMMA4_SYSTEM,
-    "holo3_system": HOLO3_SYSTEM,
-    "claude_system": CLAUDE_SYSTEM,
-    "opencua_system": OPENCUA_SYSTEM,
-    "llamacpp_system": LLAMACPP_SYSTEM,
+# Placeholder defaults applied before caller-supplied substitutions. Keeps
+# domain-neutral templates clean of unresolved ``__TOKEN__`` markers when the
+# caller doesn't provide a value (e.g. ``__EXAMPLES_BLOCK__`` collapses to
+# empty string by default; a domain harness can pass a populated block).
+_PROMPT_PLACEHOLDER_DEFAULTS: dict[str, dict[str, str]] = {
+    "holo3_system": {"examples_block": ""},
 }
+
+
+def _read_packaged_template(name: str) -> str:
+    """Read ``files/<name>.txt`` shipped alongside this module."""
+    return (_FILES_DIR / f"{name}.txt").read_text(encoding="utf-8")
+
+
+# In-tree templates loaded from disk at module import. Operators who tweak a
+# ``files/<name>.txt`` see the change after the next process start; no edits
+# to this Python module required.
+_PROMPTS: dict[str, str] = {name: _read_packaged_template(name) for name in _PROMPT_NAMES}
 
 
 def _override_dir() -> Path | None:
@@ -303,6 +75,23 @@ def _override_dir() -> Path | None:
     return p if p.is_dir() else None
 
 
+def _read_template(name: str) -> str | None:
+    """Resolve the raw template text, honouring the operator override.
+
+    Returns ``None`` when the name is unknown and no override file exists.
+    The text is the *raw* template — placeholders are not substituted here.
+    """
+    override = _override_dir()
+    if override is not None:
+        candidate = override / f"{name}.txt"
+        if candidate.is_file():
+            try:
+                return candidate.read_text(encoding="utf-8")
+            except OSError:
+                pass
+    return _PROMPTS.get(name)
+
+
 def load_prompt(name: str, **substitutions: object) -> str:
     """Load a prompt by name and substitute ``__KEY__`` placeholders.
 
@@ -311,10 +100,11 @@ def load_prompt(name: str, **substitutions: object) -> str:
     1. ``MANTIS_PROMPTS_DIR/<name>.txt`` if the env var is set and the
        file exists. Lets operators override individual prompts without
        forking the wheel.
-    2. The in-tree constant registered under ``name`` in ``_PROMPTS``.
+    2. The in-tree template at ``files/<name>.txt``.
 
-    Substitution keys are normalised to uppercase. Values are
-    ``str()``-coerced.
+    For each prompt, :data:`_PROMPT_PLACEHOLDER_DEFAULTS` is applied
+    first, then caller-supplied ``substitutions`` override. Substitution
+    keys are normalised to uppercase. Values are ``str()``-coerced.
 
     Example::
 
@@ -322,26 +112,18 @@ def load_prompt(name: str, **substitutions: object) -> str:
 
     Raises ``KeyError`` if the name is unknown and no override file exists.
     """
-    text: str | None = None
-
-    override = _override_dir()
-    if override is not None:
-        candidate = override / f"{name}.txt"
-        if candidate.is_file():
-            text = candidate.read_text(encoding="utf-8")
-
+    text = _read_template(name)
     if text is None:
-        try:
-            text = _PROMPTS[name]
-        except KeyError as exc:
-            raise KeyError(
-                f"Unknown prompt: {name!r}. Available: {sorted(_PROMPTS)}; "
-                f"override dir: {override or '(unset)'}"
-            ) from exc
+        raise KeyError(
+            f"Unknown prompt: {name!r}. Available: {sorted(_PROMPTS)}; "
+            f"override dir: {_override_dir() or '(unset)'}"
+        )
 
+    merged: dict[str, str] = dict(_PROMPT_PLACEHOLDER_DEFAULTS.get(name, {}))
     for key, value in substitutions.items():
-        placeholder = f"__{key.upper()}__"
-        text = text.replace(placeholder, str(value))
+        merged[key.lower()] = str(value)
+    for key, value in merged.items():
+        text = text.replace(f"__{key.upper()}__", value)
     return text.strip()
 
 
@@ -354,25 +136,15 @@ def prompt_version(name: str) -> str:
     """Return an 8-char SHA1 of the prompt content as currently resolved (#127).
 
     Honors ``MANTIS_PROMPTS_DIR`` overrides — operators who replace a prompt
-    should see a different SHA so prompt regressions are attributable. Pure
-    in-tree constants are hashed without substitution applied (the post-
-    substitution string is run-specific and would change per-tenant).
+    should see a different SHA so prompt regressions are attributable. The
+    raw template is hashed (no substitution applied), so the version tracks
+    the source-of-truth content rather than per-run rendering.
 
     Returns ``"unknown"`` for names not registered and not present in the
     override dir, so this is safe to call eagerly at run start without
     crashing on a typo.
     """
-    text: str | None = None
-    override = _override_dir()
-    if override is not None:
-        candidate = override / f"{name}.txt"
-        if candidate.is_file():
-            try:
-                text = candidate.read_text(encoding="utf-8")
-            except OSError:
-                text = None
-    if text is None:
-        text = _PROMPTS.get(name)
+    text = _read_template(name)
     if text is None:
         return "unknown"
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
@@ -386,6 +158,17 @@ def current_prompt_versions() -> dict[str, str]:
     :func:`list_prompts` semantics.
     """
     return {name: prompt_version(name) for name in _PROMPTS}
+
+
+# Module-level constants — rendered with placeholder defaults applied. Tests
+# and direct importers (``from mantis_agent.prompts import HOLO3_SYSTEM``)
+# rely on these. The .txt file is the canonical source; these are derived.
+SYSTEM_V1 = load_prompt("system_v1")
+GEMMA4_SYSTEM = load_prompt("gemma4_system")
+HOLO3_SYSTEM = load_prompt("holo3_system")
+CLAUDE_SYSTEM = load_prompt("claude_system")
+OPENCUA_SYSTEM = load_prompt("opencua_system")
+LLAMACPP_SYSTEM = load_prompt("llamacpp_system")
 
 
 __all__ = [
