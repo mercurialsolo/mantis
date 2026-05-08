@@ -414,6 +414,11 @@ def run_task_loop(
             )
 
             if not result.success and config.fallback_brain is not None:
+                fallback_intent = task_config.get("fallback_intent", intent)
+                fallback_max_steps = task_config.get(
+                    "fallback_max_steps",
+                    task_config.get("max_steps", config.max_steps),
+                )
                 print(
                     f"  {config.fallback_label} fallback: retrying failed section "
                     f"'{task_id}'"
@@ -421,15 +426,15 @@ def run_task_loop(
                 fallback_runner = GymRunner(
                     brain=config.fallback_brain,
                     env=config.env,
-                    max_steps=task_config.get("max_steps", config.max_steps),
+                    max_steps=fallback_max_steps,
                     frames_per_inference=config.frames_per_inference,
                     grounding=config.grounding,
                     on_step=on_step,
                 )
                 result = fallback_runner.run(
-                    task=intent,
+                    task=fallback_intent,
                     task_id=f"{task_id}_{config.fallback_label}_fallback",
-                    start_url=task_config.get("start_url", ""),
+                    start_url=task_config.get("fallback_start_url", ""),
                 )
                 try:
                     setattr(result, "fallback_used", config.fallback_label)

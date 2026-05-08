@@ -58,7 +58,7 @@ def test_standard_task_uses_fallback_brain_after_primary_failure(
     monkeypatch,
     tmp_path,
 ) -> None:
-    calls: list[object] = []
+    calls: list[dict[str, object]] = []
 
     class FakeEnv:
         current_url = "https://example.test/"
@@ -66,9 +66,17 @@ def test_standard_task_uses_fallback_brain_after_primary_failure(
     class FakeGymRunner:
         def __init__(self, *, brain, **_kwargs):
             self.brain = brain
+            self.max_steps = _kwargs["max_steps"]
 
-        def run(self, **_kwargs):
-            calls.append(self.brain)
+        def run(self, **kwargs):
+            calls.append(
+                {
+                    "brain": self.brain,
+                    "task": kwargs["task"],
+                    "start_url": kwargs.get("start_url", ""),
+                    "max_steps": self.max_steps,
+                }
+            )
             return SimpleNamespace(
                 success=self.brain == "claude",
                 total_steps=3,
@@ -90,10 +98,30 @@ def test_standard_task_uses_fallback_brain_after_primary_failure(
         max_steps=12,
         results_dir=str(tmp_path),
     )
-    tasks = [{"task_id": "fill_filters", "intent": "fill filters"}]
+    tasks = [
+        {
+            "task_id": "fill_filters",
+            "intent": "fill filters",
+            "fallback_intent": "click the visible search button only",
+            "fallback_max_steps": 5,
+        }
+    ]
 
     scores, details = task_loop.run_task_loop(tasks, config)
 
-    assert calls == ["holo3", "claude"]
+    assert calls == [
+        {
+            "brain": "holo3",
+            "task": "fill filters",
+            "start_url": "",
+            "max_steps": 12,
+        },
+        {
+            "brain": "claude",
+            "task": "click the visible search button only",
+            "start_url": "",
+            "max_steps": 5,
+        },
+    ]
     assert scores == [1.0]
     assert details[0]["success"] is True
