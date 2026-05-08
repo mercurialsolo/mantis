@@ -136,6 +136,14 @@ image = (
         "&& cmake --build build --target llama-server --config Release -j$(nproc)",
     )
     .add_local_python_source("mantis_agent")
+    # add_local_python_source only ships .py files, but mantis_agent.prompts
+    # loads templates from files/<name>.txt at import time (#208). Mount the
+    # prompts/files directory at the same path the package expects so
+    # `Holo3Brain` / `ClaudeExtractor` can boot.
+    .add_local_dir(
+        "src/mantis_agent/prompts/files",
+        remote_path="/root/mantis_agent/prompts/files",
+    )
 )
 
 app = modal.App(APP_NAME, image=image)

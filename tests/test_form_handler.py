@@ -40,6 +40,7 @@ class _FakeRunner:
         }
         self._url_history: list[str] = ["", ""]  # before, after
         self.dump_calls: list[tuple[str, Any]] = []
+        self._last_known_url: str = ""
 
     def _best_effort_current_url(self) -> str:
         return self._url_history.pop(0) if self._url_history else ""
@@ -149,6 +150,97 @@ def test_submit_target_not_found_after_scroll(monkeypatch):
     # Final Home keypress to reset scroll
     final_keypress = env.step.call_args_list[-1].args[0]
     assert final_keypress.params == {"keys": "Home"}
+
+
+def test_submit_click_navigated_propagates_url_to_last_known_url(monkeypatch):
+    """Successful click that changes the URL must update runner._last_known_url
+    so step_snapshot.diff sees the change and run_executor doesn't demote
+    the success to no_state_change."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    runner._last_known_url = "https://app.example/dashboard"
+    runner._url_history = [
+        "https://app.example/dashboard",  # url_before
+        "https://app.example/leads",      # url_after_click — navigated
+    ]
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 100, "y": 142}
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Open Leads", type="submit",
+        params={"label": "Leads"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    assert runner._last_known_url == "https://app.example/leads"
+
+
+def test_submit_url_unchanged_does_not_update_last_known_url(monkeypatch):
+    """When neither click nor Enter fallback navigates, _last_known_url
+    must stay at its prior value — recovery uses it as the rollback URL."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    runner._last_known_url = "https://app.example/results"
+    runner._url_history = [
+        "https://app.example/results",  # url_before
+        "https://app.example/results",  # url_after_click — unchanged
+        "https://app.example/results",  # url_after_enter — still unchanged
+    ]
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 100, "y": 142}
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Submit", type="submit",
+        params={"label": "Submit"},
+    )
+    ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert runner._last_known_url == "https://app.example/results"
+
+
+def test_submit_url_changed_after_enter_fallback_updates_last_known_url(monkeypatch):
+    """Click doesn't navigate but Enter fallback does — the post-Enter URL
+    is what should land in _last_known_url."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    runner._last_known_url = "https://app.example/login"
+    runner._url_history = [
+        "https://app.example/login",     # url_before
+        "https://app.example/login",     # url_after_click — unchanged → trigger Enter
+        "https://app.example/dashboard", # url_after_enter — navigated
+    ]
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 100, "y": 142}
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Sign in", type="submit",
+        params={"label": "Sign in"},
+    )
+    ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert runner._last_known_url == "https://app.example/dashboard"
 
 
 def test_submit_click_then_enter_fallback_when_url_does_not_change(monkeypatch):
