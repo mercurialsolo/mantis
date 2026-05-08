@@ -48,6 +48,50 @@ def test_repeated_non_form_click_does_not_force_type() -> None:
     assert values == [{"label": "zip code", "value": "33101"}]
 
 
+def test_repeated_form_click_ignores_origin_sentinel() -> None:
+    values = [{"label": "radius", "value": "35"}]
+    previous = Action(ActionType.CLICK, {"x": 0, "y": 0})
+    current = Action(ActionType.CLICK, {"x": 0, "y": 0})
+
+    forced = GymRunner._maybe_force_type_after_repeated_form_click(
+        current,
+        [previous],
+        values,
+        [],
+        "Set the radius to 35 miles.",
+    )
+
+    assert forced is None
+    assert values == [{"label": "radius", "value": "35"}]
+
+
+def test_force_type_text_ignores_origin_sentinel(monkeypatch) -> None:
+    from mantis_agent.gym import holo3_detector
+
+    values = [{"label": "radius", "value": "35"}]
+    monkeypatch.setattr(
+        holo3_detector,
+        "detect_focused_field",
+        lambda *args, **kwargs: {
+            "focused": True,
+            "label": "radius",
+            "type": "text",
+        },
+    )
+
+    forced = GymRunner._maybe_force_type_text(
+        Action(ActionType.CLICK, {"x": 0, "y": 0}),
+        [],
+        values,
+        [],
+        brain=object(),
+        screenshot=Image.new("RGB", (100, 100)),
+    )
+
+    assert forced is None
+    assert values == [{"label": "radius", "value": "35"}]
+
+
 @dataclass
 class _BrainResult:
     action: Action

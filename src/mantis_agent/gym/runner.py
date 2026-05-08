@@ -1432,6 +1432,11 @@ class GymRunner:
         return None
 
     @staticmethod
+    def _is_valid_force_fill_click(x: int, y: int) -> bool:
+        """Reject sentinel/browser-chrome clicks before typing plan values."""
+        return x >= 10 and y >= 80
+
+    @staticmethod
     def _maybe_redirect_repeated_top_click(
         action: "Action",
         action_history: list["Action"],
@@ -1635,6 +1640,8 @@ class GymRunner:
 
         px = int((action.params or {}).get("x", 0))
         py = int((action.params or {}).get("y", 0))
+        if not GymRunner._is_valid_force_fill_click(px, py):
+            return None
         prev_x = int((previous_click.params or {}).get("x", 0))
         prev_y = int((previous_click.params or {}).get("y", 0))
         near_equal = abs(px - prev_x) <= 8 and abs(py - prev_y) <= 8
@@ -1698,6 +1705,8 @@ class GymRunner:
 
         px = int((action.params or {}).get("x", 0))
         py = int((action.params or {}).get("y", 0))
+        if not GymRunner._is_valid_force_fill_click(px, py):
+            return None
 
         # Already filled this region? Don't double-consume.
         for ux, uy in force_fill_used_regions:
