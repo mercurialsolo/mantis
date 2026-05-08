@@ -110,6 +110,8 @@ where = ["src"]
 [tool.setuptools.package-data]
 # Recipes ship with the wheel: plan.json + any prompt assets a recipe owns.
 "mantis_agent.recipes" = ["**/*.json", "**/*.txt"]
+# System-prompt templates ship with the wheel; the loader reads them at import.
+"mantis_agent.prompts" = ["files/*.txt"]
 
 [tool.ruff]
 line-length = 100
