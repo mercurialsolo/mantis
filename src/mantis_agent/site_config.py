@@ -20,6 +20,28 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
+
+
+def _path_extends(child_path: str, parent_path: str) -> bool:
+    """True iff ``child_path`` is strictly deeper than ``parent_path``.
+
+    Pure URL-path heuristic for "did a click navigate from a listings/index
+    page to a detail page?" — the detail URL extends the base path with at
+    least one extra non-empty segment.
+
+    Examples (parent → child):
+        "/leads"               → "/leads/13"           True
+        "/leads"               → "/leads/13/edit"      True
+        "/products/category"   → "/products/category/9 sku" False (whitespace)
+        "/products/category"   → "/products/category/9-sku"  True
+        "/leads"               → "/leads"              False (same)
+        "/leads"               → "/login"              False (different branch)
+        "/"                    → "/leads"              True (root → segment)
+    """
+    cs = [s for s in child_path.split("/") if s]
+    ps = [s for s in parent_path.split("/") if s]
+    return len(cs) > len(ps) and cs[: len(ps)] == ps
 
 
 @dataclass
@@ -60,11 +82,39 @@ class SiteConfig:
     # grounding (default; routine clicks still benefit from #117 cache).
     require_independent_grounding: tuple[str, ...] = ()
 
-    def is_detail_page(self, url: str) -> bool:
-        """Check if URL matches the detail page pattern."""
-        if not self.detail_page_pattern:
+    def is_detail_page(self, url: str, base_url: str = "") -> bool:
+        """Check if ``url`` is a post-click detail page.
+
+        Resolution order:
+
+        1. ``detail_page_pattern`` regex (when configured by a recipe or
+           inferred by the analysis stage). Domain-specific, highest
+           confidence.
+        2. Generic path-extension heuristic against ``base_url`` (the
+           listings / results URL the runner was on before the click).
+           Used when no pattern is configured — covers the
+           "framework-level CRM/SaaS workflow" case where a row click
+           lands on ``<base>/<id>``. Same host, same path prefix, plus
+           at least one new path segment.
+        3. ``False`` — neither pattern nor base URL available.
+
+        The optional ``base_url`` argument keeps the framework primitive
+        domain-neutral. Per-plan ``detail_page_pattern`` hints belong in
+        the analysis/decomposition stage and are passed in via
+        :class:`SiteConfig` rather than hardcoded into this primitive
+        (#209 Symptom 1).
+        """
+        if self.detail_page_pattern:
+            return bool(re.search(self.detail_page_pattern, url, re.IGNORECASE))
+        if not base_url:
             return False
-        return bool(re.search(self.detail_page_pattern, url, re.IGNORECASE))
+        try:
+            pu, pb = urlparse(url), urlparse(base_url)
+        except (ValueError, AttributeError):
+            return False
+        if not pu.netloc or not pb.netloc or pu.netloc.lower() != pb.netloc.lower():
+            return False
+        return _path_extends(pu.path, pb.path)
 
     def is_results_page(self, url: str) -> bool:
         """Check if URL matches the results page pattern."""
