@@ -46,7 +46,9 @@ from __future__ import annotations
 import logging
 import random
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from PIL import Image
 
 from ...actions import Action, ActionType
 from ..checkpoint import StepResult
@@ -57,6 +59,82 @@ if TYPE_CHECKING:
     from ...plan_decomposer import MicroIntent
 
 logger = logging.getLogger(__name__)
+
+
+# ── Render-wait primitives (#209 follow-up: blank-screenshot race) ──────
+#
+# Form steps frequently fire ``find_form_target`` against a screenshot
+# the page hasn't finished painting yet — typically the first action
+# after a navigate to a slow / proxied / SPA-cold-start page. The
+# extractor then correctly returns ``not_found`` ("blank white page
+# with no visible form elements") and the runner halts a required
+# step that would have succeeded a few seconds later. Confirmed via
+# /tmp/mantis_debug screenshots from a staff-crm smoke run: pure-white
+# 1280x720 PNGs at attempt 1+2, fully-rendered login form at attempt 3.
+#
+# The helpers below detect a blank screenshot via a cheap pixel-count
+# heuristic and re-screenshot until the page has visible content or
+# the deadline expires. Generic — no domain knowledge; works for any
+# site whose first paint is slower than the form handler's static
+# settle.
+
+
+def _is_blank_screenshot(img: Image.Image, threshold: float = 0.99) -> bool:
+    """True iff ``img`` is at least ``threshold`` fraction near-white.
+
+    Cheap heuristic for "page hasn't rendered yet". Even a sparse
+    real page (login form, settings panel) carries 5-15% non-white
+    pixels — the threshold is intentionally conservative to avoid
+    false positives on legitimately white-themed UIs. Downsamples to
+    a 64×64 grid before counting so the cost is fixed regardless of
+    viewport size.
+    """
+    try:
+        # NEAREST avoids anti-aliasing at boundaries — the helper counts
+        # near-white pixels, and bicubic smoothing would shift the
+        # ratio at the threshold edge unpredictably across viewport
+        # sizes. NEAREST preserves the original pixel population.
+        small = img.convert("L").resize((64, 64), Image.NEAREST)
+    except Exception:
+        return False
+    pixels = list(small.getdata())
+    if not pixels:
+        return False
+    near_white = sum(1 for p in pixels if p >= 250)
+    return near_white / len(pixels) >= threshold
+
+
+def _wait_for_rendered_screenshot(
+    env: Any,
+    *,
+    max_retries: int = 5,
+    poll_seconds: float = 2.0,
+) -> Image.Image:
+    """Re-screenshot until the page is non-blank or ``max_retries`` is hit.
+
+    Returns the most recent screenshot regardless — callers should not
+    assume a guaranteed-rendered frame after the cap (the page might
+    genuinely be white). The retry pattern keeps the page-not-rendered
+    race from cascading into a ``not_found`` response that the form
+    handler treats as a real verify failure.
+
+    The retry cap is a count rather than a wall-clock deadline so tests
+    can drive the helper deterministically by mocking only
+    ``time.sleep`` (a no-op sleep moves the loop forward in zero real
+    time without needing to also mock ``time.time``).
+    """
+    img = env.screenshot()
+    for _ in range(max(0, max_retries)):
+        if not _is_blank_screenshot(img):
+            return img
+        logger.info(
+            "  [claude-form] screenshot is blank (page still painting); "
+            "waiting %.1fs and retrying",
+            poll_seconds,
+        )
+        time.sleep(poll_seconds)
+        img = env.screenshot()
+    return img
 
 
 # Visual-affordance kinds for ``submit`` steps. The decomposer classifies
@@ -140,7 +218,7 @@ class ClaudeGuidedFormHandler:
         # synthesised click→submit path that calls form via the runner
         # shim no longer adds its own pre-settle either.
         time.sleep(4)
-        screenshot = env.screenshot()
+        screenshot = _wait_for_rendered_screenshot(env)
 
         if step.type == "fill_field":
             label = str(params.get("label") or "").strip()
@@ -226,7 +304,7 @@ class ClaudeGuidedFormHandler:
                 except Exception:
                     break
                 time.sleep(0.6)
-                screenshot = env.screenshot()
+                screenshot = _wait_for_rendered_screenshot(env)
                 target = extractor.find_form_target(
                     screenshot, search_intent,
                     target_label=label, target_aliases=aliases,
