@@ -461,6 +461,56 @@ class ClaudeGuidedClickHandler:
         except Exception as e:
             logger.warning(f"  [claude-click] Middle-click fallback failed: {e}")
 
+        # Defense-in-depth (#209 Symptom 2 / Finding #3): before escalating
+        # to probe-area clicks, switch focus back to the source (first) tab
+        # and re-verify. A slow JS handler can navigate the source tab AFTER
+        # our 2-attempt verify gate ran but BEFORE the middle-click loop
+        # started, leaving us with the right state on the wrong-focused tab.
+        # ctrl+1 is the Chromium shortcut for "first tab" — a no-op when
+        # focus is already there, so it's safe even when middle-click
+        # didn't actually open a new tab.
+        try:
+            env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+1"}))
+            time.sleep(1)
+            url = runner._read_current_url()
+            if not url:
+                after = env.screenshot()
+                url = runner._read_current_url(after)
+            if url and site_config.is_detail_page(url, base_url=runner._results_base_url):
+                logger.info(
+                    "  [claude-click] Source tab navigated after middle-click "
+                    "(url=%s) — accepting late navigation",
+                    url_for_log(url),
+                )
+                runner._last_known_url = url
+                dynamic_verifier.record_item_opened(
+                    page=runner._current_page,
+                    item=getattr(runner, "_last_click_title", "") or title,
+                    url=url,
+                )
+                runner._last_extracted = {
+                    **runner._last_extracted,
+                    "last_clicked_title": getattr(runner, "_last_click_title", ""),
+                    "last_attempted_url": url,
+                    "last_attempted_at": time.time(),
+                    "last_attempted_step": index,
+                }
+                runner._set_scroll_state(
+                    context="detail_top", url=url, page_downs=0, wheel_downs=0,
+                )
+                runner._listings_on_page += 1
+                if hasattr(runner, '_last_click_title') and runner._last_click_title:
+                    runner._extracted_titles.append(runner._last_click_title)
+                return StepResult(
+                    step_index=index, intent=step.intent, success=True,
+                    steps_used=3, duration=11.0,
+                )
+        except Exception as recheck_err:
+            logger.debug(
+                "  [claude-click] Source-tab recheck failed (non-fatal): %s",
+                recheck_err,
+            )
+
         logger.info("  [claude-click] Middle-click did not verify — trying card-area click probes")
         probe_points = [
             ("image_center", x, y - 145),
