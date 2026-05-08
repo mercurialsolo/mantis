@@ -1,4 +1,4 @@
-"""``mantis`` command-line interface — plan authoring + trace tooling (#154, #155).
+"""``mantis`` command-line interface — plan authoring + trace tooling + run.
 
 Subcommands:
     plan validate <path>    Run PlanValidator on a JSON micro-plan.
@@ -9,6 +9,12 @@ Subcommands:
     plan init <url>         Scaffold a starter plan via PlanDecomposer
         --task "<desc>"     (Claude API call; ~\$0.005 per scaffold).
                             Validates and dry-runs before writing.
+    plan run <path>         End-to-end execution against a remote Mantis brain
+        --platform ...      (Baseten / Modal / custom) and a local browser.
+        --endpoint ...      Loads the plan (text → decompose, JSON → direct),
+                            wires Holo3Brain + ClaudeGrounding + ClaudeExtractor +
+                            PlaywrightGymEnv, runs MicroPlanRunner, and writes
+                            ``plan.json`` + ``result.json`` to ``--output-dir``.
     trace label <input>     Batch-label exported run traces (#155 step 2).
         --output <dir>      Emits one labelled JSON per input, with each
                             step tagged positive / negative / neutral.
@@ -18,11 +24,16 @@ Subcommands:
 The CLI is wired through ``mantis_agent/main.py``: ``mantis plan ...``
 and ``mantis trace ...`` invocations dispatch to this module BEFORE any
 heavy import (no transformers / torch / mss / pyautogui), so the
-plan-authoring + trace tooling surfaces stay fast.
+plan-authoring + trace tooling surfaces stay fast. ``plan run`` does
+import the heavy stack — it's the only subcommand that needs the
+browser + brain client, so the import is gated inside the handler.
 
     mantis plan validate examples/extract_listings.json
     mantis plan dry-run examples/extract_jobs.json
     mantis plan init https://news.ycombinator.com --task "Extract top 10 stories"
+    mantis plan run plans/staff-crm.txt \\
+        --platform modal --endpoint https://workspace--app-fn.modal.run/v1 \\
+        --output-dir outputs/staff-crm-validation
     mantis trace label /data/traces --output /data/labelled
     mantis trace review /data/traces/__shared__/run123.json
 """
@@ -471,6 +482,341 @@ def cmd_trace_review(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ── plan run ──────────────────────────────────────────────────────────
+
+
+# Auth-header style per platform. Modal and Baseten both accept a Bearer
+# token at the OpenAI-compatible endpoint, so the structural difference
+# is mostly the URL shape (which the caller already supplies via
+# --endpoint). ``custom`` exists for self-hosted gateways that need a
+# different header — pass headers via ``--header`` repeats.
+_PLATFORMS: tuple[str, ...] = ("modal", "baseten", "custom")
+
+
+def _platform_default_model(platform: str) -> str:
+    """Default brain model name per platform.
+
+    The model name is informational on the Mantis side — vLLM / llama.cpp
+    proxies route based on the served-model registration, not the value
+    in the request body. Defaults match what the canonical deployments
+    serve so a typical ``mantis plan run`` works without spelling it out.
+    """
+    if platform == "modal":
+        return "Hcompany/Holo3-35B-A3B"
+    if platform == "baseten":
+        return "holo3-35b-a3b"
+    return "holo3-35b-a3b"
+
+
+def _parse_extra_headers(items: list[str] | None) -> dict[str, str]:
+    """Parse ``--header KEY=VALUE`` repeats into a dict for the brain client."""
+    out: dict[str, str] = {}
+    for raw in items or []:
+        if "=" not in raw:
+            raise ValueError(f"--header expects KEY=VALUE; got: {raw!r}")
+        k, v = raw.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if not k:
+            raise ValueError(f"--header has empty key: {raw!r}")
+        out[k] = v
+    return out
+
+
+def _looks_like_text_plan(path: Path) -> bool:
+    """Heuristic for the plan-format dispatch.
+
+    A path with ``.json`` extension is treated as an already-decomposed
+    micro-plan; anything else is a natural-language plan that needs a
+    decomposer pass. Reading the file content as a sanity check is
+    deliberately avoided so an empty / not-yet-written ``.txt`` still
+    routes through the decomposer with a helpful error rather than a
+    silent JSON parse fail.
+    """
+    return path.suffix.lower() not in {".json"}
+
+
+def _resolve_first_navigate_url(plan_obj: Any) -> str:
+    """Pull the first ``navigate`` step's URL out of a MicroPlan.
+
+    Used as the default ``start_url`` for the browser env when the caller
+    didn't pass ``--start-url``. Returns ``""`` if no navigate step has a
+    URL — the runner will surface that as a no-URL navigate failure with
+    a clear log line.
+    """
+    import re as _re
+
+    for step in getattr(plan_obj, "steps", []):
+        if step.type != "navigate":
+            continue
+        m = _re.search(r'https?://[^\s"]+', step.intent or "")
+        if m:
+            return m.group()
+        params = step.params if isinstance(step.params, dict) else {}
+        params_url = params.get("url")
+        if isinstance(params_url, str):
+            m2 = _re.search(r'https?://[^\s"]+', params_url)
+            if m2:
+                return m2.group()
+    return ""
+
+
+def cmd_plan_run(args: argparse.Namespace) -> int:
+    """``mantis plan run <plan>`` — execute a plan against a remote Mantis brain.
+
+    End-to-end smoke / validation runner: takes a natural-language plan
+    (or pre-decomposed JSON), decomposes via PlanDecomposer if needed,
+    wires :class:`Holo3Brain` (HTTP → ``--endpoint``) +
+    :class:`ClaudeGrounding` + :class:`ClaudeExtractor` +
+    :class:`PlaywrightGymEnv` into :class:`MicroPlanRunner`, runs the
+    plan, and writes ``plan.json`` + ``result.json`` to ``--output-dir``.
+
+    The handler keeps to the project's stay-generic discipline: the
+    default :class:`SiteConfig` is the neutral one (relies on the #211
+    path-extension heuristic for detail-page detection); a per-plan
+    pattern can be injected via ``--detail-page-pattern`` rather than
+    baked into the framework.
+
+    Heavy imports — playwright, brain, runner — are gated inside this
+    function so ``mantis plan validate`` / ``dry-run`` / ``init`` stay
+    fast.
+
+    Returns 0 if every step succeeded, 1 if any failed or the runner
+    raised.
+    """
+    import os
+    import time as _time
+
+    # Plan source — text → decompose, JSON → load directly.
+    plan_path = Path(args.path)
+    if not plan_path.exists():
+        print(f"error: plan file not found: {args.path}", file=sys.stderr)
+        return EXIT_ERROR
+
+    from .plan_decomposer import MicroPlan, PlanDecomposer
+
+    if _looks_like_text_plan(plan_path):
+        plan_text = plan_path.read_text(encoding="utf-8")
+        if not plan_text.strip():
+            print(f"error: plan file is empty: {plan_path}", file=sys.stderr)
+            return EXIT_ERROR
+        anthropic_key = (
+            args.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        )
+        if not anthropic_key:
+            print(
+                "error: text plan requires Claude for decomposition; pass "
+                "--anthropic-api-key or set ANTHROPIC_API_KEY",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+        # PlanDecomposer reads ANTHROPIC_API_KEY from env; export it for the call.
+        if anthropic_key and not os.environ.get("ANTHROPIC_API_KEY"):
+            os.environ["ANTHROPIC_API_KEY"] = anthropic_key
+        print(f"Decomposing {plan_path.name} via Claude…")
+        try:
+            plan = PlanDecomposer().decompose_text(plan_text)
+        except Exception as exc:  # noqa: BLE001
+            print(f"error: decomposer failed: {exc}", file=sys.stderr)
+            return EXIT_ERROR
+    else:
+        try:
+            with plan_path.open() as fh:
+                payload = json.load(fh)
+        except json.JSONDecodeError as exc:
+            print(f"error: invalid JSON in {plan_path}: {exc}", file=sys.stderr)
+            return EXIT_ERROR
+        try:
+            plan = MicroPlan.from_dict(payload)
+        except Exception as exc:  # noqa: BLE001
+            print(f"error: cannot parse plan from {plan_path}: {exc}", file=sys.stderr)
+            return EXIT_ERROR
+
+    if not plan.steps:
+        print("error: plan has no steps", file=sys.stderr)
+        return EXIT_ERROR
+
+    # Output dir.
+    output_dir = Path(args.output_dir or f"outputs/run-{int(_time.time())}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "plan.json").write_text(
+        json.dumps(plan.to_dict(), indent=2) + "\n", encoding="utf-8",
+    )
+    print(f"  plan: {len(plan.steps)} steps → {output_dir / 'plan.json'}")
+
+    # Endpoint + auth.
+    endpoint = args.endpoint
+    if not endpoint:
+        print(
+            f"error: --endpoint is required (platform={args.platform}). "
+            "Pass the OpenAI-compatible v1 base URL, e.g. "
+            "https://workspace--app-fn.modal.run/v1",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    api_key = (
+        args.api_key
+        or os.environ.get("MANTIS_API_KEY", "")
+        or os.environ.get("HAI_API_KEY", "")
+    )
+    anthropic_key = (
+        args.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    )
+    if not anthropic_key:
+        print(
+            "error: ClaudeGrounding + ClaudeExtractor need ANTHROPIC_API_KEY "
+            "(pass --anthropic-api-key or export it)",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    try:
+        extra_headers = _parse_extra_headers(args.header)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    # Build brain — Holo3Brain is the canonical OpenAI-compatible client.
+    from .brain_holo3 import Holo3Brain
+
+    brain = Holo3Brain(
+        base_url=endpoint,
+        model=args.model or _platform_default_model(args.platform),
+        api_key=api_key,
+        extra_headers=extra_headers or None,
+    )
+
+    # Build env — playwright is the lighter default; xdotool needs Xvfb.
+    start_url = args.start_url or _resolve_first_navigate_url(plan)
+    if not start_url:
+        print(
+            "error: no --start-url given and no navigate step in the plan "
+            "carries an http(s):// URL — the browser has nowhere to start",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    env: Any
+    if args.browser == "xdotool":
+        try:
+            from .gym.xdotool_env import XdotoolGymEnv
+        except ImportError as exc:
+            print(
+                f"error: xdotool env requires the local-cua extras: {exc}. "
+                "Reinstall with `pip install mantis-agent[local-cua]` or "
+                "use --browser playwright.",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+        env = XdotoolGymEnv()
+    else:
+        try:
+            from .gym.playwright_env import PlaywrightGymEnv
+        except ImportError as exc:
+            print(
+                f"error: playwright env not available: {exc}. "
+                "Install with `pip install playwright && playwright install chromium`.",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+        env = PlaywrightGymEnv(
+            start_url=start_url,
+            headless=bool(args.headless),
+        )
+
+    # Build grounding + extractor — both Claude-backed, share the key.
+    from .extraction import ClaudeExtractor, ExtractionSchema  # noqa: F401
+    from .grounding import ClaudeGrounding
+
+    grounding = ClaudeGrounding(api_key=anthropic_key)
+    extractor = ClaudeExtractor(api_key=anthropic_key)
+
+    # Site config — neutral by default. ``--detail-page-pattern`` is the
+    # per-plan override hook; without it we rely on the path-extension
+    # heuristic from #211.
+    from .site_config import SiteConfig
+
+    site_config = SiteConfig(
+        detail_page_pattern=args.detail_page_pattern or "",
+    )
+
+    # Wire the runner. ``session_name`` flows into checkpoint paths and
+    # the dynamic verifier; derive a stable label from the plan filename
+    # so resumed runs find their checkpoint.
+    from .gym.micro_runner import MicroPlanRunner
+
+    session_name = plan_path.stem
+    checkpoint_path = str(output_dir / "checkpoint.json")
+    runner = MicroPlanRunner(
+        brain=brain,
+        env=env,
+        grounding=grounding,
+        extractor=extractor,
+        site_config=site_config,
+        checkpoint_path=checkpoint_path,
+        run_key=session_name,
+        session_name=session_name,
+        max_cost=float(args.max_cost),
+        max_time_minutes=int(args.max_time_minutes),
+    )
+
+    print(
+        f"  brain:   {endpoint}  (platform={args.platform}, "
+        f"model={brain.model}, headers={'+'.join(extra_headers) or '—'})"
+    )
+    print(f"  browser: {args.browser} (start_url={start_url})")
+    print(f"  output:  {output_dir}")
+    print()
+
+    t0 = _time.time()
+    try:
+        step_results = runner.run(plan, resume=bool(args.resume))
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: runner raised: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    elapsed = _time.time() - t0
+
+    # Result summary — write the structured payload then print a
+    # human-readable rollup.
+    successes = sum(1 for r in step_results if r.success)
+    failures = len(step_results) - successes
+    final_url = getattr(runner, "_last_known_url", "")
+    result_payload = {
+        "plan_signature": runner.plan_signature,
+        "session": session_name,
+        "platform": args.platform,
+        "endpoint": endpoint,
+        "step_count": len(step_results),
+        "successes": successes,
+        "failures": failures,
+        "elapsed_seconds": round(elapsed, 2),
+        "final_url": final_url,
+        "costs": dict(getattr(runner, "costs", {})),
+        "steps": [
+            {
+                "index": r.step_index,
+                "intent": r.intent,
+                "success": r.success,
+                "data": getattr(r, "data", ""),
+                "duration": getattr(r, "duration", 0.0),
+                "steps_used": getattr(r, "steps_used", 0),
+            }
+            for r in step_results
+        ],
+    }
+    (output_dir / "result.json").write_text(
+        json.dumps(result_payload, indent=2) + "\n", encoding="utf-8",
+    )
+    print(
+        f"\n  result: {successes}/{len(step_results)} succeeded "
+        f"({elapsed:.1f}s) — {output_dir / 'result.json'}"
+    )
+    if final_url:
+        print(f"  final URL: {final_url}")
+    return EXIT_OK if failures == 0 else EXIT_ERROR
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mantis",
@@ -550,6 +896,109 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Overwrite the output file if it already exists",
     )
     init.set_defaults(func=cmd_plan_init)
+
+    run = plan_sub.add_parser(
+        "run",
+        help="Execute a plan against a remote Mantis brain (Modal/Baseten/custom)",
+    )
+    run.add_argument(
+        "path",
+        help="Path to plan file. .json → pre-decomposed micro-plan; "
+             "any other extension → natural-language plan, decomposed "
+             "via Claude before running.",
+    )
+    run.add_argument(
+        "--platform",
+        choices=_PLATFORMS,
+        default="modal",
+        help="Inference platform tag (informational; auth header style). "
+             "Pass --endpoint for the actual base URL.",
+    )
+    run.add_argument(
+        "--endpoint",
+        default=None,
+        help="OpenAI-compatible v1 base URL of the brain "
+             "(e.g. https://workspace--app-fn.modal.run/v1 or "
+             "https://model-x.api.baseten.co/production/sync/v1)",
+    )
+    run.add_argument(
+        "--api-key",
+        default=None,
+        help="Brain endpoint key (env: MANTIS_API_KEY or HAI_API_KEY)",
+    )
+    run.add_argument(
+        "--anthropic-api-key",
+        default=None,
+        help="Anthropic key for ClaudeGrounding + ClaudeExtractor + "
+             "decompose pass on text plans (env: ANTHROPIC_API_KEY)",
+    )
+    run.add_argument(
+        "--model",
+        default=None,
+        help="Brain model name; defaults derived from --platform "
+             "(modal: Hcompany/Holo3-35B-A3B, baseten: holo3-35b-a3b)",
+    )
+    run.add_argument(
+        "--header",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help="Additional HTTP header sent with every brain request. "
+             "Repeat for multiple. Useful for tenant tokens or gateway "
+             "auth schemes that override Bearer.",
+    )
+    run.add_argument(
+        "--browser",
+        choices=("playwright", "xdotool"),
+        default="playwright",
+        help="Browser env. playwright (default) is light + headless-friendly; "
+             "xdotool needs Xvfb + Chromium running on the host.",
+    )
+    run.add_argument(
+        "--headless",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Headless browser (default). --no-headless opens a visible window "
+             "(playwright only).",
+    )
+    run.add_argument(
+        "--start-url",
+        default=None,
+        help="Initial URL for the browser. Defaults to the first navigate "
+             "step's URL in the plan.",
+    )
+    run.add_argument(
+        "--detail-page-pattern",
+        default=None,
+        help="Optional regex injected into SiteConfig.detail_page_pattern. "
+             "When unset the framework falls back to the generic "
+             "path-extension heuristic (#211).",
+    )
+    run.add_argument(
+        "--max-cost",
+        type=float,
+        default=10.0,
+        help="Hard cap on USD spend (Anthropic + brain). Runner halts when "
+             "exceeded (default: 10.0).",
+    )
+    run.add_argument(
+        "--max-time-minutes",
+        type=int,
+        default=30,
+        help="Hard wall-clock cap (default: 30 min).",
+    )
+    run.add_argument(
+        "--output-dir",
+        default=None,
+        help="Where to write plan.json + result.json + checkpoint.json. "
+             "Defaults to outputs/run-<unix-timestamp>.",
+    )
+    run.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from checkpoint at --output-dir/checkpoint.json if present.",
+    )
+    run.set_defaults(func=cmd_plan_run)
 
     trace = sub.add_parser("trace", help="Trace tooling subcommands (#155)")
     trace_sub = trace.add_subparsers(dest="trace_command", required=True)
