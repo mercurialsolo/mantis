@@ -199,11 +199,20 @@ class ClaudeExtractor:
             f"seller-supplied text or contact information.\n\n"
             f"Prefer these safe targets:\n- {allowed}\n\n"
             f"Do NOT choose: {forbidden}\n\n"
-            f"Return the center of the best target. Output ONLY valid JSON:\n"
-            f"{{\"x\": N, \"y\": N, \"action\": \"expand_description|show_phone|none\", "
-            f"\"label\": \"visible text\", \"reason\": \"brief reason\"}}\n\n"
-            f"If no safe control is visible, output:\n"
-            f"{{\"x\": 0, \"y\": 0, \"action\": \"none\", \"label\": \"\", \"reason\": \"none visible\"}}"
+            f"OUTPUT FORMAT — strict JSON, no prose preamble, no commentary,\n"
+            f"no markdown fence. The shape is exactly five string-keyed\n"
+            f"fields. ``x`` and ``y`` are separate integer keys — never a\n"
+            f"tuple, never two unlabeled positional values like\n"
+            f"``\"x\": 302, 43``.\n\n"
+            f"If a safe control IS visible — concrete example:\n"
+            f"{{\"x\": 740, \"y\": 320, \"action\": \"expand_description\", "
+            f"\"label\": \"Show more\", \"reason\": \"see-more chevron in description\"}}\n\n"
+            f"If NO safe control is visible — exact response:\n"
+            f"{{\"x\": 0, \"y\": 0, \"action\": \"none\", \"label\": \"\", \"reason\": \"none visible\"}}\n\n"
+            f"Substitute the integers, label, and reason with what you "
+            f"actually see — keep every key spelled exactly as shown above. "
+            f"Allowed values for ``action``: expand_description, show_phone, "
+            f"none."
         )
 
     def _parse_schema_result(self, data: dict[str, Any]) -> ExtractionResult:
@@ -239,7 +248,7 @@ class ClaudeExtractor:
                 continue
         return os.path.join("/tmp", f"{stem}_{int(time.time())}{suffix}")
 
-    def _call(self, screenshot: Image.Image, prompt: str, max_tokens: int = 200) -> str:
+    def _call(self, screenshot: Image.Image, prompt: str, max_tokens: int = 500) -> str:
         """Call Claude API with screenshot + prompt."""
         import requests
 
@@ -285,6 +294,95 @@ class ClaudeExtractor:
         except Exception as e:
             logger.warning(f"ClaudeExtractor failed: {e}")
         return ""
+
+    def _call_with_tool_schema(
+        self,
+        screenshot: Image.Image,
+        prompt: str,
+        *,
+        tool_name: str,
+        tool_description: str,
+        input_schema: dict[str, Any],
+        max_tokens: int = 500,
+    ) -> dict | None:
+        """Call Claude API and force the response into a JSON-Schema-validated tool_use.
+
+        Anthropic's ``tool_use`` with ``tool_choice={\"type\": \"tool\", \"name\": ...}``
+        forces the model to emit a ``tool_use`` content block whose
+        ``input`` field is server-side-validated against ``input_schema``.
+        Replaces the previous prompt-only \"output ONLY valid JSON\"
+        approach which the model inconsistently honoured — empirical
+        failures from the boattrader smoke included prose-only responses
+        (no JSON at all), prose-then-truncated-JSON (max_tokens cliff),
+        and malformed JSON like ``{\"x\": 302, 43, \"y\": 43, ...}`` (extra
+        positional value before the next key). Schema enforcement makes
+        all three failure modes impossible.
+
+        Returns the validated input dict, or ``None`` on any API / network
+        / shape mismatch (caller logs and treats as not_found, same as
+        the legacy ``_parse_json`` failure path).
+
+        ``prompt`` is still passed for the screen-content guidance — only
+        the response shape is schema-locked. Generic primitive: every
+        extractor call site that wants structured output should use this
+        instead of ``_call`` + ``_parse_json``.
+        """
+        import requests
+
+        if not self.api_key:
+            logger.warning("ClaudeExtractor: no API key")
+            return None
+
+        buf = BytesIO()
+        screenshot.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+
+        try:
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "max_tokens": max_tokens,
+                    "tools": [{
+                        "name": tool_name,
+                        "description": tool_description,
+                        "input_schema": input_schema,
+                    }],
+                    "tool_choice": {"type": "tool", "name": tool_name},
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }],
+                },
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "ClaudeExtractor tool_use API error %s: %s",
+                    resp.status_code,
+                    resp.text[:500],
+                )
+                return None
+            for block in resp.json().get("content", []):
+                if block.get("type") == "tool_use" and block.get("name") == tool_name:
+                    tool_input = block.get("input")
+                    if isinstance(tool_input, dict):
+                        return tool_input
+            logger.warning(
+                "ClaudeExtractor tool_use returned no %s tool block in response",
+                tool_name,
+            )
+        except Exception as e:
+            logger.warning(f"ClaudeExtractor tool_use failed: {e}")
+        return None
 
     def _call_many(
         self,
@@ -488,17 +586,43 @@ class ClaudeExtractor:
         except Exception:
             pass
 
-        text = self._call(screenshot, prompt)
+        # Force structured output via tool_use schema validation. The
+        # previous _call + _parse_json path produced prose-only,
+        # truncated-JSON, and tuple-style malformed JSON failures during
+        # the boattrader smoke; tool_use eliminates all three by schema-
+        # validating the response server-side.
+        allowed_actions = list(self.schema.allowed_controls) + ["none"] if self.schema else [
+            "expand_description", "show_phone", "none",
+        ]
+        parsed = self._call_with_tool_schema(
+            screenshot,
+            prompt,
+            tool_name="report_content_control",
+            tool_description=(
+                "Report the chosen content-reveal control on the listing "
+                "page (or 'none' if no safe target is visible)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "Center X in pixels"},
+                    "y": {"type": "integer", "description": "Center Y in pixels"},
+                    "action": {"type": "string", "enum": allowed_actions},
+                    "label": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["x", "y", "action", "label", "reason"],
+            },
+        )
 
         try:
             with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
-                f.write(text)
+                f.write(json.dumps(parsed) if parsed is not None else "<no tool_use>")
         except Exception:
             pass
 
-        parsed = self._parse_json(text)
         if not parsed:
-            logger.warning(f"  [content-control] parse failed: {text[:200]}")
+            logger.warning("  [content-control] tool_use returned no usable result")
             return None
 
         action = str(parsed.get("action", "none"))
