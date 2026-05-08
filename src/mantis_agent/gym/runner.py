@@ -764,6 +764,20 @@ class GymRunner:
                         action = directive
                         last_director_step = step_num
 
+                top_click_guard = self._maybe_redirect_repeated_top_click(
+                    action,
+                    action_history,
+                    task,
+                )
+                if top_click_guard is not None:
+                    logger.warning(
+                        "top-click guard: substituting %s(%s) → %s(%s)",
+                        action.action_type.value, action.params,
+                        top_click_guard.action_type.value, top_click_guard.params,
+                    )
+                    action = top_click_guard
+                    substituted_action = True
+
                 # Grounded click refinement — if grounding model available,
                 # refine click coordinates before execution
                 if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
@@ -1416,6 +1430,69 @@ class GymRunner:
 
         print(f"  [discovery] execution failed for [{idx}]")
         return None
+
+    @staticmethod
+    def _maybe_redirect_repeated_top_click(
+        action: "Action",
+        action_history: list["Action"],
+        task: str,
+    ) -> "Action | None":
+        """Avoid wasting recovery budget on repeated top-of-page clicks.
+
+        This is intentionally domain-agnostic. When the task is trying to move
+        forward (submit/search/save/continue) and the model repeatedly clicks
+        the browser/header area, a small scroll is usually the least invasive
+        way to reveal the in-page control it is looking for.
+        """
+        from ..actions import Action, ActionType
+
+        if action.action_type not in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+            return None
+
+        task_lower = task.lower() if isinstance(task, str) else ""
+        forward_signals = (
+            "submit",
+            "search",
+            "find ",
+            "continue",
+            "next",
+            "save",
+            "update",
+            "move forward",
+        )
+        if not any(sig in task_lower for sig in forward_signals):
+            return None
+
+        x = int((action.params or {}).get("x", 0))
+        y = int((action.params or {}).get("y", 0))
+        if y > 100:
+            return None
+
+        previous_top_click = next(
+            (
+                a
+                for a in reversed(action_history)
+                if a.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK)
+                and int((a.params or {}).get("y", 9999)) <= 100
+            ),
+            None,
+        )
+        if previous_top_click is None:
+            return None
+
+        prev_x = int((previous_top_click.params or {}).get("x", 0))
+        prev_y = int((previous_top_click.params or {}).get("y", 0))
+        if abs(prev_x - x) > 80 or abs(prev_y - y) > 40:
+            return None
+
+        return Action(
+            ActionType.SCROLL,
+            {"direction": "down", "amount": 350},
+            reasoning=(
+                "top-click guard: repeated top/header click during forward "
+                "action; scroll to reveal the in-page control"
+            ),
+        )
 
     @staticmethod
     def _force_fill_post_type_actions(task: str) -> list["Action"]:

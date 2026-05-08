@@ -144,3 +144,31 @@ def test_force_fill_does_not_auto_finish_submit_or_login_tasks() -> None:
         pending_value_count=0,
         submitted=False,
     )
+
+
+def test_repeated_top_click_redirects_forward_task_to_scroll() -> None:
+    previous = Action(ActionType.CLICK, {"x": 263, "y": 63})
+    current = Action(ActionType.CLICK, {"x": 275, "y": 64})
+
+    redirected = GymRunner._maybe_redirect_repeated_top_click(
+        current,
+        [previous],
+        "Click the visible Search button to submit the form.",
+    )
+
+    assert redirected is not None
+    assert redirected.action_type == ActionType.SCROLL
+    assert redirected.params == {"direction": "down", "amount": 350}
+
+
+def test_repeated_top_click_guard_ignores_non_forward_tasks() -> None:
+    previous = Action(ActionType.CLICK, {"x": 263, "y": 63})
+    current = Action(ActionType.CLICK, {"x": 275, "y": 64})
+
+    redirected = GymRunner._maybe_redirect_repeated_top_click(
+        current,
+        [previous],
+        "Inspect the page header.",
+    )
+
+    assert redirected is None
