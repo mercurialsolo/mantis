@@ -500,3 +500,96 @@ def test_run_uses_explicit_start_url_in_env_reset(
     env_instance = patched_deps["env_cls"].return_value
     reset_kwargs = env_instance.reset.call_args.kwargs
     assert reset_kwargs.get("start_url") == "https://other.example.test/dashboard"
+
+
+# ── --proxy-from-env (Oxylabs) ───────────────────────────────────────────
+
+
+def test_run_threads_oxylabs_proxy_dict_into_env(
+    tmp_path: Path, patched_deps, monkeypatch,
+) -> None:
+    """``--proxy-from-env`` reads OXYLABS_ENTRYPOINT / OXYLABS_USERNAME /
+    OXYLABS_PASSWORD and builds the dict Playwright expects.
+
+    Required for sites behind Cloudflare anti-bot challenges (the
+    boattrader smoke surfaced a 403 challenge served to vanilla
+    headless Chromium). The host integration uses Oxylabs in
+    production; the CLI matches for parity."""
+    monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:7777")
+    monkeypatch.setenv("OXYLABS_USERNAME", "customer-mantis")
+    monkeypatch.setenv("OXYLABS_PASSWORD", "shh")
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    code = main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert code == EXIT_OK
+
+    env_kwargs = patched_deps["env_cls"].call_args.kwargs
+    assert env_kwargs["proxy"] == {
+        # Scheme prepended automatically when host:port is given.
+        "server": "http://pr.oxylabs.io:7777",
+        "username": "customer-mantis",
+        "password": "shh",
+    }
+
+
+def test_run_proxy_from_env_preserves_explicit_scheme(
+    tmp_path: Path, patched_deps, monkeypatch,
+) -> None:
+    """If OXYLABS_ENTRYPOINT already has a scheme, don't double-prefix."""
+    monkeypatch.setenv("OXYLABS_ENTRYPOINT", "http://pr.oxylabs.io:7777")
+    monkeypatch.setenv("OXYLABS_USERNAME", "u")
+    monkeypatch.setenv("OXYLABS_PASSWORD", "p")
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    env_kwargs = patched_deps["env_cls"].call_args.kwargs
+    assert env_kwargs["proxy"]["server"] == "http://pr.oxylabs.io:7777"
+
+
+def test_run_proxy_from_env_fails_without_entrypoint(
+    tmp_path: Path, patched_deps, monkeypatch, capsys,
+) -> None:
+    """``--proxy-from-env`` with no OXYLABS_ENTRYPOINT must fail loudly,
+    not silently fall back to direct (which would still hit Cloudflare
+    and leave the operator wondering why)."""
+    monkeypatch.delenv("OXYLABS_ENTRYPOINT", raising=False)
+    monkeypatch.delenv("OXYLABS_USERNAME", raising=False)
+    monkeypatch.delenv("OXYLABS_PASSWORD", raising=False)
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    code = main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert code == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "OXYLABS_ENTRYPOINT" in err
+
+
+def test_run_no_proxy_when_flag_omitted(tmp_path: Path, patched_deps) -> None:
+    """Default (no --proxy-from-env) builds env without a proxy. Direct
+    connection still works for sites that don't anti-bot."""
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    env_kwargs = patched_deps["env_cls"].call_args.kwargs
+    assert env_kwargs.get("proxy") is None

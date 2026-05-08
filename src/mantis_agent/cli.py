@@ -697,6 +697,39 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
         )
         return EXIT_ERROR
 
+    # Build the optional proxy dict before constructing the env. Sites
+    # behind anti-bot challenges (Cloudflare, DataDome, etc.) often
+    # serve a 403 to a vanilla headless Chromium IP. The host
+    # integration uses an Oxylabs residential proxy for the same
+    # reason; the CLI mirrors that contract with --proxy-from-env,
+    # which reads OXYLABS_ENTRYPOINT / OXYLABS_USERNAME /
+    # OXYLABS_PASSWORD from the environment and plumbs the dict
+    # Playwright expects.
+    proxy_dict: dict | None = None
+    if args.proxy_from_env:
+        proxy_url = os.environ.get("OXYLABS_ENTRYPOINT", "").strip()
+        proxy_user = os.environ.get("OXYLABS_USERNAME", "").strip()
+        proxy_pass = os.environ.get("OXYLABS_PASSWORD", "").strip()
+        if not proxy_url:
+            print(
+                "error: --proxy-from-env set but OXYLABS_ENTRYPOINT is empty. "
+                "Export OXYLABS_ENTRYPOINT (host:port or http://host:port) plus "
+                "OXYLABS_USERNAME / OXYLABS_PASSWORD for the Oxylabs "
+                "residential proxy.",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+        # Playwright accepts a bare host:port; if the user supplied a
+        # scheme-less host:port, prepend http:// so launchers downstream
+        # don't reject the malformed URL.
+        if "://" not in proxy_url:
+            proxy_url = f"http://{proxy_url}"
+        proxy_dict = {"server": proxy_url}
+        if proxy_user:
+            proxy_dict["username"] = proxy_user
+        if proxy_pass:
+            proxy_dict["password"] = proxy_pass
+
     env: Any
     if args.browser == "xdotool":
         try:
@@ -723,6 +756,7 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
         env = PlaywrightGymEnv(
             start_url=start_url,
             headless=bool(args.headless),
+            proxy=proxy_dict,
         )
 
     # Build grounding + extractor — both Claude-backed, share the key.
@@ -981,6 +1015,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Initial URL for the browser. Defaults to the first navigate "
              "step's URL in the plan.",
+    )
+    run.add_argument(
+        "--proxy-from-env",
+        action="store_true",
+        default=False,
+        help="Route the browser through OXYLABS_ENTRYPOINT / OXYLABS_USERNAME "
+             "/ OXYLABS_PASSWORD (the host integration's residential proxy). "
+             "Required for sites behind Cloudflare / DataDome anti-bot "
+             "challenges that block headless Chromium IPs. The entrypoint "
+             "accepts host:port or http://host:port.",
     )
     run.add_argument(
         "--detail-page-pattern",
