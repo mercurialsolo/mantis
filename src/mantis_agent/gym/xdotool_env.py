@@ -21,6 +21,7 @@ Requirements:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
@@ -154,6 +155,39 @@ class XdotoolGymEnv(GymEnvironment):
                     os.remove(path)
             except OSError:
                 pass
+
+        # Disable Chrome's "Save password?" / autofill prompts via the
+        # profile Preferences file. The CLI flags
+        # ``--disable-save-password-bubble`` and
+        # ``--disable-features=PasswordManagerOnboarding,...`` don't kill
+        # the bubble in current Chromium — the canonical kill switch is
+        # ``credentials_enable_service: false`` plus
+        # ``profile.password_manager_enabled: false`` in
+        # ``Default/Preferences``. Symptom: a "Save password?" overlay
+        # rendered after the login submit on staff-crm intercepted clicks
+        # on the Lead Management table (run 13).
+        prefs_dir = os.path.join(self._profile_dir, "Default")
+        os.makedirs(prefs_dir, exist_ok=True)
+        prefs_path = os.path.join(prefs_dir, "Preferences")
+        prefs: dict[str, Any] = {}
+        if os.path.exists(prefs_path):
+            try:
+                with open(prefs_path) as f:
+                    prefs = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                prefs = {}
+        prefs["credentials_enable_service"] = False
+        prefs["credentials_enable_autosignin"] = False
+        profile_section = prefs.setdefault("profile", {})
+        profile_section["password_manager_enabled"] = False
+        try:
+            with open(prefs_path, "w") as f:
+                json.dump(prefs, f)
+        except OSError as exc:
+            logger.debug(
+                "could not write Preferences to suppress password bubble: %s",
+                exc,
+            )
 
         cmd = [
             self._browser_cmd,
