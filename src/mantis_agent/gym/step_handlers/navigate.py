@@ -69,6 +69,19 @@ class NavigateHandler:
         url_match = re.search(r'https?://[^\s"]+', step.intent)
         url = url_match.group() if url_match else ""
 
+        # Defense-in-depth (#209 Symptom 4): when the decomposer paraphrases
+        # the intent and drops the URL, recover from ``params.url`` before
+        # giving up. The repair pass in ``PlanDecomposer`` populates
+        # ``params.url`` whenever the source plan named a URL the step lost.
+        if not url:
+            params_url = str((step.params or {}).get("url", ""))
+            pm = re.search(r'https?://[^\s"]+', params_url)
+            if pm:
+                url = pm.group()
+                logger.info(
+                    f"  [navigate] URL absent from intent; recovered from params.url: {url}"
+                )
+
         if not url:
             logger.warning(f"  [navigate] No URL found in intent: {step.intent[:60]}")
             return StepResult(step_index=index, intent=step.intent, success=False)

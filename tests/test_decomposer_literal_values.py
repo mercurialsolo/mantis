@@ -125,5 +125,6 @@ def test_prompt_version_was_bumped() -> None:
     from mantis_agent.plan_decomposer import PlanDecomposer
 
     src = inspect.getsource(PlanDecomposer.decompose_text)
-    assert "v19_literal_values" in src
+    assert "v20_url_mirror" in src
+    assert "v19_literal_values" not in src
     assert "v18_pure_llm" not in src
