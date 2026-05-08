@@ -58,7 +58,7 @@ The full docs site is at **[mercurialsolo.github.io/mantis](https://mercurialsol
 The reference deployment is live on Baseten. With a tenant token from your operator:
 
 ```bash
-export ENDPOINT="https://model-qvvgkneq.api.baseten.co/production"
+export ENDPOINT="https://model-qvvgkneq.api.baseten.co/production/sync"
 export BASETEN_API_KEY="..."
 export MANTIS_API_TOKEN="..."
 
@@ -96,7 +96,12 @@ pip install -e ".[docs]"          # mkdocs + material theme
 ```
 src/mantis_agent/             core library
   api_schemas.py              PredictRequest + plan validation + caps
-  baseten_server.py           FastAPI: /v1/predict + /v1/chat/completions + /metrics
+  baseten_server/             FastAPI server package
+    routes.py                 /v1/predict + /v1/chat/completions + /metrics + /v1/runs/{id}/video
+    runtime.py                BasetenCUARuntime — model + run lifecycle
+    middleware.py             X-Mantis-Token auth + per-tenant secret resolvers
+    paths.py                  per-tenant data / Chrome-profile path resolvers
+    logging_setup.py          JSON log formatter + per-run log handler
   brain_holo3.py              Holo3 inference client
   brain_claude.py             Claude inference client
   extraction.py               ClaudeExtractor (structured data)
