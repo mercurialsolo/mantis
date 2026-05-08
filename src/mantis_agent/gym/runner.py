@@ -625,6 +625,7 @@ class GymRunner:
                 # Falls back to None (no substitution) on detector failure
                 # so we never substitute incorrectly.
                 substituted_action = False
+                force_fill_focus_action: Action | None = None
                 forced = self._maybe_force_type_text(
                     action,
                     action_history,
@@ -639,6 +640,7 @@ class GymRunner:
                         f"click({action.params})",
                         len(str(forced.params.get("text", ""))),
                     )
+                    force_fill_focus_action = action
                     action = forced
                     substituted_action = True
                 else:
@@ -655,6 +657,7 @@ class GymRunner:
                             f"click({action.params})",
                             len(str(forced.params.get("text", ""))),
                         )
+                        force_fill_focus_action = action
                         action = forced
                         substituted_action = True
                 # Auto-submit: once at least two form fields have been
@@ -803,27 +806,49 @@ class GymRunner:
                         print(f"  [grounding] FAILED: {e}")
 
                 # Execute action in the environment
+                pre_actions: list[Action] = []
                 post_actions: list[Action] = []
                 force_success_after_action = False
-                if (
+                is_force_fill_type = (
                     action.action_type == ActionType.TYPE
                     and "force-fill" in (action.reasoning or "")
+                )
+                if is_force_fill_type:
+                    if force_fill_focus_action is not None:
+                        pre_actions.append(Action(
+                            force_fill_focus_action.action_type,
+                            dict(force_fill_focus_action.params),
+                            reasoning="force-fill: focus field before typing",
+                        ))
+                    pre_actions.append(
+                        Action(
+                            ActionType.KEY_PRESS,
+                            {"keys": "ctrl+a"},
+                            reasoning="force-fill: replace focused field contents",
+                        )
+                    )
+                    post_actions = self._force_fill_post_type_actions(task)
+                    force_success_after_action = self._force_fill_should_finish_task(
+                        task=task,
+                        initial_value_count=len(force_fill_initial_labels),
+                        pending_value_count=len(force_fill_values),
+                        submitted=force_fill_submitted,
+                    )
+
+                if (
+                    is_force_fill_type
                     and "radius" in (task.lower() if isinstance(task, str) else "")
                 ):
                     force_success_after_action = True
-                    post_actions = [
-                        Action(
-                            ActionType.KEY_PRESS,
-                            {"keys": "Return"},
-                            reasoning="force-fill: accept radius value",
-                        ),
-                        Action(
-                            ActionType.KEY_PRESS,
-                            {"keys": "Tab"},
-                            reasoning="force-fill: commit radius field",
-                        ),
-                    ]
 
+                for pre_action in pre_actions:
+                    logger.warning(
+                        "force-fill: pre-type replace via %s(%s)",
+                        pre_action.action_type.value,
+                        pre_action.params,
+                    )
+                    gym_result = self.env.step(pre_action)
+                    action_history.append(pre_action)
                 gym_result = self.env.step(action)
                 action_history.append(action)
                 for post_action in post_actions:
@@ -836,6 +861,12 @@ class GymRunner:
                     action_history.append(post_action)
                 frame_history.append(gym_result.observation.screenshot)
                 _save_frame(gym_result.observation.screenshot, step_num)
+                for pre_action in pre_actions:
+                    self._loop_detector.record(
+                        pre_action,
+                        url=gym_result.info.get("url", ""),
+                        frame=gym_result.observation.screenshot,
+                    )
                 self._loop_detector.record(
                     action,
                     url=gym_result.info.get("url", ""),
@@ -1385,6 +1416,88 @@ class GymRunner:
 
         print(f"  [discovery] execution failed for [{idx}]")
         return None
+
+    @staticmethod
+    def _force_fill_post_type_actions(task: str) -> list["Action"]:
+        """Browser keystrokes to commit a force-filled field."""
+        from ..actions import Action, ActionType
+
+        task_lower = task.lower() if isinstance(task, str) else ""
+        if "radius" in task_lower:
+            return [
+                Action(
+                    ActionType.KEY_PRESS,
+                    {"keys": "Return"},
+                    reasoning="force-fill: accept radius value",
+                ),
+                Action(
+                    ActionType.KEY_PRESS,
+                    {"keys": "Tab"},
+                    reasoning="force-fill: commit radius field",
+                ),
+            ]
+
+        commit_signals = (
+            "press tab",
+            "commits",
+            "commit",
+            "finish when",
+            "visible in the field",
+            "visibly shows",
+            "field",
+        )
+        if any(sig in task_lower for sig in commit_signals):
+            return [
+                Action(
+                    ActionType.KEY_PRESS,
+                    {"keys": "Tab"},
+                    reasoning="force-fill: commit field",
+                )
+            ]
+        return []
+
+    @staticmethod
+    def _force_fill_should_finish_task(
+        *,
+        task: str,
+        initial_value_count: int,
+        pending_value_count: int,
+        submitted: bool,
+    ) -> bool:
+        """Finish small field-fill sections once the runtime filled them.
+
+        This is intentionally limited to one-value field tasks. Multi-field
+        login/search forms still need submit/navigation behavior from the
+        model or the auto-submit path.
+        """
+        if initial_value_count != 1 or pending_value_count != 0 or submitted:
+            return False
+
+        task_lower = task.lower() if isinstance(task, str) else ""
+        excluded = (
+            "submit",
+            "search button",
+            "find boats",
+            "results page",
+            "log in",
+            "login",
+            "sign in",
+            "password",
+            "credentials",
+        )
+        if any(sig in task_lower for sig in excluded):
+            return False
+
+        completion_signals = (
+            "finish when",
+            "visible in the field",
+            "visibly shows",
+            "press tab",
+            "commit",
+            "zip code",
+            "radius",
+        )
+        return any(sig in task_lower for sig in completion_signals)
 
     @staticmethod
     def _maybe_force_type_after_repeated_form_click(
