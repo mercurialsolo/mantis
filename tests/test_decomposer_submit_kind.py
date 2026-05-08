@@ -28,8 +28,20 @@ def test_prompt_documents_each_runtime_kind() -> None:
     example in the prompt — otherwise the runtime would silently
     downgrade unknown kinds to button."""
     text = DECOMPOSE_PROMPT
-    for kind in ("button", "nav_link", "tab", "menu_item"):
+    for kind in ("button", "nav_link", "tab", "menu_item", "row_link", "cell_link"):
         assert kind in text, f"prompt is missing kind={kind!r}"
+
+
+def test_prompt_documents_row_link_for_table_record_selection() -> None:
+    """Picking a record from a multi-row table is the staff-crm pain
+    point that motivated row_link. The prompt must show the canonical
+    phrasing so Claude routes "click the first Qualified lead" through
+    the row_link template, not button."""
+    text = DECOMPOSE_PROMPT.lower()
+    assert "row_link" in text
+    # Either the verb mapping or example phrasing should mention
+    # "table" or "row" and the pattern of selecting from a list.
+    assert "table" in text or "row" in text
 
 
 def test_prompt_documents_default_kind_for_backward_compat() -> None:
@@ -58,5 +70,5 @@ def test_prompt_version_bumped_for_submit_kind() -> None:
     """A prompt change requires a cache-version bump so previously-
     decomposed plans get re-decomposed with the new rule."""
     src = inspect.getsource(PlanDecomposer.decompose_text)
-    assert "v21_submit_kind" in src
-    assert "v20_url_mirror" not in src
+    assert "v22_row_link" in src
+    assert "v21_submit_kind" not in src
