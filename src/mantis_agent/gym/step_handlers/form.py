@@ -275,6 +275,7 @@ class ClaudeGuidedFormHandler:
                             url_before=url_before,
                         )
                         runner.costs["gpu_steps"] += 1
+                        url_after_click = runner._best_effort_current_url()
                     runner._dump_debug_screenshot(
                         f"submit_step{index}_post_enter",
                         runner._safe_screenshot(),
@@ -284,6 +285,15 @@ class ClaudeGuidedFormHandler:
                         f"submit_step{index}_post_click",
                         runner._safe_screenshot(),
                     )
+
+                # Propagate any post-submit URL change to runner._last_known_url
+                # so step_snapshot.diff() picks it up. Without this, a successful
+                # navigation (Leads link, Sign In button, etc.) is invisible to
+                # the snapshot diff — _last_known_url only updates in the click
+                # handler's detail-page branch — and run_executor's
+                # _maybe_demote_form_no_change demotes the success to failure.
+                if url_after_click and url_after_click != url_before:
+                    runner._last_known_url = url_after_click
 
                 logger.info(f"  [claude-form] submit '{label[:40]}'")
                 return StepResult(

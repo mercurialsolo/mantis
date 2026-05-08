@@ -40,6 +40,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from .log_utils import url_for_log
+
 if TYPE_CHECKING:
     from .micro_runner import MicroPlanRunner
 
@@ -160,7 +162,9 @@ def diff(before: StepStateSnapshot, after: StepStateSnapshot) -> StepDiff:
     out = StepDiff()
     if before.url != after.url:
         out.url_changed = True
-        out.changed_fields.append(f"url: {before.url[:40]} → {after.url[:40]}")
+        out.changed_fields.append(
+            f"url: {url_for_log(before.url)} → {url_for_log(after.url)}"
+        )
     if before.current_page != after.current_page:
         out.page_changed = True
         out.changed_fields.append(
@@ -183,7 +187,7 @@ def diff(before: StepStateSnapshot, after: StepStateSnapshot) -> StepDiff:
     ):
         out.extraction_added = True
         out.changed_fields.append(
-            f"last_extracted: {after.last_extracted_url[:40]}"
+            f"last_extracted: {url_for_log(after.last_extracted_url)}"
         )
     if after.seen_urls_count > before.seen_urls_count:
         out.new_urls_seen = True

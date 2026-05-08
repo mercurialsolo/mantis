@@ -55,6 +55,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...actions import Action, ActionType
 from ..checkpoint import StepResult
+from ..log_utils import url_for_log
 from ..step_context import StepContext
 
 if TYPE_CHECKING:
@@ -377,7 +378,10 @@ class ClaudeGuidedClickHandler:
                 )
 
             if verify_attempt == 0:
-                logger.info(f"  [claude-click] Not on detail page yet (url={url[:40]}) — retrying verify")
+                logger.info(
+                    "  [claude-click] Not on detail page yet (url=%s) — retrying verify",
+                    url_for_log(url),
+                )
 
         logger.info("  [claude-click] Plain click did not navigate — trying middle-click fallback")
         try:
@@ -424,7 +428,7 @@ class ClaudeGuidedClickHandler:
                     logger.warning(
                         "  [claude-click] Middle-click landed on blank tab "
                         "(%s) — aborting fallback chain",
-                        url[:40],
+                        url_for_log(url),
                     )
                     try:
                         env.step(Action(
@@ -524,7 +528,10 @@ class ClaudeGuidedClickHandler:
             except Exception as e:
                 logger.warning(f"  [claude-click] Probe {label} failed: {e}")
 
-        logger.warning(f"  [claude-click] Failed verification after retries (url={url[:40]})")
+        logger.warning(
+            "  [claude-click] Failed verification after retries (url=%s)",
+            url_for_log(url),
+        )
         dynamic_verifier.record_item_completed(
             page=runner._current_page,
             item=getattr(runner, "_last_click_title", "") or title,
