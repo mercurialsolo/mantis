@@ -310,12 +310,12 @@ class WorkflowRunner:
         self.session_name = session_name
         self.on_iteration = on_iteration
         self.on_trajectory = on_trajectory
-        self.start_url = start_url
+        self.start_url = start_url or self._current_env_url(env)
 
         # Cross-run learning store (persists to /data/learnings/)
         domain = ""
         # Try start_url first, fall back to iteration_intent for domain hints
-        for url_source in [start_url, loop_config.iteration_intent]:
+        for url_source in [self.start_url, loop_config.iteration_intent]:
             if url_source:
                 import re as _r
                 m = _r.search(r"(?:https?://)?(?:www\.)?([\w\-]+\.[\w]+)", url_source)
@@ -332,6 +332,14 @@ class WorkflowRunner:
                 brain=brain, env=env, grounding=grounding,
                 extractor=extractor, on_step=on_step,
             )
+
+    @staticmethod
+    def _current_env_url(env: Any) -> str:
+        """Best-effort current browser URL for loop recovery anchors."""
+        try:
+            return str(getattr(env, "current_url", "") or "")
+        except Exception:
+            return ""
 
     def run_loop(self) -> list[IterationResult]:
         """Execute the full loop: iterate items on each page, paginate."""

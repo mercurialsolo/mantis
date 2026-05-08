@@ -277,6 +277,7 @@ class GymRunner:
         trajectory: list[TrajectoryStep] = []
         total_reward = 0.0
         plan_inputs = dict(plan_inputs or {})
+        done_success: bool | None = None
 
         # Reward state — only populated when reward_fn is provided.
         episode_state: Any = None
@@ -335,6 +336,10 @@ class GymRunner:
         last_director_step: int = -100
         director_cooldown_steps: int = 3
         anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "") or ""
+        director_enabled = (
+            bool(anthropic_api_key)
+            and type(self.brain).__name__ != "ClaudeBrain"
+        )
 
         # Done-verification: Holo3 sometimes emits done(success=True) with a
         # fabricated summary (run 023: claimed "Updated lead industry to Space
@@ -564,6 +569,7 @@ class GymRunner:
 
                 if action.action_type == ActionType.DONE:
                     success = action.params.get("success", False)
+                    done_success = bool(success)
                     summary = str(action.params.get("summary", ""))
                     # Verify success-done against the screenshot. Reject if
                     # the verifier says the screen doesn't evidence completion.
@@ -618,6 +624,7 @@ class GymRunner:
                 # with type_text using the next unconsumed plan value.
                 # Falls back to None (no substitution) on detector failure
                 # so we never substitute incorrectly.
+                substituted_action = False
                 forced = self._maybe_force_type_text(
                     action,
                     action_history,
@@ -628,11 +635,28 @@ class GymRunner:
                 )
                 if forced is not None:
                     logger.warning(
-                        "force-fill: substituting %s → type_text(%r)",
+                        "force-fill: substituting %s → type_text(<%d chars>)",
                         f"click({action.params})",
-                        forced.params.get("text", ""),
+                        len(str(forced.params.get("text", ""))),
                     )
                     action = forced
+                    substituted_action = True
+                else:
+                    forced = self._maybe_force_type_after_repeated_form_click(
+                        action,
+                        action_history,
+                        force_fill_values,
+                        force_fill_used_regions,
+                        task,
+                    )
+                    if forced is not None:
+                        logger.warning(
+                            "force-fill: repeated form click %s → type_text(<%d chars>)",
+                            f"click({action.params})",
+                            len(str(forced.params.get("text", ""))),
+                        )
+                        action = forced
+                        substituted_action = True
                 # Auto-submit: once at least two form fields have been
                 # filled, press Enter on the still-focused last input field.
                 # Run 027 showed the old "queue must be empty" gate never
@@ -640,7 +664,7 @@ class GymRunner:
                 # password + industry_vertical, the latter for a later
                 # step). Login forms typically have 2 fields — fire submit
                 # then. The remaining values stay queued for later steps.
-                elif (
+                if (
                     len(force_fill_used_regions) >= 2
                     and not force_fill_submitted
                     and action.action_type == ActionType.CLICK
@@ -678,6 +702,7 @@ class GymRunner:
                                 f"{submit_button.get('label')!r}"
                             ),
                         )
+                        substituted_action = True
                     else:
                         logger.warning(
                             "force-submit: substituting %s → key_press(Return) "
@@ -689,6 +714,7 @@ class GymRunner:
                             {"keys": "Return"},
                             reasoning="force-submit: Enter on focused input",
                         )
+                        substituted_action = True
                     force_fill_submitted = True
                 # Claude-director escalation: only fires when no other
                 # substitution kicked in AND the soft-loop detector says
@@ -697,7 +723,8 @@ class GymRunner:
                 # the model's stuck output. Cool-down avoids calling
                 # Claude on every step of a long loop.
                 elif (
-                    anthropic_api_key
+                    not substituted_action
+                    and director_enabled
                     and step_num - last_director_step >= director_cooldown_steps
                     and self._loop_detector.is_any_loop(self.soft_loop_window)
                 ):
@@ -776,8 +803,37 @@ class GymRunner:
                         print(f"  [grounding] FAILED: {e}")
 
                 # Execute action in the environment
+                post_actions: list[Action] = []
+                force_success_after_action = False
+                if (
+                    action.action_type == ActionType.TYPE
+                    and "force-fill" in (action.reasoning or "")
+                    and "radius" in (task.lower() if isinstance(task, str) else "")
+                ):
+                    force_success_after_action = True
+                    post_actions = [
+                        Action(
+                            ActionType.KEY_PRESS,
+                            {"keys": "Return"},
+                            reasoning="force-fill: accept radius value",
+                        ),
+                        Action(
+                            ActionType.KEY_PRESS,
+                            {"keys": "Tab"},
+                            reasoning="force-fill: commit radius field",
+                        ),
+                    ]
+
                 gym_result = self.env.step(action)
                 action_history.append(action)
+                for post_action in post_actions:
+                    logger.warning(
+                        "force-fill: post-type commit via %s(%s)",
+                        post_action.action_type.value,
+                        post_action.params,
+                    )
+                    gym_result = self.env.step(post_action)
+                    action_history.append(post_action)
                 frame_history.append(gym_result.observation.screenshot)
                 _save_frame(gym_result.observation.screenshot, step_num)
                 self._loop_detector.record(
@@ -785,6 +841,12 @@ class GymRunner:
                     url=gym_result.info.get("url", ""),
                     frame=gym_result.observation.screenshot,
                 )
+                for post_action in post_actions:
+                    self._loop_detector.record(
+                        post_action,
+                        url=gym_result.info.get("url", ""),
+                        frame=gym_result.observation.screenshot,
+                    )
 
                 gallery_recovery: dict[str, Any] = {}
                 if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
@@ -855,6 +917,11 @@ class GymRunner:
 
                 logger.info(f"Feedback: {feedback}")
 
+                if force_success_after_action:
+                    done_success = True
+                    termination_reason = "done"
+                    break
+
                 if gym_result.done:
                     termination_reason = "env_done"
                     break
@@ -874,7 +941,11 @@ class GymRunner:
                 frame_history = frame_history[-min_keep * 2:]
 
         total_time = time.time() - t0
-        success = termination_reason == "done" or (termination_reason == "env_done" and total_reward > 0)
+        success = (
+            done_success
+            if termination_reason == "done" and done_success is not None
+            else (termination_reason == "env_done" and total_reward > 0)
+        )
         logger.info(f"Task finished: {termination_reason}, {len(trajectory)} steps, {total_time:.1f}s")
 
         self._emit(
@@ -1314,6 +1385,90 @@ class GymRunner:
 
         print(f"  [discovery] execution failed for [{idx}]")
         return None
+
+    @staticmethod
+    def _maybe_force_type_after_repeated_form_click(
+        action: "Action",
+        action_history: list["Action"],
+        force_fill_values: list[dict],
+        force_fill_used_regions: list[tuple[int, int]],
+        task: str,
+    ) -> "Action | None":
+        """Type the next known form value when a model repeats a field click.
+
+        Claude sometimes focuses a text field, sees no large visual delta, and
+        repeats the same click until the visual loop detector stops the task.
+        When the plan has explicit values to type, convert the repeated click
+        into the next type_text action. This stays in the CUA action channel
+        and avoids DOM reads.
+        """
+        from ..actions import Action, ActionType
+
+        if action.action_type != ActionType.CLICK or not force_fill_values:
+            return None
+        if not action_history:
+            return None
+
+        task_lower = task.lower() if isinstance(task, str) else ""
+        form_signals = (
+            "zip code",
+            "radius",
+            "search form",
+            "filter",
+            "type ",
+            "log in",
+            "login",
+            "sign in",
+            "credentials",
+            "user id",
+            "username",
+            "email",
+            "password",
+            "fill in",
+            "enter the",
+            "type the",
+            "type into",
+        )
+        if not any(sig in task_lower for sig in form_signals):
+            return None
+
+        previous_click = next(
+            (
+                a
+                for a in reversed(action_history)
+                if a.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK)
+            ),
+            None,
+        )
+        if previous_click is None:
+            return None
+
+        px = int((action.params or {}).get("x", 0))
+        py = int((action.params or {}).get("y", 0))
+        prev_x = int((previous_click.params or {}).get("x", 0))
+        prev_y = int((previous_click.params or {}).get("y", 0))
+        near_equal = abs(px - prev_x) <= 8 and abs(py - prev_y) <= 8
+        if not near_equal:
+            return None
+
+        for ux, uy in force_fill_used_regions:
+            if abs(ux - px) <= 20 and abs(uy - py) <= 20:
+                return None
+
+        entry = force_fill_values.pop(0)
+        value = str(entry.get("value") or "")
+        if not value:
+            return None
+
+        force_fill_used_regions.append((px, py))
+        return Action(
+            ActionType.TYPE,
+            {"text": value},
+            reasoning=(
+                "force-fill: repeated click likely focused a form field; "
+                f"typing plan value for {entry.get('label')!r}"
+            ),
+        )
 
     @staticmethod
     def _maybe_force_type_text(

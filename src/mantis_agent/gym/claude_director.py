@@ -225,7 +225,11 @@ def _decision_to_action(decision: dict) -> Action | None:
                 reasoning=reasoning,
             )
         if action_type == ActionType.KEY_PRESS:
-            return Action(action_type, {"keys": str(decision.get("keys", ""))}, reasoning=reasoning)
+            keys = str(decision.get("keys") or decision.get("key") or "").strip()
+            if not keys:
+                logger.info("claude director: empty key decision rejected: %r", decision)
+                return None
+            return Action(action_type, {"keys": keys}, reasoning=reasoning)
         if action_type == ActionType.SCROLL:
             params = {
                 "direction": str(decision.get("direction") or "down"),

@@ -109,7 +109,7 @@ GEMMA4_E4B_MMPROJ = "mmproj-gemma-4-e4b-it-f16.gguf"
 # ── Images ──────────────────────────────────────────────────────────
 
 # Gemma4 planner: llama.cpp + CUDA (lightweight)
-planner_image = (
+planner_base_image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11"
     )
@@ -127,6 +127,7 @@ planner_image = (
     )
     .pip_install("huggingface-hub[cli]", "requests")
 )
+planner_image = planner_base_image.add_local_python_source("mantis_agent")
 
 # EvoCUA executor: vLLM + real Chrome + Xvfb + xdotool (zero automation fingerprints)
 executor_image = (
@@ -134,7 +135,7 @@ executor_image = (
         "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11"
     )
     .apt_install("git", "build-essential", "curl", "wget", "gnupg",
-                 "xvfb", "xdotool", "scrot")
+                 "xvfb", "xdotool", "xclip", "scrot")
     .run_commands(
         # Install real Google Chrome (not Chromium)
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
@@ -145,7 +146,7 @@ executor_image = (
         "vllm>=0.12.0",
         "openai", "requests", "pillow", "mss",
         "huggingface-hub", "transformers", "torch",
-        "fastapi>=0.100", "uvicorn>=0.20",
+        "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
     )
     .add_local_python_source("mantis_agent")
 )
@@ -409,6 +410,10 @@ def _run_executor(
     env, proxy_proc = setup_env(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name, settle_time=2.0,
+        proxy_city=str(task_suite.get("_proxy_city") or ""),
+        proxy_state=str(task_suite.get("_proxy_state") or ""),
+        proxy_provider=str(task_suite.get("_proxy_provider") or ""),
+        proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
     viewer_ctx, viewer_event_bus = setup_viewer(viewer)
 
@@ -575,6 +580,10 @@ def _run_holo3_executor(
     env, proxy_proc = setup_env(
         base_url=base_url, run_id=run_id, session_name=session_name,
         settle_time=4.0,  # Holo3 needs longer settle — sees black screen with 2s
+        proxy_city=str(task_suite.get("_proxy_city") or ""),
+        proxy_state=str(task_suite.get("_proxy_state") or ""),
+        proxy_provider=str(task_suite.get("_proxy_provider") or ""),
+        proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
     from mantis_agent.extraction import ClaudeExtractor, ExtractionSchema
     schema = None
@@ -961,6 +970,10 @@ def _run_gemma4_cua_executor(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name,
         settle_time=2.0, display=":99", start_xvfb=True,
+        proxy_city=str(task_suite.get("_proxy_city") or ""),
+        proxy_state=str(task_suite.get("_proxy_state") or ""),
+        proxy_provider=str(task_suite.get("_proxy_provider") or ""),
+        proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
     viewer_ctx, viewer_event_bus = setup_viewer(viewer)
 
@@ -982,14 +995,14 @@ def _run_gemma4_cua_executor(
 
 @app.function(
     gpu="A100-80GB",
-    image=planner_image.run_commands(
-        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool scrot",
+    image=planner_base_image.run_commands(
+        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool xclip scrot",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
         "apt-get update && apt-get install -y google-chrome-stable || true",
     ).pip_install(
         "openai", "requests", "pillow", "mss",
-        "fastapi>=0.100", "uvicorn>=0.20",
+        "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
     ).add_local_python_source("mantis_agent"),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -1010,7 +1023,7 @@ def run_gemma4_cua(task_file_contents: str, **kwargs) -> dict:
 # Lightweight image: just Chrome + xdotool (no vLLM, no llama.cpp)
 claude_executor_image = (
     modal.Image.from_registry("ubuntu:22.04", add_python="3.11")
-    .apt_install("curl", "wget", "gnupg", "xvfb", "xdotool", "scrot")
+    .apt_install("curl", "wget", "gnupg", "xvfb", "xdotool", "xclip", "scrot")
     .run_commands(
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
@@ -1018,7 +1031,7 @@ claude_executor_image = (
     )
     .pip_install(
         "requests", "pillow", "mss",
-        "fastapi>=0.100", "uvicorn>=0.20",
+        "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
     )
     .add_local_python_source("mantis_agent")
 )
@@ -1085,6 +1098,10 @@ def _run_claude_executor(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name,
         settle_time=2.0, display=":99", start_xvfb=True,
+        proxy_city=str(task_suite.get("_proxy_city") or ""),
+        proxy_state=str(task_suite.get("_proxy_state") or ""),
+        proxy_provider=str(task_suite.get("_proxy_provider") or ""),
+        proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
     viewer_ctx, viewer_event_bus = setup_viewer(viewer)
 
@@ -1123,14 +1140,14 @@ def run_claude_cua(task_file_contents: str, claude_model: str = "claude-sonnet-4
 
 @app.function(
     gpu="A100-80GB",
-    image=planner_image.run_commands(
-        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool scrot",
+    image=planner_base_image.run_commands(
+        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool xclip scrot",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
         "apt-get update && apt-get install -y google-chrome-stable || true",
     ).pip_install(
         "openai", "requests", "pillow", "mss",
-        "fastapi>=0.100", "uvicorn>=0.20",
+        "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
     ).add_local_python_source("mantis_agent"),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -1160,6 +1177,18 @@ EXECUTOR_MAP = {
 }
 
 APP_NAME = "mantis-cua-server"
+
+
+def _gemma4_planner_url() -> str:
+    """Resolve the deployed planner URL for the current Modal workspace."""
+    override = os.environ.get("MANTIS_GEMMA4_PLANNER_URL", "").strip().rstrip("/")
+    if override:
+        return override
+    try:
+        return modal.Function.from_name(APP_NAME, "gemma4_planner").get_web_url()
+    except Exception as exc:
+        print(f"  WARNING: Failed to resolve planner URL via Modal SDK: {exc}")
+        return f"https://{APP_NAME}--gemma4-planner.modal.run"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1197,14 +1226,14 @@ def _make_page_task(original_task: dict, worker_id: int, page: int) -> dict:
 
 @app.function(
     gpu="A100-80GB",
-    image=planner_image.run_commands(
-        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool scrot",
+    image=planner_base_image.run_commands(
+        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool xclip scrot",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
         "apt-get update && apt-get install -y google-chrome-stable || true",
     ).pip_install(
         "openai", "requests", "pillow", "mss",
-        "fastapi>=0.100", "uvicorn>=0.20",
+        "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
     ).add_local_python_source("mantis_agent"),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -1287,6 +1316,10 @@ def main(
     state_key: str = "",
     graph_learn: bool = False,
     graph_learn_only: bool = False,
+    proxy_provider: str = "oxylabs",
+    proxy_city: str = "miami",
+    proxy_state: str = "florida",
+    disable_proxy: bool = False,
 ):
     """Mantis CUA Server — run plans or task suites on Modal.
 
@@ -1308,6 +1341,7 @@ def main(
     Micro: --micro plan.txt   (decompose → micro-intents → execute with checkpoint/reverse)
     Resume: --resume-state --state-key my-run   (reuse externalized micro state across sessions)
     Graph: --graph-learn   (probe + graph + compile + execute) --graph-learn-only (no execution)
+    Proxy: --proxy-provider privateproxy|oxylabs|iproyal --proxy-city miami --proxy-state florida
     """
     cua_config = CUA_MODELS.get(model, CUA_MODELS["evocua-8b"])
     print(f"Mantis CUA Server — {cua_config['name']}")
@@ -1331,7 +1365,7 @@ def main(
         if not session_name:
             session_name = os.path.splitext(os.path.basename(plan_file))[0]
 
-        planner_url = f"https://{APP_NAME}--gemma4-planner.modal.run"
+        planner_url = _gemma4_planner_url()
         print(f"  Planner: {planner_url}")
 
         import requests
@@ -1496,6 +1530,19 @@ def main(
         print("  Step verification enabled for critical actions...")
         task_suite_obj = json.loads(task_file_contents)
         task_suite_obj["_verify"] = True
+        task_file_contents = json.dumps(task_suite_obj)
+
+    if disable_proxy:
+        print("\n  Proxy disabled for this run")
+        task_suite_obj = json.loads(task_file_contents)
+        task_suite_obj["_proxy_disabled"] = True
+        task_file_contents = json.dumps(task_suite_obj)
+    elif proxy_provider:
+        print(f"\n  Proxy provider: {proxy_provider}")
+        task_suite_obj = json.loads(task_file_contents)
+        task_suite_obj["_proxy_provider"] = proxy_provider
+        task_suite_obj["_proxy_city"] = proxy_city
+        task_suite_obj["_proxy_state"] = proxy_state
         task_file_contents = json.dumps(task_suite_obj)
 
     # ── Auto-parallelize looped tasks ──────────────────────────────
