@@ -46,6 +46,7 @@ class TaskLoopConfig:
     fallback_label: str = "fallback"
     fallback_micro_retries: int = 2
     fallback_micro_max_steps: int = 6
+    stop_on_task_failure: bool = True
 
     # ── Execution params ──
     max_steps: int = 30
@@ -323,6 +324,12 @@ def _build_micro_fallback_intent(
         "- Do not complete the whole original section unless the only needed "
         "micro-step itself completes it.\n"
         "- Do not edit unrelated fields or clear already-correct values.\n"
+        "- Operate inside the web page content. Do not click the browser "
+        "toolbar, address bar, tab strip, or extension area unless the original "
+        "section goal is explicit navigation.\n"
+        "- If the section goal is to submit, continue, save, search, or move "
+        "forward, look for an in-page button/control with that meaning; if it "
+        "is not visible, use a small scroll to reveal it.\n"
         "- Prefer click, scroll, key_press, or wait. Type only when the current "
         "micro-step is clearly a focused field that requires typing.\n"
         "- If no useful recovery action is visible, finish with "
@@ -470,6 +477,13 @@ def run_task_loop(
                 save_progress()
                 if config.on_loop_complete:
                     config.on_loop_complete()
+                if (
+                    not success
+                    and config.stop_on_task_failure
+                    and not task_config.get("continue_on_failure", False)
+                ):
+                    print(f"  Stopping task loop after failed task '{task_id}'")
+                    break
                 continue
 
             # ── Standard task ──
@@ -544,7 +558,7 @@ def run_task_loop(
 
                     if not micro_result.success:
                         result = micro_result
-                        break
+                        continue
 
                     print(
                         f"  Primary resume: retrying section '{task_id}' "
@@ -599,7 +613,11 @@ def run_task_loop(
             )
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
 
-            if not success and ("setup" in task_id or "filter" in task_id):
+            if (
+                not success
+                and task_config.get("continue_on_failure")
+                and ("setup" in task_id or "filter" in task_id)
+            ):
                 print(
                     f"  WARNING: Setup '{task_id}' failed — continuing with current page state"
                 )
@@ -622,6 +640,15 @@ def run_task_loop(
             )
 
         save_progress()
+        if (
+            task_details
+            and task_details[-1].get("task_id") == task_id
+            and not task_details[-1].get("success", False)
+            and config.stop_on_task_failure
+            and not task_config.get("continue_on_failure", False)
+        ):
+            print(f"  Stopping task loop after failed task '{task_id}'")
+            break
 
     return scores, task_details
 

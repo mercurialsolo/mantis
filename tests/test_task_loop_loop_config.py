@@ -128,3 +128,45 @@ def test_standard_task_uses_fallback_brain_after_primary_failure(
     }
     assert scores == [1.0]
     assert details[0]["success"] is True
+
+
+def test_failed_standard_task_stops_loop_by_default(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    class FakeEnv:
+        current_url = "https://example.test/"
+
+    class FakeGymRunner:
+        def __init__(self, *, brain, **_kwargs):
+            self.brain = brain
+
+        def run(self, **kwargs):
+            calls.append(kwargs["task_id"])
+            return SimpleNamespace(
+                success=False,
+                total_steps=2,
+                termination_reason="loop",
+                trajectory=[],
+            )
+
+    monkeypatch.setattr(runner_module, "GymRunner", FakeGymRunner)
+
+    config = task_loop.TaskLoopConfig(
+        run_id="run",
+        session_name="session",
+        model_name="model",
+        results_prefix="test",
+        brain="holo3",
+        env=FakeEnv(),
+        results_dir=str(tmp_path),
+    )
+    tasks = [
+        {"task_id": "submit", "intent": "click submit"},
+        {"task_id": "extract", "intent": "extract records"},
+    ]
+
+    scores, details = task_loop.run_task_loop(tasks, config)
+
+    assert calls == ["submit"]
+    assert scores == [0.0]
+    assert [d["task_id"] for d in details] == ["submit"]
