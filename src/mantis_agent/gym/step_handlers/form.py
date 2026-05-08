@@ -74,6 +74,18 @@ _SUBMIT_KIND_INTENT_TEMPLATES: dict[str, str] = {
     ),
     "tab": "Click the '{label}' tab in the page's tab bar.",
     "menu_item": "Click the '{label}' menu item — an entry in an open menu, dropdown, or kebab.",
+    "row_link": (
+        "Click the '{label}' link in a table row's body cell — a record-name "
+        "or detail-link inside a data table that opens that row's detail page. "
+        "This is the row's primary clickable cell text (often blue / underlined), "
+        "NOT a column header, NOT a status badge, NOT a sort/filter control, "
+        "NOT a row checkbox or action icon."
+    ),
+    "cell_link": (
+        "Click the '{label}' link inside a table cell — a hyperlinked value "
+        "embedded in a list/table cell. Click the underlined cell text itself, "
+        "not the surrounding row, header, or any inline action icon."
+    ),
     "button": "Click the '{label}' button to submit the form.",
 }
 _SUBMIT_KIND_DEFAULT = "button"

@@ -387,6 +387,30 @@ VERB → STEP-TYPE MAPPING (FORM FLOWS):
        "choose {Y} from the kebab menu"
        → submit with params={"label": "Y", "kind": "menu_item"}.
 
+   • params.kind="row_link" — a record-name link inside a data table
+                              that opens that row's detail page. The
+                              click target is the row's primary cell
+                              text (often a name, ID, or title), NOT
+                              the row checkbox, status badge, sort
+                              header, or inline action icon.
+       "click the lead {Y} to open its detail/edit page",
+       "open the {Y} record from the {leads/orders/tickets} list",
+       "click the first row whose Status is Qualified",
+       "click the row for record X in the table"
+       → submit with params={"label": "Y", "kind": "row_link"}.
+     Use this whenever the source plan describes selecting / opening
+     a single record from a multi-row list/table by its name or by a
+     filtering attribute (status, owner, etc.).
+
+   • params.kind="cell_link" — a hyperlinked value inside a table
+                               cell that isn't the row's primary
+                               record name (e.g. an account-name link
+                               in the Account column, an email link in
+                               the Email column).
+       "click the {account-name} link in the {Account} column",
+       "open the {related record} link in the row"
+       → submit with params={"label": "Y", "kind": "cell_link"}.
+
    When in doubt, default to params.kind="button". The runner accepts
    submit steps without a kind and treats them as buttons for
    backward compatibility.
@@ -566,7 +590,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v21_submit_kind"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v22_row_link"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

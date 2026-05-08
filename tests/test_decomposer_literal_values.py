@@ -120,12 +120,20 @@ def test_prompt_still_links_log_in_to_fill_field_then_submit() -> None:
 
 def test_prompt_version_was_bumped() -> None:
     """A prompt change requires a cache-version bump so previously-
-    decomposed plans get re-decomposed with the new rule."""
+    decomposed plans get re-decomposed with the new rule. Each
+    subsequent revision lands its own ``vNN_*`` tag; this test just
+    pins the invariant that no superseded version-string survives in
+    the source — bumping forward and forgetting to update this list
+    re-introduces stale-cache risk silently."""
     import inspect
     from mantis_agent.plan_decomposer import PlanDecomposer
 
     src = inspect.getsource(PlanDecomposer.decompose_text)
-    assert "v21_submit_kind" in src
+    # Current version (PR #216 row_link / cell_link).
+    assert "v22_row_link" in src
+    # Superseded versions must NOT appear — would mean someone
+    # accidentally restored a stale cache key.
+    assert "v21_submit_kind" not in src
     assert "v20_url_mirror" not in src
     assert "v19_literal_values" not in src
     assert "v18_pure_llm" not in src

@@ -46,6 +46,8 @@ def test_build_intent_returns_fallback_when_label_empty() -> None:
         ("nav_link", "navigation link"),
         ("tab", "tab"),
         ("menu_item", "menu item"),
+        ("row_link", "table row"),
+        ("cell_link", "table cell"),
         ("button", "button to submit the form"),
     ],
 )
@@ -74,8 +76,22 @@ def test_all_known_kinds_have_templates() -> None:
     """Every kind documented in the decomposer prompt must have a
     runtime template — otherwise the decomposer can emit a kind the
     runtime silently downgrades to ``button``."""
-    expected = {"button", "nav_link", "tab", "menu_item"}
+    expected = {"button", "nav_link", "tab", "menu_item", "row_link", "cell_link"}
     assert expected.issubset(_SUBMIT_KIND_INTENT_TEMPLATES.keys())
+
+
+def test_row_link_template_disambiguates_from_headers_and_badges() -> None:
+    """row_link clicks are the new staff-crm pain point: Holo3 mistargeted
+    column headers / status badges / sort controls when asked to "click
+    the lead with Status=Qualified". The template must explicitly steer
+    away from those non-row-body candidates so find_form_target picks
+    the cell-text link instead."""
+    out = _build_submit_search_intent("Optimus Prime", "row_link", fallback="x")
+    assert "Optimus Prime" in out
+    # Disambiguation cues that materially narrow the target set.
+    assert "row" in out.lower()
+    assert "header" in out.lower()
+    assert "badge" in out.lower() or "status" in out.lower()
 
 
 # ── Handler dispatch — search_intent observed via the extractor mock ─────
