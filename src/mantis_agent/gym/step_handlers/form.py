@@ -59,6 +59,42 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Visual-affordance kinds for ``submit`` steps. The decomposer classifies
+# each submit step into one of these so the search prompt sent to
+# ``find_form_target`` frames the target correctly. Default is "button"
+# — the previous unconditional "click the X button to submit the form"
+# wording — so submit steps without a ``kind`` hint behave exactly as
+# before. Adding a new kind requires a template entry here AND a worked
+# example in DECOMPOSE_PROMPT — that friction is intentional. (#209
+# Symptom 4)
+_SUBMIT_KIND_INTENT_TEMPLATES: dict[str, str] = {
+    "nav_link": (
+        "Click the '{label}' navigation link in the sidebar or top-level "
+        "navigation. This is a primary nav item, not a button or form control."
+    ),
+    "tab": "Click the '{label}' tab in the page's tab bar.",
+    "menu_item": "Click the '{label}' menu item — an entry in an open menu, dropdown, or kebab.",
+    "button": "Click the '{label}' button to submit the form.",
+}
+_SUBMIT_KIND_DEFAULT = "button"
+
+
+def _build_submit_search_intent(label: str, kind: str, fallback: str) -> str:
+    """Construct the find_form_target prompt for a submit step.
+
+    Generic primitive — the kind comes from the analysis/decomposition
+    stage, not from any domain knowledge in this handler. Unknown kinds
+    fall back to the default ``button`` framing to preserve existing
+    behaviour for cached plans that predate the ``kind`` hint.
+    """
+    if not label:
+        return fallback
+    template = _SUBMIT_KIND_INTENT_TEMPLATES.get(
+        kind, _SUBMIT_KIND_INTENT_TEMPLATES[_SUBMIT_KIND_DEFAULT],
+    )
+    return template.format(label=label)
+
+
 class ClaudeGuidedFormHandler:
     """Implements :class:`~..step_context.StepHandler` for form-shaped steps.
 
@@ -153,9 +189,8 @@ class ClaudeGuidedFormHandler:
             if isinstance(aliases, str):
                 aliases = [aliases]
             aliases = [str(a).strip() for a in aliases if str(a).strip()]
-            search_intent = (
-                f"Click the '{label}' button to submit the form" if label else step.intent
-            )
+            kind = str(params.get("kind") or _SUBMIT_KIND_DEFAULT).strip().lower() or _SUBMIT_KIND_DEFAULT
+            search_intent = _build_submit_search_intent(label, kind, step.intent)
             # Scroll-and-rescan loop — issue #89 §2. Long forms (CRMs,
             # settings panels) often render the primary submit button below
             # the fold; the previous single-screenshot path declared the
