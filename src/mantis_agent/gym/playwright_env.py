@@ -271,6 +271,26 @@ class PlaywrightGymEnv(GymEnvironment):
     def screen_size(self) -> tuple[int, int]:
         return self._viewport
 
+    def screenshot(self) -> Image.Image:
+        """Public: capture current screenshot as PIL Image.
+
+        Step handlers (``ClaudeGuidedClickHandler``, ``ClaudeGuidedFormHandler``)
+        call ``env.screenshot()`` to grab a fresh frame mid-step (after a
+        Page_Down scroll, between submit and verify, etc.). Mirrors
+        :meth:`XdotoolGymEnv.screenshot` so the handler dispatch is
+        env-agnostic.
+
+        Raises ``RuntimeError`` if called before :meth:`reset` — there is
+        no page to screenshot until the browser is launched.
+        """
+        if self._page is None:
+            raise RuntimeError(
+                "PlaywrightGymEnv: screenshot() called before reset(). "
+                "Call env.reset(task=..., start_url=...) first."
+            )
+        png_bytes = self._page.screenshot(type="png")
+        return Image.open(io.BytesIO(png_bytes))
+
     @property
     def page(self):
         """Direct access to the Playwright page for verification."""
