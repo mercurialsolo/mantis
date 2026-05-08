@@ -189,6 +189,112 @@ def test_all_viewports_exhausted_returns_page_exhausted(monkeypatch):
     assert runner._viewport_stage == 2  # advanced past both stages
 
 
+def test_login_redirect_short_circuits_fallback_chain(monkeypatch):
+    """Plain click that lands on /login → bail with data='login_redirect',
+    no middle-click, no probes, card marked tried."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.click.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.click.random.uniform", lambda *_: 0.0,
+    )
+
+    runner = _FakeRunner()
+    runner._max_viewport_stages = 1
+    extractor = MagicMock()
+    extractor.find_all_listings.return_value = [(100, 200, "Card A")]
+
+    env = MagicMock()
+    env.screen_size = (1280, 800)
+    ctx = _ctx(runner, env=env, extractor=extractor)
+    ctx.site_config.is_detail_page.return_value = False
+    runner._read_current_url = MagicMock(
+        return_value="https://example.com/users/sign_in?redirect=/listings/42",
+    )
+
+    result = ClaudeGuidedClickHandler(runner).execute(_step(), ctx)
+
+    assert result.success is False
+    assert result.data == "login_redirect"
+    # Middle-click was NOT fired — only the initial single-button CLICK.
+    click_actions = [
+        c.args[0]
+        for c in env.step.call_args_list
+        if getattr(c.args[0], "params", {}).get("button") == "middle"
+    ]
+    assert click_actions == []
+    # Card title appended to the skip list so we don't re-attempt it.
+    assert "Card A" in runner._extracted_titles
+    # Verifier saw login_redirect reason
+    completed = ctx.dynamic_verifier.record_item_completed.call_args
+    assert completed.kwargs["reason"] == "login_redirect"
+
+
+def test_blank_newtab_aborts_middle_click_fallback(monkeypatch):
+    """Middle-click landing on chrome://newtab/ → close tab, data='newtab_blank',
+    no probe-area attempts, card marked tried."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.click.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.click.random.uniform", lambda *_: 0.0,
+    )
+
+    runner = _FakeRunner()
+    runner._max_viewport_stages = 1
+    extractor = MagicMock()
+    extractor.find_all_listings.return_value = [(100, 200, "Card B")]
+
+    env = MagicMock()
+    env.screen_size = (1280, 800)
+    ctx = _ctx(runner, env=env, extractor=extractor)
+    ctx.site_config.is_detail_page.return_value = False
+    # Verify reads (4 calls = 2 attempts × {primary, screenshot-fallback}) → "".
+    # Middle-click reads (1+ call) → "chrome://newtab/".
+    runner._read_current_url = MagicMock(
+        side_effect=["", "", "", "", "chrome://newtab/", "chrome://newtab/"],
+    )
+
+    result = ClaudeGuidedClickHandler(runner).execute(_step(), ctx)
+
+    assert result.success is False
+    assert result.data == "newtab_blank"
+    # ctrl+w sent to close the empty tab.
+    keypresses = [
+        c.args[0].params.get("keys")
+        for c in env.step.call_args_list
+        if getattr(c.args[0], "action_type", None)
+        and c.args[0].action_type.name == "KEY_PRESS"
+    ]
+    assert "ctrl+w" in keypresses
+    # No probe-area click — only the initial click + middle-click.
+    click_count = sum(
+        1
+        for c in env.step.call_args_list
+        if getattr(c.args[0], "action_type", None)
+        and c.args[0].action_type.name == "CLICK"
+    )
+    assert click_count == 2  # plain click + middle-click only
+    assert "Card B" in runner._extracted_titles
+    completed = ctx.dynamic_verifier.record_item_completed.call_args
+    assert completed.kwargs["reason"] == "newtab_blank"
+
+
+def test_looks_like_login_redirect_predicate():
+    from mantis_agent.gym.step_handlers.click import _looks_like_login_redirect
+    assert _looks_like_login_redirect("https://app.example.com/login") is True
+    assert _looks_like_login_redirect("https://app.example.com/users/sign_in") is True
+    assert _looks_like_login_redirect("https://app.example.com/oauth/authorize?id=1") is True
+    assert _looks_like_login_redirect("https://example.com/listings/42") is False
+    assert _looks_like_login_redirect("") is False
+
+
+def test_looks_like_blank_newtab_predicate():
+    from mantis_agent.gym.step_handlers.click import _looks_like_blank_newtab
+    assert _looks_like_blank_newtab("chrome://newtab/") is True
+    assert _looks_like_blank_newtab("chrome://new-tab-page/") is True
+    assert _looks_like_blank_newtab("about:blank") is True
+    assert _looks_like_blank_newtab("edge://newtab/") is True
+    assert _looks_like_blank_newtab("https://example.com/") is False
+    assert _looks_like_blank_newtab("") is False
+
+
 def test_handler_filters_already_extracted_titles(monkeypatch):
     """Cards whose titles are in _extracted_titles get filtered out before clicking."""
     monkeypatch.setattr("mantis_agent.gym.step_handlers.click.time.sleep", lambda *_: None)
