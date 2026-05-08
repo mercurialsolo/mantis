@@ -509,15 +509,18 @@ def test_run_threads_oxylabs_proxy_dict_into_env(
     tmp_path: Path, patched_deps, monkeypatch,
 ) -> None:
     """``--proxy-from-env`` reads OXYLABS_ENTRYPOINT / OXYLABS_USERNAME /
-    OXYLABS_PASSWORD and builds the dict Playwright expects.
+    OXYLABS_PASSWORD and builds the dict Playwright expects, with the
+    customer-{USERNAME} prefix Oxylabs requires for residential auth.
 
-    Required for sites behind Cloudflare anti-bot challenges (the
-    boattrader smoke surfaced a 403 challenge served to vanilla
-    headless Chromium). The host integration uses Oxylabs in
-    production; the CLI matches for parity."""
+    Empirical: without the customer- prefix Oxylabs returns HTTP 000 /
+    rejected; with it the request is accepted. The default
+    --proxy-session=mantis is appended as the sessid suffix."""
     monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:7777")
-    monkeypatch.setenv("OXYLABS_USERNAME", "customer-mantis")
+    monkeypatch.setenv("OXYLABS_USERNAME", "tok123")
     monkeypatch.setenv("OXYLABS_PASSWORD", "shh")
+    monkeypatch.delenv("OXYLABS_COUNTRY", raising=False)
+    monkeypatch.delenv("OXYLABS_STATE", raising=False)
+    monkeypatch.delenv("OXYLABS_CITY", raising=False)
 
     plan_path = _write_json_plan(tmp_path / "plan.json")
     code = main([
@@ -531,11 +534,64 @@ def test_run_threads_oxylabs_proxy_dict_into_env(
 
     env_kwargs = patched_deps["env_cls"].call_args.kwargs
     assert env_kwargs["proxy"] == {
-        # Scheme prepended automatically when host:port is given.
         "server": "http://pr.oxylabs.io:7777",
-        "username": "customer-mantis",
+        # ``customer-`` prefix added; default sessid suffix appended.
+        "username": "customer-tok123-sessid-mantis",
         "password": "shh",
     }
+
+
+def test_run_oxylabs_geo_pin_built_from_env(
+    tmp_path: Path, patched_deps, monkeypatch,
+) -> None:
+    """OXYLABS_COUNTRY / STATE / CITY get appended as dash-delimited
+    geo segments. ``--proxy-session`` overrides the default sessid."""
+    monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:10000")
+    monkeypatch.setenv("OXYLABS_USERNAME", "tok")
+    monkeypatch.setenv("OXYLABS_PASSWORD", "p")
+    monkeypatch.setenv("OXYLABS_COUNTRY", "US")
+    monkeypatch.setenv("OXYLABS_STATE", "florida")
+    monkeypatch.setenv("OXYLABS_CITY", "miami")
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--proxy-session", "smoke-2",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+
+    user = patched_deps["env_cls"].call_args.kwargs["proxy"]["username"]
+    assert user == "customer-tok-cc-US-st-florida-city-miami-sessid-smoke-2"
+
+
+def test_run_oxylabs_partial_geo_skips_empty_segments(
+    tmp_path: Path, patched_deps, monkeypatch,
+) -> None:
+    """Partial geo: only OXYLABS_COUNTRY set, the others empty —
+    state/city segments must be omitted (Oxylabs rejects empty values)."""
+    monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:10000")
+    monkeypatch.setenv("OXYLABS_USERNAME", "tok")
+    monkeypatch.setenv("OXYLABS_PASSWORD", "p")
+    monkeypatch.setenv("OXYLABS_COUNTRY", "US")
+    monkeypatch.delenv("OXYLABS_STATE", raising=False)
+    monkeypatch.delenv("OXYLABS_CITY", raising=False)
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+
+    user = patched_deps["env_cls"].call_args.kwargs["proxy"]["username"]
+    assert "cc-US" in user
+    assert "-st-" not in user
+    assert "-city-" not in user
 
 
 def test_run_proxy_from_env_preserves_explicit_scheme(
@@ -545,6 +601,9 @@ def test_run_proxy_from_env_preserves_explicit_scheme(
     monkeypatch.setenv("OXYLABS_ENTRYPOINT", "http://pr.oxylabs.io:7777")
     monkeypatch.setenv("OXYLABS_USERNAME", "u")
     monkeypatch.setenv("OXYLABS_PASSWORD", "p")
+    monkeypatch.delenv("OXYLABS_COUNTRY", raising=False)
+    monkeypatch.delenv("OXYLABS_STATE", raising=False)
+    monkeypatch.delenv("OXYLABS_CITY", raising=False)
 
     plan_path = _write_json_plan(tmp_path / "plan.json")
     main([
@@ -558,10 +617,11 @@ def test_run_proxy_from_env_preserves_explicit_scheme(
     assert env_kwargs["proxy"]["server"] == "http://pr.oxylabs.io:7777"
 
 
-def test_run_proxy_from_env_fails_without_entrypoint(
+def test_run_proxy_from_env_fails_without_full_credentials(
     tmp_path: Path, patched_deps, monkeypatch, capsys,
 ) -> None:
-    """``--proxy-from-env`` with no OXYLABS_ENTRYPOINT must fail loudly,
+    """``--proxy-from-env`` with any of OXYLABS_ENTRYPOINT /
+    OXYLABS_USERNAME / OXYLABS_PASSWORD missing must fail loudly,
     not silently fall back to direct (which would still hit Cloudflare
     and leave the operator wondering why)."""
     monkeypatch.delenv("OXYLABS_ENTRYPOINT", raising=False)
