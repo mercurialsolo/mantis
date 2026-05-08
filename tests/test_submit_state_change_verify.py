@@ -33,16 +33,19 @@ def _verifier(
 ) -> tuple[bool, str]:
     """Re-implement the runner's verifier branch in 12 lines.
 
-    The actual verifier lives inside :class:`MicroPlanRunner.run` and
-    can't be exercised in isolation without a full runner. This tiny
+    The actual verifier lives inside
+    :meth:`PlanExecutor._maybe_demote_form_no_change` (run_executor.py)
+    and can't be exercised in isolation without a full runner. This
     fixture mirrors the same predicate so tests can drive it across
-    every diff state.
+    every diff state. ``select_option`` is intentionally not demoted —
+    a dropdown change rarely changes URL/scroll/focus, and the option
+    handler already verifies the option click landed.
     """
     from mantis_agent.gym.step_snapshot import diff as compute_diff
 
     success = initial_success
     data = ""
-    if success and step_type in ("submit", "select_option"):
+    if success and step_type == "submit":
         delta = compute_diff(pre, post)
         if not delta.has_changes:
             success = False
@@ -63,14 +66,17 @@ def test_submit_with_no_change_is_demoted_to_failure() -> None:
     assert "no_state_change" in data
 
 
-def test_select_option_with_no_change_also_demoted() -> None:
-    """Same rule applies to dropdown selects — silently accepting a
-    select that didn't take effect leads to the same retry-pointless-
-    over-bad-state failure."""
+def test_select_option_with_no_change_is_not_demoted() -> None:
+    """select_option intentionally NOT demoted: changing a dropdown
+    value rarely produces URL/scroll/focus delta. The option handler
+    already verifies the option was clicked. Demoting here caused
+    valid Industry-Vertical edits on staff-crm to retry until budget
+    exhausted (run 19)."""
     pre = StepStateSnapshot(url="https://x.test/edit")
     post = StepStateSnapshot(url="https://x.test/edit")
-    success, _ = _verifier(pre, post, step_type="select_option")
-    assert success is False
+    success, data = _verifier(pre, post, step_type="select_option")
+    assert success is True
+    assert data == ""
 
 
 # ── State-change cases keep the success ────────────────────────────────

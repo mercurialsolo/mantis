@@ -359,14 +359,22 @@ class RunExecutor:
     def _maybe_demote_form_no_change(
         self, state: RunState, effective_step: MicroIntent, pre_snapshot: Any,
     ) -> None:
-        """Demote submit/select_option success → fail when no observable
-        change. Preserves the staffcrm-verify follow-up behavior.
+        """Demote submit success → fail when no observable change.
+        Preserves the staffcrm-verify follow-up behavior.
+
+        ``select_option`` is intentionally excluded: changing a dropdown
+        value almost never produces a URL/scroll/page-counter delta —
+        the only delta is the field value itself, which the snapshot
+        doesn't track. The select_option handler already verifies that
+        the open menu was found and the option clicked; demoting on
+        no-state-change there caused valid Industry-Vertical edits on
+        staff-crm to retry until the budget exhausted.
         """
         runner = self.parent
         step_result = state.results[-1]
         if not (
             step_result.success
-            and effective_step.type in ("submit", "select_option")
+            and effective_step.type == "submit"
         ):
             return
         try:
