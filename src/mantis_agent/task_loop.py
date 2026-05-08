@@ -353,6 +353,12 @@ def run_task_loop(
                     max_steps_per_iteration=task_config["loop"].get(
                         "max_steps_per_iteration", config.max_steps
                     ),
+                    max_retries_per_iteration=task_config["loop"].get(
+                        "max_retries_per_iteration", 2
+                    ),
+                    max_steps_pagination=task_config["loop"].get(
+                        "max_steps_pagination", 20
+                    ),
                 )
                 wf_kwargs: dict[str, Any] = {
                     "brain": config.brain,
