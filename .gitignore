@@ -31,6 +31,7 @@ secrets*.json
 Thumbs.db
 
 # Project-specific
+.codex_tmp/
 OSWorld/
 uv.lock
 *.gguf

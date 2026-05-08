@@ -512,20 +512,27 @@ async def _handle_predict(
 @app.post("/v1/predict")
 async def predict_v1(
     request: Request,
-    tenant: TenantConfig = Depends(_require_mantis_token),
+    tenant: TenantConfig = Depends(_require_run_scope),
 ) -> dict[str, Any]:
-    """Tier-1 multi-tenant /predict. Validated, per-tenant capped and isolated."""
+    """Tier-1 multi-tenant /predict. Validated, per-tenant capped and isolated.
+
+    Requires the ``run`` scope on the tenant token — read-only keys
+    (e.g. observers with only ``status`` / ``result`` access) are
+    rejected with 403. Polling actions (``status``/``result``/``logs``/
+    ``cancel``) flow through the same handler, so any caller that needs
+    to poll a run also needs ``run`` scope.
+    """
     return await _handle_predict(request, tenant)
 
 
 @app.post("/predict")
 async def predict(
     request: Request,
-    tenant: TenantConfig = Depends(_require_mantis_token),
+    tenant: TenantConfig = Depends(_require_run_scope),
 ) -> dict[str, Any]:
     """Backwards-compat alias for /v1/predict.
 
     Kept indefinitely for callers built against the v1.0 deployment shape.
-    Identical behavior to /v1/predict.
+    Identical behavior to /v1/predict, including the ``run`` scope check.
     """
     return await _handle_predict(request, tenant)
