@@ -325,3 +325,133 @@ def test_handler_filters_already_extracted_titles(monkeypatch):
     last_click_title = runner._last_click_title or ""
     assert "Listing A" not in last_click_title
     assert "Listing B" not in last_click_title
+
+
+def test_source_tab_recheck_after_middle_click_accepts_late_navigation(monkeypatch):
+    """#209 Symptom 2 / Finding #3 defense-in-depth.
+
+    A slow JS click handler can navigate the source tab AFTER the
+    plain-click 2-attempt verify gate has run but BEFORE the middle-
+    click loop concludes. The previous code skipped straight to the
+    probe-area click chain, racing five more clicks against a tab that
+    had already navigated. The fix: between middle-click failure and
+    the probe-area chain, switch focus back to the source tab via
+    ctrl+1 and re-verify. If the source tab is now on a detail page,
+    accept the late navigation.
+    """
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.click.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.click.random.uniform", lambda *_: 0.0,
+    )
+
+    runner = _FakeRunner()
+    runner._max_viewport_stages = 1
+    runner._results_base_url = "https://crm.example.test/leads"
+    extractor = MagicMock()
+    extractor.find_all_listings.return_value = [(100, 200, "Lead Card")]
+
+    env = MagicMock()
+    env.screen_size = (1280, 800)
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    # is_detail_page: False for /leads (listings), True for /leads/13.
+    def fake_is_detail(url, base_url=None):
+        return "/leads/13" in (url or "")
+    ctx.site_config.is_detail_page.side_effect = fake_is_detail
+
+    # Read sequence (no OCR fallback because primary always returns non-empty):
+    #   1: plain-click verify_attempt 0 → still on listings
+    #   2: plain-click verify_attempt 1 (after 6s sleep) → still on listings
+    #   3: middle-click switch_attempt 0 → still on listings (no useful new tab)
+    #   4: middle-click switch_attempt 1 (after ctrl+Tab) → still on listings
+    #   5: source-tab recheck (after ctrl+1) → /leads/13 (late nav succeeded)
+    runner._read_current_url = MagicMock(side_effect=[
+        "https://crm.example.test/leads",
+        "https://crm.example.test/leads",
+        "https://crm.example.test/leads",
+        "https://crm.example.test/leads",
+        "https://crm.example.test/leads/13",
+    ])
+
+    result = ClaudeGuidedClickHandler(runner).execute(_step(), ctx)
+
+    assert result.success is True
+    assert runner._last_known_url == "https://crm.example.test/leads/13"
+
+    # ctrl+1 was sent to focus the source tab during recheck.
+    keypresses = [
+        c.args[0].params.get("keys")
+        for c in env.step.call_args_list
+        if getattr(c.args[0], "action_type", None)
+        and c.args[0].action_type.name == "KEY_PRESS"
+    ]
+    assert "ctrl+1" in keypresses
+
+    # Probe-area click chain was NOT run — clicks should be: initial click,
+    # middle-click, no probe-area clicks (5 candidates would mean 5 more).
+    click_count = sum(
+        1
+        for c in env.step.call_args_list
+        if getattr(c.args[0], "action_type", None)
+        and c.args[0].action_type.name == "CLICK"
+    )
+    assert click_count == 2, f"expected 2 clicks (plain + middle); got {click_count}"
+
+    # Detail-page bookkeeping ran: scroll context advanced to detail_top.
+    detail_top_calls = [
+        c for c in runner.scroll_state_calls if c.get("context") == "detail_top"
+    ]
+    assert len(detail_top_calls) == 1
+    assert detail_top_calls[0]["url"] == "https://crm.example.test/leads/13"
+
+    # Card title appended to extracted skip list.
+    assert "Lead Card" in runner._extracted_titles
+
+
+def test_source_tab_recheck_falls_through_to_probes_when_still_on_listings(monkeypatch):
+    """If the source tab also did not navigate, the recheck must NOT
+    accept and the runner falls through to the probe-area chain."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.click.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.click.random.uniform", lambda *_: 0.0,
+    )
+
+    runner = _FakeRunner()
+    runner._max_viewport_stages = 1
+    runner._results_base_url = "https://crm.example.test/leads"
+    extractor = MagicMock()
+    extractor.find_all_listings.return_value = [(100, 200, "Lead Card")]
+
+    env = MagicMock()
+    env.screen_size = (1280, 800)
+    ctx = _ctx(runner, env=env, extractor=extractor)
+    ctx.site_config.is_detail_page.return_value = False  # never on detail
+
+    # All reads return listings (no late navigation; no useful new tab).
+    # Provide enough side_effect entries for: plain-click verify (2),
+    # middle-click loop (2), source-tab recheck (1), and probe-area
+    # attempts (5 probes × 1 read each, all returning listings).
+    runner._read_current_url = MagicMock(
+        return_value="https://crm.example.test/leads",
+    )
+
+    result = ClaudeGuidedClickHandler(runner).execute(_step(), ctx)
+
+    assert result.success is False
+    # ctrl+1 was still sent (recheck attempted), even though it didn't help.
+    keypresses = [
+        c.args[0].params.get("keys")
+        for c in env.step.call_args_list
+        if getattr(c.args[0], "action_type", None)
+        and c.args[0].action_type.name == "KEY_PRESS"
+    ]
+    assert "ctrl+1" in keypresses
+    # Probe-area clicks ran (5 probe points).
+    click_count = sum(
+        1
+        for c in env.step.call_args_list
+        if getattr(c.args[0], "action_type", None)
+        and c.args[0].action_type.name == "CLICK"
+    )
+    # Plain + middle + 5 probes = 7. Allow ≥7 in case any retry edges fired.
+    assert click_count >= 7, f"expected probe chain to run; got {click_count} clicks"
