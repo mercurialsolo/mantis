@@ -386,16 +386,23 @@ RULES:
   region of the page (e.g. left sidebar, top header, modal dialog,
   results card) when it disambiguates. Use the labels the source plan
   itself names — never invent application-specific filter names.
-- For navigate steps: include the FULL URL (http:// or https://) in the intent.
+- For navigate steps: include the FULL URL (http:// or https://) in the intent
+  AND mirror the URL in `params.url`. The duplication is intentional — the
+  runner will recover from `params.url` if the intent string ever drifts.
   CRITICAL RULE — no exceptions:
     • If the source plan DOES contain an http(s):// URL, emit `navigate`
-      with the full URL in the intent.
+      with the full URL in BOTH `intent` and `params.url`.
     • If the source plan does NOT contain an http(s):// URL for a step,
       you MUST emit `submit` with params={"label": "<page name>"}.
       The runner clicks the matching nav link — there is no URL to load.
   WORKED EXAMPLES:
     Source: "1. Go to https://app.example.com/login"
-    → {"type": "navigate", "intent": "Navigate to https://app.example.com/login", ...}
+    → {"type": "navigate", "intent": "Navigate to https://app.example.com/login",
+       "params": {"url": "https://app.example.com/login"}, ...}
+    Source: "1. Navigate to https://app.example.com for billing"
+    (do NOT paraphrase the URL away — keep the literal string)
+    → {"type": "navigate", "intent": "Navigate to https://app.example.com",
+       "params": {"url": "https://app.example.com"}, ...}
     Source: "3. Go the Leads Page"
     → {"type": "submit", "intent": "Open the Leads section",
        "params": {"label": "Leads"}, ...}
@@ -403,8 +410,9 @@ RULES:
     → {"type": "submit", "intent": "Open the Settings section",
        "params": {"label": "Settings"}, ...}
   This rule is verifiable by inspecting your own output: every `navigate`
-  step's intent string MUST contain the substring "http://" or "https://".
-  If it doesn't, the step type is wrong — switch it to `submit`.
+  step's intent string MUST contain the substring "http://" or "https://"
+  AND `params.url` MUST contain the same URL. If it doesn't, the step type
+  is wrong — switch it to `submit`.
 - Extraction steps (reading screen) use claude_only=true
 - For fill_field / submit / select_option, ALWAYS populate `params`
   (label/value/dropdown_label/option_label) using the labels the source
@@ -536,7 +544,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v19_literal_values"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v20_url_mirror"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -631,6 +639,11 @@ class PlanDecomposer:
 
         # Fix 3: Validate and fix loop targets — must point to the click step
         self._fix_loop_targets(plan)
+        # Fix 4 (#209 Symptom 4): repair urlless navigate steps by injecting
+        # the matching source-plan URL into ``params.url``. The v20 prompt
+        # asks Claude to mirror the URL there already; this pass catches
+        # the residual cases where it paraphrases the URL away entirely.
+        self._repair_navigate_urls(plan)
 
         # Cache the full parsed structure (object or legacy array) so the
         # cached path round-trips through both schemas.
@@ -707,6 +720,88 @@ class PlanDecomposer:
             params=params,
             hints=hints,
         )
+
+    @staticmethod
+    def _repair_navigate_urls(plan: MicroPlan) -> None:
+        """Inject lost source-plan URLs into urlless navigate steps (#209 Symptom 4).
+
+        The v20 ``DECOMPOSE_PROMPT`` instructs Claude to mirror every
+        literal URL from the source plan into both the navigate step's
+        ``intent`` and ``params.url``. Empirically, even with explicit
+        rules and worked examples, Claude occasionally paraphrases the
+        URL away ("Navigate to the leads management system") leaving
+        the runner with no URL to load.
+
+        This pass extracts ``https?://`` URLs from the source plan in
+        source order, walks the decomposed navigate steps, and pairs
+        each urlless navigate step (intent AND params.url both empty
+        of an https URL) with the next unconsumed source URL by
+        injecting it into ``params.url``. The runtime navigate handler
+        falls back to ``params.url`` when the intent lacks a URL, so
+        the repaired step executes correctly.
+
+        A repaired step logs at WARNING (so prompt regressions are
+        visible). An unrepairable step — more urlless navigates than
+        source URLs — logs at ERROR; that's a decomposer bug worth a
+        prompt iteration. Repair is best-effort and never fails the
+        decompose, because production traffic must still flow.
+        """
+        url_re = re.compile(r'https?://[^\s"\'<>]+')
+        source_urls = url_re.findall(plan.source_plan or "")
+        if not source_urls:
+            return
+
+        # Pass 1: build the queue of source URLs the decomposer hasn't
+        # already covered. We walk healthy navigate steps in plan order and
+        # remove the first remaining occurrence of each URL they reference,
+        # so duplicates in the source plan are honoured (each occurrence
+        # can satisfy at most one navigate step).
+        remaining = list(source_urls)
+        for step in plan.steps:
+            if step.type != "navigate":
+                continue
+            covered: str | None = None
+            intent_match = url_re.search(step.intent or "")
+            if intent_match:
+                covered = intent_match.group()
+            elif isinstance(step.params, dict):
+                params_url = step.params.get("url")
+                if isinstance(params_url, str):
+                    pm = url_re.search(params_url)
+                    if pm:
+                        covered = pm.group()
+            if covered and covered in remaining:
+                remaining.remove(covered)
+
+        # Pass 2: repair urlless navigate steps from the unused queue.
+        cursor = 0
+        for i, step in enumerate(plan.steps):
+            if step.type != "navigate":
+                continue
+            if url_re.search(step.intent or ""):
+                continue
+            params = step.params if isinstance(step.params, dict) else {}
+            existing = params.get("url")
+            if isinstance(existing, str) and url_re.search(existing):
+                continue
+
+            if cursor >= len(remaining):
+                logger.error(
+                    f"  [decomposer] navigate step #{i} lost its URL and no "
+                    f"source URL remains to repair from: {step.intent[:80]!r}"
+                )
+                continue
+
+            recovered = remaining[cursor]
+            cursor += 1
+            if not isinstance(step.params, dict):
+                step.params = {}
+            step.params["url"] = recovered
+            logger.warning(
+                f"  [decomposer] navigate step #{i} dropped its URL "
+                f"({step.intent[:60]!r}); repaired with source URL "
+                f"{recovered}. Tighten the decomposer prompt if this recurs."
+            )
 
     @staticmethod
     def _fix_loop_targets(plan: MicroPlan):

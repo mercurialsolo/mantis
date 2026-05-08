@@ -129,6 +129,31 @@ def test_navigate_returns_failure_when_intent_lacks_url(monkeypatch):
     env.step.assert_not_called()
 
 
+def test_navigate_falls_back_to_params_url_when_intent_lacks_url(monkeypatch):
+    """#209 Symptom 4 defense-in-depth: when the decomposer paraphrases
+    the intent and drops the URL but leaves it in ``params.url``, the
+    handler must recover from there rather than failing the step."""
+    monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.navigate.time.sleep", lambda *_: None)
+
+    runner = _FakeRunner()
+    env = MagicMock()
+    ctx = _ctx_with_runner_and_env(runner, env)
+    handler = NavigateHandler(runner)
+
+    step = _step(
+        "Navigate to the leads management system",
+        url="https://crm.example.test/leads",
+    )
+    result = handler.execute(step, ctx)
+
+    assert result.success is True
+    env.reset.assert_called_once_with(
+        task="navigate", start_url="https://crm.example.test/leads"
+    )
+    assert runner._last_known_url == "https://crm.example.test/leads"
+
+
 def test_navigate_returns_failure_when_env_reset_raises(monkeypatch):
     monkeypatch.setattr("mantis_agent.gym.step_handlers.navigate.time.sleep", lambda *_: None)
     runner = _FakeRunner()
