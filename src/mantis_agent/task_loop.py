@@ -42,6 +42,8 @@ class TaskLoopConfig:
     env: Any
     grounding: Any = None
     extractor: Any = None
+    fallback_brain: Any = None
+    fallback_label: str = "fallback"
 
     # ── Execution params ──
     max_steps: int = 30
@@ -410,6 +412,29 @@ def run_task_loop(
                 task_id=task_id,
                 start_url=task_config.get("start_url", ""),
             )
+
+            if not result.success and config.fallback_brain is not None:
+                print(
+                    f"  {config.fallback_label} fallback: retrying failed section "
+                    f"'{task_id}'"
+                )
+                fallback_runner = GymRunner(
+                    brain=config.fallback_brain,
+                    env=config.env,
+                    max_steps=task_config.get("max_steps", config.max_steps),
+                    frames_per_inference=config.frames_per_inference,
+                    grounding=config.grounding,
+                    on_step=on_step,
+                )
+                result = fallback_runner.run(
+                    task=intent,
+                    task_id=f"{task_id}_{config.fallback_label}_fallback",
+                    start_url=task_config.get("start_url", ""),
+                )
+                try:
+                    setattr(result, "fallback_used", config.fallback_label)
+                except (AttributeError, TypeError):
+                    pass
 
             # Executor-specific post-processing (filter validation, retries, etc.)
             if config.on_task_result:

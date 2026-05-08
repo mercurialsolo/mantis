@@ -571,6 +571,20 @@ def _run_holo3_executor(
         use_tool_calling=True,
     )
     brain.load()
+    claude_fallback_brain = None
+    claude_fallback_disabled = bool(task_suite.get("_claude_fallback_disabled", False))
+    if not claude_fallback_disabled:
+        try:
+            from mantis_agent.brain_claude import ClaudeBrain
+            claude_fallback_brain = ClaudeBrain(
+                model=str(task_suite.get("_claude_fallback_model") or "claude-sonnet-4-20250514"),
+                thinking_budget=2048,
+                screen_size=(1280, 720),
+            )
+            claude_fallback_brain.load()
+            print("Claude fallback enabled for failed Holo3 task sections")
+        except Exception as exc:
+            print(f"Claude fallback unavailable for failed Holo3 sections: {exc}")
 
     # Claude Sonnet grounding for click targeting
     from mantis_agent.grounding import ClaudeGrounding
@@ -795,11 +809,16 @@ def _run_holo3_executor(
 
         task_max_steps = task_config.get("max_steps", config.max_steps)
         min_steps = task_config.get("min_steps", 0)
+        fallback_used = getattr(result, "fallback_used", "")
         if "setup" in task_id or "filter" in task_id:
             min_steps = max(min_steps, 5)
 
         # Hybrid mode: use Claude for setup tasks
-        if ("setup" in task_id or "filter" in task_id) and verify_mode:
+        if (
+            ("setup" in task_id or "filter" in task_id)
+            and verify_mode
+            and fallback_used != "claude"
+        ):
             try:
                 from mantis_agent.brain_claude import ClaudeBrain as _CB
                 task_brain = _CB(model="claude-sonnet-4-20250514", thinking_budget=2048, screen_size=(1280, 720))
@@ -813,7 +832,12 @@ def _run_holo3_executor(
                 print(f"  Claude brain failed, using Holo3: {e}")
 
         # Retry if model skipped interaction
-        if result.total_steps <= min_steps and result.success and min_steps > 0:
+        if (
+            result.total_steps <= min_steps
+            and result.success
+            and min_steps > 0
+            and fallback_used != "claude"
+        ):
             print(f"  SKIP-DETECTED: {result.total_steps} steps (min={min_steps}). Retrying...")
             retry_intent = task_config["intent"] + (
                 "\n\nCRITICAL: Your previous attempt called done() without interacting with the page. "
@@ -893,6 +917,8 @@ def _run_holo3_executor(
         run_id=run_id, session_name=session_name,
         model_name="Holo3-35B-A3B", results_prefix="holo3",
         brain=brain, env=env, grounding=grounding, extractor=extractor,
+        fallback_brain=claude_fallback_brain,
+        fallback_label="claude",
         max_steps=max_steps, frames_per_inference=frames_per_inference,
         use_sub_plan=sub_plan,
         site_config=site_cfg,
