@@ -1,6 +1,6 @@
 """Tests for SiteConfig (issue #46)."""
 
-from mantis_agent.site_config import SiteConfig
+from mantis_agent.site_config import SiteConfig, _path_extends
 
 
 def test_default_boattrader():
@@ -104,3 +104,114 @@ def test_from_probe_basic():
     config = SiteConfig.from_probe(probe)
     assert config.domain == "example.com"
     assert config.is_detail_page("https://example.com/item/test-123/")
+
+
+# ── Generic detail-page heuristic (#209 Symptom 1) ───────────────────────
+
+
+def test_path_extends_basic_segment_addition():
+    assert _path_extends("/leads/13", "/leads") is True
+    assert _path_extends("/leads/13/edit", "/leads") is True
+    assert _path_extends("/products/9", "/products") is True
+
+
+def test_path_extends_rejects_same_path():
+    assert _path_extends("/leads", "/leads") is False
+    assert _path_extends("/leads/", "/leads") is False
+    # Trailing-slash differences are normalised away by the segment split.
+
+
+def test_path_extends_rejects_different_branch():
+    assert _path_extends("/login", "/leads") is False
+    assert _path_extends("/admin/users", "/leads") is False
+
+
+def test_path_extends_handles_root_parent():
+    assert _path_extends("/leads", "/") is True
+    assert _path_extends("/leads", "") is True
+
+
+def test_path_extends_rejects_shorter_or_equal():
+    # Going UP the tree is not "deeper".
+    assert _path_extends("/leads", "/leads/13") is False
+    assert _path_extends("", "/leads") is False
+
+
+# ── is_detail_page with base_url heuristic ───────────────────────────────
+
+
+def test_is_detail_page_pattern_wins_over_base_url():
+    """When detail_page_pattern is configured, base_url is ignored."""
+    config = SiteConfig(detail_page_pattern=r"/boat/[\w-]+")
+    # Pattern matches → True, regardless of base_url.
+    assert config.is_detail_page(
+        "https://x.com/boat/abc-123",
+        base_url="https://other.com/listings",
+    )
+    # Pattern does not match → False, even if path-extends would say True.
+    assert not config.is_detail_page(
+        "https://x.com/something/else",
+        base_url="https://x.com/something",
+    )
+
+
+def test_is_detail_page_falls_back_to_base_url_heuristic_when_no_pattern():
+    """Empty SiteConfig — generic heuristic kicks in once base_url is passed.
+
+    Covers the #209 Symptom 1 failure mode: a CRM with no pattern
+    configured should still recognise /leads/13 as a detail page when
+    the runner was on /leads.
+    """
+    config = SiteConfig()
+    assert config.is_detail_page(
+        "https://crm.example.test/leads/13",
+        base_url="https://crm.example.test/leads",
+    )
+    assert config.is_detail_page(
+        "https://crm.example.test/leads/13/edit",
+        base_url="https://crm.example.test/leads",
+    )
+
+
+def test_is_detail_page_heuristic_rejects_same_path():
+    """Same listings page after a filter change is NOT a detail page."""
+    config = SiteConfig()
+    assert not config.is_detail_page(
+        "https://crm.example.test/leads?status=qualified",
+        base_url="https://crm.example.test/leads",
+    )
+
+
+def test_is_detail_page_heuristic_rejects_login_redirect():
+    """A click that redirected to /login is on the same host but a
+    different branch — must not be classified as a detail page."""
+    config = SiteConfig()
+    assert not config.is_detail_page(
+        "https://crm.example.test/login",
+        base_url="https://crm.example.test/leads",
+    )
+
+
+def test_is_detail_page_heuristic_rejects_different_host():
+    """A cross-host redirect (e.g. SSO provider) is never a detail page."""
+    config = SiteConfig()
+    assert not config.is_detail_page(
+        "https://idp.example.test/sso/login",
+        base_url="https://crm.example.test/leads",
+    )
+
+
+def test_is_detail_page_heuristic_returns_false_without_base_url():
+    """Backwards-compatible: empty SiteConfig + no base_url → False
+    (preserves the behaviour every existing call site relies on)."""
+    config = SiteConfig()
+    assert not config.is_detail_page("https://crm.example.test/leads/13")
+
+
+def test_is_detail_page_handles_query_string_in_base():
+    """Query strings on the base URL must not break the heuristic."""
+    config = SiteConfig()
+    assert config.is_detail_page(
+        "https://crm.example.test/leads/13",
+        base_url="https://crm.example.test/leads?status=qualified&page=2",
+    )

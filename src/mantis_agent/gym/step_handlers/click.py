@@ -328,7 +328,7 @@ class ClaudeGuidedClickHandler:
                 after = env.screenshot()
                 url = runner._read_current_url(after)
 
-            if url and site_config.is_detail_page(url):
+            if url and site_config.is_detail_page(url, base_url=runner._results_base_url):
                 logger.info(f"  [claude-click] Verified on detail page: {url[:60]}")
                 runner._last_known_url = url
                 dynamic_verifier.record_item_opened(
@@ -392,7 +392,7 @@ class ClaudeGuidedClickHandler:
                 if not url:
                     after = env.screenshot()
                     url = runner._read_current_url(after)
-                if url and site_config.is_detail_page(url):
+                if url and site_config.is_detail_page(url, base_url=runner._results_base_url):
                     logger.info(f"  [claude-click] Middle-click fallback opened detail: {url[:60]}")
                     runner._opened_detail_in_new_tab = True
                     runner._last_known_url = url
@@ -496,7 +496,7 @@ class ClaudeGuidedClickHandler:
                 if not url:
                     after = env.screenshot()
                     url = runner._read_current_url(after)
-                if url and site_config.is_detail_page(url):
+                if url and site_config.is_detail_page(url, base_url=runner._results_base_url):
                     logger.info(
                         "  [claude-click] Probe %s opened detail: %s",
                         label,
