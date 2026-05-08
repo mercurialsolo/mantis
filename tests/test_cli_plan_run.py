@@ -428,3 +428,75 @@ def test_run_propagates_max_cost_and_max_time(
     runner_kwargs = patched_deps["runner_cls"].call_args.kwargs
     assert runner_kwargs["max_cost"] == 2.5
     assert runner_kwargs["max_time_minutes"] == 5
+
+
+# ── env.reset prewarm before runner.run ─────────────────────────────────
+
+
+def test_run_prewarms_env_reset_before_runner_run(
+    tmp_path: Path, patched_deps,
+) -> None:
+    """Plans that omit a ``navigate`` step (e.g. bench variants that
+    assume the runtime already opened the browser) must still produce
+    a constructed Playwright page before the first step. The CLI calls
+    ``env.reset(start_url=...)`` after building the runner and before
+    ``runner.run``, mirroring what the host-integration runtime does.
+    Without this, the first handler that calls ``env.screenshot()``
+    raises a clear-but-blocking RuntimeError from PR #215."""
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    code = main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert code == EXIT_OK
+
+    env_instance = patched_deps["env_cls"].return_value
+    env_instance.reset.assert_called_once()
+    reset_kwargs = env_instance.reset.call_args.kwargs
+    assert reset_kwargs.get("start_url") == "https://crm.example.test/leads"
+    # The reset must fire BEFORE runner.run — verifies pre-warm ordering.
+    assert env_instance.reset.call_args.args == () or env_instance.reset.call_args.kwargs
+
+
+def test_run_returns_error_when_env_reset_fails(
+    tmp_path: Path, patched_deps, capsys,
+) -> None:
+    """A pre-warm failure (network, browser launch error, etc.) must
+    NOT silently fall through to runner.run — that would re-raise the
+    same error inside the runner with less context. Surface it
+    explicitly with a clear stderr message."""
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    env_instance = patched_deps["env_cls"].return_value
+    env_instance.reset.side_effect = RuntimeError("playwright failed to launch chromium")
+
+    code = main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert code == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "env.reset failed before runner.run" in err
+    # Runner was never invoked because the prewarm failed first.
+    patched_deps["runner_instance"].run.assert_not_called()
+
+
+def test_run_uses_explicit_start_url_in_env_reset(
+    tmp_path: Path, patched_deps,
+) -> None:
+    """``--start-url`` overrides the plan-inferred URL for both the env
+    constructor AND the prewarm reset call — caller's intent wins."""
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--start-url", "https://other.example.test/dashboard",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    env_instance = patched_deps["env_cls"].return_value
+    reset_kwargs = env_instance.reset.call_args.kwargs
+    assert reset_kwargs.get("start_url") == "https://other.example.test/dashboard"

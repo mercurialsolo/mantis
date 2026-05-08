@@ -769,6 +769,21 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
     print(f"  output:  {output_dir}")
     print()
 
+    # Pre-warm the env at ``start_url`` before handing it to the runner.
+    # Plans that begin with a ``navigate`` step will reset again on their
+    # first action — harmless. Plans that omit ``navigate`` (e.g. bench
+    # variants that assume the runtime already opened the browser, like
+    # ``boattrader_scrape_bench``) need this prewarm: without it, the
+    # first handler that calls ``env.screenshot()`` hits a clear-but-
+    # blocking RuntimeError because the Playwright page hasn't been
+    # constructed yet. Equivalent to what the host-integration runtime
+    # does before invoking ``MicroPlanRunner.run``.
+    try:
+        env.reset(task="cli_plan_run", start_url=start_url)
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: env.reset failed before runner.run: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
     t0 = _time.time()
     try:
         step_results = runner.run(plan, resume=bool(args.resume))
