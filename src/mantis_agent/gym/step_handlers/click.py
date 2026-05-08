@@ -351,6 +351,31 @@ class ClaudeGuidedClickHandler:
                 return StepResult(step_index=index, intent=step.intent, success=True,
                                 steps_used=1, duration=3.0 + verify_attempt * 3)
 
+            # Auth-wall short-circuit: if the click hijacked the original tab to
+            # a /login page, neither middle-click nor probe-area clicks can
+            # rescue this card — they'll just re-fire on a login form. Bail
+            # immediately and let StepRecoveryPolicy roll back to the results
+            # URL so the next loop iteration starts clean.
+            if url and _looks_like_login_redirect(url):
+                logger.warning(
+                    "  [claude-click] Click redirected to login (url=%s) — "
+                    "bailing out for recovery to roll back",
+                    url[:80],
+                )
+                dynamic_verifier.record_item_completed(
+                    page=runner._current_page,
+                    item=getattr(runner, "_last_click_title", "") or title,
+                    url=url,
+                    success=False,
+                    reason="login_redirect",
+                )
+                if hasattr(runner, '_last_click_title') and runner._last_click_title:
+                    runner._extracted_titles.append(runner._last_click_title)
+                return StepResult(
+                    step_index=index, intent=step.intent, success=False,
+                    data="login_redirect",
+                )
+
             if verify_attempt == 0:
                 logger.info(f"  [claude-click] Not on detail page yet (url={url[:40]}) — retrying verify")
 
@@ -389,6 +414,42 @@ class ClaudeGuidedClickHandler:
                         runner._extracted_titles.append(runner._last_click_title)
                     return StepResult(step_index=index, intent=step.intent, success=True,
                                     steps_used=2 + switch_attempt, duration=9.0)
+
+                # Empty-newtab short-circuit: middle-click on a non-anchor card
+                # region (e.g. whitespace) opens a blank chrome://newtab/.
+                # Repeated ctrl+Tab + probe-area clicks won't recover — the
+                # click target itself isn't a link. Close the empty tab,
+                # mark the card tried, and let recovery move on.
+                if url and _looks_like_blank_newtab(url):
+                    logger.warning(
+                        "  [claude-click] Middle-click landed on blank tab "
+                        "(%s) — aborting fallback chain",
+                        url[:40],
+                    )
+                    try:
+                        env.step(Action(
+                            action_type=ActionType.KEY_PRESS,
+                            params={"keys": "ctrl+w"},
+                        ))
+                        time.sleep(0.5)
+                    except Exception as close_err:
+                        logger.debug(
+                            "  [claude-click] ctrl+w on blank tab failed: %s",
+                            close_err,
+                        )
+                    dynamic_verifier.record_item_completed(
+                        page=runner._current_page,
+                        item=getattr(runner, "_last_click_title", "") or title,
+                        url=url,
+                        success=False,
+                        reason="newtab_blank",
+                    )
+                    if hasattr(runner, '_last_click_title') and runner._last_click_title:
+                        runner._extracted_titles.append(runner._last_click_title)
+                    return StepResult(
+                        step_index=index, intent=step.intent, success=False,
+                        data="newtab_blank",
+                    )
 
                 if switch_attempt == 0:
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+Tab"}))
@@ -475,6 +536,57 @@ class ClaudeGuidedClickHandler:
         if hasattr(runner, '_last_click_title') and runner._last_click_title:
             runner._extracted_titles.append(runner._last_click_title)
         return StepResult(step_index=index, intent=step.intent, success=False)
+
+
+# ── click-failure URL predicates ──────────────────────────────────────
+
+
+# Path tokens used to detect an auth wall hijacking a card click. Kept
+# conservative — match common SaaS / CRM login routes, not search-result
+# pages that happen to contain "login" as a query parameter.
+_LOGIN_PATH_TOKENS: tuple[str, ...] = (
+    "/login",
+    "/signin",
+    "/sign-in",
+    "/sign_in",
+    "/auth/login",
+    "/oauth/authorize",
+    "/users/sign_in",
+    "/account/login",
+)
+
+
+def _looks_like_login_redirect(url: str) -> bool:
+    """True when the post-click URL is a login wall, not a detail page.
+
+    Used by the click handler to short-circuit the middle-click + probe
+    fallback chain — neither will rescue a click that was hijacked into
+    an auth flow. StepRecoveryPolicy receives ``data="login_redirect"``
+    and rolls back to the prior results URL.
+    """
+    if not url:
+        return False
+    lowered = url.lower()
+    return any(token in lowered for token in _LOGIN_PATH_TOKENS)
+
+
+def _looks_like_blank_newtab(url: str) -> bool:
+    """True when the middle-click landed on Chromium's empty new-tab page.
+
+    Used by the click handler to abort the middle-click + probe chain
+    when the click target wasn't a navigable link. Matches
+    ``chrome://newtab/``, ``about:blank``, and the Edge/Chromium variants
+    that surface in the same scenario.
+    """
+    if not url:
+        return False
+    lowered = url.lower().strip()
+    return (
+        lowered.startswith("chrome://newtab")
+        or lowered.startswith("chrome://new-tab-page")
+        or lowered.startswith("edge://newtab")
+        or lowered.startswith("about:blank")
+    )
 
 
 # ── #181 helpers — independent grounding routing + metric emission ────

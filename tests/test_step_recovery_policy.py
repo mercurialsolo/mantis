@@ -317,6 +317,76 @@ def test_click_failure_page_blocked_reload_failed_halts(monkeypatch):
     assert outcome.halt_reason == "page_blocked"
 
 
+def test_click_failure_login_redirect_reloads_then_jumps_to_loop(monkeypatch):
+    """login_redirect → _ensure_results_filters(force_reload=True), jump to next loop."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    runner._ensure_results_filters.return_value = True
+    policy = StepRecoveryPolicy(runner)
+
+    plan = _plan("click", "extract_data", "loop")
+    outcome = policy.handle_failure(
+        step=plan.steps[0],
+        step_result=_result(data="login_redirect"),
+        plan=plan,
+        step_index=0,
+        step_retry_counts={},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 2  # loop
+    assert outcome.halt_reason == "login_redirect_recovered"
+    runner._ensure_results_filters.assert_called_once_with(0, force_reload=True)
+
+
+def test_click_failure_login_redirect_swallows_reload_exception(monkeypatch):
+    """Recovery must not propagate a reload exception — log and skip card."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    runner._ensure_results_filters.side_effect = RuntimeError("nav blew up")
+    policy = StepRecoveryPolicy(runner)
+
+    plan = _plan("click", "loop")
+    outcome = policy.handle_failure(
+        step=plan.steps[0],
+        step_result=_result(data="login_redirect"),
+        plan=plan,
+        step_index=0,
+        step_retry_counts={},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 1
+    assert outcome.halt_reason == "login_redirect_recovered"
+
+
+def test_click_failure_newtab_blank_skips_to_loop(monkeypatch):
+    """newtab_blank → no reload (handler closed tab), jump to next loop step."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    policy = StepRecoveryPolicy(runner)
+
+    plan = _plan("click", "extract_data", "loop")
+    outcome = policy.handle_failure(
+        step=plan.steps[0],
+        step_result=_result(data="newtab_blank"),
+        plan=plan,
+        step_index=0,
+        step_retry_counts={},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 2  # loop
+    assert outcome.halt_reason == "newtab_blank"
+    runner._ensure_results_filters.assert_not_called()
+
+
 def test_click_failure_generic_escapes_then_jumps_to_loop(monkeypatch):
     monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
     runner = _runner_stub()

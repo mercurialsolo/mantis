@@ -389,6 +389,40 @@ class StepRecoveryPolicy:
                 halt=False, step_index=new_index, halt_reason="page_exhausted",
             )
 
+        # login_redirect → click hijacked into auth wall. Reload the
+        # filtered results URL to roll back, mark the card tried (handler
+        # already appended to _extracted_titles), and skip to the next
+        # loop iteration so the next card is attempted on a clean page.
+        if step_result.data == "login_redirect":
+            logger_.warning(
+                f"  [{step_index}] LOGIN REDIRECT — rolling back to results URL"
+            )
+            try:
+                runner._ensure_results_filters(step_index, force_reload=True)
+            except Exception as exc:  # noqa: BLE001 — rollback must not raise
+                logger_.warning(
+                    f"  [{step_index}] rollback reload failed: {exc}"
+                )
+            jumped = self._first_step_of_type(plan, step_index + 1, "loop")
+            new_index = jumped if jumped is not None else step_index + 1
+            return RecoveryOutcome(
+                halt=False, step_index=new_index,
+                halt_reason="login_redirect_recovered",
+            )
+
+        # newtab_blank → middle-click opened chrome://newtab/. The handler
+        # already closed the empty tab; treat as a generic skip-this-card
+        # so the next loop iteration runs on the original results tab.
+        if step_result.data == "newtab_blank":
+            logger_.warning(
+                f"  [{step_index}] BLANK NEW TAB — card has no navigable link, skipping"
+            )
+            jumped = self._first_step_of_type(plan, step_index + 1, "loop")
+            new_index = jumped if jumped is not None else step_index + 1
+            return RecoveryOutcome(
+                halt=False, step_index=new_index, halt_reason="newtab_blank",
+            )
+
         # scan_error / page_blocked → bounded retry, then page_blocked reload
         if step_result.data in ("scan_error", "page_blocked"):
             attempt = step_retry_counts.get(step_index, 0) + 1
