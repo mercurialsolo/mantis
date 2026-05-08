@@ -461,6 +461,16 @@ def run_task_loop(
                     "grounding": config.grounding,
                     "on_step": on_step,
                     "use_sub_plan": config.use_sub_plan,
+                    "fallback_brain": config.fallback_brain,
+                    "fallback_label": config.fallback_label,
+                    "fallback_micro_retries": task_config.get(
+                        "fallback_micro_retries",
+                        config.fallback_micro_retries,
+                    ),
+                    "fallback_micro_max_steps": task_config.get(
+                        "fallback_max_steps",
+                        config.fallback_micro_max_steps,
+                    ),
                 }
                 if config.extractor:
                     wf_kwargs["extractor"] = config.extractor

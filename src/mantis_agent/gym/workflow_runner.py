@@ -296,8 +296,16 @@ class WorkflowRunner:
                  grounding: Any = None,
                  on_step: Any = None,
                  use_sub_plan: bool = False,
-                 extractor: Any = None):
+                 extractor: Any = None,
+                 fallback_brain: Any = None,
+                 fallback_label: str = "fallback",
+                 fallback_micro_retries: int = 2,
+                 fallback_micro_max_steps: int = 6):
         self.brain = brain
+        self.fallback_brain = fallback_brain
+        self.fallback_label = fallback_label
+        self.fallback_micro_retries = fallback_micro_retries
+        self.fallback_micro_max_steps = fallback_micro_max_steps
         self.grounding = grounding
         self.on_step = on_step
         self.use_sub_plan = use_sub_plan
@@ -789,6 +797,41 @@ class WorkflowRunner:
             if result.success or self._check_no_more(result):
                 break
 
+            if self.fallback_brain is not None:
+                for micro_attempt in range(
+                    1, max(int(self.fallback_micro_retries), 0) + 1
+                ):
+                    micro_result = self._run_micro_fallback(
+                        intent=attempt_intent,
+                        task_id=task_id,
+                        failed_result=best_result,
+                        attempt=micro_attempt,
+                        kind="listing extraction/navigation",
+                    )
+                    if not micro_result.success:
+                        best_result = micro_result
+                        continue
+
+                    resume_intent = (
+                        attempt_intent
+                        + "\n\nA bounded recovery micro-step was just applied. "
+                        "Resume this same extraction/navigation step from the "
+                        "current browser state. Do not restart the full plan."
+                    )
+                    result = runner.run(
+                        task=resume_intent,
+                        task_id=(
+                            f"{task_id}_resume_after_"
+                            f"{self.fallback_label}_{micro_attempt}"
+                        ),
+                        start_url="",
+                    )
+                    best_result = result
+                    if result.success or self._check_no_more(result):
+                        break
+                if best_result.success or self._check_no_more(best_result):
+                    break
+
         return best_result
 
     def _run_pagination(self) -> bool:
@@ -864,7 +907,153 @@ class WorkflowRunner:
                 pass
             return True
 
+        if self.fallback_brain is not None:
+            for micro_attempt in range(1, max(int(self.fallback_micro_retries), 0) + 1):
+                micro_result = self._run_micro_fallback(
+                    intent=pagination_task,
+                    task_id="pagination",
+                    failed_result=retry_result,
+                    attempt=micro_attempt,
+                    kind="pagination/navigation",
+                )
+                if not micro_result.success:
+                    continue
+
+                verify_runner = GymRunner(
+                    brain=self.brain,
+                    env=self.env,
+                    max_steps=min(self.config.max_steps_pagination, 10),
+                    frames_per_inference=2,
+                    grounding=self.grounding,
+                    on_step=self.on_step,
+                )
+                verify_result = verify_runner.run(
+                    task=(
+                        "A bounded recovery micro-step was just applied for "
+                        "pagination. Verify whether a next results page is now "
+                        "loaded. If listings for a new page are visible, call "
+                        "done(success=true). If not, take only one small "
+                        "pagination action and then decide."
+                    ),
+                    task_id=f"pagination_resume_after_{self.fallback_label}_{micro_attempt}",
+                    start_url="",
+                )
+                if verify_result.success:
+                    try:
+                        self.env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+                        time.sleep(1.5)
+                    except Exception:
+                        pass
+                    return True
+
         return False
+
+    def _run_micro_fallback(
+        self,
+        *,
+        intent: str,
+        task_id: str,
+        failed_result: Any,
+        attempt: int,
+        kind: str,
+    ) -> Any:
+        """Run a bounded Claude recovery step, then return control to primary."""
+        micro_intent = self._build_loop_micro_fallback_intent(
+            intent=intent,
+            task_id=task_id,
+            failed_result=failed_result,
+            attempt=attempt,
+            kind=kind,
+        )
+        logger.warning(
+            "  %s micro-fallback: %s for %s (attempt %s/%s)",
+            self.fallback_label,
+            kind,
+            task_id,
+            attempt,
+            self.fallback_micro_retries,
+        )
+        runner = GymRunner(
+            brain=self.fallback_brain,
+            env=self.env,
+            max_steps=int(self.fallback_micro_max_steps),
+            frames_per_inference=2,
+            grounding=self.grounding,
+            on_step=self.on_step,
+        )
+        return runner.run(
+            task=micro_intent,
+            task_id=f"{task_id}_{self.fallback_label}_micro_fallback_{attempt}",
+            start_url="",
+        )
+
+    def _build_loop_micro_fallback_intent(
+        self,
+        *,
+        intent: str,
+        task_id: str,
+        failed_result: Any,
+        attempt: int,
+        kind: str,
+    ) -> str:
+        termination = str(getattr(failed_result, "termination_reason", "unknown"))
+        recent = self._recent_failure_context(failed_result)
+        return (
+            "You are handling one stuck browser-control micro-step inside a "
+            "larger extraction loop. Do not execute the full workflow, future "
+            "listings, or the full extraction plan.\n\n"
+            f"LOOP STEP: {task_id}\n"
+            f"MICRO-STEP TYPE: {kind}\n"
+            f"ORIGINAL LOOP GOAL:\n{intent[:2400]}\n\n"
+            f"PRIMARY EXECUTOR FAILURE: {termination}\n"
+            f"RECENT ACTIONS BEFORE FAILURE:\n{recent}\n\n"
+            f"RECOVERY ATTEMPT: {attempt}\n\n"
+            "Your job now:\n"
+            "1. Reason from the current browser screen.\n"
+            "2. Execute only the smallest visible recovery action or short "
+            "action sequence needed to unstick this loop step.\n"
+            "3. Stop immediately after that micro-step with done(success=true). "
+            "The primary executor will resume the original loop step afterward.\n\n"
+            "Constraints:\n"
+            "- Do not process another unrelated listing.\n"
+            "- Do not extract or summarize leads unless the visible current "
+            "micro-step already requires one tiny extraction check.\n"
+            "- If on the wrong page, prefer Escape, Alt+Left, or a single "
+            "in-page navigation action that returns to visible listings.\n"
+            "- If listings are hidden below/above, use a small scroll.\n"
+            "- Do not click the browser toolbar, address bar, tab strip, or "
+            "extension area unless the goal is explicit navigation.\n"
+            "- If no useful recovery action is visible, finish with "
+            "done(success=false) and explain the blocker briefly."
+        )
+
+    @staticmethod
+    def _redacted_action(action: Any) -> str:
+        action_type = getattr(action, "action_type", "")
+        kind = getattr(action_type, "value", str(action_type))
+        params = dict(getattr(action, "params", {}) or {})
+        if kind == "type_text":
+            text = str(params.get("text", ""))
+            params = {"text": f"<{len(text)} chars>"}
+        return f"{kind}({params})"
+
+    @classmethod
+    def _recent_failure_context(cls, result: Any, max_steps: int = 6) -> str:
+        trajectory = list(getattr(result, "trajectory", []) or [])[-max_steps:]
+        if not trajectory:
+            return "No recent action context was recorded."
+
+        lines: list[str] = []
+        for item in trajectory:
+            step = getattr(item, "step", "?")
+            action = cls._redacted_action(getattr(item, "action", None))
+            feedback = str(getattr(item, "feedback", "") or "")
+            if feedback:
+                feedback = feedback.replace("\n", " ")[:180]
+                lines.append(f"- step {step}: {action} -> {feedback}")
+            else:
+                lines.append(f"- step {step}: {action}")
+        return "\n".join(lines)
 
     def _check_no_more(self, result, check_pages: bool = False) -> bool:
         """Check if the model signaled no more items/pages.

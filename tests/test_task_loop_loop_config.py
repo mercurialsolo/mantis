@@ -13,6 +13,10 @@ def test_loop_task_passes_extended_loop_config(monkeypatch, tmp_path) -> None:
     class FakeWorkflowRunner:
         def __init__(self, **kwargs):
             captured["loop_config"] = kwargs["loop_config"]
+            captured["fallback_brain"] = kwargs["fallback_brain"]
+            captured["fallback_label"] = kwargs["fallback_label"]
+            captured["fallback_micro_retries"] = kwargs["fallback_micro_retries"]
+            captured["fallback_micro_max_steps"] = kwargs["fallback_micro_max_steps"]
 
         def run_loop(self):
             return []
@@ -25,6 +29,10 @@ def test_loop_task_passes_extended_loop_config(monkeypatch, tmp_path) -> None:
         model_name="model",
         results_prefix="test",
         brain=object(),
+        fallback_brain="claude",
+        fallback_label="claude",
+        fallback_micro_retries=3,
+        fallback_micro_max_steps=7,
         env=object(),
         max_steps=90,
         results_dir=str(tmp_path),
@@ -52,6 +60,10 @@ def test_loop_task_passes_extended_loop_config(monkeypatch, tmp_path) -> None:
     assert loop_config.max_steps_per_iteration == 45
     assert loop_config.max_retries_per_iteration == 4
     assert loop_config.max_steps_pagination == 35
+    assert captured["fallback_brain"] == "claude"
+    assert captured["fallback_label"] == "claude"
+    assert captured["fallback_micro_retries"] == 3
+    assert captured["fallback_micro_max_steps"] == 7
 
 
 def test_standard_task_uses_fallback_brain_after_primary_failure(
