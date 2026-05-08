@@ -170,3 +170,40 @@ def test_failed_standard_task_stops_loop_by_default(monkeypatch, tmp_path) -> No
     assert calls == ["submit"]
     assert scores == [0.0]
     assert [d["task_id"] for d in details] == ["submit"]
+
+
+def test_standard_task_uses_small_default_step_cap(monkeypatch, tmp_path) -> None:
+    captured: list[int] = []
+
+    class FakeEnv:
+        current_url = "https://example.test/"
+
+    class FakeGymRunner:
+        def __init__(self, *, max_steps, **_kwargs):
+            captured.append(max_steps)
+
+        def run(self, **_kwargs):
+            return SimpleNamespace(
+                success=True,
+                total_steps=1,
+                termination_reason="done",
+                trajectory=[],
+            )
+
+    monkeypatch.setattr(runner_module, "GymRunner", FakeGymRunner)
+
+    config = task_loop.TaskLoopConfig(
+        run_id="run",
+        session_name="session",
+        model_name="model",
+        results_prefix="test",
+        brain="holo3",
+        env=FakeEnv(),
+        max_steps=90,
+        standard_task_max_steps=15,
+        results_dir=str(tmp_path),
+    )
+
+    task_loop.run_task_loop([{"task_id": "submit", "intent": "click submit"}], config)
+
+    assert captured == [15]

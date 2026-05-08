@@ -50,6 +50,7 @@ class TaskLoopConfig:
 
     # ── Execution params ──
     max_steps: int = 30
+    standard_task_max_steps: int = 15
     frames_per_inference: int = 5
     use_sub_plan: bool = True
     site_config: Any = None  # SiteConfig for URL patterns (passed to callbacks)
@@ -337,6 +338,12 @@ def _build_micro_fallback_intent(
     )
 
 
+def _standard_task_max_steps(task_config: dict[str, Any], config: TaskLoopConfig) -> int:
+    if "max_steps" in task_config:
+        return int(task_config["max_steps"])
+    return min(int(config.max_steps), int(config.standard_task_max_steps))
+
+
 # ── Main task loop ────────────────────────────────────────────────
 
 
@@ -490,7 +497,7 @@ def run_task_loop(
             runner = GymRunner(
                 brain=config.brain,
                 env=config.env,
-                max_steps=task_config.get("max_steps", config.max_steps),
+                max_steps=_standard_task_max_steps(task_config, config),
                 frames_per_inference=config.frames_per_inference,
                 grounding=config.grounding,
                 on_step=on_step,
@@ -517,7 +524,7 @@ def run_task_loop(
                 resume_max_steps = int(
                     task_config.get(
                         "resume_max_steps",
-                        task_config.get("max_steps", config.max_steps),
+                        _standard_task_max_steps(task_config, config),
                     )
                 )
 
