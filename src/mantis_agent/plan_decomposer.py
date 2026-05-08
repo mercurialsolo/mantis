@@ -359,15 +359,37 @@ VERB → STEP-TYPE MAPPING (FORM FLOWS):
    "enter X in the Y field", "type X into Y", "fill in Y with X", "set Y to X",
    "input X for Y"
        → fill_field with params={"label": "Y", "value": "X"}.
-   "click the Submit button", "click Save", "click Update Lead", "press Continue",
-   "submit the form", "click the {Leads/Settings/etc} navigation link",
-   "click the {Edit Lead/Cancel} button", "go to the {Y} page"
-   (when {Y} is a tab/nav/menu item, NOT a URL)
-       → submit with params={"label": "<button or link text>"}.
-       Use submit for any SINGLE LABELLED CLICKABLE on a non-listings page —
-       buttons, nav links, tab items, menu items, dock icons, inline
-       action links. The runner uses find_form_target which locates one
-       labelled element by visible text, no listings-grid assumption.
+   submit handles ANY single labelled clickable on a non-listings page —
+   buttons, nav links, tab items, menu items. The runner's
+   find_form_target locates one labelled element by visible text. To
+   help it pick the right element when several share a label, the
+   step MUST include params.kind classifying the visual affordance:
+
+   • params.kind="button" — form-submit / call-to-action buttons
+       "click the Submit button", "click Save", "click Update Lead",
+       "press Continue", "submit the form", "click the {Edit/Cancel} button"
+       → submit with params={"label": "<button text>", "kind": "button"}.
+
+   • params.kind="nav_link" — sidebar / top-nav navigation links and
+                              "go to the X page" in-app transitions
+       "click the {Y} navigation link", "click the {Y} link in the sidebar",
+       "go to the {Y} page" (when {Y} is a tab/nav/menu item, NOT a URL),
+       "open the {Y} section"
+       → submit with params={"label": "Y", "kind": "nav_link"}.
+
+   • params.kind="tab" — horizontal/vertical tab bars on a page
+       "click the {Y} tab", "switch to the {Y} tab"
+       → submit with params={"label": "Y", "kind": "tab"}.
+
+   • params.kind="menu_item" — entries inside an open menu / kebab /
+                               dropdown / context menu
+       "click the {Y} menu item", "select {Y} from the menu",
+       "choose {Y} from the kebab menu"
+       → submit with params={"label": "Y", "kind": "menu_item"}.
+
+   When in doubt, default to params.kind="button". The runner accepts
+   submit steps without a kind and treats them as buttons for
+   backward compatibility.
    "select X from the Y dropdown", "choose X under Y", "pick X in the Y selector"
        → select_option with params={"dropdown_label": "Y", "option_label": "X"}.
    "click the first / next / nth result/row/listing/card/job/product/property"
@@ -544,7 +566,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v20_url_mirror"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v21_submit_kind"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
