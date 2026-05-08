@@ -73,14 +73,16 @@ def test_standard_task_uses_fallback_brain_after_primary_failure(
                 {
                     "brain": self.brain,
                     "task": kwargs["task"],
+                    "task_id": kwargs["task_id"],
                     "start_url": kwargs.get("start_url", ""),
                     "max_steps": self.max_steps,
                 }
             )
+            success = self.brain == "claude" or "resume_after_claude" in kwargs["task_id"]
             return SimpleNamespace(
-                success=self.brain == "claude",
+                success=success,
                 total_steps=3,
-                termination_reason="done" if self.brain == "claude" else "loop",
+                termination_reason="done" if success else "loop",
                 trajectory=[],
             )
 
@@ -94,34 +96,35 @@ def test_standard_task_uses_fallback_brain_after_primary_failure(
         brain="holo3",
         fallback_brain="claude",
         fallback_label="claude",
+        fallback_micro_retries=1,
+        fallback_micro_max_steps=5,
         env=FakeEnv(),
         max_steps=12,
         results_dir=str(tmp_path),
     )
-    tasks = [
-        {
-            "task_id": "fill_filters",
-            "intent": "fill filters",
-            "fallback_intent": "click the visible search button only",
-            "fallback_max_steps": 5,
-        }
-    ]
+    tasks = [{"task_id": "fill_filters", "intent": "fill filters"}]
 
     scores, details = task_loop.run_task_loop(tasks, config)
 
-    assert calls == [
-        {
-            "brain": "holo3",
-            "task": "fill filters",
-            "start_url": "",
-            "max_steps": 12,
-        },
-        {
-            "brain": "claude",
-            "task": "click the visible search button only",
-            "start_url": "",
-            "max_steps": 5,
-        },
-    ]
+    assert calls[0] == {
+        "brain": "holo3",
+        "task": "fill filters",
+        "task_id": "fill_filters",
+        "start_url": "",
+        "max_steps": 12,
+    }
+    assert calls[1]["brain"] == "claude"
+    assert "single stuck browser-control micro-step" in str(calls[1]["task"])
+    assert "fill filters" in str(calls[1]["task"])
+    assert calls[1]["task_id"] == "fill_filters_claude_micro_fallback_1"
+    assert calls[1]["start_url"] == ""
+    assert calls[1]["max_steps"] == 5
+    assert calls[2] == {
+        "brain": "holo3",
+        "task": "fill filters",
+        "task_id": "fill_filters_resume_after_claude_1",
+        "start_url": "",
+        "max_steps": 12,
+    }
     assert scores == [1.0]
     assert details[0]["success"] is True

@@ -44,6 +44,8 @@ class TaskLoopConfig:
     extractor: Any = None
     fallback_brain: Any = None
     fallback_label: str = "fallback"
+    fallback_micro_retries: int = 2
+    fallback_micro_max_steps: int = 6
 
     # ── Execution params ──
     max_steps: int = 30
@@ -256,6 +258,78 @@ def _build_loop_final_detail(
     return detail
 
 
+def _redacted_action(action: Any) -> str:
+    """Summarize an action without leaking typed values."""
+    action_type = getattr(action, "action_type", "")
+    kind = getattr(action_type, "value", str(action_type))
+    params = dict(getattr(action, "params", {}) or {})
+    if kind == "type_text":
+        text = str(params.get("text", ""))
+        params = {"text": f"<{len(text)} chars>"}
+    return f"{kind}({params})"
+
+
+def _recent_failure_context(result: Any, max_steps: int = 6) -> str:
+    trajectory = list(getattr(result, "trajectory", []) or [])[-max_steps:]
+    if not trajectory:
+        return "No recent action context was recorded."
+
+    lines: list[str] = []
+    for item in trajectory:
+        step = getattr(item, "step", "?")
+        action = _redacted_action(getattr(item, "action", None))
+        feedback = str(getattr(item, "feedback", "") or "")
+        if feedback:
+            feedback = feedback.replace("\n", " ")[:180]
+            lines.append(f"- step {step}: {action} -> {feedback}")
+        else:
+            lines.append(f"- step {step}: {action}")
+    return "\n".join(lines)
+
+
+def _build_micro_fallback_intent(
+    *,
+    task_id: str,
+    intent: str,
+    result: Any,
+    attempt: int,
+) -> str:
+    """Build a generic stuck-step prompt for Claude.
+
+    The fallback is deliberately scoped to a micro-step. Claude should repair
+    the current browser state and stop; the primary executor then resumes the
+    original section from that state.
+    """
+    termination = str(getattr(result, "termination_reason", "unknown"))
+    recent = _recent_failure_context(result)
+    return (
+        "You are handling a single stuck browser-control micro-step inside a "
+        "larger workflow. Do not execute the full workflow, future sections, "
+        "or broad multi-step plan.\n\n"
+        f"SECTION ID: {task_id}\n"
+        f"ORIGINAL SECTION GOAL:\n{intent[:2400]}\n\n"
+        f"PRIMARY EXECUTOR FAILURE: {termination}\n"
+        f"RECENT ACTIONS BEFORE FAILURE:\n{recent}\n\n"
+        f"RECOVERY ATTEMPT: {attempt}\n\n"
+        "Your job now:\n"
+        "1. Look at the current browser screen.\n"
+        "2. Execute only the smallest visible action or short action sequence "
+        "needed to unstick this section and make concrete progress toward the "
+        "original section goal.\n"
+        "3. Stop immediately after that micro-step with done(success=true). "
+        "The primary executor will resume the original section afterward.\n\n"
+        "Constraints:\n"
+        "- Do not continue into later workflow sections.\n"
+        "- Do not complete the whole original section unless the only needed "
+        "micro-step itself completes it.\n"
+        "- Do not edit unrelated fields or clear already-correct values.\n"
+        "- Prefer click, scroll, key_press, or wait. Type only when the current "
+        "micro-step is clearly a focused field that requires typing.\n"
+        "- If no useful recovery action is visible, finish with "
+        "done(success=false) and explain the blocker briefly."
+    )
+
+
 # ── Main task loop ────────────────────────────────────────────────
 
 
@@ -414,32 +488,90 @@ def run_task_loop(
             )
 
             if not result.success and config.fallback_brain is not None:
-                fallback_intent = task_config.get("fallback_intent", intent)
-                fallback_max_steps = task_config.get(
-                    "fallback_max_steps",
-                    task_config.get("max_steps", config.max_steps),
+                fallback_retries = int(
+                    task_config.get(
+                        "fallback_micro_retries",
+                        config.fallback_micro_retries,
+                    )
                 )
-                print(
-                    f"  {config.fallback_label} fallback: retrying failed section "
-                    f"'{task_id}'"
+                fallback_max_steps = int(
+                    task_config.get(
+                        "fallback_max_steps",
+                        config.fallback_micro_max_steps,
+                    )
                 )
-                fallback_runner = GymRunner(
-                    brain=config.fallback_brain,
-                    env=config.env,
-                    max_steps=fallback_max_steps,
-                    frames_per_inference=config.frames_per_inference,
-                    grounding=config.grounding,
-                    on_step=on_step,
+                resume_max_steps = int(
+                    task_config.get(
+                        "resume_max_steps",
+                        task_config.get("max_steps", config.max_steps),
+                    )
                 )
-                result = fallback_runner.run(
-                    task=fallback_intent,
-                    task_id=f"{task_id}_{config.fallback_label}_fallback",
-                    start_url=task_config.get("fallback_start_url", ""),
-                )
-                try:
-                    setattr(result, "fallback_used", config.fallback_label)
-                except (AttributeError, TypeError):
-                    pass
+
+                for attempt in range(1, max(fallback_retries, 0) + 1):
+                    fallback_intent = task_config.get("fallback_intent")
+                    if not fallback_intent:
+                        fallback_intent = _build_micro_fallback_intent(
+                            task_id=task_id,
+                            intent=intent,
+                            result=result,
+                            attempt=attempt,
+                        )
+                    print(
+                        f"  {config.fallback_label} micro-fallback: "
+                        f"recovering stuck section '{task_id}' "
+                        f"(attempt {attempt}/{fallback_retries})"
+                    )
+                    fallback_runner = GymRunner(
+                        brain=config.fallback_brain,
+                        env=config.env,
+                        max_steps=fallback_max_steps,
+                        frames_per_inference=config.frames_per_inference,
+                        grounding=config.grounding,
+                        on_step=on_step,
+                    )
+                    micro_result = fallback_runner.run(
+                        task=fallback_intent,
+                        task_id=(
+                            f"{task_id}_{config.fallback_label}"
+                            f"_micro_fallback_{attempt}"
+                        ),
+                        start_url=task_config.get("fallback_start_url", ""),
+                    )
+                    try:
+                        setattr(micro_result, "fallback_used", config.fallback_label)
+                    except (AttributeError, TypeError):
+                        pass
+
+                    if not micro_result.success:
+                        result = micro_result
+                        break
+
+                    print(
+                        f"  Primary resume: retrying section '{task_id}' "
+                        "after micro-fallback"
+                    )
+                    resume_runner = GymRunner(
+                        brain=config.brain,
+                        env=config.env,
+                        max_steps=resume_max_steps,
+                        frames_per_inference=config.frames_per_inference,
+                        grounding=config.grounding,
+                        on_step=on_step,
+                    )
+                    result = resume_runner.run(
+                        task=intent,
+                        task_id=(
+                            f"{task_id}_resume_after_{config.fallback_label}"
+                            f"_{attempt}"
+                        ),
+                        start_url="",
+                    )
+                    try:
+                        setattr(result, "fallback_used", config.fallback_label)
+                    except (AttributeError, TypeError):
+                        pass
+                    if result.success:
+                        break
 
             # Executor-specific post-processing (filter validation, retries, etc.)
             if config.on_task_result:
