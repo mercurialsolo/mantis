@@ -442,6 +442,9 @@ class ClaudeBrain:
             # Claude requesting a new screenshot = wait + observe
             return Action(ActionType.WAIT, {"seconds": 0.5})
 
+        elif action_type == "wait":
+            return Action(ActionType.WAIT, {"seconds": tool_input.get("seconds", 1.0)})
+
         elif action_type == "triple_click":
             # Select all text in field — map to ctrl+a
             return Action(ActionType.KEY_PRESS, {"keys": "ctrl+a"})

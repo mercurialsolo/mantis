@@ -12,6 +12,13 @@ def test_claude_key_action_accepts_text_payload() -> None:
     assert action.params == {"keys": "tab"}
 
 
+def test_claude_computer_wait_action_is_supported() -> None:
+    action = ClaudeBrain._parse_computer_action({"action": "wait", "seconds": 15})
+
+    assert action.action_type == ActionType.WAIT
+    assert action.params == {"seconds": 15}
+
+
 def test_claude_empty_key_action_infers_tab_from_reasoning() -> None:
     brain = ClaudeBrain(api_key="test-key")
     result = brain._parse_response({
@@ -51,4 +58,3 @@ def test_claude_empty_key_action_without_hint_becomes_wait() -> None:
 
 def test_claude_director_rejects_empty_keypress() -> None:
     assert _decision_to_action({"action_type": "key_press", "keys": ""}) is None
-

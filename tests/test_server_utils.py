@@ -43,6 +43,22 @@ class TestBuildProxyConfig:
 
     @pytest.fixture(autouse=True)
     def _proxy_env(self, monkeypatch):
+        for key in (
+            "MANTIS_PROXY_PROVIDER",
+            "OXYLABS_ENTRYPOINT",
+            "OXYLABS_CITY_ENTRYPOINT",
+            "OXYLABS_USERNAME",
+            "OXYLABS_USER",
+            "OXYLABS_PASSWORD",
+            "OXYLABS_PASS",
+            "OXYLABS_COUNTRY",
+            "OXYLABS_STATE",
+            "OXYLABS_CITY",
+            "PRIVATEPROXY_ENTRYPOINT",
+            "PRIVATEPROXY_USERNAME",
+            "PRIVATEPROXY_PASSWORD",
+        ):
+            monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("PROXY_URL", "http://geo.iproyal.com:12321")
         monkeypatch.setenv("PROXY_USER", "test_user")
         monkeypatch.setenv("PROXY_PASS", "basepass")
@@ -83,7 +99,7 @@ class TestBuildProxyConfig:
         finally:
             os.environ["PROXY_PASS"] = "basepass"
 
-    def test_oxylabs_provider_uses_oxylabs_credentials_without_suffixes(self, monkeypatch):
+    def test_oxylabs_provider_targets_city_with_customer_username(self, monkeypatch):
         monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:10000")
         monkeypatch.setenv("OXYLABS_USERNAME", "oxy_user")
         monkeypatch.setenv("OXYLABS_PASSWORD", "oxy_pass")
@@ -94,6 +110,19 @@ class TestBuildProxyConfig:
             session_id="abc123",
             provider="oxylabs",
         )
+
+        assert cfg == {
+            "server": "http://pr.oxylabs.io:7777",
+            "username": "customer-oxy_user-st-us_florida-city-miami",
+            "password": "oxy_pass",
+        }
+
+    def test_oxylabs_provider_uses_raw_credentials_without_city(self, monkeypatch):
+        monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:10000")
+        monkeypatch.setenv("OXYLABS_USERNAME", "oxy_user")
+        monkeypatch.setenv("OXYLABS_PASSWORD", "oxy_pass")
+
+        cfg = build_proxy_config(provider="oxylabs")
 
         assert cfg == {
             "server": "http://pr.oxylabs.io:10000",
@@ -109,9 +138,32 @@ class TestBuildProxyConfig:
 
         cfg = build_proxy_config(city="miami")
 
-        assert cfg["server"] == "http://pr.oxylabs.io:10000"
-        assert cfg["username"] == "oxy_user"
+        assert cfg["server"] == "http://pr.oxylabs.io:7777"
+        assert cfg["username"] == "customer-oxy_user-cc-US-city-miami"
         assert cfg["password"] == "oxy_pass"
+
+    def test_oxylabs_provider_reads_location_from_env(self, monkeypatch):
+        monkeypatch.setenv("OXYLABS_ENTRYPOINT", "http://pr.oxylabs.io:10000")
+        monkeypatch.setenv("OXYLABS_CITY_ENTRYPOINT", "pr.oxylabs.io:7777")
+        monkeypatch.setenv("OXYLABS_USERNAME", "oxy_user")
+        monkeypatch.setenv("OXYLABS_PASSWORD", "oxy_pass")
+        monkeypatch.setenv("OXYLABS_CITY", "miami")
+        monkeypatch.setenv("OXYLABS_STATE", "florida")
+
+        cfg = build_proxy_config(provider="oxylabs")
+
+        assert cfg["server"] == "http://pr.oxylabs.io:7777"
+        assert cfg["username"] == "customer-oxy_user-st-us_florida-city-miami"
+
+    def test_oxylabs_provider_respects_pre_targeted_username(self, monkeypatch):
+        monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:10000")
+        monkeypatch.setenv("OXYLABS_USERNAME", "customer-oxy_user-cc-US-city-miami")
+        monkeypatch.setenv("OXYLABS_PASSWORD", "oxy_pass")
+
+        cfg = build_proxy_config(city="miami", provider="oxylabs")
+
+        assert cfg["server"] == "http://pr.oxylabs.io:7777"
+        assert cfg["username"] == "customer-oxy_user-cc-US-city-miami"
 
     def test_privateproxy_provider_uses_privateproxy_credentials(self, monkeypatch):
         monkeypatch.setenv("PRIVATEPROXY_ENTRYPOINT", "privateproxy.example:8080")

@@ -32,6 +32,102 @@ logger = logging.getLogger(__name__)
 # ── Proxy utilities ───────────────────────────────────────────────
 
 
+def _slug_proxy_location(value: str) -> str:
+    return re.sub(r"_+", "_", re.sub(r"[^A-Za-z0-9]+", "_", value.strip())).strip("_")
+
+
+_US_STATE_SLUGS = {
+    "al": "alabama",
+    "ak": "alaska",
+    "az": "arizona",
+    "ar": "arkansas",
+    "ca": "california",
+    "co": "colorado",
+    "ct": "connecticut",
+    "de": "delaware",
+    "fl": "florida",
+    "ga": "georgia",
+    "hi": "hawaii",
+    "id": "idaho",
+    "il": "illinois",
+    "in": "indiana",
+    "ia": "iowa",
+    "ks": "kansas",
+    "ky": "kentucky",
+    "la": "louisiana",
+    "me": "maine",
+    "md": "maryland",
+    "ma": "massachusetts",
+    "mi": "michigan",
+    "mn": "minnesota",
+    "ms": "mississippi",
+    "mo": "missouri",
+    "mt": "montana",
+    "ne": "nebraska",
+    "nv": "nevada",
+    "nh": "new_hampshire",
+    "nj": "new_jersey",
+    "nm": "new_mexico",
+    "ny": "new_york",
+    "nc": "north_carolina",
+    "nd": "north_dakota",
+    "oh": "ohio",
+    "ok": "oklahoma",
+    "or": "oregon",
+    "pa": "pennsylvania",
+    "ri": "rhode_island",
+    "sc": "south_carolina",
+    "sd": "south_dakota",
+    "tn": "tennessee",
+    "tx": "texas",
+    "ut": "utah",
+    "vt": "vermont",
+    "va": "virginia",
+    "wa": "washington",
+    "wv": "west_virginia",
+    "wi": "wisconsin",
+    "wy": "wyoming",
+}
+
+
+def _build_oxylabs_username(
+    username: str,
+    *,
+    city: str,
+    state: str = "",
+    country: str = "US",
+) -> str:
+    """Build an Oxylabs username with optional city targeting.
+
+    Oxylabs city targeting requires the ``customer-`` username prefix. Plain
+    account usernames work for generic endpoints, but city suffixes return 407
+    unless the prefixed credential form is used.
+    """
+    if not city:
+        return username
+
+    lowered = username.lower()
+    if "-city-" in lowered or "-cc-" in lowered or "-st-" in lowered:
+        return username
+
+    city_slug = _slug_proxy_location(city).lower()
+    if not city_slug:
+        return username
+
+    base = username if lowered.startswith("customer-") else f"customer-{username}"
+    state_slug = _slug_proxy_location(state or os.environ.get("OXYLABS_STATE", "")).lower()
+    state_slug = _US_STATE_SLUGS.get(state_slug, state_slug)
+    if state_slug and country.upper() == "US":
+        return f"{base}-st-us_{state_slug}-city-{city_slug}"
+    return f"{base}-cc-{country.upper()}-city-{city_slug}"
+
+
+def _oxylabs_endpoint_for_targeting(endpoint: str, *, city: str) -> str:
+    if not city:
+        return endpoint
+    return os.environ.get("OXYLABS_CITY_ENTRYPOINT", "").strip() or "pr.oxylabs.io:7777"
+
+
 def build_proxy_config(
     city: str = "",
     state: str = "",
@@ -83,23 +179,34 @@ def build_proxy_config(
         return proxy
 
     if provider in {"oxylabs", "oxy"}:
-        proxy_url = os.environ.get("OXYLABS_ENTRYPOINT", "").strip()
+        proxy_user = (
+            os.environ.get("OXYLABS_USERNAME", "")
+            or os.environ.get("OXYLABS_USER", "")
+        )
+        target_city = city or os.environ.get("OXYLABS_CITY", "")
+        target_state = state or os.environ.get("OXYLABS_STATE", "")
+        proxy_url = _oxylabs_endpoint_for_targeting(
+            os.environ.get("OXYLABS_ENTRYPOINT", "").strip(),
+            city=target_city if proxy_user else "",
+        )
         if not proxy_url:
             return None
         if "://" not in proxy_url:
             proxy_url = f"http://{proxy_url}"
 
         proxy: dict[str, str] = {"server": proxy_url}
-        proxy_user = (
-            os.environ.get("OXYLABS_USERNAME", "")
-            or os.environ.get("OXYLABS_USER", "")
-        )
         proxy_pass = (
             os.environ.get("OXYLABS_PASSWORD", "")
             or os.environ.get("OXYLABS_PASS", "")
         )
         if proxy_user:
-            proxy["username"] = proxy_user
+            country = os.environ.get("OXYLABS_COUNTRY", "US").strip() or "US"
+            proxy["username"] = _build_oxylabs_username(
+                proxy_user,
+                city=target_city,
+                state=target_state,
+                country=country,
+            )
             proxy["password"] = proxy_pass
         return proxy
 
