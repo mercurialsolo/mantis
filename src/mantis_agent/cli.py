@@ -892,7 +892,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     init.add_argument(
         "--model",
-        default="claude-sonnet-4-20250514",
+        default="claude-opus-4-7",
         help="Claude model to use for decomposition",
     )
     init.add_argument(

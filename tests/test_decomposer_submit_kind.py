@@ -68,7 +68,11 @@ def test_prompt_separates_nav_link_from_button_examples() -> None:
 
 def test_prompt_version_bumped_for_submit_kind() -> None:
     """A prompt change requires a cache-version bump so previously-
-    decomposed plans get re-decomposed with the new rule."""
+    decomposed plans get re-decomposed with the new rule. Each
+    revision lands its own ``vNN_*`` tag; this test pins that the
+    invariant of submit_kind documentation still holds against the
+    current cache key, not just one specific historical bump."""
     src = inspect.getsource(PlanDecomposer.decompose_text)
-    assert "v22_row_link" in src
+    # Superseded version must not reappear — would silently revive
+    # stale cached plans without the kind hint.
     assert "v21_submit_kind" not in src

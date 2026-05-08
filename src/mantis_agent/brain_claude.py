@@ -13,7 +13,7 @@ Key differences from other brains:
 - No GPU needed — runs via API, pairs with XdotoolGymEnv on Modal
 
 Usage:
-    brain = ClaudeBrain(api_key="sk-ant-...", model="claude-sonnet-4-20250514")
+    brain = ClaudeBrain(api_key="sk-ant-...", model="claude-opus-4-7")
     brain.load()
     result = brain.think(frames=[screenshot], task="Click the login button", ...)
 
@@ -120,7 +120,7 @@ class ClaudeBrain:
     def __init__(
         self,
         api_key: str = "",
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-opus-4-7",
         max_tokens: int = 4096,
         thinking_budget: int = 2048,
         screen_size: tuple[int, int] = (1280, 720),

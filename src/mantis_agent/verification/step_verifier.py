@@ -105,7 +105,7 @@ class StepVerifier:
     Cheap (~$0.003/call), fast, vision-capable.
     """
 
-    def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: str = "", model: str = "claude-opus-4-7"):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
 

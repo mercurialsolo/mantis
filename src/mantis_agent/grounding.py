@@ -165,7 +165,7 @@ Nothing else."""
     def __init__(
         self,
         api_key: str = "",
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-opus-4-7",
         cache: "GroundingCache | None" = None,
     ):
         import os

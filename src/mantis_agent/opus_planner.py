@@ -181,7 +181,7 @@ Return ONLY the JSON, no markdown fences, no explanation.
 def plan_with_opus(
     plan_path: str,
     api_key: str = "",
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-opus-4-7",
     output_path: str = "",
     force: bool = False,
 ) -> dict:
@@ -328,7 +328,7 @@ def browse_and_plan(
     plan_path: str,
     screenshot_dir: str,
     api_key: str = "",
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-opus-4-7",
     output_path: str = "",
     max_screenshots: int = 5,
     force: bool = False,
