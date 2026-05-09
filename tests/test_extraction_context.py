@@ -186,7 +186,7 @@ def test_marketplace_listings_has_tile_carry_fields() -> None:
 def test_marketplace_recipe_tile_extraction_does_not_reject_url_only_row() -> None:
     """End-to-end against the real recipe: a tile row with just url
     must NOT be rejected (this is exactly the scenario that halted
-    the BoatTrader → PopYachts plan run before this fix)."""
+    the marketplace-listing plan run before this fix)."""
     schema = recipes.load_schema("marketplace_listings")
     row = _row(schema=schema, url="https://boattrader.com/boat/abc")
     assert row.missing_required_reason(ExtractionContext.SEARCH_TILE) == ""
