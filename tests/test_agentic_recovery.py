@@ -112,6 +112,26 @@ def test_analyse_returns_none_on_missing_tool_block() -> None:
     assert result is None
 
 
+def test_prompt_includes_progress_evidence_guidance_for_halt() -> None:
+    """The prompt must teach Claude that lack of visible progress
+    across multiple retries is evidence the target may not exist —
+    so it picks halt over insert_steps when scrolling/clicking
+    haven't moved the page. This was the priority-field gap: Claude
+    chose add_hint when halt was the right call because the prompt
+    didn't enumerate "page hasn't moved" as a halt signal."""
+    from mantis_agent.agentic_recovery import _ANALYSIS_PROMPT_TEMPLATE
+
+    rendered = _ANALYSIS_PROMPT_TEMPLATE.format(
+        intent="x", step_type="submit", params="{}",
+        failure_data="x", attempts=3, plan_context="",
+    )
+    # Halt mode mentions progress evidence.
+    assert "PROGRESS EVIDENCE" in rendered or "page state" in rendered.lower()
+    # Explicit guidance to prefer halt when retries didn't progress.
+    assert "halt" in rendered.lower()
+    assert "loop" in rendered.lower() or "didn't" in rendered.lower() or "did not" in rendered.lower()
+
+
 def test_analyse_calls_with_correct_tool_schema() -> None:
     """The ``tool_choice`` must force the ``record_recovery`` tool and
     the input_schema must enumerate the four recovery modes."""
