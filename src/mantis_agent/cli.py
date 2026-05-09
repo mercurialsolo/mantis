@@ -901,6 +901,165 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
     return EXIT_OK if failures == 0 else EXIT_ERROR
 
 
+def cmd_plan_run_modal(args: argparse.Namespace) -> int:
+    """``mantis plan run-modal <plan>`` — execute a plan inside Modal.
+
+    Thin remote driver: looks up the deployed ``run_plan`` function on
+    ``--app-name`` (default ``mantis-plan-runner``, see
+    ``deploy/modal/modal_plan_runner.py``), submits the plan + brain
+    config, and writes the returned result-payload to
+    ``<output-dir>/result.json``. The browser, decomposer (if needed),
+    grounding, and extractor all run on Modal — so Cloudflare-protected
+    sites that block local headless Chromium pass through normally
+    because the Modal image runs full Chromium under Xvfb.
+
+    The remote function reads ``ANTHROPIC_API_KEY`` and the optional
+    Oxylabs credentials from the ``mantis-plan-runner-secrets`` Modal
+    Secret — pass-through args here are limited to the brain endpoint,
+    plan source, and per-run knobs (start URL, detail-page pattern,
+    cost / time caps, proxy toggle).
+    """
+    import time as _time
+
+    plan_path = Path(args.path)
+    if not plan_path.exists():
+        print(f"error: plan file not found: {args.path}", file=sys.stderr)
+        return EXIT_ERROR
+
+    plan_text: str | None = None
+    plan_json: dict | None = None
+    if _looks_like_text_plan(plan_path):
+        plan_text = plan_path.read_text(encoding="utf-8")
+        if not plan_text.strip():
+            print(f"error: plan file is empty: {plan_path}", file=sys.stderr)
+            return EXIT_ERROR
+    else:
+        try:
+            with plan_path.open() as fh:
+                plan_json = json.load(fh)
+        except json.JSONDecodeError as exc:
+            print(f"error: invalid JSON in {plan_path}: {exc}", file=sys.stderr)
+            return EXIT_ERROR
+
+    endpoint = args.endpoint
+    if not endpoint:
+        print(
+            "error: --endpoint is required (the brain URL Modal will hit)",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    try:
+        extra_headers = _parse_extra_headers(args.header)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    try:
+        import modal  # type: ignore[import-not-found]
+    except ImportError:
+        print(
+            "error: modal SDK not installed. `pip install modal` or "
+            "use the [modal] extras to enable run-modal.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    try:
+        run_plan_fn = modal.Function.from_name(args.app_name, "run_plan")
+    except Exception as exc:  # noqa: BLE001 — modal raises various types
+        print(
+            f"error: cannot resolve Modal function "
+            f"{args.app_name}/run_plan: {exc}. Deploy first via "
+            "`uv run modal deploy deploy/modal/modal_plan_runner.py`.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    # Output dir + start_url derivation. We need a MicroPlan object to
+    # find the first navigate URL when --start-url is omitted, but only
+    # for json plans — text plans get decomposed inside Modal so we
+    # require an explicit --start-url in that case.
+    start_url = args.start_url or ""
+    if not start_url and plan_json is not None:
+        from .plan_decomposer import MicroPlan
+        try:
+            mp = MicroPlan.from_dict(plan_json)
+        except Exception as exc:  # noqa: BLE001
+            print(f"error: cannot parse plan from {plan_path}: {exc}", file=sys.stderr)
+            return EXIT_ERROR
+        start_url = _resolve_first_navigate_url(mp)
+    if not start_url:
+        print(
+            "error: --start-url is required for text plans (decomposer "
+            "runs in Modal so we can't introspect plan steps locally)",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    output_dir = Path(args.output_dir or f"outputs/run-modal-{int(_time.time())}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if plan_json is not None:
+        (output_dir / "plan.json").write_text(
+            json.dumps(plan_json, indent=2) + "\n", encoding="utf-8",
+        )
+    else:
+        (output_dir / "plan.txt").write_text(plan_text or "", encoding="utf-8")
+
+    session_name = plan_path.stem
+
+    print(f"  app:     {args.app_name} (modal)")
+    print(f"  brain:   {endpoint}")
+    print(f"  plan:    {plan_path.name} → {output_dir}")
+    print(f"  start:   {start_url}")
+    print()
+
+    t0 = _time.time()
+    try:
+        result = run_plan_fn.remote(
+            plan_text=plan_text,
+            plan_json=plan_json,
+            brain_endpoint=endpoint,
+            brain_extra_headers=extra_headers or None,
+            brain_model=args.model or _platform_default_model("modal"),
+            start_url=start_url,
+            detail_page_pattern=args.detail_page_pattern or "",
+            max_cost_usd=float(args.max_cost),
+            max_time_minutes=int(args.max_time_minutes),
+            use_proxy=bool(args.use_proxy),
+            proxy_session=args.proxy_session,
+            session_name=session_name,
+        )
+    except Exception as exc:  # noqa: BLE001 — modal invocation errors
+        print(f"error: Modal run_plan raised: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    elapsed = _time.time() - t0
+
+    if not isinstance(result, dict):
+        print(
+            f"error: unexpected result shape from Modal: {type(result).__name__}",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    (output_dir / "result.json").write_text(
+        json.dumps(result, indent=2) + "\n", encoding="utf-8",
+    )
+
+    successes = int(result.get("successes", 0))
+    step_count = int(result.get("step_count", 0))
+    failures = int(result.get("failures", step_count - successes))
+    final_url = result.get("final_url", "")
+    print(
+        f"  result: {successes}/{step_count} succeeded "
+        f"(remote {result.get('elapsed_seconds', 0)}s, wall {elapsed:.1f}s) — "
+        f"{output_dir / 'result.json'}"
+    )
+    if final_url:
+        print(f"  final URL: {final_url}")
+    return EXIT_OK if failures == 0 else EXIT_ERROR
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mantis",
@@ -1104,6 +1263,91 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Resume from checkpoint at --output-dir/checkpoint.json if present.",
     )
     run.set_defaults(func=cmd_plan_run)
+
+    run_modal = plan_sub.add_parser(
+        "run-modal",
+        help="Execute a plan inside Modal (browser + extractor + grounding "
+             "all run remotely under Xvfb — bypasses local Cloudflare blocks)",
+    )
+    run_modal.add_argument(
+        "path",
+        help="Path to plan file. .json → pre-decomposed micro-plan; "
+             "any other extension → natural-language plan, decomposed "
+             "by Claude inside Modal.",
+    )
+    run_modal.add_argument(
+        "--app-name",
+        default="mantis-plan-runner",
+        help="Modal app name. Must match the deployed "
+             "deploy/modal/modal_plan_runner.py app (default: "
+             "mantis-plan-runner).",
+    )
+    run_modal.add_argument(
+        "--endpoint",
+        default=None,
+        required=True,
+        help="OpenAI-compatible v1 base URL of the brain. Modal calls "
+             "this endpoint over HTTP, so it must be reachable from "
+             "Modal's egress.",
+    )
+    run_modal.add_argument(
+        "--model",
+        default=None,
+        help="Brain model name (default: Hcompany/Holo3-35B-A3B for modal).",
+    )
+    run_modal.add_argument(
+        "--header",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help="Additional HTTP header sent with every brain request "
+             "(e.g. X-Mantis-Token=…). Repeat for multiple.",
+    )
+    run_modal.add_argument(
+        "--start-url",
+        default=None,
+        help="Initial URL for the browser. Required for text plans "
+             "(decomposer runs in Modal, so the CLI can't introspect "
+             "the navigate step locally). Optional for JSON plans.",
+    )
+    run_modal.add_argument(
+        "--detail-page-pattern",
+        default=None,
+        help="Optional regex injected into SiteConfig.detail_page_pattern. "
+             "When unset the framework falls back to the generic "
+             "path-extension heuristic (#211).",
+    )
+    run_modal.add_argument(
+        "--max-cost",
+        type=float,
+        default=10.0,
+        help="Hard cap on USD spend (Anthropic + brain) inside Modal "
+             "(default: 10.0).",
+    )
+    run_modal.add_argument(
+        "--max-time-minutes",
+        type=int,
+        default=30,
+        help="Hard wall-clock cap inside Modal (default: 30 min).",
+    )
+    run_modal.add_argument(
+        "--use-proxy",
+        action="store_true",
+        help="Route the Modal-side browser through Oxylabs (creds from "
+             "the mantis-plan-runner-secrets Modal Secret).",
+    )
+    run_modal.add_argument(
+        "--proxy-session",
+        default="mantis",
+        help="Oxylabs session ID for sticky-IP behavior (default: mantis).",
+    )
+    run_modal.add_argument(
+        "--output-dir",
+        default=None,
+        help="Where to write plan.json / plan.txt + result.json. "
+             "Defaults to outputs/run-modal-<unix-timestamp>.",
+    )
+    run_modal.set_defaults(func=cmd_plan_run_modal)
 
     trace = sub.add_parser("trace", help="Trace tooling subcommands (#155)")
     trace_sub = trace.add_subparsers(dest="trace_command", required=True)
