@@ -384,6 +384,89 @@ class ClaudeExtractor:
             logger.warning(f"ClaudeExtractor tool_use failed: {e}")
         return None
 
+    def _call_with_tool_schema_multi(
+        self,
+        screenshots: list[Image.Image],
+        prompt: str,
+        *,
+        tool_name: str,
+        tool_description: str,
+        input_schema: dict[str, Any],
+        labels: list[str] | None = None,
+        max_tokens: int = 500,
+    ) -> dict | None:
+        """Multi-screenshot variant of :meth:`_call_with_tool_schema`.
+
+        Same schema-validated tool_use enforcement, but bundles a list
+        of screenshots into a single messages payload. Used by paths
+        that need to compare images (e.g. post-click navigation
+        verification: before-click vs after-click). Each image is
+        prefixed with its label so the model can refer to them in
+        prose: "Screenshot 1: BEFORE click", "Screenshot 2: AFTER click".
+
+        Returns the validated input dict, or ``None`` on API / shape
+        mismatch — caller treats as fall-through (no answer).
+        """
+        import requests
+
+        if not self.api_key:
+            logger.warning("ClaudeExtractor: no API key")
+            return None
+
+        labels = labels or []
+        content: list[dict] = [{"type": "text", "text": prompt}]
+        for i, screenshot in enumerate(screenshots, 1):
+            label = labels[i - 1] if i - 1 < len(labels) else f"screenshot {i}"
+            buf = BytesIO()
+            screenshot.save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            content.append({"type": "text", "text": f"Screenshot {i}: {label}"})
+            content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": b64},
+            })
+
+        try:
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "max_tokens": max_tokens,
+                    "tools": [{
+                        "name": tool_name,
+                        "description": tool_description,
+                        "input_schema": input_schema,
+                    }],
+                    "tool_choice": {"type": "tool", "name": tool_name},
+                    "messages": [{"role": "user", "content": content}],
+                },
+                timeout=45,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "ClaudeExtractor multi tool_use API error %s: %s",
+                    resp.status_code,
+                    resp.text[:500],
+                )
+                return None
+            for block in resp.json().get("content", []):
+                if block.get("type") == "tool_use" and block.get("name") == tool_name:
+                    tool_input = block.get("input")
+                    if isinstance(tool_input, dict):
+                        return tool_input
+            logger.warning(
+                "ClaudeExtractor multi tool_use returned no %s tool block",
+                tool_name,
+            )
+        except Exception as e:
+            logger.warning(f"ClaudeExtractor multi tool_use failed: {e}")
+        return None
+
     def _call_many(
         self,
         screenshots: list[Image.Image],
@@ -730,6 +813,92 @@ class ClaudeExtractor:
             "label": label,
             "reason": reason,
         }
+
+    def verify_post_click_navigation(
+        self,
+        before_screenshot: Image.Image,
+        after_screenshot: Image.Image,
+        intent: str,
+    ) -> dict | None:
+        """Decide whether a click opened detail content (URL or modal).
+
+        Generic SPA-aware fallback for the click verifier. The URL-based
+        :meth:`SiteConfig.is_detail_page` check correctly handles full-
+        page-navigation sites (URL changes when a row click lands on a
+        detail page). It misses single-page apps where clicks open a
+        modal or overlay without changing the URL — lu.ma's event cards
+        are the canonical case: ``/discover`` stays in the address bar
+        but the visible content changes from a grid of cards to a single
+        event detail panel.
+
+        Calling pattern: invoke this AFTER the URL check returns False
+        and BEFORE escalating to middle-click / probe-area clicks. If
+        ``navigated=True``, accept the click as successful even though
+        the URL didn't change. Generic primitive — no plan vocabulary,
+        works for any SPA whose clicks open content in place.
+
+        Returns a dict with keys ``navigated`` (bool), ``kind`` (one of
+        ``url_change`` / ``modal`` / ``no_change`` / ``wrong_target``),
+        and ``reason`` (string) — or ``None`` on API / network failure
+        (caller treats None as "couldn't determine; fall through to
+        existing escalation").
+        """
+        prompt = (
+            "Compare these two screenshots taken before and after a "
+            f"single click. The intent of the click was: {intent!r}.\n\n"
+            "Decide whether the click successfully landed the user on "
+            "detail-or-target content.\n\n"
+            "Return ``navigated=true`` if EITHER:\n"
+            "  • The page navigated to a different URL/page (full-page "
+            "load) showing the target content, OR\n"
+            "  • The same URL stayed but a modal / overlay / panel "
+            "opened showing the target content (typical SPA pattern).\n\n"
+            "Return ``navigated=false`` if:\n"
+            "  • The page is essentially unchanged (click missed or "
+            "did nothing), OR\n"
+            "  • The page changed BUT to the wrong destination (login "
+            "wall, error, ad, unrelated section)."
+        )
+        return self._call_with_tool_schema_multi(
+            [before_screenshot, after_screenshot],
+            prompt,
+            tool_name="report_post_click_navigation",
+            tool_description=(
+                "Report whether a click successfully landed on detail/"
+                "target content, including the case where a SPA opens a "
+                "modal without changing the URL."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "navigated": {
+                        "type": "boolean",
+                        "description": (
+                            "True iff the click landed on the intended "
+                            "detail content (URL change OR same-URL modal)."
+                        ),
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": [
+                            "url_change",
+                            "modal",
+                            "no_change",
+                            "wrong_target",
+                        ],
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": (
+                            "What you see in the AFTER frame that "
+                            "confirms or denies navigation."
+                        ),
+                    },
+                },
+                "required": ["navigated", "kind", "reason"],
+            },
+            labels=["BEFORE click", "AFTER click"],
+        )
 
     def verify_gate(self, screenshot: Image.Image, expected: str) -> tuple[bool, str]:
         """Verify a gate condition from a screenshot.
