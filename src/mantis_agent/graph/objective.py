@@ -79,7 +79,14 @@ Rules:
 
 @dataclass
 class ObjectiveSpec:
-    """Structured description of what the user wants to accomplish."""
+    """Structured description of what the user wants to accomplish.
+
+    The fields below ``output_schema`` are populated by the
+    derive-first producer (``mantis_agent.objective.derive_from_plan``)
+    and consumed by ``ExtractionSchema.from_objective`` when building
+    the schema. They default to empty so legacy callers that only
+    populate the original fields keep working unchanged.
+    """
 
     raw_text: str
     domains: list[str] = field(default_factory=list)
@@ -90,6 +97,13 @@ class ObjectiveSpec:
     allowed_reveal_actions: list[str] = field(default_factory=list)
     output_schema: list[OutputField] = field(default_factory=list)
     completion: CompletionCondition = field(default_factory=CompletionCondition)
+    # Issue #224 Phase 2: derive-time fields lifted from plan text.
+    # ``ExtractionSchema.from_objective`` already reads them via
+    # getattr, so these defaults make the round-trip safe.
+    viability_definition: str = ""
+    spam_text_indicators: list[str] = field(default_factory=list)
+    spam_seller_indicators: list[str] = field(default_factory=list)
+    spam_label: str = ""
     objective_hash: str = ""
 
     def __post_init__(self):
@@ -247,6 +261,10 @@ class ObjectiveSpec:
                 "max_items": self.completion.max_items,
                 "max_pages": self.completion.max_pages,
             },
+            "viability_definition": self.viability_definition,
+            "spam_text_indicators": self.spam_text_indicators,
+            "spam_seller_indicators": self.spam_seller_indicators,
+            "spam_label": self.spam_label,
             "objective_hash": self.objective_hash,
         }
 
@@ -271,5 +289,9 @@ class ObjectiveSpec:
             allowed_reveal_actions=data.get("allowed_reveal_actions", []),
             output_schema=output_schema,
             completion=completion,
+            viability_definition=data.get("viability_definition", ""),
+            spam_text_indicators=data.get("spam_text_indicators", []),
+            spam_seller_indicators=data.get("spam_seller_indicators", []),
+            spam_label=data.get("spam_label", ""),
             objective_hash=data.get("objective_hash", ""),
         )
