@@ -303,6 +303,18 @@ class ClaudeGuidedClickHandler:
         elif title.strip().lower() == "unknown":
             logger.info("  [grounding] skipped for unknown-title card; using scan coordinates")
 
+        # Capture the BEFORE-click frame for SPA-aware verification —
+        # if the URL check after click fails, the framework falls back
+        # to comparing this frame with the AFTER frame to decide whether
+        # the click landed on a same-URL modal/overlay (the lu.ma /
+        # generic-SPA pattern). Defensive: failure to capture downgrades
+        # the SPA fallback to a no-op rather than the click itself.
+        pre_click_screenshot: Any = None
+        try:
+            pre_click_screenshot = env.screenshot()
+        except Exception:
+            pre_click_screenshot = None
+
         # Click
         try:
             env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
@@ -382,6 +394,65 @@ class ClaudeGuidedClickHandler:
                     "  [claude-click] Not on detail page yet (url=%s) — retrying verify",
                     url_for_log(url),
                 )
+
+        # SPA-aware fallback (lu.ma / single-page apps that open detail
+        # content in a modal without changing the URL). The URL check
+        # above only succeeds when the click triggers a full-page
+        # navigation; for SPA modals the URL stays put and the URL
+        # check returns False even though the click succeeded. Compare
+        # the BEFORE / AFTER screenshots via the extractor's tool_use
+        # verifier and accept the click when navigation is confirmed
+        # (URL change OR same-URL modal opened). Skipped when the
+        # extractor or the pre-click frame is unavailable; falls
+        # through to middle-click in that case.
+        if extractor is not None and pre_click_screenshot is not None:
+            try:
+                post_click_screenshot = env.screenshot()
+            except Exception:
+                post_click_screenshot = None
+            if post_click_screenshot is not None:
+                nav = extractor.verify_post_click_navigation(
+                    pre_click_screenshot,
+                    post_click_screenshot,
+                    step.intent,
+                )
+                runner.costs["claude_extract"] += 1
+                if nav and nav.get("navigated") is True:
+                    kind = str(nav.get("kind", "modal"))
+                    reason = str(nav.get("reason", ""))[:120]
+                    logger.info(
+                        "  [claude-click] SPA-aware verify accepted click "
+                        "(kind=%s): %s",
+                        kind, reason,
+                    )
+                    accepted_url = url or runner._results_base_url
+                    runner._last_known_url = accepted_url
+                    dynamic_verifier.record_item_opened(
+                        page=runner._current_page,
+                        item=getattr(runner, "_last_click_title", "") or title,
+                        url=accepted_url,
+                    )
+                    runner._last_extracted = {
+                        **runner._last_extracted,
+                        "last_clicked_title": getattr(runner, "_last_click_title", ""),
+                        "last_attempted_url": accepted_url,
+                        "last_attempted_at": time.time(),
+                        "last_attempted_step": index,
+                        "last_click_verify_kind": kind,
+                    }
+                    runner._set_scroll_state(
+                        context="detail_top",
+                        url=accepted_url,
+                        page_downs=0,
+                        wheel_downs=0,
+                    )
+                    runner._listings_on_page += 1
+                    if hasattr(runner, '_last_click_title') and runner._last_click_title:
+                        runner._extracted_titles.append(runner._last_click_title)
+                    return StepResult(
+                        step_index=index, intent=step.intent, success=True,
+                        steps_used=1, duration=9.0,
+                    )
 
         logger.info("  [claude-click] Plain click did not navigate — trying middle-click fallback")
         try:
