@@ -244,13 +244,21 @@ def test_dispatcher_routes_to_holo3_when_override_set() -> None:
 
     submit_step = MicroIntent(
         intent="Click Qualified lead", type="submit",
+        budget=4,  # the typical submit budget — too tight for scroll-and-find
         params={"label": "Qualified"},
     )
 
     # Patch execute_holo3_step so the test doesn't try to spin up
-    # a real GymRunner.
+    # a real GymRunner. Capture the synthesized step so we can
+    # assert the escalation budget bump.
+    captured_step: list = []
+
+    def _stub_holo3_capture(r, step_arg, idx):
+        captured_step.append(step_arg)
+        return _stub_holo3(r, step_arg, idx)
+
     orig = _runner_helpers.execute_holo3_step
-    _runner_helpers.execute_holo3_step = _stub_holo3
+    _runner_helpers.execute_holo3_step = _stub_holo3_capture
     try:
         result = _runner_helpers.execute_step(runner, submit_step, 5)
     finally:
@@ -258,9 +266,15 @@ def test_dispatcher_routes_to_holo3_when_override_set() -> None:
 
     assert result.success is True
     assert result.data == "holo3-completed"
-    # Holo3 was called with the original step (preserves intent /
-    # type for any downstream verification).
+    # Holo3 was called with the original step type / intent —
+    # we don't morph the step into a click, just route differently.
     assert holo3_called == [(5, "submit")]
+    # The synthesised step that reached Holo3 has a bumped budget.
+    # Original budget=4 is too tight for "scroll down to find off-
+    # screen target + click"; the escalation path bumps to >= 15.
+    assert captured_step[0].intent == "Click Qualified lead"
+    assert captured_step[0].type == "submit"
+    assert captured_step[0].budget >= 15
     # Default registry handlers were not touched.
     runner._handler_registry.get.assert_not_called()
 
