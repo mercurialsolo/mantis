@@ -314,7 +314,11 @@ class ClaudeGuidedFormHandler:
                     "kind of element (e.g. the row container instead of the "
                     "status pill, the link rather than the surrounding text)."
                 )
-                logger.info(
+                # Log at WARNING so the trace is visible in Modal's
+                # default INFO-suppressed log capture; this firing is
+                # the canonical signal that the agentic-retry loop
+                # actually engaged on a retry attempt.
+                logger.warning(
                     f"  [claude-form] submit '{label}' retry — feeding "
                     f"{len(failure_history)} prior failure(s) into search prompt"
                 )
@@ -480,11 +484,17 @@ class ClaudeGuidedFormHandler:
                 if url_after_click and url_after_click != url_before:
                     runner._last_known_url = url_after_click
 
-                logger.info(f"  [claude-form] submit '{label[:40]}'")
+                logger.info(f"  [claude-form] submit '{label[:40]}' at ({x}, {y})")
+                # Include the click coordinates in result.data so a
+                # post-mortem (or the agentic-retry feedback) can see
+                # whether successive retries actually picked different
+                # targets. Without coordinates, two failed retries with
+                # ``submit:Login`` data look identical even when they
+                # clicked different pixels.
                 return StepResult(
                     step_index=index, intent=step.intent, success=True,
                     steps_used=1, duration=3.0,
-                    data=f"submit:{label[:40]}",
+                    data=f"submit:{label[:40]}@({x},{y})",
                 )
             except Exception as e:
                 logger.warning(f"  [claude-form] submit failed: {e}")
