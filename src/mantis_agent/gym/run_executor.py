@@ -422,6 +422,16 @@ class RunExecutor:
                 kind="no_state_change",
                 reason="snapshot diff and visual verifier both saw no UI change",
             )
+            # Pattern-match the failure history for handler escalation.
+            # When the same step has accumulated 2+ same-kind failures,
+            # the default handler is locked on the wrong element class
+            # (e.g. text-matching a status pill instead of a row link).
+            # The next retry should route through a different handler
+            # — currently Holo3StepHandler, which uses brain grounding
+            # over the intent prose rather than text matching.
+            self._maybe_set_handler_override(
+                runner=runner, step_index=state.step_index,
+            )
         # Always clear the per-step stashes — they're only valid for
         # the immediately following demotion check.
         if hasattr(runner, "_last_submit_pre_screenshot"):
@@ -463,6 +473,55 @@ class RunExecutor:
             "kind": kind,
             "reason": reason,
         })
+
+    @staticmethod
+    def _maybe_set_handler_override(
+        *, runner: Any, step_index: int,
+    ) -> None:
+        """Decide whether the next retry should route through a
+        different handler based on the failure history pattern.
+
+        The escalation triggers when the per-step failure history
+        accumulates 2+ records of the same ``kind`` (currently only
+        ``no_state_change`` triggers escalation — that's the strongest
+        signal that the default handler is finding text matches that
+        don't actually navigate). Sets
+        ``runner._step_handler_override[step_index] = "holo3"`` so the
+        dispatcher routes the next attempt through ``Holo3StepHandler``
+        — the brain-grounded loop that operates on intent prose
+        rather than label text matching.
+
+        General-purpose: triggered purely by observed failure pattern,
+        no hardcoded plan content. Cleared on step success
+        (see :meth:`_handle_success`).
+
+        Side effects: mutates ``runner._step_handler_override`` only.
+        Idempotent — calling twice with the same trigger produces
+        the same override; the dispatcher consumes it once per
+        retry attempt.
+        """
+        if not hasattr(runner, "_step_handler_override"):
+            return
+        history = (
+            runner._step_failure_history.get(step_index, [])
+            if hasattr(runner, "_step_failure_history") else []
+        )
+        # Count kinds eligible for escalation. Only no_state_change
+        # signals "the click happened but the page didn't change" —
+        # the canonical wrong-handler symptom. Other kinds
+        # (form_target_not_found, fill_error, etc.) indicate
+        # different problems where Holo3 wouldn't necessarily help.
+        no_state_changes = sum(
+            1 for r in history if r.get("kind") == "no_state_change"
+        )
+        if no_state_changes >= 2 and runner.brain is not None:
+            runner._step_handler_override[step_index] = "holo3"
+            logger.warning(
+                "  [escalation] step %d: %d×no_state_change → next "
+                "retry will route through Holo3StepHandler (brain "
+                "grounding) instead of the default text-match handler",
+                step_index, no_state_changes,
+            )
 
     def _submit_visually_changed(
         self, runner: Any, effective_step: MicroIntent,
@@ -542,6 +601,11 @@ class RunExecutor:
         # happens to share the same step_index (loops, resumed plans).
         if hasattr(runner, "_step_failure_history"):
             runner._step_failure_history.pop(state.step_index, None)
+        # Same for the handler override — once a step has succeeded,
+        # the override is consumed and a future occurrence of the
+        # same step_index starts with the default routing.
+        if hasattr(runner, "_step_handler_override"):
+            runner._step_handler_override.pop(state.step_index, None)
 
         if step.type == "paginate":
             # Phase 4: listings-scan reset is one method on the scanner now,
