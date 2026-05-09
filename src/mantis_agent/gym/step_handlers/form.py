@@ -241,6 +241,26 @@ class ClaudeGuidedFormHandler:
             )
             runner.costs["claude_extract"] += 1
             if not target:
+                # Visual-affordance fallback before failing — covers
+                # non-English / icon-only inputs whose labels don't
+                # match the configured aliases. Defocus first so any
+                # currently-focused control doesn't absorb the
+                # subsequent search's interactions.
+                logger.warning(
+                    "  [claude-form] fill_field: label-match exhausted "
+                    "for '%s' — trying visual-affordance fallback", label,
+                )
+                try:
+                    env.step(Action(
+                        action_type=ActionType.KEY_PRESS, params={"keys": "Tab"},
+                    ))
+                    time.sleep(0.3)
+                except Exception:
+                    pass
+                shot = _wait_for_rendered_screenshot(env)
+                target = extractor.find_target_by_affordance(shot, search_intent)
+                runner.costs["claude_extract"] += 1
+            if not target:
                 logger.warning(f"  [claude-form] fill_field: target '{label}' not found")
                 return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
             x, y = target["x"], target["y"]
@@ -420,6 +440,47 @@ class ClaudeGuidedFormHandler:
                     f"Page_Down{scroll_steps + 1}/{max_scrolls}",
                 )
                 scroll_steps += 1
+
+            # Vision-affordance fallback — the label-driven scroll-probe
+            # above can't find elements whose actual text differs from
+            # any configured alias (canonical case: a French CRM whose
+            # ``Update Lead`` button reads ``Enregistrer`` and the plan
+            # didn't enumerate that, OR an icon-only checkmark button).
+            # Before halting, do ONE final pass that asks Claude to
+            # identify the right element FOR THE INTENT by VISUAL
+            # AFFORDANCE — shape, position, styling — independent of
+            # label. The intent prose drives element-type selection
+            # (button / input / dropdown), so this fallback handles
+            # any step type, not just submits.
+            #
+            # Defocus any active input first (Tab key) so the prior
+            # keyboard-scroll attempts that may have been eaten by an
+            # open dropdown / focused field can finally move the page —
+            # without this, End/Page_Down on a focused <select> are
+            # no-ops and the search saw the same viewport repeatedly.
+            if target is None:
+                logger.warning(
+                    "  [claude-form] submit: label-match exhausted after "
+                    "probes %s — trying visual-affordance fallback",
+                    probe_attempts,
+                )
+                try:
+                    env.step(Action(
+                        action_type=ActionType.KEY_PRESS, params={"keys": "Tab"},
+                    ))
+                    time.sleep(0.3)
+                    env.step(Action(
+                        action_type=ActionType.KEY_PRESS, params={"keys": "End"},
+                    ))
+                except Exception:
+                    pass
+                time.sleep(0.6)
+                shot = _wait_for_rendered_screenshot(env)
+                screenshot = shot
+                target = extractor.find_target_by_affordance(shot, search_intent)
+                runner.costs["claude_extract"] += 1
+                if target:
+                    probe_attempts.append("vision-affordance")
 
             if not target:
                 logger.warning(

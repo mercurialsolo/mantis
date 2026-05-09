@@ -1600,3 +1600,171 @@ class ClaudeExtractor:
         }
         logger.info(f"  [claude-form] '{result['label'][:40]}' at ({x},{y}) action={result['action']}")
         return result
+
+    def find_target_by_affordance(
+        self,
+        screenshot: Image.Image,
+        intent: str,
+    ) -> dict | None:
+        """Locate the right element for an intent by VISUAL AFFORDANCE
+        rather than any specific label or hardcoded action assumption.
+
+        The label-driven ``find_form_target`` requires the caller to
+        know the element's literal text (or one of its aliases). That
+        doesn't work for:
+
+        - non-English UIs (``Enregistrer`` / ``Speichern`` / ``保存``)
+        - icon-only controls (checkmark / floppy / paper-plane glyphs)
+        - product-specific labels the plan author couldn't predict
+        - elements whose visual position is recognisable but whose
+          label is partially obscured / abbreviated
+
+        This method is the visual-fallback partner. It DOES NOT assume
+        the target is a button / submit / action — it reads the
+        intent prose and asks Claude "what element on this page best
+        matches this intent, by visual affordance?". The intent
+        determines the element type:
+
+        - "Click Save" → primary action button
+        - "Enter password in Password field" → text input
+        - "Pick High from Priority dropdown" → dropdown control
+        - "Toggle the Enable Notifications switch" → toggle / checkbox
+
+        Claude reads the intent, identifies the affordance category,
+        and returns coordinates + the OBSERVED label / description so
+        the runner can log what it actually found (in any language /
+        for any icon).
+
+        Used as a fallback by the form handler when the cheaper
+        label-match search has exhausted. Returns the same result
+        shape as ``find_form_target`` — when ``action`` is
+        ``"not_found"`` the helper returns ``None`` so the caller
+        falls through to existing failure paths.
+        """
+        prompt = (
+            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"INTENT (read this carefully — it tells you what kind of "
+            f"element to find): {intent}\n\n"
+            f"The label-driven search for this intent already failed: no "
+            f"element matched the literal label / alias the plan "
+            f"specified. The intent prose ABOVE is the source of truth "
+            f"for what the runner is trying to do — read it, infer the "
+            f"element type that fits, and locate that element by VISUAL "
+            f"AFFORDANCE rather than text matching.\n\n"
+            f"Element-type heuristics (use the intent verbs to choose):\n"
+            f"- ``click`` / ``open`` / ``submit`` / ``save`` / ``confirm`` "
+            f"/ ``select [a row / lead / item]`` — find a button, link, "
+            f"or clickable card. Primary action buttons are typically "
+            f"coloured / filled, in form footers or sticky toolbars; "
+            f"secondary buttons (Cancel, Reset, Back) are typically "
+            f"grey / outline.\n"
+            f"- ``enter`` / ``type`` / ``fill`` / ``input`` — find a "
+            f"text input or textarea. Match the intent's field name to "
+            f"the visible label adjacent to (above / left of / "
+            f"placeholder inside) the input box.\n"
+            f"- ``pick`` / ``choose`` / ``select [option] from [dropdown]`` "
+            f"— find a dropdown / select control (visible chevron or "
+            f"current value).\n"
+            f"- ``toggle`` / ``check`` / ``enable`` / ``disable`` — "
+            f"find a checkbox / toggle / radio.\n\n"
+            f"LANGUAGE-AGNOSTIC: the element's visible label may be in "
+            f"any language (English, French, German, Japanese, etc) "
+            f"or icon-only. Match by AFFORDANCE — shape, position, "
+            f"styling — not by specific words. The intent's reference "
+            f"to a field or button name is a HINT (semantic match) "
+            f"rather than a literal text-match requirement.\n\n"
+            f"NO HARDCODED ACTION ASSUMPTIONS: don't assume the target "
+            f"is necessarily a submit button. If the intent is "
+            f"``Enter the password``, the target is the password "
+            f"input, NOT the Login button. The intent verb is the "
+            f"final word.\n\n"
+            f"If you see no element on screen that plausibly matches "
+            f"the intent, return action=not_found and describe in "
+            f"``label`` what is visible. The runner will route that "
+            f"to its existing failure / recovery path.\n\n"
+            f"Return CENTER coordinates of the chosen element along "
+            f"with the EXACT TEXT or icon description visible on it. "
+            f"Set ``action`` to one of ``click`` / ``type`` / "
+            f"``select`` based on what the runner should do next "
+            f"(matching the verb in the intent)."
+        )
+        parsed = self._call_with_tool_schema(
+            screenshot,
+            prompt,
+            tool_name="report_target_by_affordance",
+            tool_description=(
+                "Report the location, observed label, and recommended "
+                "action for the element best matching the intent — "
+                "identified by visual affordance, not label match."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "x": {
+                        "type": "integer",
+                        "description": "Center x of the chosen element.",
+                    },
+                    "y": {
+                        "type": "integer",
+                        "description": "Center y of the chosen element.",
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["click", "type", "select", "not_found"],
+                        "description": (
+                            "What the runner should do at this element. "
+                            "``click`` for buttons / links / row "
+                            "containers; ``type`` for text inputs the "
+                            "runner should fill; ``select`` for an "
+                            "option already visible in an open "
+                            "dropdown menu (click first if the "
+                            "dropdown is closed). ``not_found`` if "
+                            "the page has nothing matching the intent."
+                        ),
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": (
+                            "EXACT text observed on / near the element "
+                            "(any language) or an icon description for "
+                            "icon-only elements. When action=not_found, "
+                            "describe what IS visible instead."
+                        ),
+                    },
+                },
+                "required": ["action", "label"],
+            },
+            max_tokens=500,
+        )
+        if not parsed:
+            logger.warning(
+                "  [claude-form] affordance: tool_use returned no result"
+            )
+            return None
+        if parsed.get("action") == "not_found":
+            logger.info(
+                "  [claude-form] affordance: not found — observed: %s",
+                str(parsed.get("label", ""))[:120],
+            )
+            return None
+        x = _coerce_coord(parsed.get("x"))
+        y = _coerce_coord(parsed.get("y"))
+        if x is None or y is None or (x == 0 and y == 0):
+            logger.warning(
+                "  [claude-form] affordance: invalid coords x=%r y=%r",
+                parsed.get("x"), parsed.get("y"),
+            )
+            return None
+        result = {
+            "x": x,
+            "y": y,
+            "action": str(parsed.get("action", "click")),
+            "value": "",
+            "label": str(parsed.get("label", "")),
+        }
+        logger.info(
+            "  [claude-form] affordance: '%s' at (%d, %d) action=%s — "
+            "discovered via visual affordance (no alias match needed)",
+            result["label"][:60], x, y, result["action"],
+        )
+        return result

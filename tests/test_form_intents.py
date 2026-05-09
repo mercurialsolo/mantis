@@ -207,6 +207,8 @@ def test_submit_target_not_found_returns_failure_no_crash():
     env = _FakeEnv()
     extractor = MagicMock()
     extractor.find_form_target.return_value = None
+    # Vision-affordance fallback also misses → form_target_not_found.
+    extractor.find_target_by_affordance.return_value = None
     runner = _runner_with_extractor(env, extractor)
 
     intent = MicroIntent(
@@ -522,6 +524,8 @@ def test_submit_gives_up_after_full_agentic_sweep():
     env = _FakeEnv()
     extractor = MagicMock()
     extractor.find_form_target.return_value = None  # never found
+    # Vision-affordance fallback also misses (truly nothing on page).
+    extractor.find_target_by_affordance.return_value = None
     runner = _runner_with_extractor(env, extractor)
 
     intent = MicroIntent(

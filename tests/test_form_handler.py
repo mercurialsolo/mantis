@@ -80,6 +80,8 @@ def test_fill_field_target_not_found_returns_form_target_not_found(monkeypatch):
     runner = _FakeRunner()
     extractor = MagicMock()
     extractor.find_form_target.return_value = None
+    # Vision-affordance fallback also misses → form_target_not_found.
+    extractor.find_target_by_affordance.return_value = None
     ctx = _ctx(runner, extractor=extractor)
 
     step = MicroIntent(
@@ -90,7 +92,8 @@ def test_fill_field_target_not_found_returns_form_target_not_found(monkeypatch):
 
     assert result.success is False
     assert result.data == "form_target_not_found"
-    assert runner.costs["claude_extract"] == 1
+    # 1 label-match + 1 visual-affordance fallback = 2 Claude calls.
+    assert runner.costs["claude_extract"] == 2
 
 
 def test_fill_field_success_clicks_triple_clicks_clears_and_types(monkeypatch):
@@ -134,6 +137,7 @@ def test_submit_target_not_found_after_scroll(monkeypatch):
     runner = _FakeRunner()
     extractor = MagicMock()
     extractor.find_form_target.return_value = None  # never found
+    extractor.find_target_by_affordance.return_value = None  # vision miss too
     env = MagicMock()
     ctx = _ctx(runner, env=env, extractor=extractor)
 
@@ -145,10 +149,11 @@ def test_submit_target_not_found_after_scroll(monkeypatch):
 
     assert result.success is False
     assert result.data == "form_target_not_found"
-    # 1 initial + End probe + Home probe + 6 Page_Down sweeps = 9 calls.
-    # Old budget was 5 (1 + 4 Page_Down); the agentic search adds the
-    # End / Home end-probes and bumps the Page_Down cap from 4 to 6.
-    assert runner.costs["claude_extract"] == 9
+    # 1 initial + End probe + Home probe + 6 Page_Down sweeps + 1
+    # visual-affordance fallback = 10 calls. The affordance pass
+    # is the language-agnostic / icon-aware fallback that fires
+    # after label-match scroll-probe exhausts.
+    assert runner.costs["claude_extract"] == 10
     # Final Home keypress to reset scroll for the next step.
     final_keypress = env.step.call_args_list[-1].args[0]
     assert final_keypress.params == {"keys": "Home"}
