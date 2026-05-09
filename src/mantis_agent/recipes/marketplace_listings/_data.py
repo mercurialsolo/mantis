@@ -74,6 +74,19 @@ def fields() -> list[dict[str, Any]]:
 
 
 REQUIRED_FIELDS: tuple[str, ...] = ("year", "make")
+# Issue #236: looser required-field contract for SEARCH_TILE
+# extraction. Tiles often render year/make only in alt-text or
+# JSON-LD (invisible to vision-mode extraction); the strict
+# ``REQUIRED_FIELDS`` set was rejecting every tile row, halting
+# the run with zero leads. Tile mode now needs only ``url`` so
+# the runner can keep the row to drive a follow-up navigation
+# into the detail page where ``REQUIRED_FIELDS`` is enforced.
+TILE_REQUIRED_FIELDS: tuple[str, ...] = ("url",)
+# Informational hint: which fields the search tile is expected to
+# surface. The runner uses this to skip re-reading these on the
+# detail page (carry from tile → enrich detail). url, title,
+# price near-universally render on marketplace tile cards.
+TILE_CARRY_FIELDS: tuple[str, ...] = ("url", "title", "price")
 # "boat listing" is preserved verbatim from the legacy
 # ExtractionSchema.default_boattrader() default. Renaming it would be a
 # behavior change for callers reading entity_name in their own prompts.

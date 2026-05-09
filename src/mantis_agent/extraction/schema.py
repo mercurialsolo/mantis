@@ -10,7 +10,29 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
+
+
+class ExtractionContext(str, Enum):
+    """Where the extractor is reading from — drives which required-field
+    contract to enforce.
+
+    Issue #236: ``required_fields`` enforced uniformly is the dominant
+    failure mode on listings sites. Search-result tiles often render
+    canonical fields (year, make, ...) only in image alt-text or
+    JSON-LD that vision-mode extraction can't see; rejecting every
+    tile-mode row that lacks them halts the run before any leads are
+    captured. Tagging context lets the schema apply a strict contract
+    on the canonical detail page and a looser one on tiles.
+
+    The string-enum shape lets callers pass either the enum or the
+    raw string (matching the JSON-serialisable plan-step shape).
+    """
+
+    SEARCH_TILE = "search_tile"   # reading a row from a list of cards
+    DETAIL_PAGE = "detail_page"   # reading the canonical entity page
+    UNKNOWN = "unknown"           # default — preserves current behavior
 
 
 @dataclass
@@ -28,6 +50,20 @@ class ExtractionSchema:
     entity_name: str = "listing"  # "boat listing", "job posting", "property"
     fields: list[dict[str, Any]] = field(default_factory=list)  # OutputField-like dicts
     required_fields: list[str] = field(default_factory=list)  # field names for viability
+    # Issue #236: per-context required-field contracts. ``required_fields``
+    # is the strict DETAIL_PAGE contract (canonical entity fields the
+    # detail page must surface). ``tile_required_fields`` is the looser
+    # SEARCH_TILE contract — typically just ``["url"]`` so the runner can
+    # keep the row to drive a follow-up navigate-into-detail. Empty list
+    # ``[]`` opts out of the split (uses ``required_fields`` for both
+    # contexts), preserving existing recipe behavior.
+    tile_required_fields: list[str] = field(default_factory=list)
+    # Informational hint: which fields the search tile is expected to
+    # surface. The runner uses this to decide what NOT to re-read on
+    # the detail page (carry from tile → enrich detail). Recipe-side
+    # only; framework primitives don't enforce it. Empty list = no
+    # carry (today's behavior).
+    tile_carry_fields: list[str] = field(default_factory=list)
     spam_indicators: list[str] = field(default_factory=list)
     spam_seller_indicators: list[str] = field(default_factory=list)
     spam_label: str = "dealer/spam"  # what to call spam (e.g. "dealer", "recruiter")
@@ -58,6 +94,8 @@ class ExtractionSchema:
             entity_name=getattr(objective, "target_entity", "item") or "item",
             fields=fields or cls._default_fields(),
             required_fields=required or ["url"],
+            tile_required_fields=list(getattr(objective, "tile_required_fields", []) or []),
+            tile_carry_fields=list(getattr(objective, "tile_carry_fields", []) or []),
             spam_indicators=spam_text,
             spam_seller_indicators=spam_seller,
             spam_label=spam_label,
@@ -190,10 +228,25 @@ class ExtractionSchema:
             if self.spam_label and self.spam_label != "dealer/spam"
             else (other.spam_label or self.spam_label)
         )
+        # Tile-context fields (#236): derived schema body wins for
+        # ``tile_required_fields`` (the plan text owns the tile contract
+        # the same way it owns ``required_fields``). For
+        # ``tile_carry_fields`` — informational only — recipe extends
+        # derived (recipes accumulate empirical knowledge of which
+        # tile fields actually render across the marketplace's
+        # listing variants).
         return ExtractionSchema(
             entity_name=entity,
             fields=self.fields,
             required_fields=self.required_fields,
+            tile_required_fields=(
+                self.tile_required_fields
+                if self.tile_required_fields
+                else other.tile_required_fields
+            ),
+            tile_carry_fields=_union(
+                self.tile_carry_fields, other.tile_carry_fields,
+            ),
             spam_indicators=_union(self.spam_indicators, other.spam_indicators),
             spam_seller_indicators=_union(
                 self.spam_seller_indicators, other.spam_seller_indicators,

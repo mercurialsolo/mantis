@@ -183,7 +183,7 @@ def test_extract_data_viable_writes_to_cache_when_write_enabled(monkeypatch):
         url="https://example.com/listing/777",
         is_viable=lambda: True,
         dealer_reason=lambda: None,
-        missing_required_reason=lambda: None,
+        missing_required_reason=lambda *_a, **_k: None,
         to_summary=lambda: "VIABLE | year:2024 | make:Acme",
         extracted_fields={"year": "2024", "make": "Acme"},
     )
@@ -221,7 +221,7 @@ def test_extract_data_post_extract_dedup_returns_duplicate(monkeypatch):
         url="https://example.com/already-seen",
         is_viable=lambda: True,
         dealer_reason=lambda: None,
-        missing_required_reason=lambda: None,
+        missing_required_reason=lambda *_a, **_k: None,
         to_summary=lambda: "VIABLE | seen",
         extracted_fields={},
     )
@@ -249,7 +249,7 @@ def test_extract_data_rejects_dealer_listing(monkeypatch):
         url="https://example.com/dealer/123",
         is_viable=lambda: False,
         dealer_reason=lambda: "seller looks like dealer: AcmeAuto",
-        missing_required_reason=lambda: None,
+        missing_required_reason=lambda *_a, **_k: None,
         to_summary=lambda: "DEALER | year:2020 | make:Acme | seller:AcmeAuto",
     )
     extractor = MagicMock()
@@ -273,7 +273,7 @@ def test_extract_data_rejects_incomplete_listing(monkeypatch):
         url="https://example.com/incomplete/9",
         is_viable=lambda: False,
         dealer_reason=lambda: None,
-        missing_required_reason=lambda: "missing required field(s): year",
+        missing_required_reason=lambda *_a, **_k: "missing required field(s): year",
         to_summary=lambda: "INCOMPLETE | make:Acme",
     )
     extractor = MagicMock()

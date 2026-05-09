@@ -61,6 +61,42 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _resolve_extraction_context(runner: "MicroPlanRunner", data: object | None):
+    """Classify the extracted page as SEARCH_TILE / DETAIL_PAGE / UNKNOWN.
+
+    Issue #236: ``ExtractionResult.missing_required_reason`` accepts a
+    context arg to choose between strict (detail-page) and loose
+    (search-tile) required-field contracts. The cleanest signal is the
+    URL the extractor was reading, classified via the runner's
+    ``SiteConfig.is_detail_page`` / ``is_results_page`` (those already
+    encode the per-domain regex authoring).
+
+    Returns ``ExtractionContext.UNKNOWN`` when no SiteConfig is
+    configured or its patterns are empty — preserves legacy behavior
+    for runs without a configured site.
+    """
+    from ...extraction import ExtractionContext
+
+    site_config = getattr(runner, "site_config", None)
+    if site_config is None:
+        return ExtractionContext.UNKNOWN
+    url = (
+        getattr(data, "url", "")
+        or getattr(runner, "_last_known_url", "")
+        or ""
+    )
+    if not url:
+        return ExtractionContext.UNKNOWN
+    try:
+        if site_config.is_detail_page(url):
+            return ExtractionContext.DETAIL_PAGE
+        if site_config.is_results_page(url):
+            return ExtractionContext.SEARCH_TILE
+    except Exception:  # noqa: BLE001 — never break the extraction path
+        return ExtractionContext.UNKNOWN
+    return ExtractionContext.UNKNOWN
+
+
 class ClaudeStepHandler:
     """Implements :class:`~..step_context.StepHandler` for Claude-only steps.
 
@@ -251,8 +287,19 @@ class ClaudeStepHandler:
                     success=False,
                     data=f"REJECTED_DEALER|{reason}|{data.to_summary()[:160]}",
                 )
-            if data and data.missing_required_reason():
-                reason = data.missing_required_reason()
+            # Issue #236: pick the right required-field contract based
+            # on which kind of page the extractor read. ``DETAIL_PAGE``
+            # enforces the strict canonical set (e.g. year + make for
+            # marketplace listings); ``SEARCH_TILE`` enforces the
+            # looser tile_required_fields set when defined (typically
+            # just ``url``) so the runner keeps the row to drive a
+            # follow-up navigate-into-detail. Source of truth: the
+            # extracted URL classified via SiteConfig. Default
+            # ``UNKNOWN`` when no SiteConfig is configured —
+            # preserves legacy behavior for non-listings sites.
+            extraction_context = _resolve_extraction_context(runner, data)
+            if data and data.missing_required_reason(extraction_context):
+                reason = data.missing_required_reason(extraction_context)
                 logger.info("  [extract] Rejected incomplete lead: %s", reason)
                 runner._last_extracted = {
                     **runner._last_extracted,

@@ -21,6 +21,13 @@ def _build_schema() -> ExtractionSchema:
         entity_name=_data.ENTITY_NAME,
         fields=_data.fields(),
         required_fields=list(_data.REQUIRED_FIELDS),
+        # Issue #236: opt into the tile-vs-detail required-field
+        # split. Strict ``required_fields`` enforced on detail-page
+        # extraction; ``tile_required_fields`` (just ``url``)
+        # enforced on search-tile extraction so rows survive long
+        # enough to drive the navigate-into-detail follow-up.
+        tile_required_fields=list(_data.TILE_REQUIRED_FIELDS),
+        tile_carry_fields=list(_data.TILE_CARRY_FIELDS),
         spam_indicators=list(_data.DEALER_TEXT_INDICATORS),
         spam_seller_indicators=list(_data.DEALER_SELLER_INDICATORS),
         spam_label=_data.SPAM_LABEL,
