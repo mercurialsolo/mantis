@@ -628,14 +628,54 @@ def execute_step(
     )
     if override == "holo3" and runner.brain is not None:
         # Bump the budget on escalation — the canonical case is
-        # "scroll down to find an off-screen target then click it"
-        # which needs 5-15 brain turns, not the submit step's
-        # default 3-5. Without the bump, Holo3 correctly identifies
-        # the right approach (scroll + observe + click) but runs
-        # out of inferences before reaching the target.
-        escalated_budget = max(step.budget, 15)
+        # "scroll down to find an off-screen target then click it",
+        # but in CRM / settings flows the target may also live on a
+        # LATER page that requires pagination. 25 brain turns covers
+        # scroll + paginate + multi-page search without being
+        # extravagant; the original submit budget (3-5) was nowhere
+        # near enough.
+        escalated_budget = max(step.budget, 25)
+
+        # Augment the task prose with failure context. Holo3 sees the
+        # screenshots and reasons about page state directly, but
+        # giving it the prior failure trace means it doesn't re-pick
+        # the same wrong elements the form handler already tried, and
+        # gets explicit licence to paginate when the visible viewport
+        # has no matching target. The escalation only fires after
+        # 2+ confirmed no-state-change clicks, so the failure trace
+        # is already information the brain needs.
+        history = (
+            getattr(runner, "_step_failure_history", {}).get(index, [])
+            if hasattr(runner, "_step_failure_history") else []
+        )
+        augmented_intent = step.intent
+        if history:
+            wrong_targets = [
+                f"({r.get('x', '?')}, {r.get('y', '?')}) labelled "
+                f"'{r.get('label', '?')}'"
+                for r in history[-3:]
+            ]
+            augmented_intent = (
+                f"{step.intent}\n\n"
+                f"CONTEXT: previous attempts to satisfy this step clicked "
+                f"on these targets without changing the page UI: "
+                f"{', '.join(wrong_targets)}. "
+                f"That means those clicks landed on text that LOOKED like "
+                f"the target (status badge, filter chip, label) but is "
+                f"not actually the navigable element. Possible reasons:\n"
+                f"  - the real target is below the fold (scroll down to find it)\n"
+                f"  - the real target is on a LATER page (use pagination "
+                f"controls — Next button, page-number links, or scroll "
+                f"the table to load more rows)\n"
+                f"  - the visible page state genuinely has zero matching "
+                f"items; check filter / sort / status indicators to "
+                f"confirm before giving up\n"
+                f"Pick a different element or navigation action than the "
+                f"prior attempts."
+            )
+
         escalated_step = MicroIntent(
-            intent=step.intent, type=step.type,
+            intent=augmented_intent, type=step.type,
             verify=step.verify, budget=escalated_budget,
             reverse=step.reverse, grounding=step.grounding,
             section=step.section, required=step.required,
@@ -650,7 +690,8 @@ def execute_step(
         logger.warning(
             f"  [escalation] step {index} routing via Holo3StepHandler "
             f"(brain-grounded loop, budget={escalated_budget}, "
-            f"was={step.budget}) — original step.type={step.type}"
+            f"was={step.budget}, history={len(history)} prior failure(s)) "
+            f"— original step.type={step.type}"
         )
         return execute_holo3_step(runner, escalated_step, index)
 
