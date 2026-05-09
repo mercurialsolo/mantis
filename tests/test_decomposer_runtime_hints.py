@@ -98,17 +98,7 @@ def test_cache_version_bumped_to_v23() -> None:
     assert "v22_row_link" not in src
 
 
-# ── Stay-generic guard ─────────────────────────────────────────────────
-
-
-def test_runtime_hints_section_does_not_leak_customer_tokens() -> None:
-    """Worked examples must use generic phrasings, not customer-
-    specific URLs / instance names / brand vocabulary. The smoke that
-    motivated this rule used boattrader/staffai test instances; those
-    must NOT have ended up in the prompt content."""
-    text = DECOMPOSE_PROMPT
-    forbidden = ("staffai", "boattrader", "vision_claude", "popyachts")
-    for token in forbidden:
-        assert token.lower() not in text.lower(), (
-            f"runtime-hints section leaks customer token: {token!r}"
-        )
+# Stay-generic guard for customer-token leaks is delegated to
+# tests/test_docs_client_isolation.py, which scans every tracked
+# file in the tree (including DECOMPOSE_PROMPT). Adding a redundant
+# check here would itself leak the tokens this file is tracked for.
