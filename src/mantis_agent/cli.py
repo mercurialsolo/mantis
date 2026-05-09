@@ -850,7 +850,6 @@ def cmd_plan_run_modal(args: argparse.Namespace) -> int:
     plan source, and per-run knobs (start URL, detail-page pattern,
     cost / time caps, proxy toggle).
     """
-    import os
     import time as _time
 
     plan_path = Path(args.path)
