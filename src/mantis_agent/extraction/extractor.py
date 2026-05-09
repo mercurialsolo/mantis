@@ -34,7 +34,7 @@ import os
 import re
 import time
 from io import BytesIO
-from typing import Any
+from typing import Any, ClassVar
 
 from PIL import Image
 
@@ -470,15 +470,35 @@ class ClaudeExtractor:
     def extract(self, screenshot: Image.Image) -> ExtractionResult:
         """Extract listing data from a detail page screenshot.
 
-        When schema is set, uses dynamic prompts and populates generic fields.
-        Otherwise uses legacy BoatTrader hardcoded prompt.
+        When schema is set, uses dynamic prompts and populates generic
+        fields; the input_schema for the tool_use call is also built
+        dynamically from ``self.schema.fields``. Otherwise uses the
+        legacy hardcoded prompt with the canonical marketplace shape.
+
+        Routes through tool_use schema enforcement so the per-field
+        types (string / boolean) and required-set are server-validated;
+        prose-only or truncated responses become structurally
+        impossible. This is the highest-leverage migration since
+        ``extract`` is called once per detail page in the listings
+        loop.
         """
         prompt = self._get_extract_prompt()
-        text = self._call(screenshot, prompt)
-        parsed = self._parse_json(text)
+        input_schema = self._build_extract_input_schema()
+        parsed = self._call_with_tool_schema(
+            screenshot,
+            prompt,
+            tool_name="report_extracted_listing",
+            tool_description=(
+                "Report the structured fields visible on this detail page."
+            ),
+            input_schema=input_schema,
+            max_tokens=1500,
+        )
 
         if not parsed:
-            return ExtractionResult(raw_response=text, confidence=0.1, _schema=self.schema)
+            return ExtractionResult(
+                raw_response="<no tool_use>", confidence=0.1, _schema=self.schema,
+            )
 
         if self.schema:
             result = self._parse_schema_result(parsed)
@@ -494,9 +514,70 @@ class ClaudeExtractor:
             url=str(parsed.get("url", "")),
             seller=str(parsed.get("seller", "")),
             is_dealer=parse_bool(parsed.get("is_dealer", False)),
-            raw_response=text,
+            raw_response=json.dumps(parsed),
             confidence=0.9,
         )
+
+    # Type lookup for the dynamic extract input_schema. Maps the
+    # ``type`` string the schema fields use to the JSON-Schema type
+    # name Anthropic's tool_use expects. New types added to
+    # ExtractionSchema must extend this map.
+    _EXTRACT_FIELD_JSON_TYPES: ClassVar[dict[str, str]] = {
+        "str": "string",
+        "string": "string",
+        "int": "integer",
+        "integer": "integer",
+        "float": "number",
+        "number": "number",
+        "bool": "boolean",
+        "boolean": "boolean",
+    }
+
+    def _build_extract_input_schema(self) -> dict[str, Any]:
+        """Build the ``extract`` tool_use input_schema dynamically.
+
+        - When ``self.schema`` is set: every schema field becomes a
+          property; the universal ``is_spam`` boolean is appended.
+        - Otherwise: falls back to the legacy marketplace shape
+          (year / make / model / price / phone / url / seller /
+          is_dealer) so callers without a schema still get a
+          validated response.
+        """
+        if self.schema:
+            properties: dict[str, dict[str, Any]] = {}
+            required: list[str] = []
+            for field in self.schema.fields:
+                name = field["name"]
+                json_type = self._EXTRACT_FIELD_JSON_TYPES.get(
+                    str(field.get("type", "str")).lower(), "string",
+                )
+                properties[name] = {"type": json_type}
+                required.append(name)
+            properties["is_spam"] = {"type": "boolean"}
+            required.append("is_spam")
+            return {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            }
+        # Legacy / no-schema fallback shape.
+        return {
+            "type": "object",
+            "properties": {
+                "year": {"type": "string"},
+                "make": {"type": "string"},
+                "model": {"type": "string"},
+                "price": {"type": "string"},
+                "phone": {"type": "string"},
+                "url": {"type": "string"},
+                "seller": {"type": "string"},
+                "is_dealer": {"type": "boolean"},
+            },
+            "required": [
+                "year", "make", "model", "price",
+                "phone", "url", "seller", "is_dealer",
+            ],
+        }
 
     def extract_scrolled(self, screenshot: Image.Image) -> dict:
         """Extract additional data from a scrolled-down screenshot.
@@ -654,21 +735,43 @@ class ClaudeExtractor:
         """Verify a gate condition from a screenshot.
 
         Used after setup to check if filters were actually applied.
-        Returns (passed, reason).
+        Returns (passed, reason). Routes through tool_use schema so the
+        boolean / string shape is server-validated; any failure mode
+        falls through to ``(False, reason)`` so the runner halts on
+        an unverified gate (safer than silently passing).
         """
         prompt = (
             f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
             f"Check this condition: {expected}\n\n"
-            f"Look at the page heading, URL bar, result count, and any active filter tags.\n\n"
-            f"Output ONLY valid JSON:\n"
-            f"{{\"passed\": true/false, \"reason\": \"what you see that confirms or denies the condition\"}}"
+            f"Look at the page heading, URL bar, result count, and any active filter tags."
         )
 
-        text = self._call(screenshot, prompt)
-        parsed = self._parse_json(text)
+        parsed = self._call_with_tool_schema(
+            screenshot,
+            prompt,
+            tool_name="report_gate_verification",
+            tool_description=(
+                "Report whether the gate condition holds based on what is "
+                "visible in the screenshot."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "passed": {
+                        "type": "boolean",
+                        "description": "True iff the condition holds.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "What you see that confirms or denies the condition.",
+                    },
+                },
+                "required": ["passed", "reason"],
+            },
+        )
 
         if not parsed:
-            return False, f"Could not parse verifier response: {text[:100]}"
+            return False, "verify_gate: tool_use returned no usable result"
 
         passed = bool(parsed.get("passed", False))
         reason = str(parsed.get("reason", ""))
@@ -1046,17 +1149,43 @@ class ClaudeExtractor:
         except Exception:
             pass
 
-        text = self._call(screenshot, prompt)
+        # tool_use schema enforcement — the prompt-only "Output ONLY
+        # valid JSON" pattern produced prose-only / truncated /
+        # malformed responses on the boattrader smoke. Schema-validated
+        # tool_use makes those failure modes structurally impossible.
+        parsed = self._call_with_tool_schema(
+            screenshot,
+            prompt,
+            tool_name="report_filter_target",
+            tool_description=(
+                "Report the chosen filter control's coordinates and how "
+                "to interact with it (click / type / select), or "
+                "not_found if no matching element is visible."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "Center X in pixels"},
+                    "y": {"type": "integer", "description": "Center Y in pixels"},
+                    "action": {
+                        "type": "string",
+                        "enum": ["click", "type", "select", "not_found"],
+                    },
+                    "value": {"type": "string"},
+                    "label": {"type": "string"},
+                },
+                "required": ["x", "y", "action", "value", "label"],
+            },
+        )
 
         try:
             with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
-                f.write(text)
+                f.write(json.dumps(parsed) if parsed is not None else "<no tool_use>")
         except Exception:
             pass
 
-        parsed = self._parse_json(text)
         if not parsed:
-            logger.warning(f"  [claude-filter] parse failed: {text[:200]}")
+            logger.warning("  [claude-filter] tool_use returned no usable result")
             return None
 
         if parsed.get("action") == "not_found":
@@ -1191,17 +1320,42 @@ class ClaudeExtractor:
         except Exception:
             pass
 
-        text = self._call(screenshot, prompt)
+        # tool_use schema enforcement — same shape as find_filter_target
+        # (the form / filter targets are both "find one labelled element
+        # and tell me how to interact with it").
+        parsed = self._call_with_tool_schema(
+            screenshot,
+            prompt,
+            tool_name="report_form_target",
+            tool_description=(
+                "Report the form element matching the task — coordinates "
+                "and interaction (click / type / select), or not_found "
+                "if no matching element is visible on screen."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "x": {"type": "integer", "description": "Center X in pixels"},
+                    "y": {"type": "integer", "description": "Center Y in pixels"},
+                    "action": {
+                        "type": "string",
+                        "enum": ["click", "type", "select", "not_found"],
+                    },
+                    "value": {"type": "string"},
+                    "label": {"type": "string"},
+                },
+                "required": ["x", "y", "action", "value", "label"],
+            },
+        )
 
         try:
             with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
-                f.write(text)
+                f.write(json.dumps(parsed) if parsed is not None else "<no tool_use>")
         except Exception:
             pass
 
-        parsed = self._parse_json(text)
         if not parsed:
-            logger.warning(f"  [claude-form] parse failed: {text[:200]}")
+            logger.warning("  [claude-form] tool_use returned no usable result")
             return None
 
         if parsed.get("action") == "not_found":
