@@ -413,16 +413,15 @@ def test_decompose_prompt_template_substitutes_without_format_keyerror():
         DECOMPOSE_PROMPT.format(plan_text=plan)
 
 
-def test_submit_scrolls_to_find_below_fold_button():
-    """Issue #89 §2: long forms render the primary submit below the fold;
-    the previous single-screenshot path declared it missing without ever
-    scrolling. The new path Page_Downs and re-asks find_form_target up to
-    4 times before giving up."""
+def test_submit_finds_button_at_form_bottom_via_end_probe():
+    """Long forms (CRMs, account-edit pages) typically pin the primary
+    submit button at the absolute bottom. The agentic search probes
+    End→bottom on the second call (after the initial viewport miss)
+    so the common case is a 2-call hit, not a multi-Page-Down sweep."""
     env = _FakeEnv()
     extractor = MagicMock()
-    # First two screenshots: button not in viewport. Third: found.
+    # Initial viewport miss → End probe finds it at the bottom.
     extractor.find_form_target.side_effect = [
-        None,
         None,
         {"x": 640, "y": 480, "action": "click", "value": "", "label": "Update Lead"},
     ]
@@ -437,22 +436,89 @@ def test_submit_scrolls_to_find_below_fold_button():
 
     assert result.success is True
     assert result.data.startswith("submit:")
-    # Three find_form_target calls: initial + 2 after Page_Down.
+    assert extractor.find_form_target.call_count == 2  # initial + End
+    end_presses = [
+        a for a in env.actions
+        if a.action_type == ActionType.KEY_PRESS and a.params.get("keys") == "End"
+    ]
+    assert len(end_presses) == 1
+    page_downs = [
+        a for a in env.actions
+        if a.action_type == ActionType.KEY_PRESS and a.params.get("keys") == "Page_Down"
+    ]
+    assert len(page_downs) == 0  # End found it; no Page_Down sweep needed
+    clicks = [a for a in env.actions if a.action_type == ActionType.CLICK]
+    assert len(clicks) == 1
+
+
+def test_submit_finds_button_at_form_top_via_home_probe():
+    """Some products pin save / submit in a sticky header at the top.
+    When End→bottom misses, Home→top runs next; only after both ends
+    fail does the progressive Page_Down sweep start."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    # Initial miss, End miss, Home finds it.
+    extractor.find_form_target.side_effect = [
+        None,
+        None,
+        {"x": 320, "y": 80, "action": "click", "value": "", "label": "Save"},
+    ]
+    runner = _runner_with_extractor(env, extractor)
+
+    intent = MicroIntent(
+        intent="Click Save",
+        type="submit",
+        params={"label": "Save"},
+    )
+    result = runner._execute_claude_guided_form(intent, index=0)
+
+    assert result.success is True
     assert extractor.find_form_target.call_count == 3
-    # Two Page_Down keypresses + one terminal click.
+    keys_pressed = [
+        a.params.get("keys") for a in env.actions
+        if a.action_type == ActionType.KEY_PRESS
+    ]
+    # End comes first, then Home — order matters for the cheap-probe-first
+    # contract.
+    assert keys_pressed[:2] == ["End", "Home"]
+    # No Page_Down sweep — Home found it.
+    assert "Page_Down" not in keys_pressed
+
+
+def test_submit_falls_back_to_page_down_sweep_when_ends_miss():
+    """Mid-form buttons (rare on action submits but possible on multi-
+    section settings pages) are caught by the Page_Down sweep that
+    runs only after End and Home both miss."""
+    env = _FakeEnv()
+    extractor = MagicMock()
+    # initial, End, Home, Page_Down#1, Page_Down#2 → found
+    extractor.find_form_target.side_effect = [
+        None, None, None, None,
+        {"x": 100, "y": 200, "action": "click", "value": "", "label": "Apply"},
+    ]
+    runner = _runner_with_extractor(env, extractor)
+
+    intent = MicroIntent(
+        intent="Click Apply",
+        type="submit",
+        params={"label": "Apply"},
+    )
+    result = runner._execute_claude_guided_form(intent, index=0)
+
+    assert result.success is True
+    assert extractor.find_form_target.call_count == 5
     page_downs = [
         a for a in env.actions
         if a.action_type == ActionType.KEY_PRESS and a.params.get("keys") == "Page_Down"
     ]
     assert len(page_downs) == 2
-    clicks = [a for a in env.actions if a.action_type == ActionType.CLICK]
-    assert len(clicks) == 1
 
 
-def test_submit_gives_up_after_max_scrolls():
-    """When the button truly isn't on the page, we cap scrolling so the
-    runner doesn't loop forever. Cap is 4 scrolls — initial + 4 = 5 total
-    find_form_target calls before giving up."""
+def test_submit_gives_up_after_full_agentic_sweep():
+    """When the button truly isn't on the page, the cap is now:
+    initial + End + Home + 6 Page_Down = 9 find_form_target calls.
+    The cap exists so the runner doesn't loop forever even on
+    pathologically long forms."""
     env = _FakeEnv()
     extractor = MagicMock()
     extractor.find_form_target.return_value = None  # never found
@@ -467,13 +533,15 @@ def test_submit_gives_up_after_max_scrolls():
 
     assert result.success is False
     assert result.data == "form_target_not_found"
-    assert extractor.find_form_target.call_count == 5  # 1 initial + 4 scrolls
-    # Final Home press resets scroll for the next step.
+    # initial + End + Home + 6 Page_Down sweeps
+    assert extractor.find_form_target.call_count == 9
+    # Final Home press resets scroll for the next step (in addition to
+    # the one earlier Home that was part of the search probes).
     home_presses = [
         a for a in env.actions
         if a.action_type == ActionType.KEY_PRESS and a.params.get("keys") == "Home"
     ]
-    assert len(home_presses) == 1
+    assert len(home_presses) == 2
 
 
 def test_submit_aliases_passed_to_grounder():
