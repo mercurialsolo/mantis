@@ -227,12 +227,31 @@ RECOVERY MODES (pick ONE via the record_recovery tool):
    - the target genuinely doesn't exist on the site
    - the page shows a hard error (anti-bot, 403, server error)
    - the step's premise contradicts visible page state
+   - **PROGRESS EVIDENCE** — multiple prior retries (RETRY ATTEMPTS
+     >= 2) tried scrolling / clicking but the page state shown in
+     the screenshot still looks like the SAME content the earlier
+     attempts saw. If three scrolls down and the "Robot Information"
+     section is still at the top, the form likely has no further
+     content below — the requested target may not exist on this page
+     state. Prefer halt over insert_steps when this signal is
+     present; another scroll is unlikely to reach a section that
+     hasn't moved across multiple attempts.
    No plan tweak would help; surface the failure to the operator.
 
-Be conservative: only halt when truly stuck. add_hint is preferred
-when you can see what the right action is. edit_step is preferred
-when the structure is just slightly off. insert_steps when a
-precondition is missing.
+Be conservative on insert_steps: each insertion takes ~30 seconds
+and consumes per-run recovery budget. If you've seen evidence that
+the same approach already failed (RETRY ATTEMPTS shows the runner
+already tried), prefer halt or edit_step over inserting MORE steps
+of the same kind.
+
+Decision priority when multiple modes plausibly fit:
+- The screenshot clearly shows the right element with a different
+  label → add_hint (cheapest, often sufficient)
+- The step type / labels are obviously off → edit_step
+- A precondition is needed AND prior attempts didn't already try
+  this precondition → insert_steps
+- Prior attempts already tried scroll/dismiss/wait and the page
+  state hasn't visibly progressed → halt (don't loop)
 """
 
 
