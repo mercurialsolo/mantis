@@ -100,6 +100,11 @@ class MicroPlanRunner:
         self._opened_detail_in_new_tab = False
         self._active_checkpoint_context = None
         self._pre_step_snapshot, self._final_status = None, "running"
+        # Stash for the SPA-aware submit demotion check. The form
+        # handler's submit branch sets this just before clicking the
+        # submit button; ``run_executor._maybe_demote_form_no_change``
+        # consumes it on the very next step then clears it.
+        self._last_submit_pre_screenshot: Any = None
         self.max_cost, self.max_time = max_cost, max_time_minutes * 60
         self.step_callback, self.keep_screenshots = step_callback, keep_screenshots
         self.cancel_event = cancel_event

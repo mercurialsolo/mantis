@@ -333,6 +333,16 @@ class ClaudeGuidedFormHandler:
                 runner._dump_debug_screenshot(
                     f"submit_step{index}_pre_click", screenshot,
                 )
+                # Stash the pre-click screenshot so run_executor's
+                # ``_maybe_demote_form_no_change`` can run a SPA-aware
+                # visual diff before demoting a same-URL submit. Same
+                # pattern PR #222 added for clicks: a successful login
+                # / form submit on a CRM SPA (staff-crm is the canonical
+                # case) often replaces the form with a dashboard at the
+                # SAME URL; the runner-state snapshot can't see that
+                # delta, so without the visual diff every such submit
+                # was being demoted to failure.
+                runner._last_submit_pre_screenshot = screenshot
                 env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
                 runner.costs["gpu_seconds"] += runner._adaptive_submit_settle(
                     url_before=url_before,

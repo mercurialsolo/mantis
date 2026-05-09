@@ -384,6 +384,24 @@ class RunExecutor:
             logger.debug("post-submit diff capture failed: %s", exc)
             delta = None
         if delta is not None and not delta.has_changes:
+            # Before demoting, consult the SPA-aware visual verifier:
+            # CRM-style logins (staff-crm is the canonical case) replace
+            # the login form with a dashboard at the SAME URL, so the
+            # runner-state snapshot sees no delta even though the
+            # submit succeeded. The submit handler stashes the
+            # pre-click screenshot at ``runner._last_submit_pre_screenshot``;
+            # take a post-screenshot now and ask the extractor to
+            # compare. Pattern mirrors the click-handler's
+            # ``verify_post_click_navigation`` path from PR #222.
+            if self._submit_visually_changed(runner, effective_step):
+                logger.info(
+                    "  [%d] submit had no runner-state delta but visual "
+                    "verifier confirms UI change — keeping success",
+                    state.step_index,
+                )
+                # Clear the stash so the next step starts fresh.
+                runner._last_submit_pre_screenshot = None
+                return
             logger.warning(
                 "  [%d] %s reported success but no observable state "
                 "change — demoting to failure (will retry)",
@@ -391,6 +409,55 @@ class RunExecutor:
             )
             step_result.success = False
             step_result.data = (step_result.data or "") + ":no_state_change"
+        # Always clear the stash — it's only valid for the immediately
+        # following demotion check.
+        if hasattr(runner, "_last_submit_pre_screenshot"):
+            runner._last_submit_pre_screenshot = None
+
+    def _submit_visually_changed(
+        self, runner: Any, effective_step: MicroIntent,
+    ) -> bool:
+        """Return True iff a pre/post visual diff confirms the submit
+        actually changed the page UI. Used as the SPA-aware escape hatch
+        for ``_maybe_demote_form_no_change`` so same-URL form submits
+        (CRM logins, in-page settings saves) aren't falsely demoted.
+
+        Returns False on any unavailable input (no extractor / no
+        pre-screenshot / API error) so the calling code falls through
+        to the existing snapshot-based demotion — the verifier is an
+        additive override, never a regression of the existing behavior.
+        """
+        pre = getattr(runner, "_last_submit_pre_screenshot", None)
+        extractor = getattr(runner, "extractor", None)
+        if pre is None or extractor is None:
+            return False
+        verify = getattr(extractor, "verify_post_click_navigation", None)
+        if verify is None:
+            return False
+        try:
+            post = runner._safe_screenshot()
+        except Exception:
+            return False
+        if post is None:
+            return False
+        try:
+            nav = verify(pre, post, effective_step.intent)
+        except Exception as exc:  # noqa: BLE001 — never break runs
+            logger.debug("submit visual verifier raised: %s", exc)
+            return False
+        # The verifier returns kinds: ``url_change`` / ``modal`` /
+        # ``no_change`` / ``wrong_target``. Only the first two count
+        # as evidence of a successful submit; ``no_change`` and
+        # ``wrong_target`` should still demote.
+        if not isinstance(nav, dict):
+            return False
+        if not nav.get("navigated"):
+            return False
+        kind = str(nav.get("kind", ""))
+        if kind in ("url_change", "modal"):
+            runner.costs["claude_extract"] += 1
+            return True
+        return False
 
     # ── Outcome handlers ────────────────────────────────────────────────
 
