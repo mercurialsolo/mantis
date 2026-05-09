@@ -89,7 +89,7 @@ Output ONLY valid JSON:
 class PlanEnhancer:
     """Fill gaps in vague plans using site probe knowledge."""
 
-    def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: str = "", model: str = "claude-opus-4-7"):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
 

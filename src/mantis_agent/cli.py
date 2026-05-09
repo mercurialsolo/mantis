@@ -697,6 +697,74 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
         )
         return EXIT_ERROR
 
+    # Build the optional proxy dict before constructing the env. Sites
+    # behind anti-bot challenges (Cloudflare, DataDome, etc.) often
+    # serve a 403 to a vanilla headless Chromium IP. The host
+    # integration uses an Oxylabs residential proxy for the same
+    # reason; the CLI mirrors that contract with --proxy-from-env.
+    #
+    # Oxylabs residential auth format: the username sent to the
+    # proxy gateway must be ``customer-<USERNAME>`` (not the raw
+    # USERNAME), with optional dash-delimited geo segments for
+    # country / state / city pinning:
+    #
+    #   customer-{USERNAME}-cc-{COUNTRY}-st-{STATE}-city-{CITY}
+    #   customer-{USERNAME}-cc-{COUNTRY}                          # country only
+    #   customer-{USERNAME}                                        # rotating, no pin
+    #
+    # The base USERNAME-only form returns a sticky single IP that
+    # often gets blocklisted; the geo-pinned form gives a fresh IP
+    # per session token. ``--proxy-session`` (default ``mantis``)
+    # is appended as a sessid suffix so consecutive runs can either
+    # share an IP (same session) or rotate (different session).
+    proxy_dict: dict | None = None
+    if args.proxy_from_env:
+        proxy_url = os.environ.get("OXYLABS_ENTRYPOINT", "").strip()
+        raw_user = os.environ.get("OXYLABS_USERNAME", "").strip()
+        proxy_pass = os.environ.get("OXYLABS_PASSWORD", "").strip()
+        if not proxy_url or not raw_user or not proxy_pass:
+            print(
+                "error: --proxy-from-env set but OXYLABS_ENTRYPOINT / "
+                "OXYLABS_USERNAME / OXYLABS_PASSWORD are not all populated. "
+                "Export all three for the Oxylabs residential proxy.",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+
+        # Playwright accepts a bare host:port; if the user supplied a
+        # scheme-less host:port, prepend http:// so launchers downstream
+        # don't reject the malformed URL.
+        if "://" not in proxy_url:
+            proxy_url = f"http://{proxy_url}"
+
+        # Build the customer-prefixed username with geo + session
+        # segments. Honour OXYLABS_COUNTRY / OXYLABS_STATE /
+        # OXYLABS_CITY when any are present; skip silently if absent.
+        username_parts = [f"customer-{raw_user}"]
+        country = os.environ.get("OXYLABS_COUNTRY", "").strip()
+        state = os.environ.get("OXYLABS_STATE", "").strip()
+        city = os.environ.get("OXYLABS_CITY", "").strip()
+        if country:
+            username_parts += ["cc", country]
+        if state:
+            username_parts += ["st", state]
+        if city:
+            username_parts += ["city", city]
+        if args.proxy_session:
+            username_parts += ["sessid", args.proxy_session]
+        proxy_user = "-".join(username_parts)
+
+        proxy_dict = {
+            "server": proxy_url,
+            "username": proxy_user,
+            "password": proxy_pass,
+        }
+        # Diagnostic — operators commonly need to see the username
+        # actually sent (the customer- prefix and geo/sessid segments
+        # are silently constructed) when debugging "why does this IP
+        # keep getting Cloudflare-blocked?".
+        print(f"  proxy:   {proxy_url}  (username={proxy_user})")
+
     env: Any
     if args.browser == "xdotool":
         try:
@@ -723,6 +791,7 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
         env = PlaywrightGymEnv(
             start_url=start_url,
             headless=bool(args.headless),
+            proxy=proxy_dict,
         )
 
     # Build grounding + extractor — both Claude-backed, share the key.
@@ -892,7 +961,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     init.add_argument(
         "--model",
-        default="claude-sonnet-4-20250514",
+        default="claude-opus-4-7",
         help="Claude model to use for decomposition",
     )
     init.add_argument(
@@ -981,6 +1050,27 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Initial URL for the browser. Defaults to the first navigate "
              "step's URL in the plan.",
+    )
+    run.add_argument(
+        "--proxy-from-env",
+        action="store_true",
+        default=False,
+        help="Route the browser through OXYLABS_ENTRYPOINT / OXYLABS_USERNAME "
+             "/ OXYLABS_PASSWORD (the host integration's residential proxy). "
+             "The username sent to Oxylabs is built as "
+             "``customer-{USERNAME}-cc-{COUNTRY}-st-{STATE}-city-{CITY}-sessid-{SESSION}``"
+             " — geo segments come from OXYLABS_COUNTRY / OXYLABS_STATE / "
+             "OXYLABS_CITY when present; SESSION from --proxy-session. "
+             "Required for sites behind Cloudflare / DataDome that block "
+             "headless Chromium IPs.",
+    )
+    run.add_argument(
+        "--proxy-session",
+        default="mantis",
+        help="Sessid suffix appended to the Oxylabs proxy username. Same "
+             "session reuses the same sticky IP; a different session forces "
+             "a fresh IP. Useful when a specific IP got blocklisted and you "
+             "want to rotate without restarting the proxy. Default: 'mantis'.",
     )
     run.add_argument(
         "--detail-page-pattern",

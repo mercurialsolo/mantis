@@ -117,7 +117,7 @@ class AgentSBrain:
 
     Args:
         worker_model: Model for the worker agent (reasoning).
-            Can be "gpt-4o", "claude-sonnet-4-20250514", or a vLLM endpoint model name.
+            Can be "gpt-4o", "claude-opus-4-7", or a vLLM endpoint model name.
         worker_provider: "openai", "anthropic", "vllm", "ollama"
         worker_base_url: Base URL for vLLM/ollama worker endpoint.
         grounding_model: Model for visual grounding (element location).

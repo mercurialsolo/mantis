@@ -351,6 +351,42 @@ plan says "Enter your password" with no actual password), still emit
 `fill_field` but expect the runner to use a placeholder or fail with
 an explicit message — better than silently typing "".
 
+RUNTIME HINTS — DO NOT DECOMPOSE:
+
+Some source plans include guidance for the runtime / browser /
+operator that is NOT a step the model needs to take. These are
+PROMPT METADATA, not actions. DO NOT emit a step for any of these:
+
+   • "Wait N seconds for the page to load", "Pause N seconds before
+     interacting", "Let the page fully render", "Allow N seconds for
+     hydration"
+       → omit. The runner's navigate handler already waits up to 18s
+         for first paint, the form handler adds another 4s settle,
+         and find_form_target re-screenshots until the page is non-
+         blank. Decomposing a "wait" instruction as ``extract_data``
+         then runs the listing-data extractor on a not-yet-populated
+         page and rejects the lead with REJECTED_INCOMPLETE — wrong
+         outcome, halts the plan.
+
+   • "FIRST ACTION RULE: ...", "BENCHMARK PREAMBLE", "INPUTS:",
+     "PERMITTED ACTIONS:", "STRICTLY PROHIBITED:" headers and the
+     bullet lists under them — these are operator notes, not steps.
+
+   • "Open a browser at <URL>", "The runtime has already opened the
+     browser at <URL>" — omit. The runner / host opens the browser
+     externally; the first decomposable step in this case is
+     whatever the source plan does AFTER the browser is open.
+
+   • "Do NOT use Developer Tools", "Do NOT execute JavaScript",
+     "Do NOT read page source" and similar capability constraints
+     — omit. The brain's action vocabulary doesn't include these
+     primitives in the first place.
+
+   When in doubt: if the instruction describes an environment
+   precondition or operator constraint rather than a clickable /
+   typeable / scrollable action, omit it. The plan is shorter and
+   more reliable for it.
+
 VERB → STEP-TYPE MAPPING (FORM FLOWS):
    "log in", "sign in", "authenticate"
        → fill_field for each credential (with the literal username and
@@ -538,7 +574,7 @@ parser accepts both forms but prefers the object form.
 class PlanDecomposer:
     """Decomposes plain text plans into micro-intents using Claude Sonnet."""
 
-    def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: str = "", model: str = "claude-opus-4-7"):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
 
@@ -590,7 +626,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v22_row_link"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v23_skip_runtime_hints"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

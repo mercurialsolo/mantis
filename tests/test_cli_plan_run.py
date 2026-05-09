@@ -500,3 +500,156 @@ def test_run_uses_explicit_start_url_in_env_reset(
     env_instance = patched_deps["env_cls"].return_value
     reset_kwargs = env_instance.reset.call_args.kwargs
     assert reset_kwargs.get("start_url") == "https://other.example.test/dashboard"
+
+
+# ── --proxy-from-env (Oxylabs) ───────────────────────────────────────────
+
+
+def test_run_threads_oxylabs_proxy_dict_into_env(
+    tmp_path: Path, patched_deps, monkeypatch,
+) -> None:
+    """``--proxy-from-env`` reads OXYLABS_ENTRYPOINT / OXYLABS_USERNAME /
+    OXYLABS_PASSWORD and builds the dict Playwright expects, with the
+    customer-{USERNAME} prefix Oxylabs requires for residential auth.
+
+    Empirical: without the customer- prefix Oxylabs returns HTTP 000 /
+    rejected; with it the request is accepted. The default
+    --proxy-session=mantis is appended as the sessid suffix."""
+    monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:7777")
+    monkeypatch.setenv("OXYLABS_USERNAME", "tok123")
+    monkeypatch.setenv("OXYLABS_PASSWORD", "shh")
+    monkeypatch.delenv("OXYLABS_COUNTRY", raising=False)
+    monkeypatch.delenv("OXYLABS_STATE", raising=False)
+    monkeypatch.delenv("OXYLABS_CITY", raising=False)
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    code = main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert code == EXIT_OK
+
+    env_kwargs = patched_deps["env_cls"].call_args.kwargs
+    assert env_kwargs["proxy"] == {
+        "server": "http://pr.oxylabs.io:7777",
+        # ``customer-`` prefix added; default sessid suffix appended.
+        "username": "customer-tok123-sessid-mantis",
+        "password": "shh",
+    }
+
+
+def test_run_oxylabs_geo_pin_built_from_env(
+    tmp_path: Path, patched_deps, monkeypatch,
+) -> None:
+    """OXYLABS_COUNTRY / STATE / CITY get appended as dash-delimited
+    geo segments. ``--proxy-session`` overrides the default sessid."""
+    monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:10000")
+    monkeypatch.setenv("OXYLABS_USERNAME", "tok")
+    monkeypatch.setenv("OXYLABS_PASSWORD", "p")
+    monkeypatch.setenv("OXYLABS_COUNTRY", "US")
+    monkeypatch.setenv("OXYLABS_STATE", "florida")
+    monkeypatch.setenv("OXYLABS_CITY", "miami")
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--proxy-session", "smoke-2",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+
+    user = patched_deps["env_cls"].call_args.kwargs["proxy"]["username"]
+    assert user == "customer-tok-cc-US-st-florida-city-miami-sessid-smoke-2"
+
+
+def test_run_oxylabs_partial_geo_skips_empty_segments(
+    tmp_path: Path, patched_deps, monkeypatch,
+) -> None:
+    """Partial geo: only OXYLABS_COUNTRY set, the others empty —
+    state/city segments must be omitted (Oxylabs rejects empty values)."""
+    monkeypatch.setenv("OXYLABS_ENTRYPOINT", "pr.oxylabs.io:10000")
+    monkeypatch.setenv("OXYLABS_USERNAME", "tok")
+    monkeypatch.setenv("OXYLABS_PASSWORD", "p")
+    monkeypatch.setenv("OXYLABS_COUNTRY", "US")
+    monkeypatch.delenv("OXYLABS_STATE", raising=False)
+    monkeypatch.delenv("OXYLABS_CITY", raising=False)
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+
+    user = patched_deps["env_cls"].call_args.kwargs["proxy"]["username"]
+    assert "cc-US" in user
+    assert "-st-" not in user
+    assert "-city-" not in user
+
+
+def test_run_proxy_from_env_preserves_explicit_scheme(
+    tmp_path: Path, patched_deps, monkeypatch,
+) -> None:
+    """If OXYLABS_ENTRYPOINT already has a scheme, don't double-prefix."""
+    monkeypatch.setenv("OXYLABS_ENTRYPOINT", "http://pr.oxylabs.io:7777")
+    monkeypatch.setenv("OXYLABS_USERNAME", "u")
+    monkeypatch.setenv("OXYLABS_PASSWORD", "p")
+    monkeypatch.delenv("OXYLABS_COUNTRY", raising=False)
+    monkeypatch.delenv("OXYLABS_STATE", raising=False)
+    monkeypatch.delenv("OXYLABS_CITY", raising=False)
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    env_kwargs = patched_deps["env_cls"].call_args.kwargs
+    assert env_kwargs["proxy"]["server"] == "http://pr.oxylabs.io:7777"
+
+
+def test_run_proxy_from_env_fails_without_full_credentials(
+    tmp_path: Path, patched_deps, monkeypatch, capsys,
+) -> None:
+    """``--proxy-from-env`` with any of OXYLABS_ENTRYPOINT /
+    OXYLABS_USERNAME / OXYLABS_PASSWORD missing must fail loudly,
+    not silently fall back to direct (which would still hit Cloudflare
+    and leave the operator wondering why)."""
+    monkeypatch.delenv("OXYLABS_ENTRYPOINT", raising=False)
+    monkeypatch.delenv("OXYLABS_USERNAME", raising=False)
+    monkeypatch.delenv("OXYLABS_PASSWORD", raising=False)
+
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    code = main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--proxy-from-env",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert code == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "OXYLABS_ENTRYPOINT" in err
+
+
+def test_run_no_proxy_when_flag_omitted(tmp_path: Path, patched_deps) -> None:
+    """Default (no --proxy-from-env) builds env without a proxy. Direct
+    connection still works for sites that don't anti-bot."""
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    main([
+        "plan", "run", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--anthropic-api-key", "k",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    env_kwargs = patched_deps["env_cls"].call_args.kwargs
+    assert env_kwargs.get("proxy") is None

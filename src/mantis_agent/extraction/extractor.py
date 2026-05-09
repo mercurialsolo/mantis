@@ -122,7 +122,7 @@ class ClaudeExtractor:
     def __init__(
         self,
         api_key: str = "",
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-opus-4-7",
         schema: ExtractionSchema | None = None,
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
