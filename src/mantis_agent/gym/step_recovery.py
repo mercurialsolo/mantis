@@ -57,6 +57,8 @@ from typing import Any
 
 from ..actions import Action, ActionType
 
+logger = logging.getLogger(__name__)
+
 
 class RecoveryAction(Enum):
     """Coarse decision the runner should take after a step result.
@@ -227,6 +229,28 @@ class StepRecoveryPolicy:
                     halt=False, step_index=step_index,
                     halt_reason=f"required_retry:{step.type}:{attempt}",
                 )
+            # Before halting, give the agentic recovery loop a chance.
+            # Claude analyses the failure (step + last screenshot +
+            # failure data) and either:
+            #   - returns a hint to augment the next retry's prompt
+            #   - returns an edited version of the step (changed type,
+            #     params, label, aliases)
+            #   - returns helper steps to splice in BEFORE this step
+            #   - returns halt = surface the legacy halt path
+            # Bounded by per-step + per-run budgets so we don't loop
+            # indefinitely. Falls through to the legacy halt path on
+            # any failure of the recovery call itself.
+            recovery_outcome = self._try_agentic_recovery(
+                step=step,
+                step_result=step_result,
+                step_index=step_index,
+                plan=plan,
+                step_retry_counts=step_retry_counts,
+                attempts=attempt,
+            )
+            if recovery_outcome is not None:
+                return recovery_outcome
+
             logger_.error(
                 f"  [{step_index}] REQUIRED step failed after {max_retries} retries — HALTING"
             )
@@ -491,4 +515,190 @@ class StepRecoveryPolicy:
         for j in range(start, len(plan.steps)):
             if plan.steps[j].type == step_type:
                 return j
+        return None
+
+    # ── Agentic failure-recovery loop ───────────────────────────────────
+
+    def _try_agentic_recovery(
+        self,
+        *,
+        step: Any,
+        step_result: Any,
+        step_index: int,
+        plan: Any,
+        step_retry_counts: dict[int | str, int],
+        attempts: int,
+    ) -> RecoveryOutcome | None:
+        """Last-resort: ask Claude to analyse + adapt before HALTING.
+
+        Invoked when a REQUIRED step has exhausted its retry budget
+        (and, if the wrong-handler escalation triggered, that has
+        also failed). Returns a :class:`RecoveryOutcome` describing
+        the next action to take, or ``None`` to fall through to the
+        legacy halt path.
+
+        Budget enforcement (per-step max 2 + per-run max 5) lives
+        here so a pathological step / page can't spend the whole
+        run on recovery alone. Budgets are tracked on the runner so
+        they survive across step retries within the same plan.
+
+        Modes applied:
+
+        - ``add_hint`` — append the hint to the step's
+          ``_recovery_hints[step_index]`` list. The form / click
+          handlers read this on next attempt and surface it in the
+          search prompt. Returns a ``RecoveryOutcome`` that re-runs
+          the same step.
+        - ``edit_step`` — mutate ``plan.steps[step_index]`` with
+          the changed fields (intent / type / params). Returns a
+          ``RecoveryOutcome`` that re-runs the (now edited) step.
+        - ``insert_steps`` — splice helper steps before the failed
+          step via :func:`agentic_recovery.splice_inserted_steps`.
+          Returns a ``RecoveryOutcome`` that jumps to the first
+          inserted step.
+        - ``halt`` — return ``None`` so the caller surfaces the
+          legacy halt path.
+        """
+        runner = self.parent
+
+        # Budget guards. Defensively check that the runner exposes
+        # the recovery-state fields with the right shape — legacy
+        # runners (or test stubs that use MagicMock) won't, and we
+        # should fall through to the legacy halt path rather than
+        # crash with type errors.
+        per_step_dict = getattr(runner, "_recovery_attempts_per_step", None)
+        total_attempts = getattr(runner, "_total_recovery_attempts", None)
+        if not isinstance(per_step_dict, dict) or not isinstance(total_attempts, int):
+            return None
+        from ..agentic_recovery import (
+            DEFAULT_MAX_RECOVERIES_PER_RUN,
+            DEFAULT_MAX_RECOVERIES_PER_STEP,
+        )
+        per_step = per_step_dict.get(step_index, 0)
+        per_run = total_attempts
+        if per_step >= DEFAULT_MAX_RECOVERIES_PER_STEP:
+            logger.info(
+                "  [%d] agentic recovery skipped — per-step budget "
+                "exhausted (%d/%d)",
+                step_index, per_step, DEFAULT_MAX_RECOVERIES_PER_STEP,
+            )
+            return None
+        if per_run >= DEFAULT_MAX_RECOVERIES_PER_RUN:
+            logger.info(
+                "  [%d] agentic recovery skipped — per-run budget "
+                "exhausted (%d/%d)",
+                step_index, per_run, DEFAULT_MAX_RECOVERIES_PER_RUN,
+            )
+            return None
+
+        # Capture screenshot for the analysis. Best-effort — Claude
+        # can reason without it.
+        screenshot = None
+        try:
+            screenshot = runner._safe_screenshot()
+        except Exception:
+            screenshot = None
+
+        # Plan context = intent strings of successful steps before
+        # this one. Helps Claude understand workflow position.
+        plan_context: list[str] = []
+        try:
+            for i, prev in enumerate(plan.steps[:step_index]):
+                plan_context.append(getattr(prev, "intent", "") or "")
+        except Exception:  # noqa: BLE001
+            pass
+
+        from ..agentic_recovery import (
+            analyse_failure_and_recover,
+            splice_inserted_steps,
+        )
+        decision = analyse_failure_and_recover(
+            step=step,
+            failure_data=str(getattr(step_result, "data", "") or ""),
+            screenshot=screenshot,
+            plan_context=plan_context,
+            attempts=attempts,
+        )
+        if decision is None:
+            return None
+
+        # Increment budgets *before* applying so a recovery that
+        # itself triggers another failure doesn't infinite-loop.
+        per_step_dict[step_index] = per_step + 1
+        runner._total_recovery_attempts = per_run + 1
+
+        logger.warning(
+            "  [%d] agentic recovery: mode=%s — %s",
+            step_index, decision.mode, decision.reasoning[:200],
+        )
+
+        if decision.mode == "halt":
+            return None  # fall through to legacy halt
+
+        if decision.mode == "add_hint":
+            if not decision.hint:
+                return None
+            if not hasattr(runner, "_recovery_hints"):
+                runner._recovery_hints = {}
+            runner._recovery_hints.setdefault(step_index, []).append(
+                decision.hint
+            )
+            # Reset retry count so the step gets fresh attempts with
+            # the hint. Keep the recovery budget bumped above so we
+            # don't loop forever.
+            step_retry_counts[step_index] = 0
+            return RecoveryOutcome(
+                halt=False, step_index=step_index,
+                halt_reason=f"recovery_hint:{decision.hint[:60]}",
+            )
+
+        if decision.mode == "edit_step":
+            edited = decision.edited_step or {}
+            if not edited:
+                return None
+            # Mutate the step in place. Only the fields the LLM
+            # supplied; missing fields preserve original values.
+            if "intent" in edited and edited["intent"]:
+                step.intent = str(edited["intent"])
+            if "type" in edited and edited["type"]:
+                step.type = str(edited["type"])
+            if "params" in edited and isinstance(edited["params"], dict):
+                # Merge — recipe-side params extend the existing dict.
+                merged = dict(getattr(step, "params", {}) or {})
+                merged.update(edited["params"])
+                step.params = merged
+            step_retry_counts[step_index] = 0
+            return RecoveryOutcome(
+                halt=False, step_index=step_index,
+                halt_reason=f"recovery_edit:{step.type}",
+            )
+
+        if decision.mode == "insert_steps":
+            if not decision.inserted_steps:
+                return None
+            # Build MicroIntent objects from the dict-shaped specs.
+            from ..plan_decomposer import MicroIntent
+            new_steps = [
+                MicroIntent(
+                    intent=spec["intent"],
+                    type=spec["type"],
+                    params=spec.get("params") or {},
+                    section=getattr(step, "section", "") or "",
+                    required=False,  # helper steps are best-effort
+                )
+                for spec in decision.inserted_steps
+            ]
+            plan.steps = splice_inserted_steps(
+                plan.steps, step_index, new_steps,
+            )
+            # Reset retry count so the (now-deferred) failed step
+            # gets fresh attempts after the helper sub-flow.
+            step_retry_counts[step_index] = 0
+            # Jump to the first inserted step.
+            return RecoveryOutcome(
+                halt=False, step_index=step_index,
+                halt_reason=f"recovery_insert:{len(new_steps)}_steps",
+            )
+
+        # Unknown mode — defensive fallthrough.
         return None

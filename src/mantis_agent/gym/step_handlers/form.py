@@ -281,6 +281,37 @@ class ClaudeGuidedFormHandler:
             aliases = [str(a).strip() for a in aliases if str(a).strip()]
             kind = str(params.get("kind") or _SUBMIT_KIND_DEFAULT).strip().lower() or _SUBMIT_KIND_DEFAULT
             search_intent = _build_submit_search_intent(label, kind, step.intent)
+            # Agentic-recovery hints — issue #224 follow-up. When the
+            # last-resort recovery loop returned ``mode=add_hint`` for
+            # a previous attempt at this step, the hint string was
+            # appended to ``runner._recovery_hints[step_index]``.
+            # Surface every accumulated hint into the search prompt
+            # so the next attempt's LLM has them all. Hints come from
+            # Claude analysing the failure screenshot — much more
+            # specific than the generic "avoid these coords" feedback
+            # produced by the snapshot-diff path.
+            # Defensive: only proceed when runner has a real dict of
+            # hints. Test stubs that use MagicMock auto-create the
+            # attribute as a Mock; we don't want to surface bogus
+            # "recovery hints" prose in that case.
+            recovery_hints_dict = getattr(runner, "_recovery_hints", None)
+            recovery_hints: list[str] = []
+            if isinstance(recovery_hints_dict, dict):
+                stored = recovery_hints_dict.get(index, [])
+                if isinstance(stored, list):
+                    recovery_hints = [str(h) for h in stored if h]
+            if recovery_hints:
+                hint_block = "\n".join(f"  - {h}" for h in recovery_hints)
+                search_intent = (
+                    search_intent
+                    + "\n\nRECOVERY HINTS from previous failed attempts:\n"
+                    + hint_block
+                )
+                logger.warning(
+                    "  [claude-form] submit '%s' retry — applying %d "
+                    "recovery hint(s) from agentic-recovery loop",
+                    label, len(recovery_hints),
+                )
             # Agentic retry feedback — issue #224 follow-up. When a
             # previous attempt at this step failed with no_state_change
             # / wrong_target, the runner records the click target + label
