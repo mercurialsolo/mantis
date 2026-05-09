@@ -144,6 +144,115 @@ Exit codes mirror `validate`: 0 clean, 2 warnings only, 1 errors. The
 file is written even when validator finds issues — the validator's
 output tells you what to fix.
 
+### `mantis plan run <path>`
+
+End-to-end execution against a remote Mantis brain (Baseten / Modal /
+custom OpenAI-compatible endpoint) and a local browser. Loads the plan
+(`.txt` → decompose via Claude, `.json` → load directly), wires
+`Holo3Brain` + `ClaudeGrounding` + `ClaudeExtractor` + a browser env
+into `MicroPlanRunner`, and writes `plan.json` + `result.json` to
+`--output-dir`.
+
+```
+export ANTHROPIC_API_KEY="<your key>"
+export MANTIS_API_TOKEN="<tenant token>"
+mantis plan run plans/staff-crm.txt \
+    --platform modal \
+    --endpoint https://workspace--mantis-server-api.modal.run/v1 \
+    --header "X-Mantis-Token=$MANTIS_API_TOKEN" \
+    --output-dir outputs/staff-crm-validation
+```
+
+Output:
+
+```
+  plan: 14 steps → outputs/staff-crm-validation/plan.json
+  brain:   https://workspace--mantis-server-api.modal.run/v1  (platform=modal, model=Hcompany/Holo3-35B-A3B, headers=X-Mantis-Token)
+  browser: playwright (start_url=https://crm.example.test/leads)
+  output:  outputs/staff-crm-validation
+
+  result: 12/14 succeeded (732.4s) — outputs/staff-crm-validation/result.json
+  final URL: https://crm.example.test/leads
+```
+
+Key flags:
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--platform` | `modal` | `modal` / `baseten` / `custom` — informational; controls the default model name. |
+| `--endpoint` | (required) | OpenAI-compatible v1 base URL of the brain. |
+| `--header KEY=VALUE` | — | Repeatable. Sent on every brain request — typical use: `X-Mantis-Token=…`. |
+| `--browser` | `playwright` | `playwright` (lighter, headless-friendly) or `xdotool` (Xvfb + Chromium, needed for sites that detect headless). |
+| `--headless / --no-headless` | headless | Playwright-only. Pass `--no-headless` to bypass Cloudflare's headless-detection on commerce sites. |
+| `--start-url` | first navigate URL | Initial URL the browser opens. Defaults to the first navigate step's URL. |
+| `--detail-page-pattern` | — | Optional regex injected into `SiteConfig.detail_page_pattern` (per-plan override; framework primitives stay neutral). |
+| `--max-cost` | `10.0` | Hard cap on USD spend (Anthropic + brain). Halts when exceeded. |
+| `--max-time-minutes` | `30` | Wall-clock cap. |
+| `--output-dir` | `outputs/run-<unix>` | Where to write `plan.json` + `result.json` + `checkpoint.json`. |
+| `--resume` | off | Resume from a previous checkpoint at `<output-dir>/checkpoint.json`. |
+
+Exit code is 0 if every step succeeded, 1 if any failed or the runner
+raised. Useful as a CI gate against staging endpoints.
+
+### `mantis plan run-modal <path>`
+
+Like `plan run`, but the **browser, decomposer, grounding, and
+extractor all execute inside Modal** under Xvfb instead of on the
+local machine. The CLI is a thin remote driver — `modal.Function.from_name`
+→ `.remote(...)` → write `result.json` — that submits the plan and
+renders the same per-step rollup the local CLI prints.
+
+When to use it:
+
+- The local headless / xdotool browser hits Cloudflare's bot challenge
+  (BoatTrader, Zillow, Reddit-on-iframe) — Modal's full Chromium under
+  Xvfb + window-manager populates fingerprint signals (`navigator.
+  webdriver`, GPU, fonts) that headless strips.
+- You want consistent egress (a single Modal-side IP and proxy
+  configuration, not whatever your laptop happens to have).
+- You're integrating with another remote system (a host integration's
+  CUA backend) and don't want to round-trip the browser bytes through
+  your laptop.
+
+```
+mantis plan run-modal plans/marketplace-listings.txt \
+    --endpoint https://workspace--mantis-server-api.modal.run/v1 \
+    --header "X-Mantis-Token=$MANTIS_API_TOKEN" \
+    --start-url https://www.marketplace.example/listings/ \
+    --use-proxy --proxy-session marketplace-1 \
+    --output-dir outputs/marketplace-modal
+```
+
+Same flags as `plan run` minus `--platform` / `--browser` / `--headless`
+(always Modal + xdotool + headed under Xvfb), plus:
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--app-name` | `mantis-plan-runner` | Modal app name. Must match the deployed `deploy/modal/modal_plan_runner.py` app. |
+| `--use-proxy` | off | Route the Modal-side browser through the configured upstream proxy (auth held by an in-container `tinyproxy`). |
+| `--proxy-session` | `mantis` | Session ID for sticky-IP behavior on providers that support it. |
+| `--start-url` | required for text plans | Text plans are decomposed inside Modal so the CLI can't introspect navigate steps; pass it explicitly. JSON plans infer it from the first navigate step. |
+
+Prerequisites:
+
+1. **Deploy the app once:**
+
+   ```
+   uv run modal deploy deploy/modal/modal_plan_runner.py
+   ```
+
+2. **Provision the Modal Secret** named `mantis-plan-runner-secrets`
+   with at least `ANTHROPIC_API_KEY`. Add `MANTIS_API_TOKEN` and the
+   upstream proxy credentials when needed:
+
+   ```
+   modal secret create mantis-plan-runner-secrets \
+       ANTHROPIC_API_KEY=sk-ant-... \
+       MANTIS_API_TOKEN=...
+   ```
+
+See [Modal hosting](../hosting/modal.md) for the full deploy story.
+
 ## Streaming-agent run (legacy default)
 
 `mantis "<task description>"` continues to work as before — running the

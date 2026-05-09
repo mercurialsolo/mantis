@@ -838,6 +838,53 @@ last checkpoint.
 
 ---
 
+## Recipes as overlays (#224 Phase 1)
+
+Recipes are evolving from "primary configuration source" to
+"production-hardening overlay" on top of derived `ExtractionSchema`
+and probe-derived `SiteConfig`. The Phase 1 primitives shipped in
+`mantis_agent` give you the merge half:
+
+```python
+from mantis_agent import recipes
+from mantis_agent.extraction import ExtractionSchema
+from mantis_agent.site_config import SiteConfig
+
+# Derived from plan text (see issue #224 Phase 2 for the producer).
+derived_schema = ExtractionSchema.from_objective(objective_spec)
+derived_site   = SiteConfig.from_probe(probe_result)
+
+# Optional recipe overlay — recipe extends the derived spam / control
+# vocabulary and fills in URL patterns the probe couldn't infer from
+# one screenshot. Returns the derived value unchanged when the recipe
+# has no opinion (no site_config.py, empty pattern strings, etc.).
+schema = derived_schema.overlay(recipes.load_schema("marketplace_listings"))
+site   = derived_site.overlay(recipes.load_site_config("marketplace_listings"))
+```
+
+Merge rules:
+
+| Field | Strategy |
+|---|---|
+| `spam_indicators`, `spam_seller_indicators`, `forbidden_controls`, `allowed_controls` | List union (recipe extends derived, deduplicated). |
+| `entity_name`, `spam_label` | Derived wins once it has departed from the dataclass default; recipe fills in defaults. |
+| `fields`, `required_fields` | Derived always wins — the plan text owns the schema body. |
+| `detail_page_pattern`, `pagination_format`, `results_page_pattern`, `pagination_strip_pattern`, `filtered_results_url`, `domain` | Recipe wins when set (empty string = no opinion). |
+| `gate_verify_prompt` | Derived wins — the plan owns the gate intent. |
+| `pagination_type` | Follows `pagination_format` (the dataclass default `"path_suffix"` can't double as a sentinel). |
+
+`recipes.load_site_config(name)` returns `None` when a recipe ships a
+`SCHEMA` but no `SITE_CONFIG`, so `derived.overlay(None)` is a no-op
+and you don't need an outer guard.
+
+The producer side — `derive_from_plan(plan_text)` and `run_probe(env,
+url)` — lands in subsequent issue-#224 phases. Until then, callers
+that want derive-first behavior can construct `ObjectiveSpec` /
+`ProbeResult` themselves and feed them through `from_objective` /
+`from_probe`.
+
+---
+
 ## Next
 
 - [Generic CUA usage](generic-cua.md) — the request envelope + tenant setup.

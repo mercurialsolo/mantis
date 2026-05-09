@@ -125,3 +125,80 @@ class ExtractionSchema:
     def seller_looks_like_spam(self, seller: str) -> bool:
         seller_lower = seller.lower()
         return any(ind in seller_lower for ind in self.spam_seller_indicators)
+
+    def overlay(self, other: ExtractionSchema | None) -> ExtractionSchema:
+        """Merge a recipe overlay into ``self`` (the derived base).
+
+        Issue #224 Phase 1: ``self`` is the derive-first schema produced
+        from plan text via :meth:`from_objective`; ``other`` is the
+        optional production-hardened recipe carrying empirical tokens
+        (dealer indicators, controls vocabulary) accumulated from real
+        runs. The merge rules favour the derived shape for *what* to
+        extract, the recipe for *how* to defend against site-specific
+        noise:
+
+        - **List fields** (``spam_indicators``, ``spam_seller_indicators``,
+          ``forbidden_controls``, ``allowed_controls``) — overlay UNION
+          (recipe extends the derived list, deduped, derived ordering
+          preserved). The recipe was authored by accreting empirical
+          tokens; dropping derived tokens would discard the plan-text
+          signal.
+        - **Scalar fields** (``entity_name``, ``spam_label``) — recipe
+          wins when it sets a non-default value, otherwise derived
+          stays. Default sentinels: ``entity_name == "listing"``,
+          ``spam_label == "dealer/spam"``.
+        - **Schema body** (``fields``, ``required_fields``) — derived
+          wins. The plan text is the source of truth for *what* is
+          being extracted; recipes don't override that. Recipes that
+          want to override must do it via the explicit
+          ``ExtractionSchema(...)`` constructor before overlay.
+
+        Passing ``other=None`` is a no-op — returns ``self`` unchanged
+        so callers can write::
+
+            schema = ExtractionSchema.from_objective(spec).overlay(
+                recipes.load_schema(name) if name else None
+            )
+
+        without an outer guard.
+        """
+        if other is None:
+            return self
+
+        def _union(base: list, ext: list) -> list:
+            seen: set = set()
+            merged: list = []
+            for item in (*base, *ext):
+                if item in seen:
+                    continue
+                seen.add(item)
+                merged.append(item)
+            return merged
+
+        # Sentinel-aware scalar pick: keep derived once it has departed
+        # from the dataclass default; otherwise take recipe's value.
+        # This makes "default" mean "no opinion" so the recipe can fill
+        # it in, but keeps a derived non-default value sticky against
+        # the recipe.
+        entity = (
+            self.entity_name
+            if self.entity_name and self.entity_name != "listing"
+            else (other.entity_name or self.entity_name)
+        )
+        spam_lbl = (
+            self.spam_label
+            if self.spam_label and self.spam_label != "dealer/spam"
+            else (other.spam_label or self.spam_label)
+        )
+        return ExtractionSchema(
+            entity_name=entity,
+            fields=self.fields,
+            required_fields=self.required_fields,
+            spam_indicators=_union(self.spam_indicators, other.spam_indicators),
+            spam_seller_indicators=_union(
+                self.spam_seller_indicators, other.spam_seller_indicators,
+            ),
+            spam_label=spam_lbl,
+            forbidden_controls=_union(self.forbidden_controls, other.forbidden_controls),
+            allowed_controls=_union(self.allowed_controls, other.allowed_controls),
+        )

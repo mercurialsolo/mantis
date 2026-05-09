@@ -206,6 +206,88 @@ class SiteConfig:
             pagination_strip_pattern=pagination_strip,
         )
 
+    def overlay(self, other: SiteConfig | None) -> SiteConfig:
+        """Merge a recipe overlay into ``self`` (the probe-derived base).
+
+        Issue #224 Phase 1: ``self`` is the runtime-probed config built
+        via :meth:`from_probe`; ``other`` is the optional recipe-side
+        config carrying URL / pagination patterns curated for the
+        domain. The probe sees what the page looks like *right now*,
+        but only one page; the recipe encodes structural knowledge
+        (e.g. detail-URL slug shape) that may not be visible from a
+        single landing screenshot.
+
+        Merge rules:
+
+        - **URL / pagination patterns** — recipe wins when set
+          (``detail_page_pattern``, ``results_page_pattern``,
+          ``pagination_format``, ``pagination_type``,
+          ``pagination_strip_pattern``, ``filtered_results_url``,
+          ``domain``). Empty string on the recipe means "no opinion;
+          keep the probe's guess."
+        - **Gate prompt** — derived wins. The plan text picks the
+          intent for the gate; recipes shouldn't override that
+          unless they explicitly set ``gate_verify_prompt``.
+        - **Booleans / tuples** — recipe wins when its value differs
+          from the dataclass default (``prefer_som_grounding=False``,
+          ``require_independent_grounding=()``).
+
+        Passing ``other=None`` is a no-op so callers can chain::
+
+            site = SiteConfig.from_probe(probe).overlay(
+                recipes.load_site_config(name) if name else None
+            )
+        """
+        if other is None:
+            return self
+
+        def _str_pick(base: str, ext: str) -> str:
+            return ext if ext else base
+
+        return SiteConfig(
+            domain=_str_pick(self.domain, other.domain),
+            detail_page_pattern=_str_pick(
+                self.detail_page_pattern, other.detail_page_pattern,
+            ),
+            results_page_pattern=_str_pick(
+                self.results_page_pattern, other.results_page_pattern,
+            ),
+            pagination_format=_str_pick(
+                self.pagination_format, other.pagination_format,
+            ),
+            # ``pagination_type`` follows ``pagination_format`` — when
+            # the recipe declares a format, it also defines the
+            # accompanying type (path-suffix vs query-param vs
+            # next-button). The dataclass default ``"path_suffix"`` is
+            # not a usable "no opinion" sentinel because it's a real
+            # valid value, so we use ``pagination_format`` as the
+            # opinion indicator instead.
+            pagination_type=(
+                other.pagination_type
+                if other.pagination_format
+                else self.pagination_type
+            ),
+            pagination_strip_pattern=_str_pick(
+                self.pagination_strip_pattern, other.pagination_strip_pattern,
+            ),
+            gate_verify_prompt=(
+                other.gate_verify_prompt
+                if other.gate_verify_prompt
+                else self.gate_verify_prompt
+            ),
+            filtered_results_url=_str_pick(
+                self.filtered_results_url, other.filtered_results_url,
+            ),
+            prefer_som_grounding=(
+                other.prefer_som_grounding or self.prefer_som_grounding
+            ),
+            require_independent_grounding=(
+                other.require_independent_grounding
+                if other.require_independent_grounding
+                else self.require_independent_grounding
+            ),
+        )
+
     def to_dict(self) -> dict[str, str | bool]:
         return {
             "domain": self.domain,
