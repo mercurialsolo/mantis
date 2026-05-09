@@ -120,6 +120,15 @@ class MicroPlanRunner:
         # by the executor on step success (so a successful retry
         # doesn't bleed warnings into the next step).
         self._step_failure_history: dict[int, list[dict[str, Any]]] = {}
+        # Per-step handler-routing override — set by the executor when
+        # a step has accumulated enough same-kind failures that the
+        # default handler is clearly the wrong tool. Currently the only
+        # value is ``"brain_grounded_click"`` which routes a submit /
+        # fill step through the click handler with brain grounding
+        # (Holo3) instead of Claude text-matching. General-purpose:
+        # triggered purely by observed failure pattern, not plan
+        # content. Cleared on step success.
+        self._step_handler_override: dict[int, str] = {}
         self.max_cost, self.max_time = max_cost, max_time_minutes * 60
         self.step_callback, self.keep_screenshots = step_callback, keep_screenshots
         self.cancel_event = cancel_event

@@ -611,6 +611,28 @@ def execute_step(
 ) -> StepResult:
     registry = runner._handler_registry
 
+    # Agentic handler-escalation — issue #224 follow-up. When prior
+    # failures on this step indicate the default handler is the
+    # wrong tool (canonical case: text-matching submit handler keeps
+    # clicking elements that match a label but produce no
+    # navigation), the executor sets
+    # ``runner._step_handler_override[index]`` so the next attempt
+    # routes through a different handler. Currently the only escalation
+    # target is ``"holo3"`` — the brain-grounded loop that operates
+    # on intent prose rather than text-matching specific labels.
+    # General-purpose: the override is set purely from observed
+    # failure patterns, no hardcoded plan content.
+    override = (
+        getattr(runner, "_step_handler_override", {}).get(index)
+        if hasattr(runner, "_step_handler_override") else None
+    )
+    if override == "holo3" and runner.brain is not None:
+        logger.info(
+            f"  [escalation] step {index} routing via Holo3StepHandler "
+            f"(brain-grounded loop) — original step.type={step.type}"
+        )
+        return execute_holo3_step(runner, step, index)
+
     if step.type == "click" and runner.extractor:
         layout_hint = (step.hints or {}).get("layout", "")
         is_listings = (
