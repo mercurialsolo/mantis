@@ -266,17 +266,79 @@ def test_dispatcher_routes_to_holo3_when_override_set() -> None:
 
     assert result.success is True
     assert result.data == "holo3-completed"
-    # Holo3 was called with the original step type / intent —
-    # we don't morph the step into a click, just route differently.
+    # Holo3 was called preserving the original step.type — we don't
+    # morph the step into a click, just route differently.
     assert holo3_called == [(5, "submit")]
     # The synthesised step that reached Holo3 has a bumped budget.
-    # Original budget=4 is too tight for "scroll down to find off-
-    # screen target + click"; the escalation path bumps to >= 15.
-    assert captured_step[0].intent == "Click Qualified lead"
+    # Original budget=4 is too tight for "scroll down then maybe
+    # paginate to find off-screen target"; escalation bumps to >= 25.
     assert captured_step[0].type == "submit"
-    assert captured_step[0].budget >= 15
+    assert captured_step[0].budget >= 25
+    # Intent prose preserved at the start (no history → no augment).
+    assert captured_step[0].intent.startswith("Click Qualified lead")
     # Default registry handlers were not touched.
     runner._handler_registry.get.assert_not_called()
+
+
+def test_dispatcher_augments_intent_with_failure_history_when_present() -> None:
+    """When the runner has accumulated failure records for this step,
+    the dispatcher's escalation path must surface them in the
+    Holo3-bound task prose. Holo3 sees screenshots directly, but
+    giving it the failure trace means it doesn't re-try the same
+    wrong elements and gets explicit licence to paginate when the
+    visible viewport has no matching target."""
+    from mantis_agent.gym import _runner_helpers
+
+    runner = MagicMock()
+    runner.brain = MagicMock()
+    runner.extractor = MagicMock()
+    runner._step_handler_override = {5: "holo3"}
+    runner._step_failure_history = {
+        5: [
+            {"x": 39, "y": 137, "label": "Qualified",
+             "matched_label": "Qualified",
+             "kind": "no_state_change", "reason": ""},
+            {"x": 66, "y": 395, "label": "Qualified",
+             "matched_label": "Qualified",
+             "kind": "no_state_change", "reason": ""},
+        ],
+    }
+    runner._handler_registry = MagicMock()
+
+    captured_step: list = []
+
+    def _capture(r, step_arg, idx):
+        captured_step.append(step_arg)
+        return StepResult(
+            step_index=idx, intent=step_arg.intent, success=True,
+            data="holo3-completed",
+        )
+
+    submit_step = MicroIntent(
+        intent="Click the first lead row whose Status is Qualified",
+        type="submit", budget=4,
+        params={"label": "Qualified"},
+    )
+    orig = _runner_helpers.execute_holo3_step
+    _runner_helpers.execute_holo3_step = _capture
+    try:
+        _runner_helpers.execute_step(runner, submit_step, 5)
+    finally:
+        _runner_helpers.execute_holo3_step = orig
+
+    augmented = captured_step[0].intent
+    # Intent prose retains the original task as the leading clause.
+    assert augmented.startswith(
+        "Click the first lead row whose Status is Qualified"
+    )
+    # Failure context appended.
+    assert "previous attempts" in augmented.lower()
+    assert "(39, 137)" in augmented
+    assert "(66, 395)" in augmented
+    # Pagination guidance present so Holo3 explores beyond the
+    # current viewport when the target genuinely isn't on screen.
+    assert "pagination" in augmented.lower() or "later page" in augmented.lower()
+    assert "scroll" in augmented.lower()
 
 
 def test_dispatcher_skips_escalation_when_no_override() -> None:
