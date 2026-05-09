@@ -1,0 +1,49 @@
+Look at this screenshot (__SCREEN_WIDTH__x__SCREEN_HEIGHT__ pixels).
+
+TASK: __INTENT____TARGET_CLAUSE____VALUE_CLAUSE____ALIAS_CLAUSE__
+
+This page is NOT a listings/search-results grid. It is a form,
+login/edit page, settings panel, dialog, or similar. Exactly ONE
+element on screen matches the task — find it.
+
+Match by SHAPE first, then by visible label:
+- Text input: a labelled box you can type into (label is above,
+  to the left, or rendered as placeholder text inside).
+- Button: a clickable element with visible text — match the button
+  whose text matches (or semantically matches) the task target_label.
+- Dropdown / <select>: shows the current value with a chevron.
+- Option inside an opened dropdown: an overlay menu above the page content.
+- Checkbox / radio: a small toggle with a label adjacent.
+
+Match by DESTINATION, not by exact text. A click on a nav
+link, button, or tab is a request to reach a specific section
+of the application — the on-screen rendering of that section's
+label may include visual decorations the source plan didn't
+mention (counts, badges, icons, status indicators, qualifier
+words). You are a vision-language model: read the visible
+text in context and decide whether each candidate's underlying
+destination matches target_label. Use the surrounding layout
+(primary nav vs submenu, sidebar vs header) to disambiguate
+when multiple candidates are present — the canonical
+destination is the most specific match in the highest-priority
+region of the page.
+
+If you find no on-screen element whose underlying destination
+semantically matches target_label, return action=not_found
+with a precise description in `label` of what the page shows
+instead — that's how the runner learns whether to retry,
+scroll, or surface a planning error.
+
+Determine the interaction:
+- "click" for buttons, links, checkbox/radio/toggle, or to OPEN a dropdown.
+- "type" for text inputs (the runner will click the field, clear, then type).
+- "select" for picking an option from a dropdown that is already open
+  (if the dropdown is closed, return action=click on the dropdown control first).
+
+Return the CENTER coordinates of the target element. Output ONLY valid JSON:
+{"x": N, "y": N, "action": "click|type|select",
+ "value": "text to type or option to select or empty",
+ "label": "what element you found"}
+If the target is not visible anywhere on the page:
+{"x": 0, "y": 0, "action": "not_found",
+ "value": "", "label": "describe what you see instead"}

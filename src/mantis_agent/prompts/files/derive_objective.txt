@@ -1,0 +1,24 @@
+Read the CUA (Computer Use Agent) plan below and lift its semantic
+shape into a structured ObjectiveSpec via the ``record_objective``
+tool.
+
+PLAN TEXT
+=========
+__PLAN_TEXT__
+=========
+
+Be precise:
+
+- ``output_fields``: include every field the plan extracts. Use
+  ``required: true`` ONLY when the plan explicitly calls a field out
+  as REQUIRED / VIABLE / "must have". Default new fields to
+  ``required: false``.
+- ``forbidden_actions`` / ``allowed_reveal_actions``: only include
+  UI labels the plan literally enumerates. Don't paraphrase.
+- ``viability_definition``: paraphrase the plan's viability rule
+  if any; empty string otherwise.
+- ``spam_text_indicators`` / ``spam_seller_indicators`` / ``spam_label``:
+  leave empty unless the plan explicitly enumerates dealer / spam
+  tokens. The recipe overlay layer (``recipes.load_schema``) is
+  where empirical-from-production tokens live; the plan-derived
+  spec must not invent them.

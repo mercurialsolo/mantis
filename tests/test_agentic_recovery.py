@@ -119,9 +119,10 @@ def test_prompt_includes_progress_evidence_guidance_for_halt() -> None:
     haven't moved the page. This was the priority-field gap: Claude
     chose add_hint when halt was the right call because the prompt
     didn't enumerate "page hasn't moved" as a halt signal."""
-    from mantis_agent.agentic_recovery import _ANALYSIS_PROMPT_TEMPLATE
+    from mantis_agent.prompts import load_prompt
 
-    rendered = _ANALYSIS_PROMPT_TEMPLATE.format(
+    rendered = load_prompt(
+        "recovery_analysis",
         intent="x", step_type="submit", params="{}",
         failure_data="x", attempts=3, plan_context="",
     )

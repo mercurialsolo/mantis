@@ -44,6 +44,13 @@ _PROMPT_NAMES: tuple[str, ...] = (
     "claude_system",
     "opencua_system",
     "llamacpp_system",
+    # Action-side prompts (issue #224 + agentic-recovery follow-ups).
+    # Externalised so plan authors / operators can A/B-test the wording
+    # without forking Python modules. ``MANTIS_PROMPTS_DIR`` overrides
+    # apply to these the same way as the system templates.
+    "recovery_analysis",
+    "derive_objective",
+    "find_form_target",
 )
 
 # Placeholder defaults applied before caller-supplied substitutions. Keeps
