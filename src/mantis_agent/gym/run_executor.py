@@ -606,6 +606,14 @@ class RunExecutor:
         # same step_index starts with the default routing.
         if hasattr(runner, "_step_handler_override"):
             runner._step_handler_override.pop(state.step_index, None)
+        # Same for agentic-recovery hints — once the step has
+        # succeeded, accumulated hints have served their purpose;
+        # don't bleed them into a future occurrence of the same
+        # step_index (loops, resumed plans).
+        if hasattr(runner, "_recovery_hints"):
+            runner._recovery_hints.pop(state.step_index, None)
+        if hasattr(runner, "_recovery_attempts_per_step"):
+            runner._recovery_attempts_per_step.pop(state.step_index, None)
 
         if step.type == "paginate":
             # Phase 4: listings-scan reset is one method on the scanner now,

@@ -129,6 +129,15 @@ class MicroPlanRunner:
         # triggered purely by observed failure pattern, not plan
         # content. Cleared on step success.
         self._step_handler_override: dict[int, str] = {}
+        # Agentic-recovery state (issue #224 follow-up). When the
+        # recovery loop returns ``mode=add_hint``, the hint is
+        # appended to ``_recovery_hints[step_index]`` and surfaced in
+        # the next attempt's search prompt. Budget tracking (per-step
+        # + per-run) prevents infinite recovery loops. Cleared on
+        # step success along with failure history / handler override.
+        self._recovery_hints: dict[int, list[str]] = {}
+        self._recovery_attempts_per_step: dict[int, int] = {}
+        self._total_recovery_attempts: int = 0
         self.max_cost, self.max_time = max_cost, max_time_minutes * 60
         self.step_callback, self.keep_screenshots = step_callback, keep_screenshots
         self.cancel_event = cancel_event
