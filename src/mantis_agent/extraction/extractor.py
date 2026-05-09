@@ -44,6 +44,45 @@ from .spam import contains_dealer_text, parse_bool, seller_looks_like_dealer
 
 logger = logging.getLogger(__name__)
 
+
+def _coerce_coord(value: Any) -> int | None:
+    """Best-effort int coercion for click coordinates returned by Claude.
+
+    Tool_use ``input_schema`` requires ``"type": "integer"`` for
+    coordinate fields, but the model occasionally emits values as
+    strings with stray whitespace / trailing commas (canonical
+    failure: ``"x": "296, "`` observed on long-prompt retries that
+    fed failure-history into the search). Crashing the run on
+    those cases — instead of treating them as ``not_found`` — was
+    a sharp edge surfaced by the priority-field staff-crm rerun.
+
+    Returns the parsed int, or ``None`` when the value can't be
+    coerced. Caller treats ``None`` as the same not-found path as
+    a zero-coordinate response.
+    """
+    if isinstance(value, bool):
+        # bool is a subclass of int — explicit reject so True/False
+        # don't smuggle in as 1 / 0.
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        # Strip whitespace and trailing punctuation (commas / semicolons
+        # / closing brackets) the model occasionally appends.
+        cleaned = value.strip().rstrip(",;]}").strip()
+        if not cleaned:
+            return None
+        try:
+            return int(cleaned)
+        except ValueError:
+            try:
+                return int(float(cleaned))
+            except ValueError:
+                return None
+    return None
+
 # Generic fallback prompts used when ClaudeExtractor is constructed without
 # a schema. They describe the extractor's job in entity-neutral language and
 # rely on the caller's plan/intent to provide context. Application-specific
@@ -1533,8 +1572,21 @@ class ClaudeExtractor:
             logger.info(f"  [claude-form] What Claude sees: {label[:120]}")
             return None
 
-        x = int(parsed.get("x", 0))
-        y = int(parsed.get("y", 0))
+        # Defensive int coercion — even with the tool_use schema enforcing
+        # ``"type": "integer"``, the model occasionally emits coordinates
+        # as strings with stray whitespace / trailing comma (e.g.
+        # ``"x": "296, "`` was observed on a long-prompt retry that fed
+        # failure-history into the search). Strip and parse rather than
+        # crash the entire run.
+        x = _coerce_coord(parsed.get("x"))
+        y = _coerce_coord(parsed.get("y"))
+        if x is None or y is None:
+            logger.warning(
+                "  [claude-form] non-integer coordinates returned: "
+                "x=%r y=%r — treating as not found",
+                parsed.get("x"), parsed.get("y"),
+            )
+            return None
         if x == 0 and y == 0:
             logger.warning("  [claude-form] zero coordinates")
             return None
