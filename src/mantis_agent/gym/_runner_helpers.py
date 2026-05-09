@@ -627,11 +627,32 @@ def execute_step(
         if hasattr(runner, "_step_handler_override") else None
     )
     if override == "holo3" and runner.brain is not None:
-        logger.info(
-            f"  [escalation] step {index} routing via Holo3StepHandler "
-            f"(brain-grounded loop) — original step.type={step.type}"
+        # Bump the budget on escalation — the canonical case is
+        # "scroll down to find an off-screen target then click it"
+        # which needs 5-15 brain turns, not the submit step's
+        # default 3-5. Without the bump, Holo3 correctly identifies
+        # the right approach (scroll + observe + click) but runs
+        # out of inferences before reaching the target.
+        escalated_budget = max(step.budget, 15)
+        escalated_step = MicroIntent(
+            intent=step.intent, type=step.type,
+            verify=step.verify, budget=escalated_budget,
+            reverse=step.reverse, grounding=step.grounding,
+            section=step.section, required=step.required,
+            gate=step.gate, claude_only=step.claude_only,
+            loop_target=step.loop_target,
+            loop_count=step.loop_count,
+            params=step.params, hints=step.hints,
         )
-        return execute_holo3_step(runner, step, index)
+        # WARNING level so the trace survives Modal's INFO-suppressed
+        # log capture. Firing this is the canonical signal that the
+        # agentic-handler-escalation path engaged on a retry attempt.
+        logger.warning(
+            f"  [escalation] step {index} routing via Holo3StepHandler "
+            f"(brain-grounded loop, budget={escalated_budget}, "
+            f"was={step.budget}) — original step.type={step.type}"
+        )
+        return execute_holo3_step(runner, escalated_step, index)
 
     if step.type == "click" and runner.extractor:
         layout_hint = (step.hints or {}).get("layout", "")
