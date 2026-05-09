@@ -13,15 +13,23 @@ hardcoded example list.
 
 from __future__ import annotations
 
-import inspect
-
-from mantis_agent.extraction.extractor import ClaudeExtractor
+from mantis_agent.prompts import load_prompt
 
 
 def _grab_form_target_prompt() -> str:
-    """Pull the find_form_target source text. The actual prompt is
-    constructed at call time — inspecting source captures the templates."""
-    return inspect.getsource(ClaudeExtractor.find_form_target)
+    """Render the find_form_target prompt with placeholders filled.
+
+    The body lives at ``prompts/files/find_form_target.txt`` —
+    rendered via ``load_prompt`` so callers / tests both see the
+    canonical resolved text (including any ``MANTIS_PROMPTS_DIR``
+    override). Synthetic substitution values just make placeholders
+    resolve; the asserts below check the static content.
+    """
+    return load_prompt(
+        "find_form_target",
+        screen_width=1280, screen_height=720,
+        intent="x", target_clause="", value_clause="", alias_clause="",
+    )
 
 
 # ── Principled instruction language ────────────────────────────────────

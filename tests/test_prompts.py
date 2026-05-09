@@ -50,6 +50,61 @@ def test_load_prompt_substitutes_placeholders():
     assert "__PASSWORD__" not in out
 
 
+def test_action_side_prompts_registered():
+    """Externalised action-side prompts must be enumerated in
+    ``list_prompts()`` so the operator-override path
+    (``MANTIS_PROMPTS_DIR``) can reach them, and so SHA-versioned
+    telemetry surfaces them."""
+    names = set(list_prompts())
+    assert "recovery_analysis" in names
+    assert "derive_objective" in names
+    assert "find_form_target" in names
+
+
+def test_recovery_analysis_substitutes_placeholders():
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="Click Update Lead",
+        step_type="submit",
+        params="{'label': 'Update Lead'}",
+        failure_data="form_target_not_found",
+        attempts=3,
+        plan_context="  [0] Login\n  [1] Open Edit",
+    )
+    assert "Click Update Lead" in rendered
+    assert "form_target_not_found" in rendered
+    assert "Open Edit" in rendered
+    # No unrendered tokens leak into the model prompt.
+    assert "__INTENT__" not in rendered
+    assert "__STEP_TYPE__" not in rendered
+    assert "__PLAN_CONTEXT__" not in rendered
+
+
+def test_derive_objective_substitutes_placeholders():
+    rendered = load_prompt(
+        "derive_objective", plan_text="A demo plan body.",
+    )
+    assert "A demo plan body." in rendered
+    assert "__PLAN_TEXT__" not in rendered
+
+
+def test_find_form_target_substitutes_placeholders():
+    rendered = load_prompt(
+        "find_form_target",
+        screen_width=1920, screen_height=1080,
+        intent="Click Save",
+        target_clause="\nThe target element label is: \"Save\"",
+        value_clause="",
+        alias_clause="",
+    )
+    assert "1920x1080" in rendered
+    assert "Click Save" in rendered
+    assert "Save" in rendered
+    # Empty placeholder clauses collapse cleanly (no leftover token).
+    assert "__VALUE_CLAUSE__" not in rendered
+    assert "__ALIAS_CLAUSE__" not in rendered
+
+
 def test_load_prompt_unknown_name_raises():
     with pytest.raises(KeyError) as excinfo:
         load_prompt("nonexistent")

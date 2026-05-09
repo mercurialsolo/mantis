@@ -181,32 +181,10 @@ _DERIVE_TOOL_SCHEMA: dict[str, Any] = {
 }
 
 
-_DERIVE_PROMPT = """\
-Read the CUA (Computer Use Agent) plan below and lift its semantic
-shape into a structured ObjectiveSpec via the ``record_objective``
-tool.
-
-PLAN TEXT
-=========
-{plan_text}
-=========
-
-Be precise:
-
-- ``output_fields``: include every field the plan extracts. Use
-  ``required: true`` ONLY when the plan explicitly calls a field out
-  as REQUIRED / VIABLE / "must have". Default new fields to
-  ``required: false``.
-- ``forbidden_actions`` / ``allowed_reveal_actions``: only include
-  UI labels the plan literally enumerates. Don't paraphrase.
-- ``viability_definition``: paraphrase the plan's viability rule
-  if any; empty string otherwise.
-- ``spam_text_indicators`` / ``spam_seller_indicators`` / ``spam_label``:
-  leave empty unless the plan explicitly enumerates dealer / spam
-  tokens. The recipe overlay layer (``recipes.load_schema``) is
-  where empirical-from-production tokens live; the plan-derived
-  spec must not invent them.
-"""
+# Derive-objective prompt body lives at
+# ``src/mantis_agent/prompts/files/derive_objective.txt``. Operators
+# can override via ``MANTIS_PROMPTS_DIR=/path/to/prompts`` without
+# editing this module.
 
 
 def derive_from_plan(
@@ -284,6 +262,18 @@ def _cache_key(plan_text: str) -> str:
     ).hexdigest()
 
 
+def _render_derive_prompt(plan_text: str) -> str:
+    """Render the derive-objective prompt with the plan body inlined.
+
+    Indirected so the prompt body can live as a ``.txt`` file under
+    ``mantis_agent/prompts/files/``. Operators tune wording via
+    ``MANTIS_PROMPTS_DIR`` overrides without forking this module.
+    """
+    from .prompts import load_prompt
+
+    return load_prompt("derive_objective", plan_text=plan_text)
+
+
 def _call_derive_tool(
     plan_text: str,
     *,
@@ -316,7 +306,7 @@ def _call_derive_tool(
                 "tool_choice": {"type": "tool", "name": "record_objective"},
                 "messages": [{
                     "role": "user",
-                    "content": _DERIVE_PROMPT.format(plan_text=plan_text),
+                    "content": _render_derive_prompt(plan_text),
                 }],
             },
             timeout=30,

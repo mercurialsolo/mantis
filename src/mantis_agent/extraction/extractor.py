@@ -1471,50 +1471,20 @@ class ClaudeExtractor:
             + ", ".join(f'"{a}"' for a in aliases)
             if aliases else ""
         )
-        prompt = (
-            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"TASK: {intent}"
-            f"{target_clause}{value_clause}{alias_clause}\n\n"
-            f"This page is NOT a listings/search-results grid. It is a form, "
-            f"login/edit page, settings panel, dialog, or similar. Exactly ONE "
-            f"element on screen matches the task — find it.\n\n"
-            f"Match by SHAPE first, then by visible label:\n"
-            f"- Text input: a labelled box you can type into (label is above, "
-            f"  to the left, or rendered as placeholder text inside).\n"
-            f"- Button: a clickable element with visible text — match the button\n"
-            f"  whose text matches (or semantically matches) the task target_label.\n"
-            f"- Dropdown / <select>: shows the current value with a chevron.\n"
-            f"- Option inside an opened dropdown: an overlay menu above the page content.\n"
-            f"- Checkbox / radio: a small toggle with a label adjacent.\n\n"
-            f"Match by DESTINATION, not by exact text. A click on a nav "
-            f"link, button, or tab is a request to reach a specific section "
-            f"of the application — the on-screen rendering of that section's "
-            f"label may include visual decorations the source plan didn't "
-            f"mention (counts, badges, icons, status indicators, qualifier "
-            f"words). You are a vision-language model: read the visible "
-            f"text in context and decide whether each candidate's underlying "
-            f"destination matches target_label. Use the surrounding layout "
-            f"(primary nav vs submenu, sidebar vs header) to disambiguate "
-            f"when multiple candidates are present — the canonical "
-            f"destination is the most specific match in the highest-priority "
-            f"region of the page.\n\n"
-            f"If you find no on-screen element whose underlying destination "
-            f"semantically matches target_label, return action=not_found "
-            f"with a precise description in `label` of what the page shows "
-            f"instead — that's how the runner learns whether to retry, "
-            f"scroll, or surface a planning error.\n\n"
-            f"Determine the interaction:\n"
-            f"- \"click\" for buttons, links, checkbox/radio/toggle, or to OPEN a dropdown.\n"
-            f"- \"type\" for text inputs (the runner will click the field, clear, then type).\n"
-            f"- \"select\" for picking an option from a dropdown that is already open "
-            f"(if the dropdown is closed, return action=click on the dropdown control first).\n\n"
-            f"Return the CENTER coordinates of the target element. Output ONLY valid JSON:\n"
-            f"{{\"x\": N, \"y\": N, \"action\": \"click|type|select\", "
-            f"\"value\": \"text to type or option to select or empty\", "
-            f"\"label\": \"what element you found\"}}\n"
-            f"If the target is not visible anywhere on the page:\n"
-            f"{{\"x\": 0, \"y\": 0, \"action\": \"not_found\", "
-            f"\"value\": \"\", \"label\": \"describe what you see instead\"}}"
+        # Prompt body lives at
+        # ``mantis_agent/prompts/files/find_form_target.txt`` so plan
+        # authors / operators can A/B-test wording without forking
+        # this module. Caller-supplied placeholders below.
+        from ..prompts import load_prompt
+
+        prompt = load_prompt(
+            "find_form_target",
+            screen_width=screenshot.width,
+            screen_height=screenshot.height,
+            intent=intent,
+            target_clause=target_clause,
+            value_clause=value_clause,
+            alias_clause=alias_clause,
         )
 
         debug_stem = "claude_form"
