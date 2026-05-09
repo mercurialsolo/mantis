@@ -897,7 +897,7 @@ def cmd_plan_run_modal(args: argparse.Namespace) -> int:
         return EXIT_ERROR
 
     try:
-        run_plan_fn = modal.Function.lookup(args.app_name, "run_plan")
+        run_plan_fn = modal.Function.from_name(args.app_name, "run_plan")
     except Exception as exc:  # noqa: BLE001 — modal raises various types
         print(
             f"error: cannot resolve Modal function "

@@ -75,7 +75,7 @@ def _make_modal_stub(remote_result: dict | None = None) -> tuple[types.ModuleTyp
             },
         ],
     }
-    function_ns = types.SimpleNamespace(lookup=MagicMock(return_value=run_plan_mock))
+    function_ns = types.SimpleNamespace(from_name=MagicMock(return_value=run_plan_mock))
     stub = types.ModuleType("modal")
     stub.Function = function_ns  # type: ignore[attr-defined]
     return stub, run_plan_mock
@@ -123,7 +123,7 @@ def test_run_modal_fails_when_lookup_raises(tmp_path: Path, capsys, monkeypatch)
     """A misspelled --app-name (or undeployed app) must produce a clear
     diagnostic instead of leaking the modal SDK's exception text alone."""
     stub, run_plan_mock = _make_modal_stub()
-    stub.Function.lookup.side_effect = RuntimeError("app not found")  # type: ignore[attr-defined]
+    stub.Function.from_name.side_effect = RuntimeError("app not found")  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "modal", stub)
 
     plan_path = _write_json_plan(tmp_path / "plan.json")
@@ -313,7 +313,7 @@ def test_run_modal_uses_custom_app_name(
     ])
     assert code == EXIT_OK
 
-    lookup_args = modal_stub["stub"].Function.lookup.call_args.args
+    lookup_args = modal_stub["stub"].Function.from_name.call_args.args
     assert lookup_args == ("mantis-staging", "run_plan")
 
 
