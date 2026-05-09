@@ -5,10 +5,18 @@ provides:
 
 - ``schema.py`` exposing ``SCHEMA: ExtractionSchema``
 - ``plan.json`` — a valid micro-plan
-- optionally ``rewards.py`` (``REWARD: RewardFn``) and ``verifier.py``
+- optionally ``site_config.py`` (``SITE_CONFIG: SiteConfig``),
+  ``rewards.py`` (``REWARD: RewardFn``), and ``verifier.py``
 
 The core never imports from a specific recipe. Plans declare a recipe by
 name; the loader resolves it via ``importlib`` at run time.
+
+Per issue #224 the recipe is shifting from "primary configuration source"
+to "production-hardening overlay" on top of derived ``ExtractionSchema``
+and probe-derived ``SiteConfig``. ``load_schema`` and
+``load_site_config`` are the lookup half; the overlay half lives on the
+respective dataclasses (see ``ExtractionSchema.overlay`` /
+``SiteConfig.overlay``).
 """
 
 from __future__ import annotations
@@ -18,6 +26,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..extraction import ExtractionSchema
+    from ..site_config import SiteConfig
 
 
 def load_schema(name: str) -> "ExtractionSchema":
@@ -33,3 +42,38 @@ def load_schema(name: str) -> "ExtractionSchema":
         raise ModuleNotFoundError(
             f"recipe {name!r} does not export SCHEMA in schema.py"
         ) from exc
+
+
+def load_site_config(name: str) -> "SiteConfig | None":
+    """Resolve ``mantis_agent.recipes.<name>.site_config.SITE_CONFIG``.
+
+    Symmetric with :func:`load_schema`. ``site_config.py`` is optional —
+    a recipe may ship a ``SCHEMA`` without a ``SITE_CONFIG`` (e.g. when
+    the URL / pagination shape is generic enough for the probe-derived
+    default to suffice). Returns ``None`` in that case rather than
+    raising, so callers can do::
+
+        site = SiteConfig.from_probe(probe).overlay(
+            recipes.load_site_config(name)
+        )
+
+    and have ``overlay(None)`` behave as a no-op.
+
+    Raises ``ModuleNotFoundError`` only when the recipe directory itself
+    doesn't exist — distinguishing "recipe absent" from "recipe present,
+    no site config".
+    """
+    try:
+        mod = importlib.import_module(f"{__name__}.{name}.site_config")
+    except ModuleNotFoundError as exc:
+        # Distinguish "recipe directory missing" (re-raise) from
+        # "site_config.py missing" (return None). importlib raises the
+        # same exception type for both; we look at the args.
+        missing = getattr(exc, "name", "") or ""
+        if missing.endswith(f".{name}"):
+            raise
+        if missing == f"{__name__}.{name}.site_config":
+            return None
+        # Some other intermediate import error — surface it.
+        raise
+    return getattr(mod, "SITE_CONFIG", None)
