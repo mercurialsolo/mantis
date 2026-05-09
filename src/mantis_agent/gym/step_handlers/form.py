@@ -281,40 +281,78 @@ class ClaudeGuidedFormHandler:
             aliases = [str(a).strip() for a in aliases if str(a).strip()]
             kind = str(params.get("kind") or _SUBMIT_KIND_DEFAULT).strip().lower() or _SUBMIT_KIND_DEFAULT
             search_intent = _build_submit_search_intent(label, kind, step.intent)
-            # Scroll-and-rescan loop — issue #89 §2. Long forms (CRMs,
-            # settings panels) often render the primary submit button below
-            # the fold; the previous single-screenshot path declared the
-            # button missing without ever checking lower viewports.
+            # Agentic scroll search — issue #89 §2 + staff-crm post-PR-#228.
+            # Long forms (CRMs, settings panels, account-edit pages) almost
+            # always pin the primary submit button at the absolute bottom
+            # OR the top of the form. Probe the ends first (cheap) before
+            # falling back to progressive Page_Down sweeps.
+            #
+            # Order:
+            #   0. current viewport (no scroll — covers buttons in initial
+            #      view, the common case)
+            #   1. End (jump to bottom — covers Save / Update Lead / Submit
+            #      buttons pinned at the form footer)
+            #   2. Home (jump to top — covers nav-bar action buttons like
+            #      "Save" pinned at a sticky header)
+            #   3. progressive Page_Down sweep from top — covers buttons
+            #      mid-form (rare on action submits but possible on
+            #      multi-section settings pages)
+            #
+            # Cost: each probe = 1 ``find_form_target`` call. Steps 0+1+2
+            # cost ~3 calls in the worst case before the Page_Down loop
+            # starts; with the loop the budget is ~3 + 6 = 9 calls.
             target = extractor.find_form_target(
                 screenshot, search_intent,
                 target_label=label, target_aliases=aliases,
             )
             runner.costs["claude_extract"] += 1
-            scroll_steps = 0
-            max_scrolls = 4
-            while target is None and scroll_steps < max_scrolls:
-                logger.info(
-                    f"  [claude-form] submit '{label}' not in viewport — "
-                    f"scrolling Page_Down ({scroll_steps + 1}/{max_scrolls})"
-                )
+            probe_attempts = ["initial"]
+
+            def _probe(keys: str, label_for_log: str) -> dict | None:
+                """One scroll-then-search step. Returns the target or None."""
                 try:
                     env.step(Action(
-                        action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"},
+                        action_type=ActionType.KEY_PRESS, params={"keys": keys},
                     ))
                 except Exception:
-                    break
+                    return None
                 time.sleep(0.6)
-                screenshot = _wait_for_rendered_screenshot(env)
-                target = extractor.find_form_target(
-                    screenshot, search_intent,
+                shot = _wait_for_rendered_screenshot(env)
+                # Update the closure's ``screenshot`` so the
+                # downstream click uses the freshest frame for
+                # debug-screenshot capture.
+                nonlocal screenshot
+                screenshot = shot
+                t = extractor.find_form_target(
+                    shot, search_intent,
                     target_label=label, target_aliases=aliases,
                 )
                 runner.costs["claude_extract"] += 1
+                logger.info(
+                    f"  [claude-form] submit '{label}' probe {label_for_log}: "
+                    f"{'found' if t else 'not found'}"
+                )
+                probe_attempts.append(label_for_log)
+                return t
+
+            if target is None:
+                target = _probe("End", "End→bottom")
+            if target is None:
+                target = _probe("Home", "Home→top")
+
+            scroll_steps = 0
+            max_scrolls = 6
+            while target is None and scroll_steps < max_scrolls:
+                target = _probe(
+                    "Page_Down",
+                    f"Page_Down{scroll_steps + 1}/{max_scrolls}",
+                )
                 scroll_steps += 1
+
             if not target:
                 logger.warning(
                     f"  [claude-form] submit: button '{label}' not found "
-                    f"after {scroll_steps} scroll(s)"
+                    f"after probes: {probe_attempts}"
                 )
                 # Reset scroll position so the next step starts at top.
                 try:

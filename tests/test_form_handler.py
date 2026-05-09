@@ -145,9 +145,11 @@ def test_submit_target_not_found_after_scroll(monkeypatch):
 
     assert result.success is False
     assert result.data == "form_target_not_found"
-    # 1 initial scan + 4 scroll rescans = 5 claude_extract calls
-    assert runner.costs["claude_extract"] == 5
-    # Final Home keypress to reset scroll
+    # 1 initial + End probe + Home probe + 6 Page_Down sweeps = 9 calls.
+    # Old budget was 5 (1 + 4 Page_Down); the agentic search adds the
+    # End / Home end-probes and bumps the Page_Down cap from 4 to 6.
+    assert runner.costs["claude_extract"] == 9
+    # Final Home keypress to reset scroll for the next step.
     final_keypress = env.step.call_args_list[-1].args[0]
     assert final_keypress.params == {"keys": "Home"}
 
