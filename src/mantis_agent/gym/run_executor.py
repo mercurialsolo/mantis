@@ -409,10 +409,60 @@ class RunExecutor:
             )
             step_result.success = False
             step_result.data = (step_result.data or "") + ":no_state_change"
-        # Always clear the stash — it's only valid for the immediately
-        # following demotion check.
+            # Record the failed click target into the per-step failure
+            # history so the next retry's ``find_form_target`` call
+            # avoids the same broken target. Without this, retries
+            # blindly re-pick the same coordinates and fail
+            # identically — the canonical case is staff-crm's "Click
+            # Qualified" step where the label-text matched a status
+            # pill rather than the row link.
+            self._record_failure_for_retry(
+                runner=runner,
+                step_index=state.step_index,
+                kind="no_state_change",
+                reason="snapshot diff and visual verifier both saw no UI change",
+            )
+        # Always clear the per-step stashes — they're only valid for
+        # the immediately following demotion check.
         if hasattr(runner, "_last_submit_pre_screenshot"):
             runner._last_submit_pre_screenshot = None
+        if hasattr(runner, "_last_submit_target"):
+            runner._last_submit_target = None
+
+    @staticmethod
+    def _record_failure_for_retry(
+        *,
+        runner: Any,
+        step_index: int,
+        kind: str,
+        reason: str,
+    ) -> None:
+        """Append a failure record for the agentic retry path.
+
+        The record carries the (x, y) coordinates and label the
+        previous attempt clicked, so on retry the form handler
+        can tell ``find_form_target`` "avoid this target." Records
+        accumulate per step_index and are cleared on success
+        (see ``_handle_success``).
+        """
+        target = getattr(runner, "_last_submit_target", None)
+        if not target:
+            # The form handler didn't surface a click target — nothing
+            # to feed back. Common reason: ``form_target_not_found``
+            # already-failed step; the retry path's no-coordinate
+            # fallback handles it.
+            return
+        if not hasattr(runner, "_step_failure_history"):
+            return
+        history = runner._step_failure_history.setdefault(step_index, [])
+        history.append({
+            "x": target.get("x"),
+            "y": target.get("y"),
+            "label": target.get("label", ""),
+            "matched_label": target.get("matched_label", ""),
+            "kind": kind,
+            "reason": reason,
+        })
 
     def _submit_visually_changed(
         self, runner: Any, effective_step: MicroIntent,
@@ -487,6 +537,11 @@ class RunExecutor:
         del step_result  # signature-stable; success values not consumed here
         runner = self.parent
         state.step_retry_counts.pop(state.step_index, None)
+        # Clear the agentic-retry failure history for this step on
+        # success so warnings don't bleed into a later step that
+        # happens to share the same step_index (loops, resumed plans).
+        if hasattr(runner, "_step_failure_history"):
+            runner._step_failure_history.pop(state.step_index, None)
 
         if step.type == "paginate":
             # Phase 4: listings-scan reset is one method on the scanner now,

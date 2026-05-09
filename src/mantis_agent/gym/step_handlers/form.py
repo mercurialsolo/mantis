@@ -281,6 +281,43 @@ class ClaudeGuidedFormHandler:
             aliases = [str(a).strip() for a in aliases if str(a).strip()]
             kind = str(params.get("kind") or _SUBMIT_KIND_DEFAULT).strip().lower() or _SUBMIT_KIND_DEFAULT
             search_intent = _build_submit_search_intent(label, kind, step.intent)
+            # Agentic retry feedback — issue #224 follow-up. When a
+            # previous attempt at this step failed with no_state_change
+            # / wrong_target, the runner records the click target + label
+            # on ``_step_failure_history``. We surface that to
+            # ``find_form_target`` so the LLM avoids picking the same
+            # broken target again. Without this, retries blindly re-pick
+            # the same coordinates and fail identically (the canonical
+            # case is the staff-crm "Click Qualified" step where the
+            # label-text matched a status pill rather than the row link).
+            failure_history = (
+                runner._step_failure_history.get(index, [])
+                if hasattr(runner, "_step_failure_history") else []
+            )
+            if failure_history:
+                avoid_lines = []
+                for record in failure_history[-3:]:  # last 3 failures
+                    avoid_lines.append(
+                        f"  - target ({record.get('x', '?')}, {record.get('y', '?')}) "
+                        f"matched label='{record.get('label', '?')}' "
+                        f"but {record.get('kind', 'no_state_change')} "
+                        f"(reason: {record.get('reason', '')[:80]})"
+                    )
+                search_intent = (
+                    search_intent
+                    + "\n\nNOTE: previous attempts at this step did not change "
+                    "the page UI:\n" + "\n".join(avoid_lines)
+                    + "\n\nThis usually means the previous click landed on a "
+                    "non-action element (a status badge, a filter chip, a "
+                    "label rather than a link / button). Pick a DIFFERENT "
+                    "target — different coordinates AND ideally a different "
+                    "kind of element (e.g. the row container instead of the "
+                    "status pill, the link rather than the surrounding text)."
+                )
+                logger.info(
+                    f"  [claude-form] submit '{label}' retry — feeding "
+                    f"{len(failure_history)} prior failure(s) into search prompt"
+                )
             # Agentic scroll search — issue #89 §2 + staff-crm post-PR-#228.
             # Long forms (CRMs, settings panels, account-edit pages) almost
             # always pin the primary submit button at the absolute bottom
@@ -363,6 +400,16 @@ class ClaudeGuidedFormHandler:
                     pass
                 return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
             x, y = target["x"], target["y"]
+            # Stash the click target so the demote check can record
+            # the target into ``_step_failure_history`` if the click
+            # turns out to produce no state change. Cleared by the
+            # demote check after it consumes the value.
+            runner._last_submit_target = {
+                "x": x, "y": y,
+                "label": label,
+                "matched_label": str(target.get("label") or ""),
+                "step_index": index,
+            }
             try:
                 time.sleep(random.uniform(0.4, 0.9))
                 # Snapshot URL before click so the adaptive settle below

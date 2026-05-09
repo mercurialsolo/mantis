@@ -105,6 +105,21 @@ class MicroPlanRunner:
         # submit button; ``run_executor._maybe_demote_form_no_change``
         # consumes it on the very next step then clears it.
         self._last_submit_pre_screenshot: Any = None
+        # Stash for the most recently clicked submit target (x, y,
+        # label). The submit handler writes it just before clicking;
+        # ``_maybe_demote_form_no_change`` reads it when recording a
+        # demotion to ``_step_failure_history``. Cleared after the
+        # demote check.
+        self._last_submit_target: dict[str, Any] | None = None
+        # Per-step failure history — issue #224 follow-up: when a
+        # required step fails repeatedly on the same broken click,
+        # the form handler reads this on retry and tells
+        # ``find_form_target`` to AVOID the previously-tried targets.
+        # Keyed by step_index so multiple steps can independently
+        # accumulate their own histories without cross-talk. Cleared
+        # by the executor on step success (so a successful retry
+        # doesn't bleed warnings into the next step).
+        self._step_failure_history: dict[int, list[dict[str, Any]]] = {}
         self.max_cost, self.max_time = max_cost, max_time_minutes * 60
         self.step_callback, self.keep_screenshots = step_callback, keep_screenshots
         self.cancel_event = cancel_event
