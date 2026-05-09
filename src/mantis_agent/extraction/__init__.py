@@ -32,7 +32,7 @@ from .extractor import (
     ClaudeExtractor,
 )
 from .result import ExtractionResult
-from .schema import ExtractionSchema
+from .schema import ExtractionContext, ExtractionSchema
 from .spam import (
     _contains_dealer_text,
     _parse_bool,
@@ -67,6 +67,7 @@ def __getattr__(name: str) -> Any:  # PEP 562
 
 
 __all__ = [
+    "ExtractionContext",
     "ExtractionSchema",
     "ExtractionResult",
     "ClaudeExtractor",

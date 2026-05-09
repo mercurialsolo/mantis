@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .schema import ExtractionSchema
+from .schema import ExtractionContext, ExtractionSchema
 from .spam import contains_dealer_text, seller_looks_like_dealer
 
 
@@ -81,11 +81,34 @@ class ExtractionResult:
         digits = re.sub(r"\D", "", phone)
         return len(digits) >= 10
 
-    def missing_required_reason(self) -> str:
-        """Return why this extraction is not a usable lead."""
+    def missing_required_reason(
+        self,
+        context: ExtractionContext = ExtractionContext.UNKNOWN,
+    ) -> str:
+        """Return why this extraction is not a usable lead.
+
+        Issue #236: ``context`` selects which required-field contract
+        to enforce. ``DETAIL_PAGE`` uses ``schema.required_fields``
+        (canonical strict set). ``SEARCH_TILE`` uses
+        ``schema.tile_required_fields`` when set — typically just
+        ``["url"]`` so the runner keeps the row to drive a follow-up
+        navigate-into-detail. ``UNKNOWN`` (default) preserves legacy
+        behavior: enforces ``required_fields`` regardless of context.
+
+        When the schema doesn't define ``tile_required_fields`` (empty
+        list), ``SEARCH_TILE`` falls back to ``required_fields`` —
+        recipes that don't opt into the split see no behavior change.
+        """
         if self._schema:
+            if (
+                context == ExtractionContext.SEARCH_TILE
+                and self._schema.tile_required_fields
+            ):
+                fields_to_check = self._schema.tile_required_fields
+            else:
+                fields_to_check = self._schema.required_fields
             missing = [
-                name for name in self._schema.required_fields
+                name for name in fields_to_check
                 if not self.extracted_fields.get(name)
             ]
             return f"missing required field(s): {', '.join(missing)}" if missing else ""
