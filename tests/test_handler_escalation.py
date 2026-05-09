@@ -339,6 +339,14 @@ def test_dispatcher_augments_intent_with_failure_history_when_present() -> None:
     # current viewport when the target genuinely isn't on screen.
     assert "pagination" in augmented.lower() or "later page" in augmented.lower()
     assert "scroll" in augmented.lower()
+    # Stop-on-success guidance present so Holo3 emits ``done`` the
+    # moment navigation succeeds rather than continuing to act on
+    # the new page (which would undo the navigation).
+    assert "done" in augmented.lower()
+    assert (
+        "navigates" in augmented.lower()
+        or "navigation" in augmented.lower()
+    )
 
 
 def test_dispatcher_skips_escalation_when_no_override() -> None:

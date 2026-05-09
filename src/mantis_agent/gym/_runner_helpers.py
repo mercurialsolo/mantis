@@ -671,7 +671,16 @@ def execute_step(
                 f"items; check filter / sort / status indicators to "
                 f"confirm before giving up\n"
                 f"Pick a different element or navigation action than the "
-                f"prior attempts."
+                f"prior attempts.\n\n"
+                f"SUCCESS CRITERION: the step is COMPLETE the moment the "
+                f"page navigates (URL changes, or the visible content "
+                f"clearly transitions from a list / form to a detail / "
+                f"target view). The MOMENT that happens, emit a `done` "
+                f"action with success=true and a one-line summary. Do "
+                f"NOT take any further actions on the new page — that "
+                f"would undo the navigation you just achieved. Subsequent "
+                f"plan steps will operate on the new view; your job ends "
+                f"when the navigation succeeds."
             )
 
         escalated_step = MicroIntent(
