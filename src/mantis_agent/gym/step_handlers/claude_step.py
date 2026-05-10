@@ -97,6 +97,30 @@ def _resolve_extraction_context(runner: "MicroPlanRunner", data: object | None):
     return ExtractionContext.UNKNOWN
 
 
+def _resolve_skip_envelope(extractor, *, rejection_key: str) -> tuple[bool, str | None]:
+    """Look up a rejection key in ``extractor.schema.rejection_intents``
+    and return the StepResult skip envelope (``skip``, ``skip_reason``).
+
+    Issue #246: when a recipe annotates a rejection key as
+    ``"skip"``, the rejection is terminal-for-this-row and a host
+    orchestrator should advance past it without retrying. The
+    runner surfaces that intent via ``StepResult.skip=True``;
+    ``skip_reason`` carries the recipe-author key (``"dealer"``,
+    ``"incomplete_required"``, …) so hosts can branch on the
+    specific kind. Any other intent (``"extract_more"``,
+    ``"retry"``) or a missing entry leaves ``skip=False`` —
+    matches today's behavior, host-side retry logic continues to
+    apply.
+    """
+    schema = getattr(extractor, "schema", None)
+    if schema is None:
+        return False, None
+    intent = schema.rejection_intents.get(rejection_key, "")
+    if intent == "skip":
+        return True, rejection_key
+    return False, None
+
+
 class ClaudeStepHandler:
     """Implements :class:`~..step_context.StepHandler` for Claude-only steps.
 
@@ -282,10 +306,14 @@ class ClaudeStepHandler:
                     success=True,
                     reason=f"rejected_dealer:{reason}",
                 )
+                skip, skip_reason = _resolve_skip_envelope(
+                    extractor, rejection_key="dealer",
+                )
                 return StepResult(
                     step_index=index, intent=step.intent,
                     success=False,
                     data=f"REJECTED_DEALER|{reason}|{data.to_summary()[:160]}",
+                    skip=skip, skip_reason=skip_reason,
                 )
             # Issue #236: pick the right required-field contract based
             # on which kind of page the extractor read. ``DETAIL_PAGE``
@@ -315,10 +343,14 @@ class ClaudeStepHandler:
                     success=True,
                     reason=f"rejected_incomplete:{reason}",
                 )
+                skip, skip_reason = _resolve_skip_envelope(
+                    extractor, rejection_key="incomplete_required",
+                )
                 return StepResult(
                     step_index=index, intent=step.intent,
                     success=False,
                     data=f"REJECTED_INCOMPLETE|{reason}|{data.to_summary()[:160]}",
+                    skip=skip, skip_reason=skip_reason,
                 )
             dynamic_verifier.record_item_completed(
                 page=runner._current_page,

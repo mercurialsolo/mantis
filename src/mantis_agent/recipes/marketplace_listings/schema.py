@@ -33,6 +33,7 @@ def _build_schema() -> ExtractionSchema:
         spam_label=_data.SPAM_LABEL,
         forbidden_controls=list(_data.FORBIDDEN_CONTROLS),
         allowed_controls=list(_data.ALLOWED_CONTROLS),
+        rejection_intents=dict(_data.REJECTION_INTENTS),
     )
 
 

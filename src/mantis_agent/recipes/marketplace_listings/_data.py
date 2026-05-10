@@ -92,3 +92,21 @@ TILE_CARRY_FIELDS: tuple[str, ...] = ("url", "title", "price")
 # behavior change for callers reading entity_name in their own prompts.
 ENTITY_NAME = "boat listing"
 SPAM_LABEL = "dealer"
+
+# Issue #246: recipe-rejection → host-facing intent.
+#
+# - ``dealer``: terminal-for-this-row. The detail page truly is a
+#   dealer listing (storefront banner, "Contact Dealer" CTAs, dealer
+#   seller name). No future read can turn it into a private-seller
+#   lead. Host should mark the URL as processed-but-skipped and
+#   advance to the next listing — *not* retry the extraction. Live
+#   reproducer: BoatTrader plan d0693cd9 looped 6× on a single
+#   dealer-flagged URL across 90 minutes before this annotation.
+# - ``incomplete_required``: the search tile didn't surface
+#   year/make in rendered text, but the detail page may. Host
+#   should follow up with a deeper read; ``extract_more`` keeps
+#   the row in the extraction loop rather than dropping it.
+REJECTION_INTENTS: dict[str, str] = {
+    "dealer": "skip",
+    "incomplete_required": "extract_more",
+}
