@@ -1591,6 +1591,15 @@ class ClaudeExtractor:
         the runner reported ``select:Priority=High`` but the dropdown
         actually committed ``Critical``).
 
+        **Debiased prompt design.** The LLM is *not* told what value
+        the runner expected — telling it primes the answer ("expected
+        High, looks like High to me"). Instead, ask only for the
+        currently-displayed value; compute the semantic match locally
+        below. This ablation matters: in the priority-plan smoke run,
+        the biased version reported ``matches=True / observed=High``
+        while the saved page showed ``Critical``, defeating the
+        whole point of the post-click validator.
+
         Returns a dict::
 
             {"matches": bool, "observed": str}
@@ -1609,29 +1618,25 @@ class ClaudeExtractor:
         """
         prompt = (
             f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"A dropdown labelled '{dropdown_label}' is visible on the page. "
-            f"Read its CURRENT VALUE — the text that's displayed inside the "
-            f"dropdown control showing what option is currently selected. "
-            f"Most dropdowns show the selected text on the left of the "
-            f"control with a chevron/arrow on the right.\n\n"
-            f"The runner just attempted to set this dropdown to "
-            f"'{expected_value}'. Your job: verify that the dropdown's "
-            f"displayed value semantically matches the expected value.\n\n"
-            f"Return the exact text shown inside the dropdown along with "
-            f"a boolean indicating whether it matches the expected value. "
-            f"Match semantically (case-insensitive, substring tolerant) — "
-            f"e.g. 'High Priority' matches 'High', 'Contacted (4)' matches "
-            f"'Contacted'. Return matches=false when the dropdown shows a "
-            f"clearly different option (e.g. 'Critical' when 'High' was "
-            f"requested)."
+            f"A dropdown control labelled '{dropdown_label}' is visible on "
+            f"the page. Read its CURRENT VALUE — the text displayed inside "
+            f"the closed dropdown control, showing which option is currently "
+            f"selected. Most dropdowns render the selected text on the left "
+            f"of the control with a chevron/arrow on the right.\n\n"
+            f"Important: report only what is *literally rendered* inside "
+            f"the dropdown control right now — do not infer, normalise, or "
+            f"guess. If the dropdown is empty / no value is visible, return "
+            f"an empty string. If a menu is still open and partially "
+            f"covering the control, report what the control itself shows "
+            f"(not the highlighted menu item)."
         )
         parsed = self._call_with_tool_schema(
             screenshot,
             prompt,
             tool_name="report_dropdown_value",
             tool_description=(
-                "Report the current displayed value of a dropdown control "
-                "and whether it matches the expected option."
+                "Report the literal text displayed inside a dropdown "
+                "control — the currently-selected value."
             ),
             input_schema={
                 "type": "object",
@@ -1640,30 +1645,35 @@ class ClaudeExtractor:
                         "type": "string",
                         "description": (
                             "The literal text displayed inside the "
-                            "dropdown control (the currently-selected "
-                            "option). Empty string if the dropdown isn't "
-                            "visible or its value can't be read."
-                        ),
-                    },
-                    "matches": {
-                        "type": "boolean",
-                        "description": (
-                            "True iff observed semantically matches "
-                            "the expected value (case-insensitive, "
-                            "substring tolerant)."
+                            "dropdown control right now. Empty string "
+                            "if no value is visible."
                         ),
                     },
                 },
-                "required": ["observed", "matches"],
+                "required": ["observed"],
             },
-            max_tokens=300,
+            max_tokens=200,
         )
         if not parsed:
             return None
-        return {
-            "matches": bool(parsed.get("matches", False)),
-            "observed": str(parsed.get("observed") or ""),
-        }
+        observed = str(parsed.get("observed") or "")
+        matches = self._semantic_dropdown_match(observed, expected_value)
+        return {"matches": matches, "observed": observed}
+
+    @staticmethod
+    def _semantic_dropdown_match(observed: str, expected: str) -> bool:
+        """Decide if a dropdown's observed value matches the expected
+        option. Case-insensitive, whitespace-tolerant, substring on
+        either side. ``"High"`` matches ``"High Priority"`` and vice
+        versa; ``"Critical"`` does *not* match ``"High"``. Empty
+        observed never matches a non-empty expected (post-click
+        verifier blanked its read → caller should treat as not-matched
+        rather than silently passing)."""
+        a = (observed or "").strip().casefold()
+        b = (expected or "").strip().casefold()
+        if not a or not b:
+            return False
+        return a == b or a in b or b in a
 
     def find_target_by_affordance(
         self,
