@@ -175,6 +175,129 @@ class MicroPlanRunner:
     ) -> RunnerResult:
         return self._build_runner_result(plan, self.run(plan, resume=resume))
 
+    def run_with_exploration(
+        self,
+        *,
+        plan_variants: list[MicroPlan],
+        recipe_variants: list[Any] | None = None,
+        budget_per_variant: Any = None,
+    ) -> list[Any]:
+        """Run plan + recipe variants sequentially and return a
+        per-variant outcome bundle (issue #248).
+
+        v1 ships the *substrate*: each variant is dispatched through
+        the existing :meth:`run` infrastructure, the runtime stamps the
+        outcome with rejection histogram + URL coverage derived from
+        the step results, and a per-variant
+        :class:`ExplorationBudget` enforces a cost / wall-clock cap.
+        Concrete deviation strategies that emit
+        :class:`ExperimentEvent` records land in follow-up PRs against
+        this surface.
+
+        Args:
+            plan_variants: List of :class:`MicroPlan` variants to run.
+                Each is dispatched once per recipe variant (if any).
+            recipe_variants: Optional list of
+                :class:`ExtractionSchema` to swap onto
+                ``self.extractor.schema`` for the duration of each
+                variant. ``None`` (default) runs every plan variant
+                once with the extractor's existing schema.
+            budget_per_variant: Per-variant
+                :class:`ExplorationBudget`. ``None`` uses defaults
+                (3 USD / 10 min). The runtime checks the wall-clock
+                cap before starting each variant; a variant that
+                trips the budget aborts cleanly with
+                ``terminal_status='budget_exceeded'`` and an empty
+                step_results list (it never started).
+
+        Returns:
+            ``list[VariantOutcome]``, one per variant in iteration
+            order (plan_variants × recipe_variants).
+        """
+        # Imports inside the method so the substrate module is opt-in
+        # — modules that never call this entrypoint don't pay the
+        # exploration import cost.
+        from .exploration import (
+            ExplorationBudget,
+            VariantOutcome,
+            rejection_histogram_from_steps,
+            url_coverage_from_steps,
+        )
+
+        if not plan_variants:
+            return []
+        recipe_list: list[Any] = list(recipe_variants) if recipe_variants else [None]
+        budget = budget_per_variant or ExplorationBudget()
+
+        # Snapshot the extractor's current schema so we can restore it
+        # after the run — recipe swap must not leak into legacy
+        # callers that share this runner instance.
+        original_schema = (
+            getattr(self.extractor, "schema", None)
+            if self.extractor is not None
+            else None
+        )
+
+        outcomes: list[Any] = []
+        run_started = time.time()
+        wall_budget_seconds = budget.max_minutes * 60.0
+
+        for plan_idx, plan in enumerate(plan_variants):
+            for recipe_idx, recipe in enumerate(recipe_list):
+                variant_id = f"plan{plan_idx}"
+                if recipe is not None:
+                    variant_id += f"_recipe{recipe_idx}"
+
+                # Wall-clock budget check before each variant.
+                # ``run`` itself can overshoot — by-design, since the
+                # underlying execution path is best-effort. The budget
+                # is a *don't start the next variant if we're already
+                # over* signal, which matches the refinement-agent's
+                # cost-control intent.
+                elapsed = time.time() - run_started
+                if elapsed > wall_budget_seconds:
+                    outcomes.append(VariantOutcome(
+                        variant_id=variant_id,
+                        terminal_status="budget_exceeded",
+                        wall_time_s=elapsed,
+                    ))
+                    continue
+
+                # Swap recipe onto extractor for this variant. Done
+                # outside the try/finally so any exception during the
+                # swap (mis-typed recipe variant) surfaces immediately
+                # rather than after a half-run.
+                if recipe is not None and self.extractor is not None:
+                    self.extractor.schema = recipe
+
+                variant_start = time.time()
+                pre_cost = float(self.costs.get("claude_extract", 0.0))
+                try:
+                    step_results = self.run(plan)
+                finally:
+                    # Restore the original schema between variants.
+                    if recipe is not None and self.extractor is not None:
+                        self.extractor.schema = original_schema
+
+                variant_elapsed = time.time() - variant_start
+                terminal = getattr(self, "_final_status", "completed") or "completed"
+                if terminal == "running":  # underlying runner didn't set it
+                    terminal = "completed"
+
+                outcomes.append(VariantOutcome(
+                    variant_id=variant_id,
+                    terminal_status=terminal,
+                    step_results=list(step_results or []),
+                    recipe_rejection_histogram=rejection_histogram_from_steps(
+                        step_results or []
+                    ),
+                    url_coverage=url_coverage_from_steps(step_results or []),
+                    cost_total=float(self.costs.get("claude_extract", 0.0)) - pre_cost,
+                    wall_time_s=variant_elapsed,
+                ))
+
+        return outcomes
+
     def resume(
         self, state: PauseState | dict[str, Any], *,
         user_input: Any = None, plan: MicroPlan | None = None,
