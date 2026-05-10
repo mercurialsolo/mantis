@@ -129,10 +129,11 @@ def test_prompt_version_was_bumped() -> None:
     from mantis_agent.plan_decomposer import PlanDecomposer
 
     src = inspect.getsource(PlanDecomposer.decompose_text)
-    # Current version (skip runtime hints / wait instructions).
-    assert "v23_skip_runtime_hints" in src
+    # Current version (route verification extract_data through gate).
+    assert "v24_verification_gate" in src
     # Superseded versions must NOT appear — would mean someone
     # accidentally restored a stale cache key.
+    assert "v23_skip_runtime_hints" not in src
     assert "v22_row_link" not in src
     assert "v21_submit_kind" not in src
     assert "v20_url_mirror" not in src

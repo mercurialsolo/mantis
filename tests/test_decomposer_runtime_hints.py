@@ -90,11 +90,16 @@ def test_prompt_omit_rule_extends_to_capability_constraints() -> None:
 # ── Cache key bumped so v22 caches re-decompose under v23 ─────────────
 
 
-def test_cache_version_bumped_to_v23() -> None:
+def test_cache_version_bumped_past_v23() -> None:
     """A prompt change requires a cache-version bump so previously-
-    decomposed plans get re-decomposed under the new rule."""
+    decomposed plans get re-decomposed under the new rule. v23 was
+    the runtime-hints rule; v24 (issue #244) supersedes it by also
+    routing verification extract_data through the gate path. The
+    runtime-hints rule itself is preserved in the v24 prompt — this
+    test just guards against stale-cache regression by asserting we
+    moved past v23."""
     src = inspect.getsource(PlanDecomposer.decompose_text)
-    assert "v23_skip_runtime_hints" in src
+    assert "v23_skip_runtime_hints" not in src
     assert "v22_row_link" not in src
 
 

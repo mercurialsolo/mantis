@@ -503,6 +503,13 @@ RULES:
 - Set section="setup", section="extraction", or section="pagination"
 - Set required=true for all setup/filter/form steps (this is the default)
 - Set gate=true for the verification step at the end of setup
+- Set gate=true on EVERY verification-flavored extract_data step,
+  not just end-of-setup gates. If the step's intent contains any of
+  "verify", "confirm", "check that", "make sure", "wait for",
+  "read the URL", "ensure" — it is a verification step. Set
+  gate=true so the runner dispatches to verify_gate (no recipe
+  schema validation). Authoritative extraction (read structured
+  fields, scrape, harvest data) keeps gate=false.
 
 LOOP STRUCTURE:
   Extraction loop: click → URL → scroll → extract → back → loop(target=click, count=N)
@@ -527,7 +534,26 @@ STEP TYPES:
 - click: Click an element on a listings/results page (budget=8, grounding=true)
 - scroll: Scroll until target content visible (budget=10, section="extraction")
 - extract_url: Read URL from address bar (claude_only=true, budget=0, section="extraction")
-- extract_data: Inspect page and read structured data or verify state (claude_only=true, budget=0)
+- extract_data: Inspect page and read structured data OR verify state.
+                CRITICAL — these are TWO DISTINCT MODES (issue #244):
+                  • Authoritative extraction (claude_only=true, gate=false):
+                    runs the recipe-schema-validated deep-extract path.
+                    Use when the source plan asks to *read structured
+                    fields* off a detail/listing page (year, make,
+                    price, title, lead name, …) for downstream use.
+                  • Verification (claude_only=true, gate=true):
+                    runs the verify_gate path — Claude reads the
+                    screenshot and answers PASS/FAIL with a reason.
+                    NO recipe schema, NO required-fields validation,
+                    NO REJECTED_INCOMPLETE cascade. Use whenever the
+                    source plan asks to *verify, confirm, check, make
+                    sure, wait for, read the URL* — anything that
+                    asserts a condition holds rather than producing a
+                    structured row of data.
+                Get this wrong and the plan halts on a search/list
+                page where the schema's required fields don't exist
+                in the rendered text. Set gate=true on every
+                verification extract_data, not just end-of-setup.
 - navigate_back: Go back (budget=3, section="extraction")
 - paginate: Click Next page (budget=10, grounding=true, section="pagination")
 - loop: Jump back to step index (loop_target=N, loop_count=max)
@@ -626,7 +652,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v23_skip_runtime_hints"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v24_verification_gate"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -753,6 +779,38 @@ class PlanDecomposer:
     # Always claude-grounded; no listings find_all. See issue #80.
     FORM_STEP_TYPES = ("fill_field", "submit", "select_option")
 
+    # Verification-language triggers (issue #244). When an
+    # ``extract_data`` step's intent contains any of these substrings
+    # (case-insensitive) and the source dict didn't set ``gate``
+    # explicitly, ``_build_intent`` auto-promotes ``gate=True`` so
+    # the runner dispatches the step through ``verify_gate`` rather
+    # than the deep-extract / recipe-schema path. Without this,
+    # auto-injected verification steps like *"Verify the page
+    # loaded"* hit the marketplace_listings recipe schema on a
+    # search-results URL and reject as REJECTED_INCOMPLETE,
+    # halting the plan.
+    _VERIFICATION_INTENT_TRIGGERS = (
+        "verify",
+        "confirm",
+        "check that",
+        "make sure",
+        "wait for",
+        "read the url",
+        "ensure",
+    )
+
+    @staticmethod
+    def _is_verification_intent(intent: str) -> bool:
+        """Return True iff ``intent`` reads as verification language —
+        i.e. asserting a state holds rather than reading authoritative
+        structured data. Case-insensitive substring match against
+        :data:`_VERIFICATION_INTENT_TRIGGERS`. Used by
+        :meth:`_build_intent` as the safety net behind issue #244."""
+        if not intent:
+            return False
+        text = intent.casefold()
+        return any(t in text for t in PlanDecomposer._VERIFICATION_INTENT_TRIGGERS)
+
     @staticmethod
     def _build_intent(s: dict) -> MicroIntent:
         """Build a MicroIntent from a raw dict — used by both cache and fresh paths."""
@@ -783,6 +841,18 @@ class PlanDecomposer:
         if not isinstance(hints, dict):
             hints = {}
 
+        # Issue #244: auto-promote verification ``extract_data`` to
+        # ``gate=True`` when the source dict didn't say either way.
+        # Explicit operator overrides (``gate`` present in ``s``)
+        # always win — the heuristic must not silently flip a
+        # plan-author's deliberate choice.
+        if "gate" in s:
+            gate = bool(s["gate"])
+        elif step_type == "extract_data" and PlanDecomposer._is_verification_intent(s.get("intent", "")):
+            gate = True
+        else:
+            gate = False
+
         return MicroIntent(
             intent=s.get("intent", ""),
             type=step_type,
@@ -798,7 +868,7 @@ class PlanDecomposer:
             loop_count=s.get("loop_count", 0),
             section=section,
             required=s.get("required", default_required),
-            gate=s.get("gate", False),
+            gate=gate,
             params=params,
             hints=hints,
         )
