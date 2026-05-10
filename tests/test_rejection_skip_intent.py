@@ -4,7 +4,7 @@ Ahead of this fix, ``ClaudeStepHandler`` returned a generic
 ``StepResult(success=False, data="REJECTED_DEALER|...")`` whenever
 the extractor flagged a row as a dealer / spam / non-private
 listing. Hosts that orchestrate the agent over a tool surface
-(staffai's hybrid backend) saw an opaque step failure and treated
+(host integration's hybrid backend) saw an opaque step failure and treated
 it as *"extraction is broken, try a different angle"* — the agent
 then re-navigated, scrolled more, and asked Claude to read other
 sections, none of which can succeed because the page genuinely is
