@@ -684,6 +684,27 @@ class RunExecutor:
         )
         state.step_index = outcome.step_index
         if outcome.halt:
+            # Issue #250: opt-in skip envelope on navigation-primitive
+            # halts. When a host configures
+            # ``navigation_primitives_emit_skip`` and the halted step
+            # type is in that set, re-stamp the last StepResult with
+            # ``skip=True, skip_reason='navigation_failed'`` so the
+            # host's tool surface promotes the halt to a successful
+            # tool result and the orchestrator advances past the
+            # listing instead of retrying the same intent. Recipe
+            # rejections that already populated ``skip_reason`` (#246
+            # — dealer / spam / incomplete_required) win over this
+            # generic stamp; we only stamp when ``last_result.skip``
+            # is False.
+            nav_set = getattr(runner, "navigation_primitives_emit_skip", None)
+            if (
+                nav_set
+                and step.type in nav_set
+                and state.results
+                and not state.results[-1].skip
+            ):
+                state.results[-1].skip = True
+                state.results[-1].skip_reason = "navigation_failed"
             self._persist(plan, state, status="halted", halt_reason=outcome.halt_reason)
             return False
         self._persist(plan, state, halt_reason=outcome.halt_reason)
