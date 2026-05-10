@@ -109,6 +109,45 @@ def test_select_option_verify_match_returns_success(monkeypatch):
     assert runner.costs["claude_extract"] == 3
 
 
+def test_select_option_blurs_dropdown_after_pick(monkeypatch):
+    """A Tab keystroke must follow the option click, before the
+    verifier screenshots. React-style controlled selects only fire
+    onChange on blur — without this, the form serializes the
+    previous default on submit even when the dropdown visually
+    displays the new option."""
+    _patched_form(monkeypatch)
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.side_effect = [
+        {"x": 100, "y": 200},  # dropdown
+        {"x": 110, "y": 240},  # option click
+    ]
+    extractor.verify_dropdown_value.return_value = {
+        "matches": True, "observed": "High",
+    }
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Set priority", type="select_option",
+        params={"dropdown_label": "Priority", "option_label": "High"},
+    )
+    ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    # Sequence inspection: dropdown click → option click → Tab blur
+    # → screenshot for verify. The Tab keystroke must come AFTER
+    # the option click, BEFORE the verify screenshot.
+    actions = env.step.call_args_list
+    types = [c.args[0].action_type for c in actions]
+    assert types[0] == ActionType.CLICK   # dropdown
+    assert types[1] == ActionType.CLICK   # option
+    # Index 2 must be a KEY_PRESS Tab (the blur-and-commit step).
+    third = actions[2].args[0]
+    assert third.action_type == ActionType.KEY_PRESS
+    assert third.params == {"keys": "Tab"}
+
+
 def test_select_option_verify_mismatch_returns_failure_with_observed(monkeypatch):
     """Verifier reports ``matches=False`` → step fails with
     ``select_mismatch:got=<observed>_wanted=<expected>``."""
