@@ -109,6 +109,45 @@ def test_select_option_verify_match_returns_success(monkeypatch):
     assert runner.costs["claude_extract"] == 3
 
 
+def test_select_option_blurs_dropdown_after_pick(monkeypatch):
+    """A Tab keystroke must follow the option click, before the
+    verifier screenshots. React-style controlled selects only fire
+    onChange on blur — without this, the form serializes the
+    previous default on submit even when the dropdown visually
+    displays the new option."""
+    _patched_form(monkeypatch)
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.side_effect = [
+        {"x": 100, "y": 200},  # dropdown
+        {"x": 110, "y": 240},  # option click
+    ]
+    extractor.verify_dropdown_value.return_value = {
+        "matches": True, "observed": "High",
+    }
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Set priority", type="select_option",
+        params={"dropdown_label": "Priority", "option_label": "High"},
+    )
+    ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    # Sequence inspection: dropdown click → option click → Tab blur
+    # → screenshot for verify. The Tab keystroke must come AFTER
+    # the option click, BEFORE the verify screenshot.
+    actions = env.step.call_args_list
+    types = [c.args[0].action_type for c in actions]
+    assert types[0] == ActionType.CLICK   # dropdown
+    assert types[1] == ActionType.CLICK   # option
+    # Index 2 must be a KEY_PRESS Tab (the blur-and-commit step).
+    third = actions[2].args[0]
+    assert third.action_type == ActionType.KEY_PRESS
+    assert third.params == {"keys": "Tab"}
+
+
 def test_select_option_verify_mismatch_returns_failure_with_observed(monkeypatch):
     """Verifier reports ``matches=False`` → step fails with
     ``select_mismatch:got=<observed>_wanted=<expected>``."""
@@ -228,16 +267,16 @@ def test_select_option_verify_skipped_when_dropdown_or_option_blank(monkeypatch)
 
 
 def test_verify_dropdown_value_returns_match_dict_on_success(monkeypatch):
-    """Happy path: ``_call_with_tool_schema`` returns a dict with
-    ``observed`` and ``matches``; the public method must coerce
-    ``matches`` to bool, return ``observed`` as str."""
+    """Happy path: ``_call_with_tool_schema`` returns ``observed``
+    only (no ``matches`` field — that's the debiased contract). The
+    public method computes the match locally and reports both."""
     from mantis_agent.extraction.extractor import ClaudeExtractor
 
     extractor = ClaudeExtractor.__new__(ClaudeExtractor)
     monkeypatch.setattr(
         ClaudeExtractor,
         "_call_with_tool_schema",
-        lambda self, *a, **kw: {"observed": "High", "matches": True},
+        lambda self, *a, **kw: {"observed": "High"},
     )
 
     out = extractor.verify_dropdown_value(
@@ -249,13 +288,15 @@ def test_verify_dropdown_value_returns_match_dict_on_success(monkeypatch):
 
 
 def test_verify_dropdown_value_returns_mismatch_dict(monkeypatch):
+    """LLM reports ``observed=Critical`` neutrally — local matcher
+    decides matches=False against expected=High."""
     from mantis_agent.extraction.extractor import ClaudeExtractor
 
     extractor = ClaudeExtractor.__new__(ClaudeExtractor)
     monkeypatch.setattr(
         ClaudeExtractor,
         "_call_with_tool_schema",
-        lambda self, *a, **kw: {"observed": "Critical", "matches": False},
+        lambda self, *a, **kw: {"observed": "Critical"},
     )
 
     out = extractor.verify_dropdown_value(
@@ -264,6 +305,88 @@ def test_verify_dropdown_value_returns_mismatch_dict(monkeypatch):
         expected_value="High",
     )
     assert out == {"matches": False, "observed": "Critical"}
+
+
+def test_verify_dropdown_value_substring_match_on_either_side(monkeypatch):
+    """Common UI shapes: dropdowns render ``"High Priority"`` for
+    expected ``"High"``, or render ``"Contacted"`` when option list
+    label was ``"Contacted (4)"``. Both should match — the local
+    matcher does case-insensitive substring on either side."""
+    from mantis_agent.extraction.extractor import ClaudeExtractor
+
+    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
+    monkeypatch.setattr(
+        ClaudeExtractor,
+        "_call_with_tool_schema",
+        lambda self, *a, **kw: {"observed": "High Priority"},
+    )
+
+    out = extractor.verify_dropdown_value(
+        screenshot=MagicMock(width=1280, height=720),
+        dropdown_label="Priority",
+        expected_value="High",
+    )
+    assert out["matches"] is True
+
+    monkeypatch.setattr(
+        ClaudeExtractor,
+        "_call_with_tool_schema",
+        lambda self, *a, **kw: {"observed": "Contacted"},
+    )
+    out = extractor.verify_dropdown_value(
+        screenshot=MagicMock(width=1280, height=720),
+        dropdown_label="Status",
+        expected_value="Contacted (4)",
+    )
+    assert out["matches"] is True
+
+
+def test_verify_dropdown_value_empty_observed_does_not_match(monkeypatch):
+    """An empty ``observed`` (LLM couldn't read the dropdown) must
+    not silently pass as a match — that would defeat the validator."""
+    from mantis_agent.extraction.extractor import ClaudeExtractor
+
+    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
+    monkeypatch.setattr(
+        ClaudeExtractor,
+        "_call_with_tool_schema",
+        lambda self, *a, **kw: {"observed": ""},
+    )
+
+    out = extractor.verify_dropdown_value(
+        screenshot=MagicMock(width=1280, height=720),
+        dropdown_label="Priority",
+        expected_value="High",
+    )
+    assert out == {"matches": False, "observed": ""}
+
+
+def test_verify_dropdown_value_prompt_does_not_leak_expected_value(monkeypatch):
+    """The expected value must not appear in the prompt — that's the
+    debias guarantee. If we ever leak it back into the prompt the
+    LLM will go back to confidently confirming whatever we asked
+    for."""
+    from mantis_agent.extraction.extractor import ClaudeExtractor
+
+    captured: dict = {}
+
+    def fake_call(self, screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens):
+        captured["prompt"] = prompt
+        return {"observed": "High"}
+
+    monkeypatch.setattr(ClaudeExtractor, "_call_with_tool_schema", fake_call)
+
+    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
+    extractor.verify_dropdown_value(
+        screenshot=MagicMock(width=1280, height=720),
+        dropdown_label="Priority",
+        expected_value="High",
+    )
+    # Dropdown label is fine — orient the LLM to the right control.
+    assert "Priority" in captured["prompt"]
+    # Expected value must not be in the prompt — that's the bias we
+    # specifically removed.
+    assert "High" not in captured["prompt"]
 
 
 def test_verify_dropdown_value_returns_none_on_api_failure(monkeypatch):
@@ -288,10 +411,8 @@ def test_verify_dropdown_value_returns_none_on_api_failure(monkeypatch):
 
 
 def test_verify_dropdown_value_passes_correct_tool_schema(monkeypatch):
-    """The tool schema must require ``observed`` and ``matches`` —
-    Anthropic's server-side validation rejects the response if a
-    required field is missing, so the runner can't accidentally
-    silently-pass on a half-formed answer."""
+    """The tool schema requires only ``observed`` — match is
+    computed locally to keep the LLM unbiased."""
     from mantis_agent.extraction.extractor import ClaudeExtractor
 
     captured: dict = {}
@@ -299,8 +420,7 @@ def test_verify_dropdown_value_passes_correct_tool_schema(monkeypatch):
     def fake_call(self, screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens):
         captured["tool_name"] = tool_name
         captured["input_schema"] = input_schema
-        captured["prompt"] = prompt
-        return {"observed": "High", "matches": True}
+        return {"observed": "High"}
 
     monkeypatch.setattr(ClaudeExtractor, "_call_with_tool_schema", fake_call)
 
@@ -314,33 +434,42 @@ def test_verify_dropdown_value_passes_correct_tool_schema(monkeypatch):
     assert captured["tool_name"] == "report_dropdown_value"
     schema = captured["input_schema"]
     assert "observed" in schema["properties"]
-    assert "matches" in schema["properties"]
-    assert set(schema["required"]) == {"observed", "matches"}
-    assert schema["properties"]["matches"]["type"] == "boolean"
+    assert "matches" not in schema["properties"]  # debiased: no LLM-side decision
+    assert set(schema["required"]) == {"observed"}
     assert schema["properties"]["observed"]["type"] == "string"
-    # Prompt should mention both the dropdown label and the expected
-    # value so the LLM has the binding context.
-    assert "Priority" in captured["prompt"]
-    assert "High" in captured["prompt"]
 
 
-def test_verify_dropdown_value_coerces_non_bool_matches(monkeypatch):
-    """If a model returns ``matches`` as the string ``\"true\"`` or a
-    truthy non-bool, the public return type must still be a bool —
-    callers branch on ``verify.get('matches', False)``."""
+# ── Local semantic matcher ─────────────────────────────────────────
+
+
+def test_semantic_dropdown_match_exact():
     from mantis_agent.extraction.extractor import ClaudeExtractor
+    assert ClaudeExtractor._semantic_dropdown_match("High", "High") is True
 
-    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
-    monkeypatch.setattr(
-        ClaudeExtractor,
-        "_call_with_tool_schema",
-        lambda self, *a, **kw: {"observed": "High", "matches": 1},
-    )
 
-    out = extractor.verify_dropdown_value(
-        screenshot=MagicMock(width=1280, height=720),
-        dropdown_label="Priority",
-        expected_value="High",
-    )
-    assert out == {"matches": True, "observed": "High"}
-    assert isinstance(out["matches"], bool)
+def test_semantic_dropdown_match_case_and_whitespace():
+    from mantis_agent.extraction.extractor import ClaudeExtractor
+    assert ClaudeExtractor._semantic_dropdown_match("  high  ", "HIGH") is True
+
+
+def test_semantic_dropdown_match_substring_either_direction():
+    from mantis_agent.extraction.extractor import ClaudeExtractor
+    # observed shorter
+    assert ClaudeExtractor._semantic_dropdown_match("High", "High Priority") is True
+    # expected shorter
+    assert ClaudeExtractor._semantic_dropdown_match("High Priority", "High") is True
+
+
+def test_semantic_dropdown_match_distinct_values():
+    from mantis_agent.extraction.extractor import ClaudeExtractor
+    # Critical and High share no substring relationship — must NOT match.
+    assert ClaudeExtractor._semantic_dropdown_match("Critical", "High") is False
+
+
+def test_semantic_dropdown_match_empty_strings():
+    from mantis_agent.extraction.extractor import ClaudeExtractor
+    # Empty observed → not a match (avoids silent pass when LLM
+    # blanks the read).
+    assert ClaudeExtractor._semantic_dropdown_match("", "High") is False
+    assert ClaudeExtractor._semantic_dropdown_match("High", "") is False
+    assert ClaudeExtractor._semantic_dropdown_match("", "") is False

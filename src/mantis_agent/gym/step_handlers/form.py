@@ -638,7 +638,21 @@ class ClaudeGuidedFormHandler:
                 time.sleep(random.uniform(0.2, 0.6))
                 env.step(Action(action_type=ActionType.CLICK, params={"x": option_target["x"], "y": option_target["y"]}))
                 runner.costs["gpu_steps"] += 1
-                time.sleep(1.5)
+                time.sleep(0.8)
+                # Blur the dropdown so any pending onChange / onBlur
+                # handler commits the new value to the underlying form
+                # state. Many React-style controlled selects only fire
+                # onChange on blur — without this Tab, the dropdown
+                # *visually* shows the new option (the verifier reads
+                # it correctly) but the form serializes the previous
+                # default on submit. Diagnosed against staff-crm:
+                # Priority=High clicked + visually displayed, but
+                # Update Lead persisted Priority=Critical.
+                try:
+                    env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Tab"}))
+                except Exception:
+                    pass
+                time.sleep(0.7)
             except Exception as e:
                 logger.warning(f"  [claude-form] select_option pick failed: {e}")
                 return StepResult(step_index=index, intent=step.intent, success=False, data=f"select_pick_error:{e}")
@@ -650,6 +664,7 @@ class ClaudeGuidedFormHandler:
             # dropdown actually committed ``Critical``, the verify gate
             # later sees the wrong value, and recovery wastes a budget.
             if dropdown and option:
+                verify: dict | None = None
                 try:
                     verify_shot = env.screenshot()
                     verify = extractor.verify_dropdown_value(
@@ -657,14 +672,35 @@ class ClaudeGuidedFormHandler:
                     )
                     runner.costs["claude_extract"] += 1
                 except Exception as ve:  # noqa: BLE001
-                    logger.debug("  [claude-form] verify_dropdown_value error: %s", ve)
-                    verify = None
+                    logger.warning("  [claude-form] verify_dropdown_value raised: %s", ve)
+                # Always log the verifier's verdict so post-mortem on a
+                # mis-click vs lying-LLM is possible from the modal logs
+                # alone (without re-running with a debugger).
+                if verify is None:
+                    logger.warning(
+                        "  [claude-form] verify_dropdown_value returned None "
+                        "(API failure or empty schema response) — proceeding "
+                        "without verification; downstream verify gate is the "
+                        "safety net"
+                    )
+                else:
+                    logger.info(
+                        "  [claude-form] verify_dropdown: dropdown='%s' "
+                        "expected='%s' observed='%s' matches=%s",
+                        dropdown[:30], option[:30],
+                        (verify.get("observed") or "<empty>")[:40],
+                        verify.get("matches"),
+                    )
                 if verify is not None and not verify.get("matches", False):
                     observed = (verify.get("observed") or "").strip() or "<unknown>"
                     logger.warning(
                         "  [claude-form] select_option mismatch: dropdown '%s' "
                         "shows '%s' but expected '%s'",
                         dropdown[:30], observed[:40], option[:30],
+                    )
+                    runner._dump_debug_screenshot(
+                        f"select_mismatch_step{index}",
+                        verify_shot,
                     )
                     # Close any stray menu so the page is clean for retry.
                     try:
