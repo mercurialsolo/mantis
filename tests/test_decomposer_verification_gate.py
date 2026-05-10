@@ -8,7 +8,7 @@ those steps lacked ``gate=True`` and fell through to the deep-extract
 code path that applies the recipe schema. On a search/listing URL
 that has no ``year``/``make`` (or whatever the recipe requires) the
 extractor rejects the row and the entire plan halts. Three rounds
-of host-side prompt patches (staffai PR #587 BoatTrader template)
+of host-side prompt patches (host-integration template)
 couldn't reliably stop the orchestrator from emitting verification
 sub-goals in natural English.
 
@@ -248,7 +248,7 @@ def test_build_intent_case_insensitive_trigger_match() -> None:
 def test_micro_plan_from_dict_applies_promotion_through_build_intent() -> None:
     """``MicroPlan.from_dict`` runs every step through ``_build_intent``
     so cached JSON plans (which is how this hits production via
-    the staffai integration's plan_json shortcut) also benefit
+    the host integration's plan_json shortcut) also benefit
     from the safety net."""
     payload = {
         "steps": [
