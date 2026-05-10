@@ -78,9 +78,25 @@ class MicroPlanRunner:
         keep_screenshots: int | None = None, cancel_event: Any = None,
         cost_config: CostConfig | None = None, tenant_id: str = "",
         extraction_cache: Any = None,
+        navigation_primitives_emit_skip: set[str] | None = None,
     ):
         self.brain, self.env, self.grounding, self.extractor = (
             brain, env, grounding, extractor
+        )
+        # Issue #250: opt-in set of step types whose terminal halt
+        # should re-stamp the last StepResult with ``skip=True,
+        # skip_reason='navigation_failed'``. Mirror of issue #246's
+        # recipe-rejection skip envelope, but triggered runner-side
+        # on navigation primitives (click / submit / scroll / navigate
+        # / gate). Default ``None`` preserves today's behavior — host
+        # gets ``status='halted'`` as before. Recipe rejections that
+        # already populated ``skip_reason`` (#246) win over this
+        # generic stamp; the executor checks ``last_result.skip``
+        # before re-stamping.
+        self.navigation_primitives_emit_skip: set[str] | None = (
+            set(navigation_primitives_emit_skip)
+            if navigation_primitives_emit_skip is not None
+            else None
         )
         self.on_step, self.max_retries = on_step, max_retries
         self.checkpoint_path, self.run_key = checkpoint_path, run_key
