@@ -51,12 +51,23 @@ class StepResult:
     duration: float = 0.0
     reversed: bool = False
 
+    # Issue #246: recipe-rejection skip envelope. ``skip=True`` is the
+    # runner's signal to a hosting orchestrator that a recipe correctly
+    # excluded this row (dealer / spam / similar) and the host should
+    # advance past it, *not* retry the same step. ``skip_reason`` is
+    # the recipe-author key (``"dealer"``, ``"incomplete_required"``,
+    # …) the host can branch on. Both default off so legacy callers
+    # see no change; recipes opt in via ``ExtractionSchema.rejection_intents``.
+    skip: bool = False
+    skip_reason: str | None = None
+
     # Observability extras — populated by MicroPlanRunner; not persisted.
     screenshot_png: bytes | None = field(default=None, repr=False, compare=False)
     last_action: Action | None = field(default=None, repr=False, compare=False)
 
     _PERSISTED: ClassVar[tuple[str, ...]] = (
         "step_index", "intent", "success", "data", "steps_used", "duration", "reversed",
+        "skip", "skip_reason",
     )
 
     def to_dict(self) -> dict[str, Any]:

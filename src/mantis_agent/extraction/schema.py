@@ -69,6 +69,21 @@ class ExtractionSchema:
     spam_label: str = "dealer/spam"  # what to call spam (e.g. "dealer", "recruiter")
     forbidden_controls: list[str] = field(default_factory=list)  # "Contact Seller", etc.
     allowed_controls: list[str] = field(default_factory=list)  # "Show more", "Show phone"
+    # Issue #246: recipe-rejection → host-facing intent map. Keys are
+    # canonical rejection-reason tokens (``"dealer"``,
+    # ``"incomplete_required"``, ``"parse_error"``…) that the runner
+    # tags every rejection with. Values are intent strings the host
+    # can branch on:
+    #   ``"skip"``         — terminal-for-this-row; host should mark the
+    #                        listing as processed-but-skipped and advance
+    #                        to the next, not retry
+    #   ``"extract_more"`` — caller could enrich on the detail page;
+    #                        runner stays in extraction loop
+    #   ``"retry"``        — transient; safe to retry the same step
+    # Empty default preserves today's behavior (no skip-semantic
+    # surfaces; every rejection looks like a generic step failure).
+    # Recipes opt in by setting their canonical rejections explicitly.
+    rejection_intents: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_objective(cls, objective: Any) -> ExtractionSchema:
@@ -235,6 +250,15 @@ class ExtractionSchema:
         # derived (recipes accumulate empirical knowledge of which
         # tile fields actually render across the marketplace's
         # listing variants).
+        # ``rejection_intents``: derived keys win on conflict
+        # (operator-authored override of recipe defaults), recipe
+        # extends with new keys (recipes accumulate empirical
+        # vertical knowledge of which rejections are terminal vs
+        # retryable). Same shape as the dict-merge primitive used
+        # for tile_carry_fields list union, just dict-flavoured.
+        merged_intents = dict(other.rejection_intents)
+        merged_intents.update(self.rejection_intents)
+
         return ExtractionSchema(
             entity_name=entity,
             fields=self.fields,
@@ -254,4 +278,5 @@ class ExtractionSchema:
             spam_label=spam_lbl,
             forbidden_controls=_union(self.forbidden_controls, other.forbidden_controls),
             allowed_controls=_union(self.allowed_controls, other.allowed_controls),
+            rejection_intents=merged_intents,
         )
