@@ -1571,6 +1571,100 @@ class ClaudeExtractor:
         logger.info(f"  [claude-form] '{result['label'][:40]}' at ({x},{y}) action={result['action']}")
         return result
 
+    def verify_dropdown_value(
+        self,
+        screenshot: Image.Image,
+        dropdown_label: str,
+        expected_value: str,
+    ) -> dict | None:
+        """Read the current displayed value of a (closed) dropdown and
+        confirm it matches ``expected_value``.
+
+        Used by the ``select_option`` form-handler branch as a post-
+        click validation step. After the runner clicks an option in
+        an open dropdown menu, the menu closes and the dropdown shows
+        the picked value. This method screenshots that state and
+        asks Claude what the dropdown reads — if the answer
+        differs from the requested option, the runner knows the
+        click landed on a different option (canonical case: y-
+        coordinate disambiguation between adjacent menu items, where
+        the runner reported ``select:Priority=High`` but the dropdown
+        actually committed ``Critical``).
+
+        Returns a dict::
+
+            {"matches": bool, "observed": str}
+
+        ``matches`` is True iff the observed value semantically equals
+        the expected value (case-insensitive substring on either side
+        — the dropdown might render a label that's a substring of the
+        canonical option, or vice versa for verbose UIs). ``observed``
+        is the literal value Claude read from the dropdown — surfaced
+        in logs / mismatch errors so operators can see what actually
+        committed.
+
+        Returns ``None`` on any API failure — caller should treat as
+        "could not verify; trust the click happened" rather than
+        forcing a retry on every API blip.
+        """
+        prompt = (
+            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
+            f"A dropdown labelled '{dropdown_label}' is visible on the page. "
+            f"Read its CURRENT VALUE — the text that's displayed inside the "
+            f"dropdown control showing what option is currently selected. "
+            f"Most dropdowns show the selected text on the left of the "
+            f"control with a chevron/arrow on the right.\n\n"
+            f"The runner just attempted to set this dropdown to "
+            f"'{expected_value}'. Your job: verify that the dropdown's "
+            f"displayed value semantically matches the expected value.\n\n"
+            f"Return the exact text shown inside the dropdown along with "
+            f"a boolean indicating whether it matches the expected value. "
+            f"Match semantically (case-insensitive, substring tolerant) — "
+            f"e.g. 'High Priority' matches 'High', 'Contacted (4)' matches "
+            f"'Contacted'. Return matches=false when the dropdown shows a "
+            f"clearly different option (e.g. 'Critical' when 'High' was "
+            f"requested)."
+        )
+        parsed = self._call_with_tool_schema(
+            screenshot,
+            prompt,
+            tool_name="report_dropdown_value",
+            tool_description=(
+                "Report the current displayed value of a dropdown control "
+                "and whether it matches the expected option."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "observed": {
+                        "type": "string",
+                        "description": (
+                            "The literal text displayed inside the "
+                            "dropdown control (the currently-selected "
+                            "option). Empty string if the dropdown isn't "
+                            "visible or its value can't be read."
+                        ),
+                    },
+                    "matches": {
+                        "type": "boolean",
+                        "description": (
+                            "True iff observed semantically matches "
+                            "the expected value (case-insensitive, "
+                            "substring tolerant)."
+                        ),
+                    },
+                },
+                "required": ["observed", "matches"],
+            },
+            max_tokens=300,
+        )
+        if not parsed:
+            return None
+        return {
+            "matches": bool(parsed.get("matches", False)),
+            "observed": str(parsed.get("observed") or ""),
+        }
+
     def find_target_by_affordance(
         self,
         screenshot: Image.Image,

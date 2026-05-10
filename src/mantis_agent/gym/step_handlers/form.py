@@ -639,15 +639,49 @@ class ClaudeGuidedFormHandler:
                 env.step(Action(action_type=ActionType.CLICK, params={"x": option_target["x"], "y": option_target["y"]}))
                 runner.costs["gpu_steps"] += 1
                 time.sleep(1.5)
-                logger.info(f"  [claude-form] select_option '{dropdown[:30]}' = '{option[:30]}'")
-                return StepResult(
-                    step_index=index, intent=step.intent, success=True,
-                    steps_used=2, duration=4.0,
-                    data=f"select:{dropdown[:30]}={option[:30]}",
-                )
             except Exception as e:
                 logger.warning(f"  [claude-form] select_option pick failed: {e}")
                 return StepResult(step_index=index, intent=step.intent, success=False, data=f"select_pick_error:{e}")
+
+            # Post-click verification — the two-phase open+pick flow can
+            # land on an adjacent menu item (y-coordinate disambiguation
+            # between visually similar options). Without this read-back,
+            # the runner reports ``select:Priority=High`` when the
+            # dropdown actually committed ``Critical``, the verify gate
+            # later sees the wrong value, and recovery wastes a budget.
+            if dropdown and option:
+                try:
+                    verify_shot = env.screenshot()
+                    verify = extractor.verify_dropdown_value(
+                        verify_shot, dropdown_label=dropdown, expected_value=option,
+                    )
+                    runner.costs["claude_extract"] += 1
+                except Exception as ve:  # noqa: BLE001
+                    logger.debug("  [claude-form] verify_dropdown_value error: %s", ve)
+                    verify = None
+                if verify is not None and not verify.get("matches", False):
+                    observed = (verify.get("observed") or "").strip() or "<unknown>"
+                    logger.warning(
+                        "  [claude-form] select_option mismatch: dropdown '%s' "
+                        "shows '%s' but expected '%s'",
+                        dropdown[:30], observed[:40], option[:30],
+                    )
+                    # Close any stray menu so the page is clean for retry.
+                    try:
+                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+                    except Exception:
+                        pass
+                    return StepResult(
+                        step_index=index, intent=step.intent, success=False,
+                        data=f"select_mismatch:got={observed[:40]}_wanted={option[:30]}",
+                    )
+
+            logger.info(f"  [claude-form] select_option '{dropdown[:30]}' = '{option[:30]}'")
+            return StepResult(
+                step_index=index, intent=step.intent, success=True,
+                steps_used=2, duration=4.0,
+                data=f"select:{dropdown[:30]}={option[:30]}",
+            )
 
         # Unknown form type — shouldn't reach here.
         logger.warning(f"  [claude-form] unsupported form step type: {step.type}")
