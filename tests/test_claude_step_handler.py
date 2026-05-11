@@ -175,6 +175,7 @@ def test_extract_data_cache_hit_skips_deep_extract():
 
 def test_extract_data_viable_writes_to_cache_when_write_enabled(monkeypatch):
     monkeypatch.setattr("mantis_agent.gym.step_handlers.claude_step.time.sleep", lambda *_: None)
+    monkeypatch.setattr("mantis_agent.gym._runner_helpers.adaptive_content_settle", lambda *a, **kw: 0.0)
 
     runner = _FakeRunner()
     extractor = MagicMock()
@@ -212,6 +213,7 @@ def test_extract_data_viable_writes_to_cache_when_write_enabled(monkeypatch):
 def test_extract_data_post_extract_dedup_returns_duplicate(monkeypatch):
     """Deep extract returns a URL we've already seen → DUPLICATE marker."""
     monkeypatch.setattr("mantis_agent.gym.step_handlers.claude_step.time.sleep", lambda *_: None)
+    monkeypatch.setattr("mantis_agent.gym._runner_helpers.adaptive_content_settle", lambda *a, **kw: 0.0)
 
     runner = _FakeRunner()
     runner._seen_urls.add("https://example.com/already-seen")
@@ -239,6 +241,7 @@ def test_extract_data_post_extract_dedup_returns_duplicate(monkeypatch):
 
 def test_extract_data_rejects_dealer_listing(monkeypatch):
     monkeypatch.setattr("mantis_agent.gym.step_handlers.claude_step.time.sleep", lambda *_: None)
+    monkeypatch.setattr("mantis_agent.gym._runner_helpers.adaptive_content_settle", lambda *a, **kw: 0.0)
 
     runner = _FakeRunner()
     # When extract_multi returns a non-viable result, the deep-extract
@@ -267,6 +270,7 @@ def test_extract_data_rejects_dealer_listing(monkeypatch):
 
 def test_extract_data_rejects_incomplete_listing(monkeypatch):
     monkeypatch.setattr("mantis_agent.gym.step_handlers.claude_step.time.sleep", lambda *_: None)
+    monkeypatch.setattr("mantis_agent.gym._runner_helpers.adaptive_content_settle", lambda *a, **kw: 0.0)
 
     runner = _FakeRunner()
     incomplete_data = MagicMock(
@@ -302,6 +306,7 @@ def test_extractor_missing_returns_failure():
 
 def test_unknown_step_type_returns_failure(monkeypatch):
     monkeypatch.setattr("mantis_agent.gym.step_handlers.claude_step.time.sleep", lambda *_: None)
+    monkeypatch.setattr("mantis_agent.gym._runner_helpers.adaptive_content_settle", lambda *a, **kw: 0.0)
     runner = _FakeRunner()
     extractor = MagicMock()
     ctx = _ctx(runner, extractor=extractor)

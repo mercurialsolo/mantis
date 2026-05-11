@@ -224,6 +224,10 @@ def test_dealer_rejection_with_skip_intent_sets_step_result_skip(monkeypatch) ->
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
     )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
+    )
     schema = ExtractionSchema(
         spam_label="dealer",
         rejection_intents={"dealer": "skip"},
@@ -248,6 +252,10 @@ def test_dealer_rejection_without_recipe_intent_does_not_skip(monkeypatch) -> No
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
     )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
+    )
     schema = ExtractionSchema(spam_label="dealer")  # no rejection_intents
     handler, step, ctx = _build_step_handler_ctx(
         recipe_schema=schema, dealer=True, missing=False,
@@ -266,6 +274,10 @@ def test_incomplete_rejection_with_extract_more_intent_does_not_skip(monkeypatch
     monkeypatch.setattr(
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
+    )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
     )
     schema = ExtractionSchema(
         required_fields=["year", "make"],
@@ -293,6 +305,10 @@ def test_incomplete_rejection_with_skip_intent_does_skip(monkeypatch) -> None:
     monkeypatch.setattr(
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
+    )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
     )
     schema = ExtractionSchema(
         required_fields=["year", "make"],
