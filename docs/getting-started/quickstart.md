@@ -6,7 +6,14 @@ If someone has already deployed Mantis (or you're using the public Baseten refer
 
 - `curl`, `jq`
 - A **Baseten API key** (`BASETEN_API_KEY`) for the gateway
-- A **Mantis tenant token** (`MANTIS_API_TOKEN`) issued by your operator — see [Tenant keys](../operations/tenant-keys.md) if you're the operator
+- A **Mantis tenant token** (`MANTIS_API_TOKEN`) issued by your operator
+
+The auth model is a two-layer setup (gateway + container). Full reference:
+
+- New integrator — what to put in which header, scopes, error codes:
+  [Authentication](../client/auth.md).
+- Operator — generating tokens, the keys-file format, rotation:
+  [Tenant keys](../operations/tenant-keys.md).
 
 ```bash
 export BASETEN_API_KEY="<your baseten api key>"
