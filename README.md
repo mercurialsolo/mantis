@@ -84,6 +84,7 @@ The base install is intentionally slim. Pick the extras for your use case:
 
 ```bash
 pip install -e .                  # ~5 MB — Pillow only
+pip install -e ".[client]"        # ~10 MB — typed HTTP client (`mantis_agent.client`)
 pip install -e ".[orchestrator]"  # ~10 MB — MicroPlanRunner + remote Holo3 client
 pip install -e ".[server]"        # ~15 MB — FastAPI server + Prometheus
 pip install -e ".[local-cua]"     # ~2 GB  — torch + transformers + pyautogui
