@@ -21,6 +21,16 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
+# The Modal deploy module has top-level ``import modal`` — when the
+# ``modal`` package isn't installed (CI without [modal] extras, etc.),
+# skip the whole test module rather than fail with ImportError.
+pytest.importorskip(
+    "modal",
+    reason="modal package not installed; deploy module can't be loaded",
+)
+
 
 def _load_helper():
     """Import ``_build_oxylabs_username`` from the Modal deploy
