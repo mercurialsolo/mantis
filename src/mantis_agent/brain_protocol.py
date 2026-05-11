@@ -147,6 +147,15 @@ def _agents_factory() -> Brain:
     return AgentSBrain()
 
 
+def _mock_factory() -> Brain:
+    # Plan-authoring stub (#274). Pure-Python, no GPU / network — see
+    # brain_mock.py for the contract. Slim installs that only have
+    # ``mantis-agent[orchestrator]`` (no torch / transformers / anthropic)
+    # can still resolve ``MANTIS_BRAIN=mock``.
+    from .brain_mock import MockBrain
+    return MockBrain()
+
+
 def _register_builtins() -> None:
     """Register the in-tree brains. Idempotent."""
     register_brain("holo3", _holo3_factory)
@@ -155,6 +164,7 @@ def _register_builtins() -> None:
     register_brain("llamacpp", _llamacpp_factory)
     register_brain("gemma4", _gemma4_factory)
     register_brain("agent-s", _agents_factory)
+    register_brain("mock", _mock_factory)
 
 
 _register_builtins()

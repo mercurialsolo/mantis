@@ -35,7 +35,7 @@ These are global hard caps; tenant config can be tighter, never looser.
 | Var | Default | Effect |
 |---|---|---|
 | `MANTIS_LLAMA_PORT` | 18080 | Internal port the in-pod llama.cpp server binds to. The `/v1/chat/completions` proxy forwards here. |
-| `MANTIS_BRAIN` | `holo3` | Brain backend selector. One of `holo3`, `claude`, `opencua`, `llamacpp`, `gemma4`, `agent-s`. Wins over the legacy `MANTIS_MODEL`. |
+| `MANTIS_BRAIN` | `holo3` | Brain backend selector. One of `holo3`, `claude`, `opencua`, `llamacpp`, `gemma4`, `agent-s`, `mock`. Wins over the legacy `MANTIS_MODEL`. `mock` is a deterministic always-DONE stub for plan authoring without GPU / API cost (#274). |
 | `MANTIS_MODEL` | (set by Truss) | Legacy alias of `MANTIS_BRAIN` for one minor release. `gemma4-cua` aliases to `gemma4`. |
 | `MANTIS_HOLO3_MODEL_DIR` | `/models/holo3` | Where Holo3 GGUF weights are mounted. |
 | `ANTHROPIC_API_KEY` | unset | Default Anthropic key. Per-tenant `anthropic_secret_name` overrides per request. |
