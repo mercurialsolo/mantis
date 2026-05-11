@@ -480,18 +480,23 @@ def test_fetch_video_streams_to_disk(tmp_path: Any) -> None:
     dest = c.fetch_video("r1", tmp_path / "out.mp4")
     assert dest.exists()
     assert dest.read_bytes() == b"abcdefghij"
-    # No polished=false on the default call.
+    # Default fetch sends no query params — server defaults to polished.
     method, url, kw = session.calls[0]
     assert method == "GET"
     assert url.endswith("/v1/runs/r1/video")
-    assert "polished" not in (kw.get("params") or {})
+    assert not (kw.get("params") or {})
 
 
-def test_fetch_video_polished_false_passes_param(tmp_path: Any) -> None:
+def test_fetch_video_raw_passes_raw_one(tmp_path: Any) -> None:
+    """polished=False must send ?raw=1 — that's the query param the server
+    actually reads (`request.query_params.get("raw", "")` in
+    baseten_server/routes.py). Pre-fix the client sent ?polished=false,
+    which the server silently ignored, so callers always got the polished
+    version even when they asked for raw."""
     session = _StubSession(queue=[_StubResponse(content_chunks=[b"raw"])])
     c = _client(session)
     c.fetch_video("r1", tmp_path / "raw.mp4", polished=False)
-    assert session.calls[0][2]["params"] == {"polished": "false"}
+    assert session.calls[0][2]["params"] == {"raw": "1"}
 
 
 def test_health_returns_payload() -> None:
