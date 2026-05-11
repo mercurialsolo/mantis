@@ -20,34 +20,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
 
       - name: Install ffmpeg
         # tests/test_recorder.py + tests/test_presentation.py shell out to
         # ffmpeg. Without it on PATH the tests fail with "ffmpeg-not-installed".
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Install dev + server extras
-        run: |
-          python -m pip install --upgrade pip
-          # We only need the orchestrator-side surface for the test suite —
-          # no torch / playwright. The server tests need fastapi + httpx.
-          pip install -e ".[dev,server,orchestrator,metrics]"
+      - name: Install dev + server extras (locked)
+        # `uv sync` installs the exact versions from uv.lock — same resolution
+        # locally and in CI, no surprise minor-version drift.
+        run: uv sync --python ${{ matrix.python-version }} --extra dev --extra server --extra orchestrator --extra metrics
 
       - name: Run pytest
-        run: pytest tests/ -q
+        run: uv run pytest tests/ -q
 
   ruff:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: '3.11'
-      - run: pip install "ruff>=0.4"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv tool install "ruff>=0.4"
       - name: Lint
         run: ruff check .
 
@@ -57,15 +61,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: '3.11'
-          cache: pip
-      - run: |
-          pip install \
-            "mkdocs>=1.6" \
-            "mkdocs-material>=9.5" \
-            "mkdocs-awesome-pages-plugin>=2.9" \
-            "pymdown-extensions>=10.7"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install docs deps (locked)
+        run: uv sync --extra docs
       - name: Build site (strict)
-        run: mkdocs build --strict --site-dir /tmp/site
+        run: uv run mkdocs build --strict --site-dir /tmp/site

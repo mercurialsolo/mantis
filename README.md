@@ -144,19 +144,21 @@ tests/                        pytest suite
 
 ## Development
 
+Common tasks are wrapped in a `Makefile` — run `make help` for the full list.
+
 ```bash
-# Install dev + docs extras
-pip install -e ".[dev,docs]"
+make sync                # install locked dev env via uv (one-time)
+make precommit-install   # install the ruff + hygiene pre-commit hook
 
-# Run tests
-pytest tests/ -q
-
-# Lint
-ruff check .
-
-# Build the docs site locally
-mkdocs serve   # → http://127.0.0.1:8000
+make test                # pytest tests/ -q
+make lint                # ruff check .
+make fmt                 # ruff auto-fix + format
+make docs                # mkdocs serve → http://127.0.0.1:8000
 ```
+
+Don't have `uv`? `pip install -e ".[dev,docs]"` plus the underlying commands
+(`pytest tests/ -q`, `ruff check .`, `mkdocs serve`) still work — the
+`Makefile` just keeps them discoverable.
 
 ## License
 

@@ -31,24 +31,19 @@ jobs:
         with:
           fetch-depth: 0  # mkdocs needs full history for last-modified plugins
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: '3.11'
-          cache: pip
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Install docs deps
-        run: |
-          python -m pip install --upgrade pip
-          # Install only the [docs] extras — skip the heavy server / GPU groups
-          # so the docs build is fast.
-          pip install \
-            "mkdocs>=1.6" \
-            "mkdocs-material>=9.5" \
-            "mkdocs-awesome-pages-plugin>=2.9" \
-            "pymdown-extensions>=10.7"
+      - name: Install docs deps (locked)
+        # Install only the [docs] extras — skip the heavy server / GPU groups
+        # so the docs build is fast.
+        run: uv sync --extra docs
 
       - name: Build site (strict)
-        run: mkdocs build --strict --site-dir _site
+        run: uv run mkdocs build --strict --site-dir _site
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

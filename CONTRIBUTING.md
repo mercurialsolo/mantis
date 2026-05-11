@@ -26,10 +26,19 @@ more pluggable model backends, better verifiers), you're in the right place.
 ```bash
 git clone https://github.com/mercurialsolo/mantis
 cd mantis
+
+# Recommended: uv reproduces the locked dev environment from uv.lock.
+make sync                # uv sync --extra dev --extra server --extra orchestrator --extra metrics --extra docs
+make precommit-install   # install the git pre-commit hook (ruff + hygiene)
+
+# Or with vanilla pip:
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,server,orchestrator,metrics,docs]"
-pre-commit install   # if you add the hook
+pip install -e ".[dev,server,orchestrator,metrics,docs]" pre-commit
+pre-commit install
 ```
+
+`make help` lists every common task (`test`, `lint`, `fmt`, `docs`,
+`docs-build`, `precommit`, ...).
 
 For full-stack work that drives a real browser you also need:
 
@@ -41,13 +50,14 @@ pip install -e ".[local-cua]"
 ## Running checks locally
 
 ```bash
-pytest tests/ -q          # unit + orchestrator-surface tests
-ruff check .              # lint
-mkdocs build --strict     # docs must build clean
+make test         # pytest tests/ -q   (parallel via pytest-xdist)
+make lint         # ruff check .
+make docs-build   # mkdocs build --strict
+make precommit    # run every pre-commit hook against all files
 ```
 
-CI runs all three on every PR (`.github/workflows/test.yml`). PRs that fail
-any of them won't merge.
+CI runs the same checks on every PR (`.github/workflows/test.yml`). PRs that
+fail any of them won't merge.
 
 ## Commit & PR conventions
 
