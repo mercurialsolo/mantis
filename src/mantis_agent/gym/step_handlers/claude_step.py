@@ -97,6 +97,53 @@ def _resolve_extraction_context(runner: "MicroPlanRunner", data: object | None):
     return ExtractionContext.UNKNOWN
 
 
+def _check_already_seen(runner, ctx: StepContext) -> str | None:
+    """Consult the host's seen-URL predicate at the top of
+    ``extract_data``.
+
+    Returns the matched URL when the runner should short-circuit
+    with ``skip_reason='already_seen'``; returns ``None`` to
+    proceed with the normal extract path.
+
+    Mantis owns the timing window (post-navigate / pre-extract)
+    and the applicability gate (detail-page only via
+    :meth:`SiteConfig.is_detail_page`). The host owns the
+    predicate's policy entirely — URL match, content hash, CRM
+    lookup, anything. Issue #255.
+
+    A buggy predicate (raises on a malformed URL, hits a network
+    timeout, …) must NOT halt the run. Over-extracting is the
+    safe failure mode; under-extracting (silently skipping a real
+    new lead) is the dangerous one. So any predicate exception is
+    swallowed and we fall through to the normal extract path.
+    """
+    predicate = getattr(runner, "seen_url_predicate", None)
+    if predicate is None:
+        return None
+    try:
+        current_url = runner._best_effort_current_url()
+    except Exception:  # noqa: BLE001 — never break extract on CDP glitch
+        return None
+    if not current_url:
+        return None
+    # Applicability gate: only fire on canonical detail pages so
+    # search / results URLs aren't accidentally deduped.
+    site_config = ctx.site_config or getattr(runner, "site_config", None)
+    if site_config is not None:
+        try:
+            if not site_config.is_detail_page(current_url):
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+    try:
+        if predicate(current_url):
+            return current_url
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("seen_url_predicate raised: %s", exc)
+        return None
+    return None
+
+
 def _resolve_skip_envelope(extractor, *, rejection_key: str) -> tuple[bool, str | None]:
     """Look up a rejection key in ``extractor.schema.rejection_intents``
     and return the StepResult skip envelope (``skip``, ``skip_reason``).
@@ -188,6 +235,25 @@ class ClaudeStepHandler:
             )
 
         elif step.type == "extract_data":
+            # Issue #255: cross-session already-seen short-circuit.
+            # Runs BEFORE the in-session cache check — the cache is
+            # an intra-session optimization, the predicate is host-
+            # state (master.csv, CRM, …) crossing sessions. Mantis
+            # owns the timing window only; the predicate's policy
+            # (URL match / content hash / CRM lookup) is host-owned.
+            # Applicability gate: only fire on canonical detail
+            # pages (#236 ``is_detail_page``) so search/results URLs
+            # aren't accidentally deduped if a host's predicate
+            # would match them.
+            already_seen = _check_already_seen(runner, ctx)
+            if already_seen is not None:
+                return StepResult(
+                    step_index=index, intent=step.intent,
+                    success=False,
+                    skip=True, skip_reason="already_seen",
+                    data=f"already_seen|url={already_seen[:160]}",
+                )
+
             # Cache short-circuit BEFORE the expensive deep-extract Claude
             # call. We peek the browser's current URL (cheap CDP read, no
             # tokens). If it's a fresh cache hit, emit the cached lead and
