@@ -175,6 +175,153 @@ result = runner.resume(state, user_input="123456", plan=plan)
 Plan-signature mismatch on resume raises `ValueError`: you can't resume a
 different plan than the one that paused.
 
+## The skip-envelope family — advance vs. retry signals
+
+Hosts that wrap mantis in a tool surface (e.g. an LLM orchestrator
+calling `MantisBrowserTool.run_sub_goal(...)`) routinely face the same
+question on every halted / rejected sub-goal: "should the orchestrator
+retry, or advance to the next position?"
+
+Plan-text rules like *"never re-issue Step 4 with the same
+position_on_page"* don't bind LLM orchestrator behavior reliably — they
+get treated as preferences and overridden. Tool-result envelopes that
+change the orchestrator's downstream state are the durable mechanism.
+
+`StepResult` carries two fields for this:
+
+```python
+@dataclass
+class StepResult:
+    ...
+    skip: bool = False         # advance, don't retry — runner says this run is terminal-for-this-context
+    skip_reason: str | None = None  # canonical token the host branches on
+```
+
+When `skip=True`, the host's tool wrapper promotes the result to
+`status: skipped` (a successful tool result with an advance semantic),
+which the orchestrator already handles cleanly. When `skip=False`,
+today's success/failure semantics apply.
+
+Five opt-in trigger sources populate the envelope. All defaults preserve
+today's unbounded behavior — runs that don't opt in see no change:
+
+### a) Recipe-rejection intents ([#246](https://github.com/mercurialsolo/mantis/pull/247))
+
+Recipes annotate which rejection reasons mean *terminal-for-this-row*
+(`"skip"`) vs *retryable / enrichable* (`"extract_more"` / `"retry"`):
+
+```python
+from mantis_agent.extraction import ExtractionSchema
+
+ExtractionSchema(
+    spam_indicators=[...],
+    spam_label="dealer",
+    rejection_intents={
+        "dealer":              "skip",           # terminal — host advances
+        "incomplete_required": "extract_more",   # may enrich on detail page
+    },
+)
+```
+
+When `ClaudeExtractor` flags a row as dealer/spam (recipe-defined), the
+runner stamps `skip=True, skip_reason="dealer"` and the host advances
+past the listing instead of treating the rejection as a step failure to
+retry. `marketplace_listings` ships with this pre-wired.
+
+### b) Navigation-primitive halts ([#250](https://github.com/mercurialsolo/mantis/pull/251))
+
+When a click / submit / scroll / navigate / gate step exhausts retries
+and halts, the host can opt to convert that into a skip signal so the
+orchestrator advances rather than re-attempting the same intent:
+
+```python
+runner = MicroPlanRunner(
+    ...,
+    navigation_primitives_emit_skip={"click", "submit", "scroll", "navigate", "gate"},
+)
+```
+
+On halt, if the failed step's type is in the set and the step doesn't
+already carry a recipe-rejection `skip_reason` (those win on conflict),
+the runner stamps `skip=True, skip_reason="navigation_failed"`. Default
+`None` preserves today's halt-as-failure semantics.
+
+### c) Per-context sub-goal budget ([#254](https://github.com/mercurialsolo/mantis/pull/256))
+
+Bound how many sub-goals (= `run()` calls) can fire against the same
+URL anchor before the runner short-circuits:
+
+```python
+from mantis_agent.gym.context_budget import ContextBudget
+
+runner = MicroPlanRunner(
+    ...,
+    context_budget=ContextBudget(
+        max_sub_goals_per_url=3,         # bound per detail-page URL
+        max_sub_goals_per_iteration=10,  # global cap across all URLs
+        on_exceeded="emit_skip",         # vs "halt" / "log_only"
+    ),
+)
+```
+
+When the (N+1)th `run()` would fire against a URL that already has N
+sub-goals, the runner short-circuits *before* invoking the executor and
+returns `StepResult(skip=True, skip_reason="listing_budget_exceeded")`.
+Anchor resolution: navigate-step URL → `_last_known_url` → sentinel.
+
+### d) Already-seen URL predicate ([#255](https://github.com/mercurialsolo/mantis/pull/257))
+
+Cross-session dedup: pass a predicate the runner consults at the top
+of `extract_data` to skip URLs the host has already processed in prior
+runs:
+
+```python
+def seen(url: str) -> bool:
+    return url in already_extracted_urls  # or content_hash / CRM lookup
+
+runner = MicroPlanRunner(
+    ...,
+    seen_url_predicate=seen,
+)
+```
+
+The predicate is consulted *after* navigate but *before*
+ClaudeExtractor fires — saves the deep-extract Claude call entirely.
+Applicability gated by `SiteConfig.is_detail_page(url)` so search /
+results URLs aren't accidentally deduped. The host owns the dedup
+policy (URL match, content hash, CRM lookup, anything); mantis just
+provides the timing window.
+
+### Putting it together — what the host sees
+
+```python
+result = runner.run_with_status(plan)
+
+for step in result.steps:
+    if step.skip:
+        # advance: terminal-for-this-context; don't retry
+        log.info("skipped step %d: %s", step.step_index, step.skip_reason)
+        continue
+    if step.success:
+        process_lead(step.data)
+    else:
+        # legitimate failure — host's retry policy applies
+        ...
+```
+
+The canonical `skip_reason` values are:
+
+| `skip_reason` | Trigger | When |
+|---|---|---|
+| `"dealer"` (or any recipe key) | Recipe-rejection intents | Extractor flagged the row + recipe says `"skip"` |
+| `"navigation_failed"` | Navigation-primitive halt | Step type in opt-in set + recovery exhausted |
+| `"listing_budget_exceeded"` | Context budget | (N+1)th sub-goal against same URL anchor |
+| `"already_seen"` | Already-seen predicate | Predicate returned True at top of `extract_data` |
+
+A more-specific recipe reason (`"dealer"`) always wins over a generic
+runner reason (`"navigation_failed"`) — once a `StepResult` carries a
+`skip_reason`, later layers don't overwrite it.
+
 ## Coordinate-space contract
 
 The brain emits `(x, y)` in the **same pixel space as the screenshot it
