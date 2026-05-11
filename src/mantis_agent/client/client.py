@@ -288,14 +288,16 @@ class MantisClient:
     ) -> Path:
         """Stream ``GET /v1/runs/{run_id}/video`` to a local file.
 
-        Returns the destination ``Path``. Set ``polished=False`` to fetch
-        the raw recording instead of the captioned / overlay version (when
-        the deployment produced both).
+        Returns the destination ``Path``. The server serves the polished
+        recording by default (title card + captioned footage + outro card);
+        pass ``polished=False`` to fetch the raw screencast without overlays,
+        which the client forwards as the ``?raw=1`` query the server actually
+        reads.
         """
         url = f"{self.endpoint}/v1/runs/{run_id}/video"
         params: dict[str, Any] = {}
         if not polished:
-            params["polished"] = "false"
+            params["raw"] = "1"
         dest = Path(dest_path)
         dest.parent.mkdir(parents=True, exist_ok=True)
         with self._session.get(
