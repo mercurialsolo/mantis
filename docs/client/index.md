@@ -13,59 +13,101 @@ For applications calling a hosted Mantis instance.
 
 Looking for the full HTTP API surface? See [Reference / HTTP API](../api.md).
 
-## Minimal client (Python)
+## Typed Python client
+
+```bash
+pip install "mantis-agent[client]"
+```
 
 ```python
-import os, time, requests
+from mantis_agent.client import MantisClient, PredictRequest
 
-ENDPOINT = os.environ["MANTIS_ENDPOINT"]      # e.g. https://model-qvvgkneq.api.baseten.co/production/sync
-PLATFORM = os.environ["BASETEN_API_KEY"]
-TENANT   = os.environ["MANTIS_API_TOKEN"]
+# Reads MANTIS_ENDPOINT / BASETEN_API_KEY / MANTIS_API_TOKEN from env.
+client = MantisClient.from_env()
 
-def headers():
-    h = {"X-Mantis-Token": TENANT, "Content-Type": "application/json"}
-    if PLATFORM:
-        h["Authorization"] = f"Api-Key {PLATFORM}"
-    return h
-
-def submit(plan_path: str, state_key: str, **opts) -> str:
-    r = requests.post(f"{ENDPOINT}/v1/predict", headers=headers(), json={
-        "detached": True,
-        "micro": plan_path,
-        "state_key": state_key,
-        **opts,
-    }, timeout=60)
-    r.raise_for_status()
-    return r.json()["run_id"]
-
-def poll(run_id: str, every: int = 30) -> dict:
-    while True:
-        r = requests.post(f"{ENDPOINT}/v1/predict", headers=headers(), json={
-            "action": "status", "run_id": run_id,
-        }, timeout=60)
-        r.raise_for_status()
-        body = r.json()
-        if body["status"] in {"succeeded", "failed", "cancelled"}:
-            return body
-        time.sleep(every)
-
-def fetch_result(run_id: str) -> dict:
-    r = requests.post(f"{ENDPOINT}/v1/predict", headers=headers(), json={
-        "action": "result", "run_id": run_id,
-    }, timeout=60)
-    r.raise_for_status()
-    return r.json()
-
-# Usage
-run_id = submit(
-    "plans/example/extract_listings.json",
-    "marketplace-prod",
-    max_cost=2, max_time_minutes=20, record_video=True,
+result = client.run_to_completion(
+    PredictRequest(
+        micro="plans/example/extract_listings.json",
+        state_key="marketplace-prod",
+        max_cost=2,
+        max_time_minutes=20,
+        record_video=True,
+    ),
 )
-final = poll(run_id)
-print(final["summary"])
-result = fetch_result(run_id)
 print(result["result"]["leads"])
 ```
 
-That's the whole integration. The rest of this section is the deep-dive on each piece.
+That's the whole integration. The client wraps the five end-user
+endpoints with typed requests / responses, structured errors, and a
+polling helper. Sync `requests` + `pydantic` only — no FastAPI, no GPU
+deps, no browser.
+
+### Fire-and-poll with status callbacks
+
+For longer runs where you want to surface progress to a UI:
+
+```python
+handle = client.predict(PredictRequest(
+    micro="plans/example/extract_listings.json",
+    state_key="marketplace-prod",
+    record_video=True,
+))
+
+final = client.wait_for_completion(
+    handle.run_id,
+    poll_interval_s=30,
+    on_status=lambda s: print(f"{s.status} — {s.summary or '—'}"),
+)
+print(final.summary)
+
+result = client.result(handle.run_id)
+client.fetch_video(handle.run_id, dest_path="recording.mp4")
+```
+
+### Pure CUA pass-through
+
+For single-instruction Holo3 runs (no Claude decomposition):
+
+```python
+response = client.cua_run(
+    "Open https://example.com and click the docs link",
+    start_url="https://example.com",
+    max_steps=20,
+    detached=False,
+)
+```
+
+### Error handling
+
+Every server failure surfaces as a typed exception so callers can branch
+on the cause without parsing string messages:
+
+```python
+from mantis_agent.client import (
+    MantisAuthError, MantisRateLimitError, MantisAPIError,
+    MantisRunFailed, MantisTimeoutError,
+)
+
+try:
+    result = client.run_to_completion(req, timeout_s=1800)
+except MantisAuthError:
+    # 401 / 403 — bad or missing X-Mantis-Token
+    raise
+except MantisRateLimitError as exc:
+    time.sleep(exc.retry_after_seconds or 60)
+except MantisTimeoutError as exc:
+    # Run is still in flight; cancel or keep polling.
+    client.cancel(exc.run_id)
+except MantisRunFailed as exc:
+    # Terminal failure — exc.status carries the snapshot.
+    print(exc.status.error)
+```
+
+### Raw HTTP
+
+Prefer to drive the API directly? Build a request body following the
+shape on [Sending plans](plans.md) and POST it to `/v1/predict` with
+`Authorization: Api-Key …` + `X-Mantis-Token: …` headers. The typed
+client is a thin wrapper around that — nothing else.
+
+The rest of this section is the deep-dive on each piece.
