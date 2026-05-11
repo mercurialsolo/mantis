@@ -75,6 +75,25 @@ A flat JSON list of step objects executed by `MicroPlanRunner`. Best reliability
 
 Field reference is on the [Concepts](concepts.md#step-types-micro-plan-shape) page.
 
+### Iterate on plan structure without GPU or API cost
+
+Use `MANTIS_BRAIN=mock` to point the runner at a deterministic stub
+brain that returns `DONE` on every `think()` call — every click / scroll
+/ holo3 step succeeds immediately, so the run walks through your plan's
+sections, gates, and loops without burning Holo3 inference or Anthropic
+credits.
+
+```bash
+MANTIS_BRAIN=mock mantis plan dry-run plans/example/extract_listings.json
+```
+
+This catches the structural bugs — wrong loop_target index, gate
+predicate in the wrong section, missing `navigate` URL — long before
+you submit the plan to a paid deployment. ClaudeExtractor and
+ClaudeGrounding are independent of the brain, so plans that lean on
+extraction still need `ANTHROPIC_API_KEY` for those steps; everything
+else runs free.
+
 ### IDE autocomplete via JSON Schema
 
 A JSON Schema for the micro-plan format ships at
