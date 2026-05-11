@@ -79,6 +79,7 @@ class MicroPlanRunner:
         cost_config: CostConfig | None = None, tenant_id: str = "",
         extraction_cache: Any = None,
         navigation_primitives_emit_skip: set[str] | None = None,
+        context_budget: Any = None,  # ContextBudget | None — typed in body to avoid import cycle
     ):
         self.brain, self.env, self.grounding, self.extractor = (
             brain, env, grounding, extractor
@@ -98,6 +99,15 @@ class MicroPlanRunner:
             if navigation_primitives_emit_skip is not None
             else None
         )
+        # Issue #254: per-context sub-goal budget. Opt-in. When set,
+        # the runner tracks how many ``run()`` calls have executed
+        # against each URL anchor; an over-budget run short-circuits
+        # with a synthetic StepResult carrying ``skip=True,
+        # skip_reason='listing_budget_exceeded'``. Default ``None``
+        # preserves today's unbounded behavior.
+        self.context_budget = context_budget
+        self._sub_goal_count_by_url: dict[str, int] = {}
+        self._sub_goal_count_total: int = 0
         self.on_step, self.max_retries = on_step, max_retries
         self.checkpoint_path, self.run_key = checkpoint_path, run_key
         self.session_name, self.plan_signature = session_name, plan_signature
@@ -176,6 +186,17 @@ class MicroPlanRunner:
 
     def run(self, plan: MicroPlan, resume: bool = False) -> list[StepResult]:
         from .run_executor import RunState
+
+        # Issue #254: per-context sub-goal budget gate. Check BEFORE
+        # executor.execute so an over-budget run never enters the
+        # plan body — the skip envelope is the whole response.
+        # Resume calls bypass the gate (they're continuations, not
+        # fresh sub-goals).
+        if not resume and self.context_budget is not None:
+            envelope = self._check_and_emit_context_budget(plan)
+            if envelope is not None:
+                return envelope
+
         if not self.plan_signature:
             self.plan_signature = self._compute_plan_signature(plan)
         state = RunState.fresh(
@@ -185,6 +206,111 @@ class MicroPlanRunner:
         self._executor.execute(plan, state, resume=resume)
         self._final_summary(state.results)
         return state.results
+
+    def _check_and_emit_context_budget(
+        self, plan: MicroPlan,
+    ) -> list[StepResult] | None:
+        """Increment the per-URL counter and either short-circuit
+        with a skip envelope, halt the runner, or pass through with
+        a warning depending on the configured ``on_exceeded`` mode.
+
+        Returns ``None`` when the run should proceed normally;
+        returns a list of StepResult(s) when the run should
+        short-circuit (the caller treats the list as the run's
+        full output).
+        """
+        cb = self.context_budget
+        if cb is None:
+            return None
+
+        anchor = self._resolve_context_anchor(plan)
+        # Increment counters BEFORE checking — so a budget of N
+        # allows exactly N runs, not N-1. The N+1-th call sees
+        # ``count > max`` and trips.
+        self._sub_goal_count_total += 1
+        count = self._sub_goal_count_by_url.get(anchor, 0) + 1
+        self._sub_goal_count_by_url[anchor] = count
+
+        per_url_exceeded = (
+            cb.max_sub_goals_per_url is not None
+            and count > cb.max_sub_goals_per_url
+        )
+        total_exceeded = (
+            cb.max_sub_goals_per_iteration is not None
+            and self._sub_goal_count_total > cb.max_sub_goals_per_iteration
+        )
+
+        if not (per_url_exceeded or total_exceeded):
+            return None
+
+        reason_bound = "per_url" if per_url_exceeded else "per_iteration"
+
+        if cb.on_exceeded == "log_only":
+            logger.warning(
+                "context budget %s exceeded (anchor=%s count=%d) — log_only "
+                "mode, executing anyway",
+                reason_bound, anchor[:80], count,
+            )
+            return None
+
+        if cb.on_exceeded == "halt":
+            logger.warning(
+                "context budget %s exceeded (anchor=%s count=%d) — halting",
+                reason_bound, anchor[:80], count,
+            )
+            self._final_status = "halted"
+            return []
+
+        # Default: emit_skip — return a synthetic skip envelope.
+        intent_text = (
+            plan.steps[0].intent if plan.steps else ""
+        ) or "context budget exceeded"
+        envelope_data = (
+            f"listing_budget_exceeded:bound={reason_bound}:"
+            f"url={anchor[:120]}:count={count}"
+        )
+        logger.warning(
+            "context budget %s exceeded — emitting skip envelope "
+            "(anchor=%s count=%d)",
+            reason_bound, anchor[:80], count,
+        )
+        return [StepResult(
+            step_index=0, intent=intent_text, success=False,
+            data=envelope_data,
+            skip=True, skip_reason="listing_budget_exceeded",
+        )]
+
+    @staticmethod
+    def _resolve_context_anchor_from_plan(plan: MicroPlan) -> str:
+        """Pull the navigate-step URL from a plan, or the empty
+        string if no navigate is present. Static helper exposed so
+        tests can pin the resolution rule independently of the
+        runner state."""
+        for step in plan.steps:
+            if step.type == "navigate":
+                url = (step.params or {}).get("url", "")
+                if isinstance(url, str) and url:
+                    return url
+        return ""
+
+    def _resolve_context_anchor(self, plan: MicroPlan) -> str:
+        """Decide which URL bucket a given ``run(plan)`` invocation
+        belongs to. Preference order:
+
+        1. The first ``navigate`` step's ``params.url`` — canonical
+           because that's the URL the sub-goal is *targeted at*,
+           not whatever was in the address bar.
+        2. ``self._last_known_url`` — for sub-plans that operate on
+           the page a prior sub-goal opened.
+        3. The fixed sentinel ``"_no_anchor_"`` — keeps the counter
+           working for cold runners with neither signal (rare).
+        """
+        url = self._resolve_context_anchor_from_plan(plan)
+        if url:
+            return url
+        if getattr(self, "_last_known_url", ""):
+            return self._last_known_url
+        return "_no_anchor_"
 
     def run_with_status(
         self, plan: MicroPlan, resume: bool = False,
