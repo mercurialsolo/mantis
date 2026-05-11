@@ -116,7 +116,7 @@ def main() -> None:
     # heavy import. The streaming-agent path below still pulls in
     # transformers / torch / mss / pyautogui — none of those should load
     # when the user runs ``mantis plan validate`` or ``mantis trace label``.
-    if len(sys.argv) >= 2 and sys.argv[1] in {"plan", "trace"}:
+    if len(sys.argv) >= 2 and sys.argv[1] in {"plan", "trace", "cua"}:
         from .cli import main as cli_main
         sys.exit(cli_main(sys.argv[1:]))
 

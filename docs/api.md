@@ -12,6 +12,7 @@ and the [any-agent integration playbook](integrations/any-agent.md).
 |---|---|---|
 | `POST /v1/predict` | `X-Mantis-Token` (run scope) | Run a plan, poll status, fetch result. The high-level orchestrator. |
 | `POST /predict` | `X-Mantis-Token` (run scope) | Backwards-compat alias for `/v1/predict`. Identical behavior. |
+| `POST /v1/cua` | `X-Mantis-Token` (run scope) | Pure CUA pass-through — Mantis as a thin Holo3 driver. No decomposition, no Claude. See [Pure CUA mode](client/pure-cua.md). |
 | `POST /v1/chat/completions` | `X-Mantis-Token` (run scope) | OpenAI-compat reverse proxy to in-pod Holo3 (raw inference). |
 | `GET /v1/models` | open | OpenAI-compat model list. Returns `holo3`. |
 | `GET /v1/health`, `GET /health` | open | Liveness/readiness probe. |

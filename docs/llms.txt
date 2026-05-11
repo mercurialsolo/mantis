@@ -683,6 +683,7 @@ the allowlist for that tenant. Always include both `example.com` and
 
 | Path                          | Auth                  | Purpose                                                                      |
 |-------------------------------|-----------------------|------------------------------------------------------------------------------|
+| `POST /v1/cua`                | `X-Mantis-Token`      | **Pure CUA pass-through.** Mantis as a thin Holo3 driver — no decomposition, no Claude. See §9a. |
 | `POST /v1/chat/completions`   | `X-Mantis-Token`      | OpenAI-compat reverse proxy to in-pod Holo3. Raw inference, no orchestration.|
 | `GET /v1/models`              | open                  | Returns `{ "data": [{"id": "holo3", ...}] }`                                 |
 | `GET /v1/health`, `GET /health` | open                | Liveness probe. Returns `{ "ok": true, "model": "holo3" }`                   |
@@ -693,6 +694,105 @@ For raw Holo3 inference (no plan orchestration), `POST /v1/chat/completions`
 is OpenAI-compatible — useful for clients that want to run their own
 perception-action loop and use Holo3 as the brain.
 
+### 9a. `POST /v1/cua` — Holo3 pass-through (Mantis as a thin CUA driver)
+
+When you want Holo3 to drive the browser directly with **zero Claude
+spend** and **no decomposition** — Mantis becomes a hosted brain ↔
+xdotool loop. Useful for benchmarks measuring intrinsic plan-following,
+or for plugging Mantis into an external CUA harness that already owns
+its own planner.
+
+```
+/v1/predict  →  MicroPlanRunner  →  ClaudeExtractor + ClaudeGrounding + Holo3Brain  →  GymRunner
+/v1/cua      →  _run_pure_cua    →                                       Holo3Brain  →  GymRunner
+```
+
+Concretely: `grounding=None` and `extractor=None` are passed into
+`GymRunner`, so click coords come straight out of Holo3's smart-resize
+space (mapped to screen pixels in `brain_holo3._model_coords_to_screen`).
+No Claude calls anywhere in the path.
+
+**Action surface available to the brain** (executed by xdotool against
+the headed Chrome inside Xvfb):
+
+```
+click(x, y) · double_click(x, y) · type_text(text) · key_press(key)
+· scroll(direction, amount) · drag(start_x, start_y, end_x, end_y)
+· wait(seconds) · done(success, summary)
+```
+
+**Request:**
+
+```bash
+curl -X POST "$ENDPOINT/v1/cua" \
+  -H "X-Mantis-Token: $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instruction": "Find tomorrow’s music events on lu.ma and click the first one",
+    "start_url": "https://lu.ma/discover",
+    "max_steps": 25,
+    "settle_time": 4.0
+  }'
+```
+
+**Body fields:**
+
+| Field | Default | Effect |
+|---|---|---|
+| `instruction` | — *(required)* | Free-text instruction handed verbatim to the brain |
+| `start_url` | `""` | Initial URL the browser navigates to before the first inference |
+| `max_steps` | `30` | Cap on brain↔env iterations; clamped to `MANTIS_MAX_STEPS_PER_PLAN` |
+| `frames_per_inference` | `1` | Screenshots per step (Holo3 wants 1) |
+| `settle_time` | `2.0` | Seconds to wait after each action |
+| `detached` | `false` | Queue as background; return `run_id` to poll via `/v1/predict` actions |
+| `state_key` | unset | Reuses Chrome profile + tenant dir tied to this key |
+| `max_cost` / `max_time_minutes` | tenant caps | Same clamping as `/v1/predict` |
+| `proxy_city` / `proxy_state` / `proxy_disabled` | unset / unset / `false` | Same proxy controls as `/v1/predict` |
+| `record_video` / `video_format` / `video_fps` | `false` / `mp4` / `5` | Same screencast controls as `/v1/predict` |
+
+**Sync response:**
+
+```jsonc
+{
+  "run_id": "20260511_143215",
+  "mode": "pure_cua",
+  "model": "holo3",
+  "instruction": "Find tomorrow's music events on lu.ma…",
+  "start_url": "https://lu.ma/discover",
+  "success": true,
+  "termination_reason": "done",     // or "max_steps" / "loop" / "env_done"
+  "steps": 18,
+  "duration_s": 142,
+  "trajectory_len": 18
+}
+```
+
+**Detached:** same `queued` envelope as `/v1/predict` detached mode;
+poll via `POST /v1/predict {"action": "status", "run_id": "..."}`.
+
+**Tradeoffs to know:**
+
+- No structured-extraction output — no `leads` array, no skip envelope.
+  If you need data rows, use `/v1/predict` with an `extraction_schema`.
+- No grounding correction. Holo3's coords sometimes land a few pixels
+  off small targets; `/v1/cua` won't recover, `/v1/predict` will.
+- No section / gate / loop semantics. One open-ended loop until `done`
+  or `max_steps`.
+
+**CLI shim:**
+
+```bash
+mantis cua run "Find tomorrow's music events on lu.ma and click the first one" \
+  --endpoint https://workspace--app-fn.modal.run \
+  --token   "$MANTIS_TOKEN" \
+  --start-url https://lu.ma/discover \
+  --max-steps 25 \
+  --settle-time 4.0
+```
+
+Exit code 0 on `success=true`, 1 otherwise. `--json` prints the raw
+response. `--detached` queues and returns immediately.
+
 ---
 
 ## 10. Pointers (for deeper reading)
@@ -702,6 +802,7 @@ perception-action loop and use Holo3 as the brain.
 - [docs/operations/tenant-keys.md](operations/tenant-keys.md) — issuing / rotating / revoking tokens
 - [docs/operations/allowlist.md](operations/allowlist.md) — `allowed_domains` enforcement detail
 - [docs/client/auth.md](client/auth.md) — caller-side auth setup
+- [docs/client/pure-cua.md](client/pure-cua.md) — Pure CUA mode / Holo3 pass-through deep-dive (§9a)
 - [docs/integrations/embedding-microplanrunner.md](integrations/embedding-microplanrunner.md) — library-shaped integration (driving `MicroPlanRunner` in your own process)
 - [docs/architecture.md](architecture.md) — internals and data flow
 - [src/mantis_agent/api_schemas.py](../src/mantis_agent/api_schemas.py) — authoritative pydantic schemas for the request body

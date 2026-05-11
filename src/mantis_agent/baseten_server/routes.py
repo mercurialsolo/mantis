@@ -45,6 +45,7 @@ from ..api_schemas import (
     MAX_COST_USD,
     MAX_RUNTIME_MINUTES,
     PredictRequest,
+    PureCUARequest,
     assert_hosts_allowed,
     extract_navigate_hosts,
 )
@@ -536,3 +537,137 @@ async def predict(
     Identical behavior to /v1/predict, including the ``run`` scope check.
     """
     return await _handle_predict(request, tenant)
+
+
+@app.post("/v1/cua")
+async def cua_v1(
+    request: Request,
+    tenant: TenantConfig = Depends(_require_run_scope),
+) -> dict[str, Any]:
+    """Pure CUA loop — brain ↔ XdotoolGymEnv only, no Claude.
+
+    Mantis is a pure pass-through for the configured brain (Holo3):
+
+    * No ``PlanDecomposer`` — the instruction is handed verbatim.
+    * No ``ClaudeGrounding`` — click coords come straight from the brain.
+    * No ``ClaudeExtractor`` — no post-step verification.
+
+    Action surface available to the brain (executed by xdotool against
+    the headed Chrome inside Xvfb): ``click``, ``double_click``,
+    ``type_text``, ``key_press``, ``scroll``, ``drag``, ``wait``,
+    ``done``. Same per-tenant auth / cap / allowlist / rate-limit /
+    concurrency / webhook plumbing as ``/v1/predict``.
+    """
+    try:
+        raw = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="request body must be JSON") from exc
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+
+    try:
+        req = PureCUARequest.model_validate(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"invalid request: {exc}") from exc
+
+    payload = req.model_dump(exclude_none=True)
+    payload["max_cost"] = min(
+        float(payload.get("max_cost", MAX_COST_USD)),
+        tenant.max_cost_per_run,
+    )
+    payload["max_time_minutes"] = min(
+        int(payload.get("max_time_minutes", MAX_RUNTIME_MINUTES)),
+        tenant.max_time_minutes_per_run,
+    )
+    payload["state_key"] = _tenant_state_key(tenant, payload.get("state_key"))
+
+    os.environ["ANTHROPIC_API_KEY"] = _resolve_anthropic_key(tenant)
+    os.environ["MANTIS_TENANT_ID"] = tenant.tenant_id
+    profile_dir = _tenant_chrome_profile(tenant, payload["state_key"])
+    os.environ["MANTIS_CHROME_PROFILE_DIR"] = str(profile_dir)
+
+    # URL allowlist: enforce on start_url + any URL embedded in the
+    # instruction. Mirrors /predict's per-tenant gate.
+    if tenant.allowed_domains:
+        plan_obj = {
+            "base_url": payload.get("start_url", ""),
+            "tasks": [{"intent": payload["instruction"]}],
+        }
+        try:
+            hosts = extract_navigate_hosts(plan_obj)
+            assert_hosts_allowed(hosts, tenant.is_domain_allowed)
+        except PermissionError as exc:
+            mantis_metrics.PREDICT_REQUESTS.labels(
+                tenant_id=tenant.tenant_id, mode="cua", outcome="denied_allowlist"
+            ).inc()
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    # Rate limit + concurrency — same plumbing as /predict run mode.
+    limiter = get_rate_limiter()
+    rate_decision = limiter.try_consume_rate_token(
+        tenant.tenant_id, tenant.rate_limit_per_minute
+    )
+    if not rate_decision.allowed:
+        mantis_metrics.RATE_LIMIT_REJECTIONS.labels(
+            tenant_id=tenant.tenant_id, kind="rate"
+        ).inc()
+        mantis_metrics.PREDICT_REQUESTS.labels(
+            tenant_id=tenant.tenant_id, mode="cua", outcome="rate_limited"
+        ).inc()
+        raise HTTPException(
+            status_code=429,
+            detail=rate_decision.reason,
+            headers={"Retry-After": str(int(rate_decision.retry_after_seconds) + 1)},
+        )
+
+    decision = limiter.try_acquire_concurrency_slot(
+        tenant.tenant_id, tenant.max_concurrent_runs
+    )
+    if not decision.allowed:
+        mantis_metrics.RATE_LIMIT_REJECTIONS.labels(
+            tenant_id=tenant.tenant_id, kind="concurrent"
+        ).inc()
+        mantis_metrics.PREDICT_REQUESTS.labels(
+            tenant_id=tenant.tenant_id, mode="cua", outcome="rate_limited"
+        ).inc()
+        raise HTTPException(
+            status_code=429,
+            detail=decision.reason,
+            headers={"Retry-After": str(int(decision.retry_after_seconds) + 1)},
+        )
+    mantis_metrics.CONCURRENT_RUNS.labels(tenant_id=tenant.tenant_id).set(
+        decision.concurrent
+    )
+
+    logger.info(
+        "cua tenant=%s state_key=%s detached=%s start_url=%s",
+        tenant.tenant_id,
+        payload["state_key"],
+        payload.get("detached", False),
+        payload.get("start_url", ""),
+    )
+
+    try:
+        response = await run_in_threadpool(runtime.run_pure_cua, payload)
+        mantis_metrics.PREDICT_REQUESTS.labels(
+            tenant_id=tenant.tenant_id, mode="cua", outcome="ok"
+        ).inc()
+        return response
+    except ValueError as exc:
+        mantis_metrics.PREDICT_REQUESTS.labels(
+            tenant_id=tenant.tenant_id, mode="cua", outcome="bad_request"
+        ).inc()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        mantis_metrics.PREDICT_REQUESTS.labels(
+            tenant_id=tenant.tenant_id, mode="cua", outcome="error"
+        ).inc()
+        logger.exception("cua failed tenant=%s", tenant.tenant_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        limiter.release_concurrency_slot(tenant.tenant_id)
+        mantis_metrics.CONCURRENT_RUNS.labels(tenant_id=tenant.tenant_id).set(
+            limiter.get_concurrent(tenant.tenant_id)
+        )

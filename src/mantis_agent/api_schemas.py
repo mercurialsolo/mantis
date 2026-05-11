@@ -147,6 +147,58 @@ class PredictRequest(BaseModel):
         return self
 
 
+class PureCUARequest(BaseModel):
+    """``POST /v1/cua`` — pure CUA loop: brain ↔ XdotoolGymEnv, no Claude.
+
+    Bypasses ``PlanDecomposer``, ``ClaudeGrounding`` and ``ClaudeExtractor``
+    entirely. The configured brain (Holo3 / Gemma4) emits screen-space
+    actions (``click`` / ``double_click`` / ``type_text`` / ``key_press`` /
+    ``scroll`` / ``drag`` / ``wait`` / ``done``) which the gym env executes
+    directly via xdotool against the headed Chrome inside Xvfb.
+
+    Use when you want to measure the brain's intrinsic plan-following and
+    grounding accuracy on a single instruction, with zero Claude assist.
+    """
+
+    model_config = {"extra": "allow"}
+
+    # Single free-text instruction handed verbatim to the brain.
+    instruction: str = Field(..., min_length=1)
+
+    # Browser bootstrap.
+    start_url: str = ""
+    settle_time: float = Field(default=2.0, ge=0.0, le=30.0)
+
+    # GymRunner knobs.
+    max_steps: int = Field(default=30, ge=1, le=MAX_STEPS_PER_PLAN)
+    frames_per_inference: int = Field(default=1, ge=1, le=8)
+
+    # Run options (mirrors PredictRequest shape so tenant caps clamp the
+    # same way).
+    detached: bool = False
+    state_key: Optional[str] = None
+    max_cost: float = Field(default=MAX_COST_USD, gt=0)
+    max_time_minutes: int = Field(default=MAX_RUNTIME_MINUTES, gt=0)
+
+    # Proxy controls.
+    proxy_city: Optional[str] = None
+    proxy_state: Optional[str] = None
+    proxy_disabled: bool = False
+
+    # Screencast.
+    record_video: bool = False
+    video_format: Literal["mp4", "webm", "gif"] = "mp4"
+    video_fps: int = Field(default=5, ge=1, le=30)
+
+    @model_validator(mode="after")
+    def _clamp_caps(self) -> "PureCUARequest":
+        if self.max_cost > MAX_COST_USD:
+            self.max_cost = MAX_COST_USD
+        if self.max_time_minutes > MAX_RUNTIME_MINUTES:
+            self.max_time_minutes = MAX_RUNTIME_MINUTES
+        return self
+
+
 def validate_micro_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Validate a parsed micro-plan against MAX_STEPS / MAX_LOOP_ITERATIONS.
 
