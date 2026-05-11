@@ -6,6 +6,7 @@ For applications calling a hosted Mantis instance.
 |---|---|
 | [Authentication](auth.md) | Getting a token, request headers, scope, error responses |
 | [Sending plans](plans.md) | Request body shape for each plan format, run options, caps |
+| [Pure CUA mode](pure-cua.md) | Holo3 pass-through via `/v1/cua` — no decomposition, no Claude |
 | [Runs and polling](runs-and-polling.md) | Detached runs, status/result/logs/cancel actions, idempotency, webhooks |
 | [Recordings](recordings.md) | Requesting screencasts, downloading polished or raw, action overlays |
 | [Errors](errors.md) | Error codes, retry guidance, debugging |

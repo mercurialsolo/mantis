@@ -349,11 +349,14 @@ class BasetenCUARuntime:
             with self.lock:
                 self._append_detached_event(run_id, "running")
                 self._write_detached_status(run_id, {"status": "running", "started_at": _utc_now()})
-                task_suite = self._task_suite_from_payload(payload)
-                if task_suite.get("_micro_plan"):
-                    result = self._run_micro(task_suite, payload, run_id=run_id)
+                if payload.get("_mode") == "pure_cua":
+                    result = self._run_pure_cua(payload, run_id=run_id)
                 else:
-                    result = self._run_tasks(task_suite, payload, run_id=run_id)
+                    task_suite = self._task_suite_from_payload(payload)
+                    if task_suite.get("_micro_plan"):
+                        result = self._run_micro(task_suite, payload, run_id=run_id)
+                    else:
+                        result = self._run_tasks(task_suite, payload, run_id=run_id)
                 self._save_detached_result(run_id, result)
                 self._write_detached_status(
                     run_id,
@@ -1043,6 +1046,102 @@ class BasetenCUARuntime:
                     recorder.stop()
                 except Exception:
                     logger.exception("recorder stop in finally failed")
+
+    def run_pure_cua(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Entrypoint for ``POST /v1/cua``.
+
+        Pure CUA loop: the configured brain (Holo3 / Gemma4) drives
+        :class:`GymRunner` against ``XdotoolGymEnv`` directly. No
+        ``PlanDecomposer``, no ``ClaudeGrounding``, no ``ClaudeExtractor``
+        — every action the brain emits (click / type_text / scroll /
+        drag / key_press / wait / done) is executed verbatim by xdotool.
+
+        Detached mode reuses the standard worker pool; the dispatch in
+        :meth:`_run_detached_worker` branches on ``_mode == 'pure_cua'``
+        and re-enters :meth:`_run_pure_cua` from inside the worker.
+        """
+        self.load()
+        payload = {**payload, "_mode": "pure_cua"}
+        if payload.get("detached"):
+            return self._start_detached(payload)
+        with self.lock:
+            return self._run_pure_cua(payload)
+
+    def _run_pure_cua(
+        self,
+        payload: dict[str, Any],
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
+        from mantis_agent.gym.runner import GymRunner
+
+        run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        t0 = time.time()
+        instruction = str(payload.get("instruction") or "").strip()
+        if not instruction:
+            raise ValueError("instruction is required")
+        start_url = str(payload.get("start_url") or "")
+        max_steps = int(payload.get("max_steps", 30))
+        frames = int(payload.get("frames_per_inference", 1))
+        settle_time = float(payload.get("settle_time", 4.0 if self.model_kind == "holo3" else 2.0))
+
+        # _make_env reads proxy + base_url off a task_suite-shaped dict;
+        # build a minimal one here rather than threading a separate path.
+        session_name = "pure_cua"
+        task_suite: dict[str, Any] = {
+            "session_name": session_name,
+            "base_url": start_url,
+            "_proxy_city": payload.get("proxy_city") or "",
+            "_proxy_state": payload.get("proxy_state") or "",
+            "_proxy_disabled": bool(payload.get("proxy_disabled", False)),
+        }
+        env, proxy_proc = self._make_env(task_suite, run_id, settle_time=settle_time)
+        recorder, click_log = self._maybe_record(payload, run_id)
+        if click_log is not None:
+            from mantis_agent.presentation import ClickRecordingEnv
+            env = ClickRecordingEnv(env, click_log)
+
+        try:
+            runner = GymRunner(
+                brain=self.brain,
+                env=env,
+                max_steps=max_steps,
+                frames_per_inference=frames,
+                grounding=None,  # pure CUA: no Claude grounding
+            )
+            gym_result = runner.run(
+                task=instruction,
+                task_id="cua",
+                start_url=start_url,
+            )
+            elapsed = time.time() - t0
+            trajectory = list(getattr(gym_result, "trajectory", []) or [])
+            result: dict[str, Any] = {
+                "run_id": run_id,
+                "mode": "pure_cua",
+                "provider": "baseten",
+                "session_name": session_name,
+                "model": self.model_kind,
+                "instruction": instruction,
+                "start_url": start_url,
+                "success": bool(gym_result.success),
+                "termination_reason": getattr(gym_result, "termination_reason", ""),
+                "steps": int(gym_result.total_steps),
+                "duration_s": round(elapsed),
+                "elapsed_seconds": elapsed,
+                "trajectory_len": len(trajectory),
+            }
+            self._attach_recording_metadata(result, recorder, click_log=click_log)
+            self._save_result(result, prefix="pure_cua")
+            return result
+        finally:
+            if recorder is not None and getattr(recorder, "result", None) is None:
+                try:
+                    recorder.stop()
+                except Exception:
+                    logger.exception("recorder stop in finally failed")
+            env.close()
+            if proxy_proc:
+                proxy_proc.terminate()
 
     def _save_result(self, result: dict[str, Any], prefix: str) -> None:
         save_result_json(result, _data_root() / "results", prefix)

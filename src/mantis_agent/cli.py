@@ -1060,6 +1060,121 @@ def cmd_plan_run_modal(args: argparse.Namespace) -> int:
     return EXIT_OK if failures == 0 else EXIT_ERROR
 
 
+def cmd_cua_run(args: argparse.Namespace) -> int:
+    """``mantis cua run`` — pure CUA pass-through to ``POST /v1/cua``.
+
+    No decomposition, no Claude grounding, no Claude extraction. The
+    instruction is handed verbatim to the brain (Holo3) running on the
+    Mantis deployment, which drives ``XdotoolGymEnv`` directly via the
+    Holo3 action surface (click / type_text / scroll / drag / key_press /
+    wait / done).
+
+    Unlike ``mantis plan run``, this subcommand does NOT pull in
+    Playwright, Anthropic, or any local brain — it's a thin HTTP shim.
+    The server-side ``/v1/cua`` route owns the env + brain + runner.
+
+    Exits 0 on ``success=true`` in the response, 1 otherwise.
+    """
+    import os
+
+    import requests
+
+    endpoint = (args.endpoint or os.environ.get("MANTIS_ENDPOINT", "")).rstrip("/")
+    if not endpoint:
+        print(
+            "error: --endpoint is required (or set MANTIS_ENDPOINT). "
+            "Pass the deployment base URL, e.g. "
+            "https://workspace--app-fn.modal.run",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    # Strip a trailing ``/v1`` if a user pasted the OpenAI-style base.
+    if endpoint.endswith("/v1"):
+        endpoint = endpoint[: -len("/v1")]
+    url = f"{endpoint}/v1/cua"
+
+    token = args.token or os.environ.get("MANTIS_TOKEN", "")
+    if not token:
+        print(
+            "error: --token is required (or set MANTIS_TOKEN). "
+            "This is the per-tenant Mantis token (X-Mantis-Token).",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    try:
+        extra_headers = _parse_extra_headers(args.header)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    body: dict[str, Any] = {
+        "instruction": args.instruction,
+        "start_url": args.start_url or "",
+        "max_steps": args.max_steps,
+        "frames_per_inference": args.frames_per_inference,
+        "settle_time": args.settle_time,
+        "detached": args.detached,
+        "proxy_disabled": args.proxy_disabled,
+        "record_video": args.record_video,
+    }
+    if args.state_key:
+        body["state_key"] = args.state_key
+    if args.proxy_city:
+        body["proxy_city"] = args.proxy_city
+    if args.proxy_state:
+        body["proxy_state"] = args.proxy_state
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Mantis-Token": token,
+        **extra_headers,
+    }
+
+    print(f"POST {url}")
+    print(f"  instruction: {args.instruction[:80]}{'…' if len(args.instruction) > 80 else ''}")
+    if args.start_url:
+        print(f"  start_url:   {args.start_url}")
+    print(f"  max_steps:   {args.max_steps}  detached: {args.detached}")
+
+    try:
+        resp = requests.post(url, json=body, headers=headers, timeout=args.timeout)
+    except requests.RequestException as exc:
+        print(f"error: request failed: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    if resp.status_code >= 400:
+        print(f"error: HTTP {resp.status_code}: {resp.text[:500]}", file=sys.stderr)
+        return EXIT_ERROR
+
+    try:
+        result = resp.json()
+    except ValueError:
+        print(f"error: non-JSON response: {resp.text[:500]}", file=sys.stderr)
+        return EXIT_ERROR
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return EXIT_OK if result.get("success") else EXIT_ERROR
+
+    # Detached: surface the run handle the same way /v1/predict does.
+    if result.get("mode") == "detached" or result.get("status") == "queued":
+        print(f"  run_id:      {result.get('run_id', '?')}")
+        print(f"  status:      {result.get('status', 'queued')}")
+        print(f"  status_path: {result.get('status_path', '')}")
+        return EXIT_OK
+
+    success = bool(result.get("success"))
+    print()
+    print("═" * 60)
+    print(f"  {'SUCCESS' if success else 'FAILED'}  steps={result.get('steps', '?')}  "
+          f"duration={result.get('duration_s', '?')}s  "
+          f"termination={result.get('termination_reason', '?')}")
+    print(f"  run_id: {result.get('run_id', '?')}")
+    print("═" * 60)
+    return EXIT_OK if success else EXIT_ERROR
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mantis",
@@ -1348,6 +1463,117 @@ def _build_parser() -> argparse.ArgumentParser:
              "Defaults to outputs/run-modal-<unix-timestamp>.",
     )
     run_modal.set_defaults(func=cmd_plan_run_modal)
+
+    # ── cua: pure Holo3 pass-through (no decomposition, no Claude) ──
+    cua = sub.add_parser(
+        "cua",
+        help="Pure CUA pass-through: forward an instruction to /v1/cua "
+             "(brain ↔ XdotoolGymEnv, no Claude).",
+    )
+    cua_sub = cua.add_subparsers(dest="cua_command", required=True)
+
+    cua_run = cua_sub.add_parser(
+        "run",
+        help="POST /v1/cua with a single instruction — Mantis becomes "
+             "a thin pass-through for Holo3.",
+    )
+    cua_run.add_argument(
+        "instruction",
+        help="Natural-language instruction handed verbatim to the brain.",
+    )
+    cua_run.add_argument(
+        "--endpoint",
+        default=None,
+        help="Mantis deployment base URL (e.g. "
+             "https://workspace--app-fn.modal.run). Trailing /v1 is stripped. "
+             "Env: MANTIS_ENDPOINT.",
+    )
+    cua_run.add_argument(
+        "--token",
+        default=None,
+        help="Per-tenant Mantis token (sent as X-Mantis-Token). "
+             "Env: MANTIS_TOKEN.",
+    )
+    cua_run.add_argument(
+        "--header",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help="Additional HTTP header. Repeat for multiple.",
+    )
+    cua_run.add_argument(
+        "--start-url",
+        default="",
+        help="Initial URL for the browser inside the deployment.",
+    )
+    cua_run.add_argument(
+        "--max-steps",
+        type=int,
+        default=30,
+        help="Maximum CUA loop steps before forced termination "
+             "(default: 30, server cap: MANTIS_MAX_STEPS_PER_PLAN).",
+    )
+    cua_run.add_argument(
+        "--frames-per-inference",
+        type=int,
+        default=1,
+        help="Frames the brain sees per inference (default: 1 — Holo3 "
+             "uses one screenshot per step).",
+    )
+    cua_run.add_argument(
+        "--settle-time",
+        type=float,
+        default=2.0,
+        help="Seconds to wait after each action before re-screenshotting "
+             "(default: 2.0; bump for slow sites).",
+    )
+    cua_run.add_argument(
+        "--state-key",
+        default=None,
+        help="Optional state key to namespace the Chrome profile / "
+             "checkpoint dir on the deployment.",
+    )
+    cua_run.add_argument(
+        "--detached",
+        action="store_true",
+        help="Queue as a background run and return a run_id immediately. "
+             "Poll via /v1/predict with action=status.",
+    )
+    cua_run.add_argument(
+        "--proxy-city",
+        default=None,
+        help="Override the deployment's default proxy city (allowlist-gated).",
+    )
+    cua_run.add_argument(
+        "--proxy-state",
+        default=None,
+        help="Override the deployment's default proxy state.",
+    )
+    cua_run.add_argument(
+        "--proxy-disabled",
+        action="store_true",
+        help="Skip the upstream proxy entirely (use for test sites that "
+             "don't need bot-detection bypass).",
+    )
+    cua_run.add_argument(
+        "--record-video",
+        action="store_true",
+        help="Record a screencast of the run; fetch via "
+             "GET /v1/runs/{run_id}/video.",
+    )
+    cua_run.add_argument(
+        "--timeout",
+        type=float,
+        default=900.0,
+        help="HTTP timeout for the sync call in seconds (default: 900). "
+             "Ignored when --detached is set.",
+    )
+    cua_run.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the raw response JSON instead of a human summary.",
+    )
+    cua_run.set_defaults(func=cmd_cua_run)
 
     trace = sub.add_parser("trace", help="Trace tooling subcommands (#155)")
     trace_sub = trace.add_subparsers(dest="trace_command", required=True)

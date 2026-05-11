@@ -105,6 +105,7 @@ nav:
       - client/index.md
       - Authentication: client/auth.md
       - Sending plans: client/plans.md
+      - Pure CUA mode: client/pure-cua.md
       - Runs and polling: client/runs-and-polling.md
       - Recordings: client/recordings.md
       - Errors: client/errors.md
