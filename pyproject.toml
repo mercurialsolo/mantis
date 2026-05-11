@@ -85,6 +85,7 @@ dev = [
     "pytest-xdist>=3.8",  # parallel test execution: pytest -n auto (~2x speedup locally)
     "ruff>=0.4",
     "httpx>=0.24",   # FastAPI TestClient
+    "jsonschema>=4.0",  # tests/test_plan_schema.py validates plans against docs/reference/plan.schema.json
 ]
 # MkDocs site builder + plugins.
 docs = [

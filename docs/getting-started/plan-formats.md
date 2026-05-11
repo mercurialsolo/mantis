@@ -75,6 +75,42 @@ A flat JSON list of step objects executed by `MicroPlanRunner`. Best reliability
 
 Field reference is on the [Concepts](concepts.md#step-types-micro-plan-shape) page.
 
+### IDE autocomplete via JSON Schema
+
+A JSON Schema for the micro-plan format ships at
+[`reference/plan.schema.json`](../reference/plan.schema.json) (also live at
+`https://mercurialsolo.github.io/mantis/reference/plan.schema.json`). Point
+your editor at it and you get autocomplete + inline validation for every
+step field.
+
+**VS Code** — add to `.vscode/settings.json` (or workspace settings):
+
+```jsonc
+{
+  "json.schemas": [
+    {
+      "fileMatch": [
+        "**/plans/**/*.json",
+        "**/recipes/**/plan.json",
+        "**/examples/*.json"
+      ],
+      "url": "https://mercurialsolo.github.io/mantis/reference/plan.schema.json"
+    }
+  ]
+}
+```
+
+**Neovim / coc.nvim** — same shape under `coc-settings.json` (`json.schemas`).
+
+**IntelliJ / PyCharm** — *Preferences → Languages & Frameworks → Schemas
+and DTDs → JSON Schema Mappings*, then add a mapping with the URL above and
+a file pattern matching your plan layout.
+
+The schema is intentionally permissive (`additionalProperties: true`) so
+plan-specific fields don't trip validation — IDE autocomplete still covers
+the well-known step types and fields.
+
+
 Submit it three ways:
 
 ```jsonc
