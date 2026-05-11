@@ -1,0 +1,26 @@
+[
+  {
+    "intent": "Open Google and search for the user-specified query.",
+    "type": "navigate",
+    "url": "https://www.google.com/search?q=site%3Adocs.python.org+pathlib",
+    "wait_for_load": true
+  },
+  {
+    "intent": "Wait for organic results to render.",
+    "type": "wait",
+    "seconds": 2
+  },
+  {
+    "intent": "Extract the top 5 organic results — title, url, snippet — as a JSON array.",
+    "type": "claude",
+    "extract": {
+      "schema_name": "search_results",
+      "fields": [
+        {"name": "title", "type": "str", "required": true},
+        {"name": "url", "type": "str", "required": true},
+        {"name": "snippet", "type": "str", "required": false}
+      ],
+      "max_items": 5
+    }
+  }
+]

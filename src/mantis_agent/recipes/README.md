@@ -7,6 +7,16 @@ Recipes are how Mantis stays a generic CUA agent while still shipping working
 patterns for common tasks. The core never imports from `recipes/`. Plans
 declare a recipe by name; the loader pulls in only what's needed.
 
+## Shipped recipes
+
+| Name | What it does | Sites tested |
+|---|---|---|
+| [`marketplace_listings`](marketplace_listings/) | Vehicle / boat / RV listings → structured row per item (year / make / model / price / phone / seller / spam) | BoatTrader and comparable marketplaces |
+| [`job_listings`](job_listings/) | Public jobs board → first N roles with title / team / location / url | Greenhouse / Lever / Workday-style boards |
+| [`form_submit`](form_submit/) | Open + fill + submit a form, capture the response | `httpbin.org/forms/post` and similar single-page forms |
+| [`search_results`](search_results/) | SERP → top N organic results as `{title, url, snippet}` | Google / Bing / DuckDuckGo |
+| [`docs_lookup`](docs_lookup/) | Search a docs site for a query, capture the top hit's title + first paragraph | `docs.python.org`, Sphinx / MkDocs / Docusaurus sites |
+
 ## Layout
 
 ```
@@ -16,11 +26,10 @@ recipes/
     plan.json
     schema.py                ExtractionSchema
     verifier.py              optional StepVerifier subclass
-  jobs_board/
-    README.md
-    plan.json
-    schema.py
-  ...
+  job_listings/              README.md + plan.json
+  form_submit/               README.md + plan.json
+  search_results/            README.md + plan.json
+  docs_lookup/               README.md + plan.json
 ```
 
 ## Contract
