@@ -16,8 +16,11 @@ and the [any-agent integration playbook](integrations/any-agent.md).
 | `POST /v1/chat/completions` | `X-Mantis-Token` (run scope) | OpenAI-compat reverse proxy to in-pod Holo3 (raw inference). |
 | `GET /v1/models` | open | OpenAI-compat model list. Returns `holo3`. |
 | `GET /v1/health`, `GET /health` | open | Liveness/readiness probe. |
+| `GET /v1/version` | open | Runtime version snapshot — `version`, `model`, `ready`, `git_sha`, `build_time`. Useful for pinning client behavior to a specific build. |
 | `GET /metrics` | open | Prometheus scrape endpoint. Returns 503 if `prometheus_client` not installed. |
 | `GET /v1/runs/{run_id}/video` | `X-Mantis-Token` | Download the screencast captured during a run. Returns 404 if `record_video` was not requested. |
+| `GET /docs`, `GET /redoc` | open | Interactive Swagger UI / Redoc viewer over `/openapi.json`. Disable on production tenant fleets with `MANTIS_ENABLE_DOCS_UI=0`. |
+| `GET /openapi.json` | open | Machine-readable OpenAPI spec. Always served, even when the interactive UIs are disabled — this is what client SDKs and IDE plugins consume. |
 
 When deployed behind Baseten, all requests must also carry
 `Authorization: Api-Key <BASETEN_API_KEY>` (gateway auth, separate from

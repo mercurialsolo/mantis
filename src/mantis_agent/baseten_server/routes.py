@@ -95,7 +95,33 @@ logger = logging.getLogger("mantis_agent.baseten_server")
 
 # ── Module-level singletons ─────────────────────────────────────────────────
 
-app = FastAPI(title="Mantis CUA Baseten Workload", docs_url=None, redoc_url=None)
+# Interactive API docs at /docs (Swagger UI) and /redoc are on by default
+# so self-hosters get a browsable surface for free. Set
+# ``MANTIS_ENABLE_DOCS_UI=0`` on production tenant fleets that don't want
+# the UI exposed publicly. ``/openapi.json`` stays on regardless — it's
+# what client SDKs and IDE plugins consume.
+_DOCS_UI_ENABLED = os.environ.get("MANTIS_ENABLE_DOCS_UI", "1").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+from .. import __version__ as _mantis_version  # noqa: E402 — kept near app config
+
+app = FastAPI(
+    title="Mantis CUA",
+    description=(
+        "Perception-reasoning-action agent for computer use. Drives a "
+        "real browser via Holo3 + Claude. See the docs at "
+        "https://mercurialsolo.github.io/mantis/ — this surface is the "
+        "live HTTP API. Auth: `X-Mantis-Token` per tenant, plus "
+        "`Authorization: Api-Key …` when fronted by a Baseten gateway."
+    ),
+    version=_mantis_version,
+    docs_url="/docs" if _DOCS_UI_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_UI_ENABLED else None,
+)
 runtime = BasetenCUARuntime()
 
 
@@ -156,6 +182,25 @@ def health_v1() -> dict[str, Any]:
     /v1/health is the same payload available under the public API path.
     """
     return {"ok": runtime.loaded, "model": runtime.model_kind}
+
+
+@app.get("/v1/version")
+def version_info() -> dict[str, Any]:
+    """Runtime version snapshot — useful when multiple deployments serve
+    different builds and a client needs to pin behavior to a specific one.
+
+    ``git_sha`` and ``build_time`` are populated by the deploy pipeline via
+    ``MANTIS_GIT_SHA`` / ``MANTIS_BUILD_TIME`` env vars (empty strings when
+    running outside a build context). No auth required — version info is
+    safe to expose alongside ``/health``.
+    """
+    return {
+        "version": _mantis_version,
+        "model": runtime.model_kind,
+        "ready": runtime.loaded,
+        "git_sha": os.environ.get("MANTIS_GIT_SHA", ""),
+        "build_time": os.environ.get("MANTIS_BUILD_TIME", ""),
+    }
 
 
 @app.get("/v1/runs/{run_id}/video")
