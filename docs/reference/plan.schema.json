@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mercurialsolo.github.io/mantis/reference/plan.schema.json",
+  "title": "Mantis micro-plan",
+  "description": "Top-level shape of a Mantis micro-plan JSON file: a flat array of step objects executed by MicroPlanRunner. Each step must declare an 'intent' (one-sentence description for the brain) and a 'type' (the step kind). Step types accept additional optional fields documented in 'docs/getting-started/plan-formats.md' and 'docs/getting-started/concepts.md'. The schema is intentionally permissive (additionalProperties is true at every level) so plans can carry plan-specific fields without breaking validation — IDE autocomplete still covers the well-known fields.",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/Step"
+  },
+  "$defs": {
+    "Step": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["intent", "type"],
+      "properties": {
+        "intent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Single sentence in natural language. The brain (Holo3 / Claude) reads this verbatim — keep it concrete and one action wide."
+        },
+        "type": {
+          "type": "string",
+          "description": "Step kind. The enum lists the well-known types the runtime understands today; unknown types are not rejected (additionalProperties: true) but will fall back to a generic handler.",
+          "enum": [
+            "navigate",
+            "navigate_back",
+            "wait",
+            "click",
+            "double_click",
+            "scroll",
+            "drag",
+            "key_press",
+            "type_text",
+            "loop",
+            "holo3",
+            "claude",
+            "extract_data",
+            "extract_url",
+            "fill_field",
+            "submit",
+            "select_option",
+            "paginate",
+            "filter",
+            "done"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "description": "Target URL for navigate steps. Plans may use {{template}} placeholders the caller substitutes before submitting."
+        },
+        "wait_for_load": {
+          "type": "boolean",
+          "description": "navigate steps: block until the page reports load complete before returning."
+        },
+        "seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "wait steps: number of seconds to sleep before the next step."
+        },
+        "loop_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50,
+          "description": "loop steps: maximum iterations. Server-side cap is MANTIS_MAX_LOOP_ITERATIONS (default 50); higher values are silently clamped."
+        },
+        "loop_target": {
+          "type": "integer",
+          "minimum": -1,
+          "description": "loop steps: zero-based index of the step to jump back to. -1 (default) means 'the step immediately after the matching section start'."
+        },
+        "steps": {
+          "type": "array",
+          "description": "loop steps: inline body executed each iteration. Recursive — nested loops are allowed.",
+          "items": {
+            "$ref": "#/$defs/Step"
+          }
+        },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "holo3 steps: maximum brain actions allowed before forced termination of this step."
+        },
+        "hint": {
+          "type": "string",
+          "description": "holo3 steps: extra detail the brain sees alongside the intent — usually a target-element description or a UI affordance hint."
+        },
+        "budget": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum brain actions for the step (legacy field; prefer 'max_steps' for new plans)."
+        },
+        "section": {
+          "type": "string",
+          "description": "Logical section label (e.g. 'setup', 'extraction', 'pagination'). Sections gate which steps run after a failed gate."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "If true and the step fails after retries, the whole pipeline halts. Default false."
+        },
+        "gate": {
+          "type": "boolean",
+          "description": "If true, this is a verification gate — must pass before the runner advances to the next section. Default false."
+        },
+        "verify": {
+          "type": "string",
+          "description": "Expected outcome of the step in natural language. Surfaced to Claude in the verification prompt."
+        },
+        "claude_only": {
+          "type": "boolean",
+          "description": "If true, skip Holo3 and have Claude read the screenshot directly (used for extract_data / extract_url and verification gates)."
+        },
+        "grounding": {
+          "type": "boolean",
+          "description": "If true, enable ClaudeGrounding for this step — useful when Holo3 mis-clicks a small or visually-ambiguous target."
+        },
+        "reverse": {
+          "type": "string",
+          "description": "Natural-language description of how to undo the step (e.g. 'Press Alt+Left'). Used by the agentic-recovery loop."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Free-form author notes. Ignored by the runtime — useful for documenting plan-specific assumptions."
+        },
+        "extract": {
+          "type": "object",
+          "description": "claude steps: structured extraction schema. The brain returns one row matching 'fields' (or up to 'max_items' rows).",
+          "additionalProperties": true,
+          "properties": {
+            "schema_name": {
+              "type": "string",
+              "description": "Identifier used in logs and CSV output filenames."
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ExtractField"
+              },
+              "description": "Ordered list of fields to extract."
+            },
+            "max_items": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Cap on how many rows the brain may return. Omit for single-row extraction."
+            }
+          }
+        },
+        "params": {
+          "type": "object",
+          "description": "Structured payload for form-shaped step types: fill_field {label, value, aliases?}, submit {label, aliases?}, select_option {dropdown_label, option_label}, navigate {wait_after_load_seconds?}."
+        },
+        "hints": {
+          "type": "object",
+          "description": "Per-step grounding hints. Recognised keys: layout ('listings' | 'single'), spam_indicators, spam_label, entity_name."
+        }
+      }
+    },
+    "ExtractField": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "type"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Field key. Becomes a column in the CSV output."
+        },
+        "type": {
+          "type": "string",
+          "description": "Loose Python type hint: 'str', 'int', 'float', 'bool'.",
+          "enum": ["str", "int", "float", "bool"]
+        },
+        "required": {
+          "type": "boolean",
+          "description": "If true, a row missing this field is dropped as a partial extraction."
+        },
+        "example": {
+          "type": "string",
+          "description": "Example value the brain sees in the extraction prompt."
+        }
+      }
+    }
+  }
+}
