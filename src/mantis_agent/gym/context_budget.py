@@ -16,10 +16,11 @@ Why this had to live runner-side rather than as a host-side
 counter:
 
 - LLM orchestrators don't obey plan-text counting rules. Three
-  separate rule-text patches against staffai's BoatTrader plan
-  ("RETRY POLICY", "FORBIDDEN tile-read list", "AT MOST 3
-  sub-goals per listing") have all been overridden in live runs.
-  The orchestrator treats them as preferences.
+  separate rule-text patches against the host integration's
+  marketplace-listings plan ("RETRY POLICY", "FORBIDDEN tile-read
+  list", "AT MOST 3 sub-goals per listing") have all been
+  overridden in live runs. The orchestrator treats them as
+  preferences.
 - Tool-result envelopes that *change downstream state* are the
   only mechanism that reliably steers orchestrator behavior. The
   #246 / #250 envelopes work end-to-end in production today.
