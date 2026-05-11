@@ -1,0 +1,38 @@
+# Pre-commit hooks for Mantis.
+#
+# Install:    make precommit-install    (or `pre-commit install`)
+# Run all:    make precommit            (or `pre-commit run --all-files`)
+#
+# Hooks mirror the checks CI runs in .github/workflows/test.yml so failures
+# show up locally before push instead of after.
+
+exclude: |
+  (?x)^(
+      OSWorld/.*|
+      VWA_configs/.*|
+      uv\.lock
+  )$
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-case-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format

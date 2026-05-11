@@ -33,7 +33,6 @@ Thumbs.db
 # Project-specific
 .codex_tmp/
 OSWorld/
-uv.lock
 *.gguf
 *.qcow2
 logs/
