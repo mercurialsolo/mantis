@@ -26,14 +26,29 @@ from mantis_agent import tenant_auth as ta_mod
 
 
 def _build_client(monkeypatch, tmp_path):
-    """Boot a fresh TestClient with single-tenant auth wired up."""
+    """Boot a fresh TestClient with single-tenant auth wired up.
+
+    Reloading ``baseten_server`` (the package) alone is not enough — the
+    package's ``__init__.py`` does ``from .routes import app``, which
+    just re-fetches the existing binding from the already-cached
+    ``routes`` submodule. ``_DOCS_UI_ENABLED`` is evaluated at
+    ``routes`` import-time, so we must reload the ``routes`` submodule
+    explicitly to make the test's ``MANTIS_ENABLE_DOCS_UI`` env override
+    take effect. Without this, parallel CI workers that imported
+    ``baseten_server.routes`` for a prior test see the FastAPI app
+    constructed with the env unset (docs on by default) regardless of
+    what the current test patches — passes locally on a clean worker
+    but flakes in CI under pytest-xdist with hot module caches.
+    """
     monkeypatch.setenv("MANTIS_API_TOKEN", "test-token")
     monkeypatch.delenv("MANTIS_TENANT_KEYS_PATH", raising=False)
     monkeypatch.setenv("MANTIS_DATA_DIR", str(tmp_path / "mantis-data"))
     ta_mod.reset_key_store()
 
     from mantis_agent import baseten_server as bs
+    from mantis_agent.baseten_server import routes as bs_routes
 
+    importlib.reload(bs_routes)
     importlib.reload(bs)
     return TestClient(bs.app)
 
