@@ -135,6 +135,10 @@ def test_extract_data_short_circuits_when_predicate_returns_true(monkeypatch) ->
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
     )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
+    )
     url = "https://www.example.com/boat/already-seen-slug"
     handler, step, ctx, call_log = _build_ctx_for_extract_data(
         predicate=lambda u: "already-seen-slug" in u,
@@ -161,6 +165,10 @@ def test_extract_data_proceeds_when_predicate_returns_false(monkeypatch) -> None
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
     )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
+    )
     handler, step, ctx, call_log = _build_ctx_for_extract_data(
         predicate=lambda u: False,
         is_detail_page=True,
@@ -180,6 +188,10 @@ def test_extract_data_proceeds_when_predicate_is_none(monkeypatch) -> None:
     monkeypatch.setattr(
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
+    )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
     )
     handler, step, ctx, call_log = _build_ctx_for_extract_data(
         predicate=None,
@@ -202,6 +214,10 @@ def test_extract_data_proceeds_when_not_a_detail_page(monkeypatch) -> None:
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
     )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
+    )
     handler, step, ctx, call_log = _build_ctx_for_extract_data(
         predicate=lambda u: True,  # would short-circuit if applied
         is_detail_page=False,       # but applicability gate is False
@@ -222,6 +238,10 @@ def test_extract_data_proceeds_when_current_url_is_empty(monkeypatch) -> None:
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
     )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
+    )
     handler, step, ctx, call_log = _build_ctx_for_extract_data(
         predicate=lambda u: True,
         is_detail_page=True,
@@ -241,6 +261,10 @@ def test_extract_data_short_circuits_before_cache_check(monkeypatch) -> None:
     monkeypatch.setattr(
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
+    )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
     )
     url = "https://www.example.com/boat/known"
     handler, step, ctx, call_log = _build_ctx_for_extract_data(
@@ -272,6 +296,10 @@ def test_extract_data_predicate_exception_does_not_break_run(monkeypatch) -> Non
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
     )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
+    )
 
     def buggy_predicate(url):
         raise RuntimeError("host predicate crashed")
@@ -296,6 +324,10 @@ def test_extract_data_does_not_short_circuit_for_extract_url_step(monkeypatch) -
     monkeypatch.setattr(
         "mantis_agent.gym.step_handlers.claude_step.time.sleep",
         lambda *_: None,
+    )
+    monkeypatch.setattr(
+        "mantis_agent.gym._runner_helpers.adaptive_content_settle",
+        lambda *a, **kw: 0.0,
     )
     handler, step, ctx, call_log = _build_ctx_for_extract_data(
         predicate=lambda u: True,

@@ -144,6 +144,128 @@ def dump_debug_screenshot(
         logger.debug("debug screenshot dump failed: %s", exc)
 
 
+def screenshot_pixel_diff_fraction(a: Any, b: Any, brightness_step: int = 8) -> float:
+    """Fraction of pixels that differ between two screenshots
+    (downsampled, grayscale). Issue #259 — primitive for adaptive
+    content-settle on the deep-extract path.
+
+    Cheap heuristic: downsample to 64×64, convert to grayscale,
+    count pixels whose brightness diverged by more than
+    ``brightness_step``. 1-step shifts (JPEG re-encode artifacts,
+    cursor blinks) stay under the threshold; real content changes
+    (new text appearing, image swap, modal overlay) cross it
+    decisively.
+
+    Returns 1.0 (conservative — assume changed) for any failure
+    case: size mismatch, invalid input, exception during compare.
+    Callers treat 1.0 as "page is still changing, keep polling".
+    """
+    if a is None or b is None:
+        return 1.0
+    try:
+        if getattr(a, "size", None) != getattr(b, "size", None):
+            return 1.0
+        from PIL import Image  # local import — pillow may not be loaded yet
+        a_small = a.convert("L").resize((64, 64), Image.NEAREST)
+        b_small = b.convert("L").resize((64, 64), Image.NEAREST)
+    except Exception:
+        return 1.0
+    try:
+        a_data = list(a_small.getdata())
+        b_data = list(b_small.getdata())
+    except Exception:
+        return 1.0
+    if not a_data or len(a_data) != len(b_data):
+        return 1.0
+    diff = sum(1 for x, y in zip(a_data, b_data) if abs(x - y) > brightness_step)
+    return diff / len(a_data)
+
+
+def adaptive_content_settle(
+    env: Any,
+    *,
+    min_seconds: float = 0.3,
+    max_seconds: float = 2.0,
+    poll_seconds: float = 0.3,
+    diff_threshold: float = 0.02,
+) -> float:
+    """Poll-based settle that exits when consecutive screenshots
+    stabilize. Symmetric to :func:`adaptive_submit_settle` but
+    polls *screenshot stability* instead of URL change.
+
+    Used after actions that may trigger lazy-load, animation, or
+    XHR-driven DOM updates — the four fixed-sleep sites in
+    ``_extract_listing_data_deep`` (issue #259). Worst-case the
+    helper pays ``max_seconds`` (the original fixed-sleep value).
+    Best-case (static page) it exits at
+    ``min_seconds + poll_seconds`` (~0.6s) — the floor reflects
+    the truth that even a stable page needs at least one render
+    tick.
+
+    Args:
+        env: Object with a ``screenshot()`` method returning a
+            PIL Image. Any exception during screenshot capture
+            falls through to a fixed-sleep equivalent — better to
+            over-pay than to halt the deep-extract.
+        min_seconds: Always wait at least this long. Captures the
+            initial-render reality on every page.
+        max_seconds: Worst-case cap. Pages that genuinely keep
+            changing (long XHR, animations) pay this and proceed.
+        poll_seconds: Wall time between consecutive screenshot
+            polls. ~0.2–0.3s is the right zone — small enough to
+            exit promptly, large enough that the screenshot cost
+            doesn't dominate.
+        diff_threshold: Pixel-diff fraction below which two
+            consecutive screenshots count as "settled". 0.02 (2%
+            of downsampled pixels) is generous enough that
+            animation tails / cursor blinks don't extend the
+            settle.
+
+    Returns:
+        Actual elapsed wall-clock seconds. Callers add to
+        ``runner.costs['gpu_seconds']`` for telemetry.
+    """
+    if diff_threshold < 0:
+        raise ValueError(f"diff_threshold must be >= 0, got {diff_threshold}")
+    if min_seconds > max_seconds:
+        raise ValueError(
+            f"min_seconds ({min_seconds}) must be <= max_seconds ({max_seconds})"
+        )
+
+    start = time.time()
+    time.sleep(min_seconds)
+
+    try:
+        prev = env.screenshot()
+    except Exception as exc:
+        logger.debug("adaptive_content_settle: screenshot raised — fall through (%s)", exc)
+        # Fall through to fixed-sleep equivalent — better to
+        # over-pay than to halt.
+        remaining = max_seconds - (time.time() - start)
+        if remaining > 0:
+            time.sleep(remaining)
+        return time.time() - start
+
+    while True:
+        elapsed = time.time() - start
+        if elapsed >= max_seconds:
+            return elapsed
+        time.sleep(min(poll_seconds, max_seconds - elapsed))
+        try:
+            cur = env.screenshot()
+        except Exception:
+            break
+        if screenshot_pixel_diff_fraction(prev, cur) < diff_threshold:
+            return time.time() - start
+        prev = cur
+
+    # Loop broke on exception — pay remaining max_seconds budget.
+    remaining = max_seconds - (time.time() - start)
+    if remaining > 0:
+        time.sleep(remaining)
+    return time.time() - start
+
+
 def adaptive_submit_settle(runner: "MicroPlanRunner", *, url_before: str) -> float:
     deadline = time.time() + _SUBMIT_SETTLE_MAX_SECONDS
     time.sleep(_SUBMIT_SETTLE_MIN_SECONDS)

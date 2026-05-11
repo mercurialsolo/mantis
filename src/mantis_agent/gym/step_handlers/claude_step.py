@@ -194,10 +194,12 @@ class ClaudeStepHandler:
         if not extractor:
             return StepResult(step_index=index, intent=step.intent, success=False)
 
-        # Pre-settle — page may still be rendering after scroll. Lifted
-        # from MicroPlanRunner._execute_step's claude_only branch in EPIC
-        # #161 cleanup so registry-first dispatch produces identical timing.
-        time.sleep(1)
+        # Pre-settle — page may still be rendering after scroll.
+        # Issue #259: adaptive — exits early when consecutive
+        # screenshots stabilize (typical ~0.3-0.4s on static pages),
+        # caps at the original 1.0s on pages that keep changing.
+        from .._runner_helpers import adaptive_content_settle
+        adaptive_content_settle(env, min_seconds=0.2, max_seconds=1.0)
 
         screenshot = env.screenshot()
 
@@ -470,9 +472,13 @@ class ClaudeStepHandler:
 
         # Start from the top so the final prompt sees title, price, seller card,
         # and any safe contact/phone reveal controls before scanning details.
+        # Issue #259: adaptive — browsers re-layout when jumping to top
+        # (sticky nav, hero image, JS widgets). Static pages exit ~0.5s;
+        # JS-heavy pages still pay the full 1.5s cap.
         try:
             env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(1.5)
+            from .._runner_helpers import adaptive_content_settle
+            adaptive_content_settle(env, min_seconds=0.3, max_seconds=1.5)
         except Exception:
             pass
         runner._set_scroll_state(
@@ -518,7 +524,14 @@ class ClaudeStepHandler:
                             params={"x": target["x"], "y": target["y"]},
                         ))
                         controls_clicked += 1
-                        time.sleep(2)
+                        # Issue #259: reveal click triggers XHR +
+                        # DOM update + reveal animation. JS-backed
+                        # reveals (BoatTrader Show Phone, etc) need
+                        # the full 2s; static-content reveals
+                        # ("Show more" expanding existing DOM) exit
+                        # at ~0.6s.
+                        from .._runner_helpers import adaptive_content_settle
+                        adaptive_content_settle(env, min_seconds=0.5, max_seconds=2.0)
                         capture(
                             f"after {target.get('action', 'expand')} "
                             f"{target.get('label', '')[:40]}"
@@ -546,7 +559,12 @@ class ClaudeStepHandler:
             if viewport < max_viewports - 1:
                 try:
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
-                    time.sleep(1)
+                    # Issue #259: lazy-load below-the-fold content
+                    # typically completes in <500ms; pages with
+                    # heavy virtualized lists or image lazy-load
+                    # still get the full 1s cap.
+                    from .._runner_helpers import adaptive_content_settle
+                    adaptive_content_settle(env, min_seconds=0.2, max_seconds=1.0)
                 except Exception:
                     break
 
