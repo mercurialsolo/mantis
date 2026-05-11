@@ -869,6 +869,9 @@ Merge rules:
 | `spam_indicators`, `spam_seller_indicators`, `forbidden_controls`, `allowed_controls` | List union (recipe extends derived, deduplicated). |
 | `entity_name`, `spam_label` | Derived wins once it has departed from the dataclass default; recipe fills in defaults. |
 | `fields`, `required_fields` | Derived always wins — the plan text owns the schema body. |
+| `tile_required_fields` ([#236](https://github.com/mercurialsolo/mantis/pull/237)) | Derived wins when set; recipe fills in defaults. Looser required-field contract for `SEARCH_TILE` extraction context — typically just `["url"]` so rows survive long enough to drive a follow-up navigate-into-detail. |
+| `tile_carry_fields` ([#236](https://github.com/mercurialsolo/mantis/pull/237)) | List union (recipe extends derived). Informational hint for which fields the tile is expected to surface. |
+| `rejection_intents` ([#246](https://github.com/mercurialsolo/mantis/pull/247)) | Dict merge — derived keys win on conflict (operator override), recipe extends with new keys. Maps a rejection reason (`"dealer"`, `"incomplete_required"`) to a host-facing intent (`"skip"` / `"extract_more"` / `"retry"`). The runner stamps `StepResult.skip=True / skip_reason=<reason>` when the recipe says `"skip"` — see [embedding-microplanrunner.md](embedding-microplanrunner.md#the-skip-envelope-family--advance-vs-retry-signals). |
 | `detail_page_pattern`, `pagination_format`, `results_page_pattern`, `pagination_strip_pattern`, `filtered_results_url`, `domain` | Recipe wins when set (empty string = no opinion). |
 | `gate_verify_prompt` | Derived wins — the plan owns the gate intent. |
 | `pagination_type` | Follows `pagination_format` (the dataclass default `"path_suffix"` can't double as a sentinel). |

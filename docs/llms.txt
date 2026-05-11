@@ -139,7 +139,36 @@ crashing*, NOT that the agent achieved its goal. Always inspect
 `summary.dynamic_verification_summary.verdict` (or the per-step trace in
 the `result` payload) to determine actual success.
 
-`result` returns the full lead list and per-step trace.
+`result` returns the full lead list and per-step trace. Each per-step
+record carries the skip envelope (issues #246/#250/#254/#255):
+
+```jsonc
+{
+  "step_index": 4,
+  "intent": "Extract row",
+  "success": false,
+  "data": "REJECTED_DEALER|extractor marked as dealer|...",
+  "skip": true,                  // advance, don't retry
+  "skip_reason": "dealer"        // canonical reason — host branches on this
+}
+```
+
+Canonical `skip_reason` values:
+
+| Value | Trigger |
+|---|---|
+| `"dealer"` (or any recipe key) | Recipe-rejection intents (`rejection_intents` — §3.1a, #246) |
+| `"navigation_failed"` | Navigation-primitive halt — library-only opt-in (#250) |
+| `"listing_budget_exceeded"` | Per-context sub-goal budget — library-only opt-in (#254) |
+| `"already_seen"` | Already-seen URL predicate — library-only opt-in (#255) |
+
+The HTTP-API surface controls `skip_reason="dealer"` (and any other
+key) via `extraction_schema.rejection_intents`. The other three
+trigger sources require the library-shaped integration — see
+`docs/integrations/embedding-microplanrunner.md`. Branch on
+`step.skip` *before* `step.success` so terminal-for-this-context
+results aren't retried.
+
 `logs` returns the last `tail` events written by the runner (default 200,
 max 10000).
 
@@ -163,6 +192,50 @@ signature, and reuses the cached MicroPlan for subsequent identical
 requests. **Decomposition assumes a marketplace-listing extraction shape
 by default** — for non-marketplace targets (brand homepages, content
 sites), author a custom `micro` plan instead.
+
+### 3.1a `extraction_schema` — what the extractor reads and rejects
+
+Pass alongside any plan shape. Controls per-listing extraction + the
+recipe-side rejection envelope (issue #236 / #246). All fields
+optional; defaults preserve marketplace-listings behavior.
+
+```jsonc
+"extraction_schema": {
+  "entity_name": "boat listing",
+  "fields": [
+    {"name": "year",  "type": "str", "required": true,  "example": "2018"},
+    {"name": "make",  "type": "str", "required": true,  "example": "Sea Ray"},
+    {"name": "price", "type": "str", "required": false, "example": "$42,500"},
+    {"name": "url",   "type": "str", "required": false, "example": "site.com/boat/..."}
+  ],
+  "required_fields": ["year", "make"],           // strict DETAIL_PAGE contract
+  "tile_required_fields": ["url"],               // looser SEARCH_TILE contract (#236)
+  "spam_indicators": ["dealer website", "more from this dealer"],
+  "spam_seller_indicators": ["marine", "yacht", "brokerage", "inc"],
+  "spam_label": "dealer",
+  "forbidden_controls": ["Contact Seller", "Request Info"],
+  "allowed_controls": ["Show Phone", "Show more"],
+  "rejection_intents": {                         // #246 — recipe → host signal
+    "dealer":              "skip",               // terminal — host advances past listing
+    "incomplete_required": "extract_more"        // may enrich on detail page
+  }
+}
+```
+
+Per-field merge semantics on overlay (when both derived + recipe
+present): list fields union, scalar fields fall back from default,
+`fields`/`required_fields` derived-wins, `rejection_intents` derived
+keys win on conflict (recipe extends with new keys). See
+`docs/integrations/recipes.md` for the full merge table.
+
+The `rejection_intents` map drives `StepResult.skip / skip_reason`
+in the result payload (§2.2). When the extractor flags a row with a
+reason whose intent is `"skip"`, the per-step trace carries
+`skip=true, skip_reason="<reason>"` and a host wrapping mantis in a
+tool surface promotes that to a successful `status: skipped` tool
+result (advance, don't retry). See
+`docs/integrations/embedding-microplanrunner.md` for the full skip-
+envelope family.
 
 ### 3.2 `micro` — hand-authored micro-plan (recommended for production)
 
