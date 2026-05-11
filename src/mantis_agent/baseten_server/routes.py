@@ -125,6 +125,51 @@ app = FastAPI(
 runtime = BasetenCUARuntime()
 
 
+# ── Middleware: standard X-RateLimit-* response headers (#275) ──────────────
+# Each rate-limited route handler stashes the limit / remaining / reset
+# triple on ``request.state.rate_limit_headers`` right after consulting
+# the limiter; this middleware copies them onto the response so callers
+# can throttle proactively instead of crashing into 429s. Routes that
+# don't rate-limit (``/health``, ``/v1/version``, ``/v1/models``,
+# ``/metrics``, ``/v1/runs/{id}/video``) simply don't set the attribute
+# and the middleware is a no-op.
+
+import time as _time  # noqa: E402 — kept near the middleware it powers
+
+
+@app.middleware("http")
+async def _attach_rate_limit_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+    response = await call_next(request)
+    headers = getattr(request.state, "rate_limit_headers", None)
+    if headers:
+        for name, value in headers.items():
+            response.headers[name] = str(value)
+    return response
+
+
+def _stash_rate_limit_headers(
+    request: Request, decision: Any, tenant_limit: int,
+) -> None:
+    """Record the rate-limit triple on ``request.state`` for the middleware.
+
+    Called from every route that consults the rate limiter, regardless of
+    whether the decision was allow or deny — denied requests still
+    benefit from the headers (alongside the existing ``Retry-After`` on
+    429s).
+    """
+    limit = decision.limit or tenant_limit or 0
+    if not limit:
+        return  # rate-limit disabled for this tenant
+    remaining = max(0, int(decision.rate_remaining))
+    # Unix timestamp when the bucket will be back at full capacity.
+    reset_ts = int(_time.time() + max(0.0, decision.reset_after_seconds))
+    request.state.rate_limit_headers = {
+        "X-RateLimit-Limit": limit,
+        "X-RateLimit-Remaining": remaining,
+        "X-RateLimit-Reset": reset_ts,
+    }
+
+
 # ── Backwards-compat aliases (one-minor-release deprecation) ────────────────
 # Inside this file, route handlers were carved out of the original single-file
 # module that used single-underscore names for everything. The handlers below
@@ -450,6 +495,9 @@ async def _handle_predict(
         rate_decision = limiter.try_consume_rate_token(
             tenant.tenant_id, tenant.rate_limit_per_minute
         )
+        _stash_rate_limit_headers(
+            request, rate_decision, tenant.rate_limit_per_minute,
+        )
         if not rate_decision.allowed:
             mantis_metrics.RATE_LIMIT_REJECTIONS.labels(
                 tenant_id=tenant.tenant_id, kind="rate"
@@ -651,6 +699,9 @@ async def cua_v1(
     limiter = get_rate_limiter()
     rate_decision = limiter.try_consume_rate_token(
         tenant.tenant_id, tenant.rate_limit_per_minute
+    )
+    _stash_rate_limit_headers(
+        request, rate_decision, tenant.rate_limit_per_minute,
     )
     if not rate_decision.allowed:
         mantis_metrics.RATE_LIMIT_REJECTIONS.labels(

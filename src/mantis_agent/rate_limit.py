@@ -25,13 +25,22 @@ from typing import Optional
 
 @dataclasses.dataclass
 class RateLimitDecision:
-    """Outcome of a rate-limit check."""
+    """Outcome of a rate-limit check.
+
+    ``limit`` and ``reset_after_seconds`` are populated by
+    :meth:`TenantRateLimiter.try_consume_rate_token` so the FastAPI
+    middleware can surface ``X-RateLimit-Limit`` / ``X-RateLimit-Remaining``
+    / ``X-RateLimit-Reset`` headers (#275) — callers can throttle
+    proactively instead of crashing into 429s.
+    """
 
     allowed: bool
     reason: str = ""
     retry_after_seconds: float = 0.0
     concurrent: int = 0
     rate_remaining: float = 0.0
+    limit: int = 0
+    reset_after_seconds: float = 0.0
 
 
 @dataclasses.dataclass
@@ -102,7 +111,8 @@ class TenantRateLimiter:
         ``retry_after_seconds`` when the bucket is empty."""
         rpm = rate_per_minute if rate_per_minute is not None else self._default_rpm
         if rpm <= 0:
-            # Disabled — no rate limit.
+            # Disabled — no rate limit. ``limit=0`` signals "no cap" to the
+            # header middleware so it skips the surface entirely.
             return RateLimitDecision(allowed=True, rate_remaining=float("inf"))
 
         burst = float(rpm)
@@ -122,16 +132,30 @@ class TenantRateLimiter:
             if state.tokens < 1.0:
                 deficit = 1.0 - state.tokens
                 retry_after = deficit / refill_per_sec
+                # Even on rejection we report the full bucket state so the
+                # 429 response can carry useful X-RateLimit-* headers
+                # alongside Retry-After — callers shouldn't have to flip
+                # between two surfaces to learn the cap.
+                reset_after = (burst - state.tokens) / refill_per_sec
                 return RateLimitDecision(
                     allowed=False,
                     reason=f"rate limit ({rpm}/min) exceeded",
                     retry_after_seconds=max(retry_after, 0.1),
                     rate_remaining=state.tokens,
+                    limit=rpm,
+                    reset_after_seconds=reset_after,
                 )
 
             state.tokens -= 1.0
+            # Time until the bucket is back at full capacity. Used for the
+            # ``X-RateLimit-Reset`` header — converted to a Unix timestamp
+            # at the call site so the limiter itself stays clock-agnostic.
+            reset_after = (burst - state.tokens) / refill_per_sec
             return RateLimitDecision(
-                allowed=True, rate_remaining=state.tokens
+                allowed=True,
+                rate_remaining=state.tokens,
+                limit=rpm,
+                reset_after_seconds=reset_after,
             )
 
     # ── Test / admin helpers ────────────────────────────────────────────
