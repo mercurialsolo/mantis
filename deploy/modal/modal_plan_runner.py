@@ -222,6 +222,20 @@ def _build_oxylabs_username(session: str = "mantis", *, geo: bool = False) -> st
     (``pr.oxylabs.io:10000``). City-level pinning lives on
     ``pr.oxylabs.io:7777`` (``OXYLABS_CITY_ENTRYPOINT``) and only
     works for plans that explicitly support it. Diagnose-then-enable.
+
+    **State format** — Oxylabs docs require US states to be
+    prefixed with the country code: ``us_california``, not
+    ``california``. Canonical example: ``st-us_california-city-los_angeles``.
+    When ``OXYLABS_STATE`` lacks the ``<cc>_`` prefix, this function
+    prepends ``cc.lower() + "_"`` automatically — so operators can
+    set ``OXYLABS_STATE=florida`` and the helper produces the
+    canonical ``st-us_florida``. Without this prefix, Oxylabs treats
+    the state as unknown and silently falls back to random global
+    rotation (observed: ``st-florida`` returned Ukraine and Brazil
+    IPs in production diagnostic).
+
+    **City format** — bare lowercase, with spaces replaced by
+    underscores: ``city-los_angeles`` (not ``city-Los Angeles``).
     """
     raw_user = os.environ.get("OXYLABS_USERNAME", "").strip()
     if not raw_user:
@@ -229,14 +243,29 @@ def _build_oxylabs_username(session: str = "mantis", *, geo: bool = False) -> st
 
     parts = [f"customer-{raw_user}"]
     if geo:
-        for key, label in (
-            ("OXYLABS_COUNTRY", "cc"),
-            ("OXYLABS_STATE", "st"),
-            ("OXYLABS_CITY", "city"),
-        ):
-            v = os.environ.get(key, "").strip()
-            if v:
-                parts += [label, v]
+        cc = os.environ.get("OXYLABS_COUNTRY", "").strip()
+        state = os.environ.get("OXYLABS_STATE", "").strip()
+        city = os.environ.get("OXYLABS_CITY", "").strip()
+
+        if cc:
+            parts += ["cc", cc]
+        if state:
+            # Oxylabs convention: state names are country-prefixed
+            # ("us_california"). If the operator wrote "florida"
+            # without prefix, attach the country code lowercased so
+            # we emit the canonical "us_florida" form. Skip the
+            # auto-prefix if the value already contains "_" (operator
+            # already wrote the canonical form).
+            if "_" in state:
+                formatted_state = state.lower()
+            elif cc:
+                formatted_state = f"{cc.lower()}_{state.lower()}"
+            else:
+                formatted_state = state.lower()
+            parts += ["st", formatted_state]
+        if city:
+            # Bare lowercase, spaces → underscores.
+            parts += ["city", city.lower().replace(" ", "_")]
     if session:
         parts += ["sessid", session]
     return "-".join(parts)
