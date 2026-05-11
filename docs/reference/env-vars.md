@@ -84,6 +84,14 @@ See [operations/cost.md](../operations/cost.md) for the full rate-tuning workflo
 | `LOG_LEVEL` | `INFO` | Standard Python logging level |
 | `MANTIS_LOG_FORMAT` | `json` | `json` (default) emits one-line JSON per record with `tenant_id` enrichment; `plain` reverts to ad-hoc format |
 
+## API documentation surface
+
+| Var | Default | Effect |
+|---|---|---|
+| `MANTIS_ENABLE_DOCS_UI` | `1` | Serve `/docs` (Swagger) and `/redoc` (Redoc) over the FastAPI app. Set to `0` / `false` / `no` / `off` on production tenant fleets that don't want the interactive UIs exposed publicly. `/openapi.json` is served regardless. |
+| `MANTIS_GIT_SHA` | unset | Surfaced verbatim in `GET /v1/version` so clients can pin to a specific build. Typically populated by the deploy pipeline. |
+| `MANTIS_BUILD_TIME` | unset | Surfaced verbatim in `GET /v1/version`. Populated by the deploy pipeline. |
+
 ## Context (set per request, not per deployment)
 
 The handler sets these on every `/v1/predict` so downstream code (the runtime, the JSON log formatter) can read them via `os.environ`. **Don't rely on them being set at deployment time.**

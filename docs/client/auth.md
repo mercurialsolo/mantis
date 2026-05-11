@@ -38,8 +38,10 @@ The same headers go on every endpoint:
 
 Open / un-auth'd endpoints (no tokens needed):
 - `GET /health`, `GET /v1/health` — platform liveness probes
+- `GET /v1/version` — runtime version snapshot
 - `GET /v1/models` — model discovery
 - `GET /metrics` — Prometheus scrape
+- `GET /docs`, `GET /redoc`, `GET /openapi.json` — interactive API explorer (UIs gated by `MANTIS_ENABLE_DOCS_UI` on the server)
 
 ## Scopes
 
