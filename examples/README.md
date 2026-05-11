@@ -4,6 +4,19 @@ These are committed, generic micro-plans you can run against a fresh Mantis
 deployment. Unlike the customer-specific plans under `plans/` (gitignored),
 everything here is public and works without proprietary data.
 
+> Each plan here has a matching recipe under
+> [`src/mantis_agent/recipes/<name>/plan.json`](../src/mantis_agent/recipes/)
+> with the same JSON plus a `README.md` documenting tested sites and
+> known limits. The recipe location is the canonical home; `examples/`
+> is preserved for callers whose curl commands already point here.
+>
+> | Plan in `examples/` | Recipe |
+> |---|---|
+> | `extract_jobs.json` | [`recipes/job_listings`](../src/mantis_agent/recipes/job_listings/) |
+> | `form_fill.json` | [`recipes/form_submit`](../src/mantis_agent/recipes/form_submit/) |
+> | `google_search_extract.json` | [`recipes/search_results`](../src/mantis_agent/recipes/search_results/) |
+> | `docs_lookup.json` | [`recipes/docs_lookup`](../src/mantis_agent/recipes/docs_lookup/) |
+
 ## Files
 
 | Plan | What it does | Verified against |

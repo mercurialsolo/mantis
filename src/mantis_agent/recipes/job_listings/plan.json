@@ -1,0 +1,45 @@
+[
+  {
+    "intent": "Open a public Greenhouse-hosted careers page.",
+    "type": "navigate",
+    "url": "https://boards.greenhouse.io/mozilla",
+    "wait_for_load": true
+  },
+  {
+    "intent": "Wait for the listings to render.",
+    "type": "wait",
+    "seconds": 2
+  },
+  {
+    "intent": "Walk the first 5 job listings and extract role / team / location.",
+    "type": "loop",
+    "loop_count": 5,
+    "steps": [
+      {
+        "intent": "Click into the next unvisited job listing.",
+        "type": "holo3",
+        "max_steps": 5,
+        "hint": "Click the next job title link in the listings table that we have not yet visited."
+      },
+      {
+        "intent": "Extract the role title, team / department, and location.",
+        "type": "claude",
+        "extract": {
+          "schema_name": "job_listing",
+          "fields": [
+            {"name": "title", "type": "str", "required": true},
+            {"name": "team", "type": "str", "required": false},
+            {"name": "location", "type": "str", "required": false},
+            {"name": "url", "type": "str", "required": true}
+          ]
+        }
+      },
+      {
+        "intent": "Return to the listings page.",
+        "type": "holo3",
+        "max_steps": 2,
+        "hint": "Press Alt+Left to navigate back to the listings page."
+      }
+    ]
+  }
+]
