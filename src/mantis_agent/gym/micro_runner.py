@@ -80,6 +80,7 @@ class MicroPlanRunner:
         extraction_cache: Any = None,
         navigation_primitives_emit_skip: set[str] | None = None,
         context_budget: Any = None,  # ContextBudget | None — typed in body to avoid import cycle
+        seen_url_predicate: Any = None,  # Callable[[str], bool] | None
     ):
         self.brain, self.env, self.grounding, self.extractor = (
             brain, env, grounding, extractor
@@ -108,6 +109,16 @@ class MicroPlanRunner:
         self.context_budget = context_budget
         self._sub_goal_count_by_url: dict[str, int] = {}
         self._sub_goal_count_total: int = 0
+        # Issue #255: host-injected predicate for cross-session
+        # dedup. When set and the runner is about to deep-extract a
+        # detail-page URL, the predicate is consulted; if it returns
+        # True the runner short-circuits with
+        # ``skip_reason='already_seen'`` without invoking
+        # ClaudeExtractor. Mantis owns the timing window
+        # (post-navigate / pre-extract); the host owns the dedup
+        # policy (URL set, content hash, CRM lookup, …) entirely.
+        # Default ``None`` preserves today's behavior.
+        self.seen_url_predicate = seen_url_predicate
         self.on_step, self.max_retries = on_step, max_retries
         self.checkpoint_path, self.run_key = checkpoint_path, run_key
         self.session_name, self.plan_signature = session_name, plan_signature

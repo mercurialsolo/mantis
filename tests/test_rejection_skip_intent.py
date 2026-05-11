@@ -163,6 +163,11 @@ def _build_step_handler_ctx(*, recipe_schema: ExtractionSchema, dealer: bool, mi
     runner._last_extracted = {}
     runner._current_page = 1
     runner.scanner.is_duplicate.return_value = False
+    # Issue #255: MagicMock auto-creates the attribute as another
+    # callable mock unless we pin it to None here. With the auto-
+    # mock the seen-URL predicate would fire on every test and
+    # trip ``already_seen`` ahead of the dealer/incomplete branches.
+    runner.seen_url_predicate = None
 
     extractor = MagicMock()
     extractor.schema = recipe_schema
