@@ -7,6 +7,20 @@ Two dimensions, both per-tenant, both in-process per replica.
 | **Concurrent runs** | `tenant.max_concurrent_runs` | 5 | `429` with `Retry-After: 5` |
 | **Rate** (token bucket) | `tenant.rate_limit_per_minute` | 30 | `429` with `Retry-After: <s-until-token>` |
 
+## Response headers
+
+Every rate-limited response — `POST /v1/predict` (run mode), `POST /v1/cua` — carries the standard `X-RateLimit-*` triple so callers can throttle proactively instead of crashing into 429s:
+
+| Header | Value |
+|---|---|
+| `X-RateLimit-Limit` | The tenant's `rate_limit_per_minute` |
+| `X-RateLimit-Remaining` | Tokens left in the bucket right now (clamped to 0 when overdrawn) |
+| `X-RateLimit-Reset` | Unix timestamp at which the bucket would be back at full capacity |
+
+The headers appear on both 2xx and 429 responses, so a client that hits a 429 can reconcile its local view of the bucket from the same surface. Tenants with `rate_limit_per_minute=0` (rate-limit disabled) get no `X-RateLimit-*` headers — the surface is an explicit promise that the route is rate-limited.
+
+The legacy `Retry-After` header still rides on 429s, in seconds, for clients that already implement Retry-After backoff.
+
 ## How the rate dimension works
 
 A standard token bucket: each tenant has a bucket with `rate_limit_per_minute` capacity, refilled at `rate_limit_per_minute / 60` tokens/sec. Every `POST /v1/predict` (run mode only — polling actions don't consume tokens) takes one token. When the bucket is empty, the request gets `429` with `Retry-After` set to the time until the next token will be available.
