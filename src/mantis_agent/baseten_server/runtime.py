@@ -1115,6 +1115,20 @@ class BasetenCUARuntime:
             )
             elapsed = time.time() - t0
             trajectory = list(getattr(gym_result, "trajectory", []) or [])
+            # #291 ablation signal: how many predicates the brain emitted,
+            # how many were evaluable (env exposed the signal), and how many
+            # the brain got right. Lets a /v1/cua run double as an ablation
+            # data point without dumping the full trajectory.
+            predicate_total = 0
+            predicate_evaluated = 0
+            predicate_correct = 0
+            for tstep in trajectory:
+                for r in getattr(tstep, "predicate_results", None) or []:
+                    predicate_total += 1
+                    if r.get("result") is not None:
+                        predicate_evaluated += 1
+                        if r.get("result") is True:
+                            predicate_correct += 1
             result: dict[str, Any] = {
                 "run_id": run_id,
                 "mode": "pure_cua",
@@ -1129,6 +1143,15 @@ class BasetenCUARuntime:
                 "duration_s": round(elapsed),
                 "elapsed_seconds": elapsed,
                 "trajectory_len": len(trajectory),
+                "predicate_summary": {
+                    "total": predicate_total,
+                    "evaluated": predicate_evaluated,
+                    "correct": predicate_correct,
+                    "accuracy": (
+                        predicate_correct / predicate_evaluated
+                        if predicate_evaluated else None
+                    ),
+                },
             }
             self._attach_recording_metadata(result, recorder, click_log=click_log)
             self._save_result(result, prefix="pure_cua")
