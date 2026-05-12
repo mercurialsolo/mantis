@@ -31,6 +31,7 @@ from ..actions import Action, ActionType
 from ..loop_detector import LoopDetector, phash_64
 from ._runner_helpers import is_cancelled
 from .base import GymEnvironment
+from .done_gate import DoneAcceptanceDecision, check_done_acceptance
 from .predicates import (
     ObservationContext,
     evaluate_all,
@@ -138,6 +139,14 @@ class TrajectoryStep:
     # — see GymRunner.run for the wire-up.
     predicate_results: list[dict] = field(default_factory=list)
 
+    # ── #303 done-acceptance gate ───────────────────────────────────────
+    # Reason code from :func:`gym.done_gate.check_done_acceptance` when the
+    # runner rejected this step's ``done(success=True)`` and substituted a
+    # ``WAIT``. Empty when the action wasn't a done-rejection. The full set
+    # of reason codes is in :data:`gym.done_gate.REJECT_CODES`. Aggregate
+    # rejection counts also surface on ``RunResult.done_rejections_by_reason``.
+    done_rejected_reason: str = ""
+
 
 # Subset of ``gym_result.info`` that round-trips into TrajectoryStep
 # observed_state. Excludes high-cardinality / large-blob fields (raw DOM,
@@ -197,6 +206,11 @@ class RunResult:
     reward_components: dict[str, float] = field(default_factory=dict)
     paused: bool = False
     pause_state: PauseState | None = None
+    # #303: per-reason count of done(success=True) rejections by the
+    # deterministic gate. Empty dict when the gate was disabled or never
+    # rejected anything. Surfaces on /v1/cua so each run doubles as an
+    # ablation data point.
+    done_rejections_by_reason: dict[str, int] = field(default_factory=dict)
 
 
 # ── Trajectory serialization for pause snapshots (#285) ────────────────────
@@ -229,6 +243,7 @@ def _trajectory_step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
         "predicted_outcome": step.predicted_outcome,
         "observed_outcome": step.observed_outcome,
         "predicate_results": list(step.predicate_results),
+        "done_rejected_reason": step.done_rejected_reason,
     }
 
 
@@ -254,6 +269,7 @@ def _trajectory_step_from_dict(payload: dict[str, Any]) -> TrajectoryStep:
         predicted_outcome=str(payload.get("predicted_outcome", "")),
         observed_outcome=str(payload.get("observed_outcome", "")),
         predicate_results=list(payload.get("predicate_results") or []),
+        done_rejected_reason=str(payload.get("done_rejected_reason", "")),
     )
 
 
@@ -562,6 +578,12 @@ class GymRunner:
         # if the model is genuinely done but the verifier is wrong).
         done_rejections: int = 0
         max_done_rejections: int = 2
+        # #303 deterministic done-gate: per-reason rejection counts surfaced
+        # on RunResult. ``pending_done_rejected_reason`` is set when the
+        # gate rejects a done() and gets attached to the substituted-WAIT
+        # trajectory step on the next append.
+        done_rejections_by_reason: dict[str, int] = {}
+        pending_done_rejected_reason: str = ""
 
         # Reset environment (skipped on resume — env is owned by the host
         # across pause/resume and stays at whatever state it was in when
@@ -914,13 +936,70 @@ class GymRunner:
                     success = action.params.get("success", False)
                     done_success = bool(success)
                     summary = str(action.params.get("summary", ""))
-                    # Verify success-done against the screenshot. Reject if
-                    # the verifier says the screen doesn't evidence completion.
+
+                    # #303 deterministic gate: cheap predicates first, before
+                    # the model-based verifier runs. Toggle off via
+                    # MANTIS_DONE_GATE=disabled for ablation runs.
+                    gate_decision: DoneAcceptanceDecision | None = None
                     if (
+                        success
+                        and done_rejections < max_done_rejections
+                        and os.environ.get(
+                            "MANTIS_DONE_GATE", "enabled",
+                        ).lower() != "disabled"
+                    ):
+                        gate_decision = check_done_acceptance(
+                            summary=summary,
+                            plan=plan,
+                            plan_step_idx=plan_step_idx,
+                            recent_actions=action_history[-5:],
+                            recent_frame_hashes=[
+                                t.frame_hash for t in trajectory[-5:]
+                            ],
+                            recent_urls=[
+                                str(t.observed_state.get("url", "") or "")
+                                for t in trajectory[-5:]
+                            ],
+                            pending_form_labels=[
+                                str(v.get("label") or "")
+                                for v in force_fill_values
+                            ],
+                        )
+
+                    if gate_decision is not None and not gate_decision.accept:
+                        done_rejections += 1
+                        done_rejections_by_reason[gate_decision.reason] = (
+                            done_rejections_by_reason.get(gate_decision.reason, 0) + 1
+                        )
+                        logger.warning(
+                            "done-gate: rejecting done(success=True) "
+                            "(rejection %d/%d) — %s: %s. Continuing.",
+                            done_rejections, max_done_rejections,
+                            gate_decision.reason, gate_decision.detail,
+                        )
+                        # Substitute with a no-op wait so the loop keeps going.
+                        # The model gets another shot on the next inference.
+                        action = Action(
+                            ActionType.WAIT,
+                            {"seconds": 1.0},
+                            reasoning=(
+                                f"done-gate: rejected — "
+                                f"{gate_decision.reason}: {gate_decision.detail}"
+                            ),
+                        )
+                        # Record the rejection on the substituted step so
+                        # offline analysis can attribute the WAIT to a gate
+                        # rejection rather than a real model wait.
+                        pending_done_rejected_reason = gate_decision.reason
+                        # Fall through to normal action execution path.
+                    elif (
                         success
                         and done_rejections < max_done_rejections
                         and frame_history
                     ):
+                        # Gate accepted (or was skipped for non-success done):
+                        # run the existing model-based verifier as a second
+                        # opinion before terminating.
                         verification = holo3_detector.verify_done(
                             self.brain,
                             frame_history[-1],
@@ -1342,7 +1421,10 @@ class GymRunner:
                     observed_outcome=feedback,
                     predicted_outcome=predicted_outcome,
                     predicate_results=step_predicate_results,
+                    done_rejected_reason=pending_done_rejected_reason,
                 ))
+                # One-shot: clear so the next step doesn't inherit it.
+                pending_done_rejected_reason = ""
 
                 logger.info(f"Feedback: {feedback}")
 
@@ -1387,6 +1469,7 @@ class GymRunner:
             total_reward=total_reward, total_steps=len(trajectory),
             total_time=total_time, trajectory=trajectory,
             termination_reason=termination_reason,
+            done_rejections_by_reason=dict(done_rejections_by_reason),
         )
 
         # Terminal reward — applied last so episode() can read the full
