@@ -458,6 +458,7 @@ class GymRunner:
         ground_truth: dict[str, Any] | None = None,
         capture_dir: Any = None,
         pause_input: Any = None,
+        pending_form_labels: list[str] | None = None,
     ) -> RunResult:
         """Execute a task with plan persistence, feedback, and context.
 
@@ -481,6 +482,17 @@ class GymRunner:
             capture_dir: Optional Path. If set, each post-step screenshot is
                 written as `<capture_dir>/<NNNN>.png` for offline use (e.g.
                 rollout collection for SFT). The reset frame is `0000.png`.
+            pending_form_labels: Optional cross-layer hint (#306 follow-up).
+                When a higher-level orchestrator (e.g. ``MicroPlanRunner``
+                via ``Holo3StepHandler``) spawns an inner ``GymRunner`` for
+                a sub-step, the outer runner can pass labels of values
+                still pending elsewhere in the plan. The done-acceptance
+                gate uses this list — overriding the inner
+                ``FormController``'s derived pending list — so the gate
+                rejects ``done(success=True)`` on a sub-step that
+                inadvertently claims whole-task completion while outer
+                credentials remain pending. Default ``None`` preserves
+                current single-layer behaviour.
         """
         logger.info(f"Starting task: {task!r} (id={task_id})")
         t0 = time.time()
@@ -996,6 +1008,21 @@ class GymRunner:
                             "MANTIS_DONE_GATE", "enabled",
                         ).lower() != "disabled"
                     ):
+                        # #306 follow-up: when the caller passes
+                        # ``pending_form_labels`` (typically MicroPlanRunner
+                        # via Holo3StepHandler), use that cross-layer
+                        # hint instead of the inner FormController's
+                        # local view. Otherwise fall back to the inner
+                        # controller's pending values.
+                        if pending_form_labels is not None:
+                            gate_pending_labels = [
+                                str(lbl) for lbl in pending_form_labels
+                            ]
+                        else:
+                            gate_pending_labels = [
+                                str(v.get("label") or "")
+                                for v in force_fill_values
+                            ]
                         gate_decision = check_done_acceptance(
                             summary=summary,
                             plan=plan,
@@ -1008,10 +1035,7 @@ class GymRunner:
                                 str(t.observed_state.get("url", "") or "")
                                 for t in trajectory[-5:]
                             ],
-                            pending_form_labels=[
-                                str(v.get("label") or "")
-                                for v in force_fill_values
-                            ],
+                            pending_form_labels=gate_pending_labels,
                         )
 
                     if gate_decision is not None and not gate_decision.accept:

@@ -80,7 +80,19 @@ class Holo3StepHandler:
             on_step=runner.on_step,
         )
 
-        result = gym_runner.run(task=step.intent, task_id=f"step_{index}_{step.type}")
+        # #306 follow-up: when the outer MicroPlanRunner tracks pending
+        # form labels across the whole plan, forward them so the inner
+        # GymRunner's done-gate can reject ``done(success=True)`` on a
+        # sub-step that inadvertently claims whole-task completion
+        # while outer credentials remain pending. MicroPlanRunner
+        # doesn't track this state today; the kwarg gives us a clean
+        # plumbing point for when it does.
+        outer_pending_labels = getattr(runner, "pending_form_labels", None)
+        result = gym_runner.run(
+            task=step.intent,
+            task_id=f"step_{index}_{step.type}",
+            pending_form_labels=outer_pending_labels,
+        )
 
         success = result.success
         runner._update_scroll_state_from_trajectory(result, context=f"holo3_{step.type}")
