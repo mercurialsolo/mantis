@@ -1348,6 +1348,13 @@ class BasetenCUARuntime:
                 "perceptual_summary": dict(
                     getattr(gym_result, "perceptual_summary", None) or {},
                 ),
+                # #302 ablation signal: per-reason count of loop-recovery
+                # substitutions (type_pending_value, tab_to_next_field,
+                # press_return_for_submit). Empty when the policy never
+                # fired.
+                "loop_recoveries_by_reason": dict(
+                    getattr(gym_result, "loop_recoveries_by_reason", None) or {},
+                ),
                 "done_rejections_by_reason": dict(
                     getattr(gym_result, "done_rejections_by_reason", None) or {},
                 ),

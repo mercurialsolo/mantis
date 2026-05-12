@@ -13,3 +13,4 @@
 | [Chrome session reuse](chrome-session-reuse.md) | Container-scoped cache that reuses live Xvfb + Chrome across `/v1/cua` requests |
 | [Speculative inference](speculative-inference.md) | Overlaps `brain.think()` with the post-action settle to remove the serial inference cost |
 | [Perceptual diff verifier](perceptual-diff.md) | Detects silent failures on high-risk actions by comparing pre/post frame hashes |
+| [Loop recovery policy](loop-recovery.md) | Forces action-class transitions (Tab / Return / Type) when the brain loops on a no-effect class |
