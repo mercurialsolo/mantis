@@ -51,6 +51,30 @@ class PlanExecutor:
         self._env = env
         self._settle_time = settle_time
 
+    def _settle(self) -> None:
+        """Post-action settle (#294).
+
+        Prefers Playwright's ``networkidle`` gate (capped at the legacy
+        ``settle_time``), falling back to a plain fixed sleep when no
+        page is available or ``MANTIS_ADAPTIVE_SETTLE=disabled``.
+
+        Replaces the previous bare ``time.sleep(self._settle_time)`` so
+        deterministic plan steps no longer pay the worst-case latency on
+        every action.
+        """
+        from . import adaptive_settle
+
+        if not adaptive_settle.is_enabled():
+            self._settle()
+            return
+        page = self._page
+        if page is None:
+            self._settle()
+            return
+        adaptive_settle.wait_for_networkidle(
+            page, max_seconds=self._settle_time,
+        )
+
     @property
     def _page(self):
         """Resolve the page lazily — env.page is only available after reset."""
@@ -107,7 +131,7 @@ class PlanExecutor:
         for key, val in params.items():
             url = url.replace(f"{{{{{key}}}}}", val)
         self._page.goto(url, wait_until="domcontentloaded")
-        time.sleep(self._settle_time)
+        self._settle()
         return StepResult(success=True, method="direct", detail=f"navigated to {url}", url_after=self._page.url)
 
     def _type(self, step, params: dict) -> StepResult:
@@ -128,7 +152,7 @@ class PlanExecutor:
                 except Exception:
                     pass
                 el.type(text)
-                time.sleep(self._settle_time)
+                self._settle()
                 actual = ""
                 try:
                     actual = el.evaluate("el => el.value") or ""
@@ -152,20 +176,20 @@ class PlanExecutor:
                 if focused_info["tag"] == "select":
                     try:
                         self._page.select_option("select:focus", label=text)
-                        time.sleep(self._settle_time)
+                        self._settle()
                         return StepResult(success=True, method="direct", detail=f"selected '{text}' from dropdown")
                     except Exception:
                         pass
                 # For input/textarea/contenteditable: keyboard type
                 self._page.keyboard.type(text)
-                time.sleep(self._settle_time)
+                self._settle()
                 return StepResult(success=True, method="direct", detail=f"typed '{text}' into focused {focused_info['tag']}")
         except Exception:
             pass
 
         # Strategy 3: just type via keyboard (last resort — something might receive it)
         self._page.keyboard.type(text)
-        time.sleep(self._settle_time)
+        self._settle()
         return StepResult(success=True, method="direct", detail=f"typed '{text}' via keyboard (no target found)")
 
     def _click(self, step, params: dict) -> StepResult:
@@ -177,21 +201,21 @@ class PlanExecutor:
         el = self._find_clickable(target)
         if el:
             el.click()
-            time.sleep(self._settle_time)
+            self._settle()
             return StepResult(success=True, method="direct", detail=f"clicked '{target}'", url_after=self._page.url)
 
         # Strategy 2: find by role + name
         el = self._find_by_role(target)
         if el:
             el.click()
-            time.sleep(self._settle_time)
+            self._settle()
             return StepResult(success=True, method="direct", detail=f"clicked role element '{target}'", url_after=self._page.url)
 
         # Strategy 3: target might be an input field (e.g. "User ID input field")
         el = self._find_input(target)
         if el:
             el.click()
-            time.sleep(self._settle_time)
+            self._settle()
             return StepResult(success=True, method="direct", detail=f"clicked input '{target}'", url_after=self._page.url)
 
         return StepResult(success=False, method="direct", detail=f"could not find clickable element for '{target}'")
@@ -199,7 +223,7 @@ class PlanExecutor:
     def _key(self, step, params: dict) -> StepResult:
         keys = step.params.get("keys", "")
         self._page.keyboard.press(keys)
-        time.sleep(self._settle_time)
+        self._settle()
         return StepResult(success=True, method="direct", detail=f"pressed {keys}")
 
     def _scroll(self, step) -> StepResult:
@@ -218,7 +242,7 @@ class PlanExecutor:
             dx = amount * 100
         self._page.mouse.move(x, y)
         self._page.mouse.wheel(dx, dy)
-        time.sleep(self._settle_time)
+        self._settle()
         return StepResult(success=True, method="direct", detail=f"scrolled {direction} {amount}x")
 
     def _wait(self, step) -> StepResult:

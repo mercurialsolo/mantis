@@ -32,6 +32,7 @@ from typing import Any
 from PIL import Image
 
 from ..actions import Action, ActionType
+from . import adaptive_settle
 from .base import GymEnvironment, GymObservation, GymResult
 
 logger = logging.getLogger(__name__)
@@ -480,12 +481,28 @@ class XdotoolGymEnv(GymEnvironment):
 
         self._execute_action(action)
 
-        # Post-action settle
+        # Post-action settle (#294).
+        #
+        # Frame-stability gate replaces the fixed sleep: poll the framebuffer
+        # every 100 ms, return as soon as two consecutive ``phash_64`` reads
+        # agree (page has stopped repainting), cap at the legacy
+        # ``settle_time`` budget. On a static page this typically lands in
+        # ~200-300 ms; on a network-heavy submit it still respects the cap.
+        #
+        # MANTIS_ADAPTIVE_SETTLE=disabled falls back to the legacy fixed
+        # sleep so an A/B comparison doesn't need a redeploy.
         if action.action_type not in (ActionType.WAIT, ActionType.DONE):
             settle = self._settle_time
             if self._human_speed:
                 settle += random.uniform(0.5, 2.0)
-            time.sleep(settle)
+            if adaptive_settle.is_enabled():
+                adaptive_settle.wait_until_stable(
+                    self._screenshot,
+                    max_seconds=settle,
+                    poll_interval=0.1,
+                )
+            else:
+                time.sleep(settle)
 
         obs = self._capture()
         return GymResult(observation=obs, reward=0.0, done=False, info={})
