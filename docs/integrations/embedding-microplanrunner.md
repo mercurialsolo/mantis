@@ -110,7 +110,7 @@ sidecar (e.g. browser-context extraction) without parsing message
 structure. `keep_screenshots=N` caps retention to the most-recent N runs
 to bound memory on long plans.
 
-### 2. `cancel_event` — clean SIGTERM exit ([#76](https://github.com/mercurialsolo/mantis/issues/76))
+### 2. `cancel_event` — clean SIGTERM exit ([#76](https://github.com/mercurialsolo/mantis/issues/76), [#288](https://github.com/mercurialsolo/mantis/issues/288))
 
 ```python
 shutdown = threading.Event()
@@ -126,6 +126,25 @@ if result.cancelled:
 
 Accepts any object with `.is_set()` or a plain callable. Checked at every
 step boundary.
+
+`GymRunner` accepts the same `cancel_event` kwarg with the same shape
+(#288). On a positive check, `GymRunner` returns
+`RunResult(paused=True, pause_state=..., termination_reason="cancelled")`
+with `pause_state.pending_reason="cancelled"` — snapshot shape is
+identical to the `PauseRequested` path, so `runner.resume(pause_state)`
+rehydrates via the same code path. `user_input` is optional on a
+cancellation resume (the host typically just continues; pass it only if
+the cancellation was user-driven).
+
+```python
+shutdown = threading.Event()
+runner = GymRunner(brain=brain, env=env, cancel_event=shutdown)
+
+result = runner.run(task="onboard the new user")
+if result.paused and result.termination_reason == "cancelled":
+    save_to_db(result.pause_state.to_dict())
+    return  # release the worker; resume later from the snapshot
+```
 
 ### 3. `register_tool` — host tools to the brain ([#71](https://github.com/mercurialsolo/mantis/issues/71))
 

@@ -29,6 +29,7 @@ from PIL import Image
 
 from ..actions import Action, ActionType
 from ..loop_detector import LoopDetector, phash_64
+from ._runner_helpers import is_cancelled
 from .base import GymEnvironment
 # Re-exported so hosts can ``from mantis_agent.gym.runner import
 # PauseRequested, PauseState`` without reaching into the .checkpoint
@@ -260,6 +261,7 @@ class GymRunner:
         grounding: Any = None,
         on_step: Any = None,
         site_config: Any = None,
+        cancel_event: Any = None,
     ):
         self.brain = brain
         self.env = env
@@ -278,6 +280,20 @@ class GymRunner:
         # unchanged.
         self.site_config = site_config
         self._loop_detector = LoopDetector()
+
+        # ── Cooperative cancellation (#288) ─────────────────────────────
+        # Mirrors MicroPlanRunner.__init__'s `cancel_event` semantics
+        # (#76). Pass any object with ``.is_set()`` (e.g.
+        # ``threading.Event``) or a plain no-arg callable. The reusable
+        # ``is_cancelled`` helper in :mod:`._runner_helpers` reads
+        # ``runner.cancel_event`` generically — no GymRunner-specific
+        # check needed. Checked at every step boundary in :meth:`run`;
+        # on a positive check the runner builds a :class:`PauseState`
+        # snapshot (same shape as the :class:`PauseRequested` path from
+        # #285) and returns ``RunResult(paused=True, ...,
+        # termination_reason="cancelled")`` so :meth:`resume` can
+        # rehydrate via the same code path.
+        self.cancel_event = cancel_event
 
         # ── Host-tool channel (#285) ────────────────────────────────────
         # Mirrors MicroPlanRunner's surface so the same host integration
@@ -563,6 +579,43 @@ class GymRunner:
 
         for step_num in range(step_offset + 1, self.max_steps + 1):
             logger.info(f"--- Step {step_num}/{self.max_steps} ---")
+
+            # ── Cooperative cancellation (#288) ──────────────────────
+            # Checked at the TOP of every loop iteration so a SIGTERM
+            # arriving mid-step gets honored at the next boundary.
+            # Snapshot uses the same shape as the PauseRequested path
+            # (#285), so :meth:`resume` rehydrates via the same code
+            # path — no new return type, no new exception class.
+            if is_cancelled(self):
+                logger.info(
+                    "GymRunner cancelled at step %d (cancel_event tripped)",
+                    step_num,
+                )
+                termination_reason = "cancelled"
+                pause_state = PauseState(
+                    session_name=task_id,
+                    step_index=step_num - 1,
+                    pending_tool="",
+                    pending_arguments={},
+                    pending_reason="cancelled",
+                    prompt="",
+                    trajectory_steps=[
+                        _trajectory_step_to_dict(t) for t in trajectory
+                    ],
+                    task=task,
+                    task_id=task_id,
+                    timestamp=time.time(),
+                )
+                return RunResult(
+                    task=task, task_id=task_id, success=False,
+                    total_reward=total_reward,
+                    total_steps=step_num - 1,
+                    total_time=time.time() - t0,
+                    trajectory=trajectory,
+                    termination_reason=termination_reason,
+                    paused=True,
+                    pause_state=pause_state,
+                )
 
             # ── Hybrid execution: try DOM first, fall back to brain ──
             direct_executed = False

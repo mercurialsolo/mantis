@@ -312,3 +312,97 @@ def test_consume_pause_input_is_read_once() -> None:
     assert runner.consume_pause_input() == "secret"
     # Second read sees the default.
     assert runner.consume_pause_input(default="default-value") == "default-value"
+
+
+# ── 4. cancel_event → RunResult(paused=True, termination_reason="cancelled") (#288) ──
+
+
+def test_cancel_event_threading_event_stops_at_next_boundary() -> None:
+    """A pre-set ``threading.Event`` short-circuits the run at the very
+    first step boundary — runner returns ``RunResult(paused=True,
+    termination_reason="cancelled")`` with a resumable snapshot, and the
+    brain is never asked to think."""
+    import threading
+
+    shutdown = threading.Event()
+    shutdown.set()  # Trip the event before run() even starts.
+    env = _StubEnv()
+    brain = _ScriptedBrain([_tool_call("any", {})])
+    runner = GymRunner(
+        brain=brain, env=env, max_steps=10, cancel_event=shutdown,
+    )
+
+    result = runner.run(task="t", task_id="t-cancel")
+
+    assert result.paused is True
+    assert result.termination_reason == "cancelled"
+    assert result.pause_state is not None
+    assert result.pause_state.pending_reason == "cancelled"
+    assert result.pause_state.task == "t"
+    assert result.pause_state.task_id == "t-cancel"
+    # Brain never invoked — cancellation fired before any think() call.
+    assert brain.think_calls == 0
+    # env.reset still ran (the initial reset happens before the loop).
+    assert env.reset_calls == 1
+
+
+def test_cancel_event_callable_form_stops_run() -> None:
+    """``cancel_event`` accepts a plain no-arg callable in addition to
+    ``threading.Event``-shaped objects — mirrors ``is_cancelled`` in
+    ``_runner_helpers``, which probes for both."""
+    flipped = [False]
+
+    def cancel_fn() -> bool:
+        return flipped[0]
+
+    env = _StubEnv()
+    brain = _ScriptedBrain([_tool_call("any", {})])
+    runner = GymRunner(
+        brain=brain, env=env, max_steps=10, cancel_event=cancel_fn,
+    )
+    # First run() with the callable returning False — runs to natural
+    # termination (brain script falls off → DONE).
+    result_a = runner.run(task="t", task_id="t1")
+    assert result_a.paused is False
+
+    # Flip the callable, re-run — must trip cancellation at the first
+    # step boundary.
+    flipped[0] = True
+    brain._actions = [_tool_call("any", {})]  # restock the script
+    result_b = runner.run(task="t", task_id="t2")
+    assert result_b.paused is True
+    assert result_b.termination_reason == "cancelled"
+
+
+def test_resume_from_cancellation_snapshot() -> None:
+    """The cancellation snapshot is shape-identical to a PauseRequested
+    snapshot — :meth:`resume` rehydrates trajectory + action_history and
+    continues via the same code path. No separate cancel-resume
+    machinery."""
+    import threading
+
+    shutdown = threading.Event()
+    env = _StubEnv()
+    # Brain script: one tool_call (eaten pre-cancel) then one DONE
+    # (eaten on resume after the cancel snapshot is loaded).
+    brain = _ScriptedBrain([_tool_call("ping", {})])
+    runner = GymRunner(
+        brain=brain, env=env, max_steps=10, cancel_event=shutdown,
+    )
+    runner.register_tool("ping", {}, lambda _args: "pong")
+
+    # Trip cancellation BEFORE the first step — snapshot will have an
+    # empty trajectory (cancel runs before any tool invocation).
+    shutdown.set()
+    cancelled = runner.run(task="t", task_id="t-resume")
+    assert cancelled.paused is True
+    assert cancelled.termination_reason == "cancelled"
+
+    # Clear the event and resume — the brain runs its DONE action,
+    # loop terminates cleanly.
+    shutdown.clear()
+    resumed = runner.resume(cancelled.pause_state)
+    assert resumed.paused is False
+    # env.reset_calls should still be 1 — resume MUST NOT re-reset (same
+    # guarantee the PauseRequested path makes).
+    assert env.reset_calls == 1
