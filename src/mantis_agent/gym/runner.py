@@ -28,7 +28,11 @@ from typing import Any, Protocol
 from PIL import Image
 
 from ..actions import Action, ActionType
-from ..loop_detector import LoopDetector, phash_64
+from ..loop_detector import (
+    LoopDetector,
+    adaptive_loop_enabled as _loop_adaptive_enabled,
+    phash_64,
+)
 from ._runner_helpers import is_cancelled
 from .base import GymEnvironment
 from .done_gate import DoneAcceptanceDecision, check_done_acceptance
@@ -1225,7 +1229,7 @@ class GymRunner:
                     not substituted_action
                     and director_enabled
                     and step_num - last_director_step >= director_cooldown_steps
-                    and self._loop_detector.is_any_loop(self.soft_loop_window)
+                    and self._is_loop(self.soft_loop_window)
                 ):
                     from . import claude_director
                     # Reconstruct what's been filled so the director doesn't
@@ -1289,7 +1293,7 @@ class GymRunner:
                 pending_loop_recovery_reason: str = ""
                 if (
                     not substituted_action
-                    and self._loop_detector.is_any_loop(self.soft_loop_window)
+                    and self._is_loop(self.soft_loop_window)
                 ):
                     recent_frame_hashes_for_recovery = [
                         t.frame_hash for t in trajectory[-self.soft_loop_window:]
@@ -1588,7 +1592,7 @@ class GymRunner:
                     termination_reason = "env_done"
                     break
 
-                if self._loop_detector.is_any_loop(self.hard_loop_window):
+                if self._is_loop(self.hard_loop_window):
                     logger.warning("Hard action loop detected — stopping")
                     termination_reason = "loop"
                     break
@@ -1876,7 +1880,7 @@ class GymRunner:
 
             # Soft loop nudge — fires on byte-equal repeats, coordinate-drift
             # clicks, or diverse-actions-on-frozen-state.
-            if self._loop_detector.is_any_loop(self.soft_loop_window):
+            if self._is_loop(self.soft_loop_window):
                 nudge = self._build_nudge(action_history, last_focused_input)
                 parts.append(nudge)
                 # #123: re-inject curriculum techniques scoped to whatever
@@ -2081,6 +2085,19 @@ class GymRunner:
     def _is_valid_force_fill_click(x: int, y: int) -> bool:
         """Reject sentinel/browser-chrome clicks before typing plan values."""
         return x >= 10 and y >= 80
+
+    def _is_loop(self, base_window: int) -> bool:
+        """Loop check honoring the #298 ``MANTIS_LOOP_ADAPTIVE`` toggle.
+
+        When the toggle is on (default) the comparison window is expanded
+        on diverse / state-progressing histories and tightened on stuck
+        signatures via :meth:`LoopDetector.is_any_loop_adaptive`. When
+        off, falls through to the legacy fixed-window check so the
+        ablation harness gets a clean A/B.
+        """
+        if _loop_adaptive_enabled():
+            return self._loop_detector.is_any_loop_adaptive(base_window)
+        return self._loop_detector.is_any_loop(base_window)
 
     @staticmethod
     def _maybe_redirect_repeated_top_click(

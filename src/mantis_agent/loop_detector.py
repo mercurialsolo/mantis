@@ -15,10 +15,17 @@ loop when the visible content changes between presses.
 This module gives both runners one helper with all three signals:
 ``is_repeat_loop``, ``is_drift_loop``, ``is_state_loop``. Each takes the
 same ``window`` so callers can keep their existing soft/hard thresholds.
+
+#298: ``adaptive_window`` / ``is_any_loop_adaptive`` adjust those
+thresholds by recent action diversity + observed state progress, so
+pagination doesn't trigger spurious soft nudges and clear traps fire
+sooner. Enabled by default; ``MANTIS_LOOP_ADAPTIVE=disabled`` falls
+back to fixed windows for ablation.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import TYPE_CHECKING
@@ -154,6 +161,139 @@ class LoopDetector:
             or self.is_state_loop(window)
         )
 
+    # ── #298: adaptive thresholds ──────────────────────────────────────
+
+    def pattern_diversity(self, window: int) -> float:
+        """Ratio of unique action signatures to window size, in ``[0, 1]``.
+
+        ``1.0`` means every recent action was distinct; ``0.0`` is empty
+        history. Click / double-click coordinates are bucketed by
+        :attr:`click_tol_px` so micro-drift on the same UI target counts
+        as one signature (matches :meth:`is_drift_loop` semantics).
+
+        Returns ``0.0`` when the buffer is shorter than ``window`` so the
+        signal is conservative on cold starts.
+        """
+        if window < 2 or len(self._samples) < window:
+            return 0.0
+        recent = self._samples[-window:]
+        sigs = {self._action_signature(s.action) for s in recent}
+        return len(sigs) / window
+
+    def state_progressed(self, window: int) -> bool:
+        """True when URL or frame hash moved across the last ``window`` samples.
+
+        Public-surface mirror of the internal ``_state_changed`` guard
+        already used by :meth:`is_repeat_loop`. Returns ``False`` when the
+        buffer is too short to draw a conclusion.
+        """
+        if window < 2 or len(self._samples) < window:
+            return False
+        return self._state_changed(self._samples[-window:])
+
+    def adaptive_window(
+        self,
+        base_window: int,
+        *,
+        max_extension: int = 2,
+        floor: int = 2,
+    ) -> int:
+        """Adjust ``base_window`` by recent action diversity + state progress.
+
+        The fixed default windows (soft=3, hard=8 in :class:`GymRunner`)
+        are correct for the median case but produce two failure modes:
+
+        - **Spurious nudges on pagination**: the brain clicks the "Next"
+          button five times, the page advances each time. ``is_repeat_loop``
+          fires (identical click params) even though the run is making
+          progress. The fix is to *extend* the window when state is
+          progressing or actions are varied — diversity alone isn't
+          enough because pagination has zero diversity.
+        - **Late termination on real traps**: a modal/captcha keeps the
+          page locked while the brain emits five identical clicks. The
+          state-loop signal already catches this at the hard window;
+          the soft window can fire earlier (recovery / nudge) when
+          diversity is low *and* state is frozen.
+
+        The returned window is clamped to ``[floor, base + max_extension]``.
+        """
+        if base_window <= floor:
+            return base_window
+        # Need at least ``base_window`` samples to draw any conclusion;
+        # short-buffer reads from ``pattern_diversity`` / ``state_progressed``
+        # both return zero/False which would otherwise tip the tightening
+        # branch. Keep the legacy fixed window until history catches up.
+        if len(self._samples) < base_window:
+            return base_window
+        diversity = self.pattern_diversity(base_window)
+        progressed = self.state_progressed(base_window)
+        # Extend when work looks productive (varied actions OR moving page).
+        if diversity >= 0.6 or progressed:
+            return base_window + max_extension
+        # Tighten when we have a clear stuck signature (no state, no variety).
+        if diversity <= 0.25 and not progressed:
+            shrink = max(1, max_extension // 2)
+            return max(floor, base_window - shrink)
+        return base_window
+
+    def is_any_loop_adaptive(
+        self,
+        base_window: int,
+        *,
+        max_extension: int = 2,
+    ) -> bool:
+        """Adaptive variant of :meth:`is_any_loop` (#298).
+
+        - Computes the effective window via :meth:`adaptive_window`.
+        - Adds a pagination guard: if observed state moved across the
+          window AND the run isn't a state-loop (frozen state with
+          diverse actions, which the legacy :meth:`is_state_loop` catches),
+          the run is making progress — don't fire even on identical
+          repeated actions. This is the case the legacy ``is_repeat_loop``
+          gets wrong on drilldown / "Next" pagination, where every
+          ``click("Next")`` is byte-equal but the URL/frame moves.
+        """
+        effective = self.adaptive_window(
+            base_window, max_extension=max_extension
+        )
+        if self.state_progressed(effective) and not self.is_state_loop(effective):
+            return False
+        return self.is_any_loop(effective)
+
+    @staticmethod
+    def _action_signature(action: Action) -> tuple:
+        """Stable signature used by :meth:`pattern_diversity`.
+
+        Click-like actions bucket coordinates so micro-drift collapses to
+        one signature (same UI target). Other action types use their
+        primary discriminating parameter.
+        """
+        atype = action.action_type
+        params = action.params or {}
+        if atype in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+            x = params.get("x")
+            y = params.get("y")
+            if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                # Bucket to ``click_tol_px``-ish granularity; 8 px matches
+                # the default ``click_tol_px`` so signatures track drift.
+                return (atype, int(x) // 8, int(y) // 8)
+            return (atype,)
+        if atype == ActionType.DRAG:
+            return (
+                atype,
+                int((params.get("end_x") or 0)) // 8,
+                int((params.get("end_y") or 0)) // 8,
+            )
+        if atype == ActionType.KEY_PRESS:
+            keys = str(params.get("keys") or params.get("key") or "").lower()
+            return (atype, keys)
+        if atype == ActionType.TYPE:
+            text = str(params.get("text") or params.get("content") or "")
+            return (atype, text[:32])
+        if atype == ActionType.SCROLL:
+            return (atype, str(params.get("direction") or "down"))
+        return (atype,)
+
     # ── Internals ────────────────────────────────────────────────────────
 
     def _tail(self, window: int) -> list[_Sample] | None:
@@ -225,3 +365,16 @@ def encode_png_hash(img: "Image.Image") -> str:
     buf = BytesIO()
     img.save(buf, format="PNG")
     return hashlib.sha1(buf.getvalue()).hexdigest()[:16]
+
+
+def adaptive_loop_enabled() -> bool:
+    """#298: gate for adaptive loop windows.
+
+    Default-on. ``MANTIS_LOOP_ADAPTIVE=disabled`` (or ``0`` / ``false``)
+    forces fixed-window behaviour so the ablation harness can run an
+    A/B without redeploys. Read once per call site so the per-request
+    env-var override in ``BasetenCUARuntime._run_pure_cua`` flips
+    behaviour mid-container.
+    """
+    raw = os.environ.get("MANTIS_LOOP_ADAPTIVE", "enabled").strip().lower()
+    return raw not in {"disabled", "0", "false", "off", "no"}
