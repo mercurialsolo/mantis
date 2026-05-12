@@ -41,8 +41,17 @@
             "select_option",
             "paginate",
             "filter",
-            "done"
+            "done",
+            "tool_call"
           ]
+        },
+        "name": {
+          "type": "string",
+          "description": "tool_call steps: the registered host-tool name (see `register_tool` on MicroPlanRunner or GymRunner). The brain emits this verbatim; the runner short-circuits env.step and routes through the tool channel."
+        },
+        "args": {
+          "type": "object",
+          "description": "tool_call steps: keyword arguments passed to the registered handler. Shape matches the schema the host declared at registration time."
         },
         "url": {
           "type": "string",

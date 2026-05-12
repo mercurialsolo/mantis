@@ -175,6 +175,50 @@ result = runner.resume(state, user_input="123456", plan=plan)
 Plan-signature mismatch on resume raises `ValueError`: you can't resume a
 different plan than the one that paused.
 
+### Same surface on `GymRunner` ([#285](https://github.com/mercurialsolo/mantis/issues/285))
+
+`GymRunner` — the perception-action loop that drives any
+`GymEnvironment` with a brain (`Holo3Brain`, `ClaudeBrain`, the mock
+brain, …) — mirrors the host-tool API. Brains opt in by emitting an
+`Action(ActionType.TOOL_CALL, params={"name": str, "args": dict})`; the
+runner short-circuits `env.step` and routes through the tool channel.
+
+```python
+from mantis_agent.gym.runner import GymRunner, PauseRequested, PauseState
+
+runner = GymRunner(brain=brain, env=env, max_steps=50)
+
+runner.register_tool(
+    name="request_user_input",
+    schema={"type": "object", "properties": {"prompt": {"type": "string"}}},
+    handler=lambda args: _ask_or_pause(args, runner),
+)
+
+result = runner.run(task="onboard the new user")
+if result.paused:
+    save_to_db(result.pause_state.to_dict())
+    return  # release the worker; resume later
+
+# Later, when the user replies:
+state = PauseState.from_dict(load_from_db())
+result = runner.resume(state, user_input="user@example.com")
+```
+
+Notes specific to `GymRunner`:
+
+- The env is **owned by the host across pause/resume**: `resume()` does
+  *not* call `env.reset`, so the URL, Chrome profile, and DOM state your
+  host was holding survive the round-trip.
+- `PauseState.trajectory_steps` carries the full per-step trajectory
+  (action, thinking, observed state, frame hash) — restored on resume so
+  the brain sees the prior context as `action_history`.
+- `PauseState.task` and `PauseState.task_id` are populated by
+  `GymRunner`; `resume()` reads them so the caller doesn't have to
+  re-thread the task string. Other `run()` kwargs (`plan`,
+  `plan_inputs`, `reward_fn`, …) must be re-supplied by the caller.
+- `consume_pause_input(default=None)` is read-once on `GymRunner`, same
+  semantics as `MicroPlanRunner`.
+
 ## The skip-envelope family — advance vs. retry signals
 
 Hosts that wrap mantis in a tool surface (e.g. an LLM orchestrator
