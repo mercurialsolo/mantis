@@ -30,7 +30,12 @@ from PIL import Image
 from ..actions import Action, ActionType
 from ..loop_detector import LoopDetector, phash_64
 from .base import GymEnvironment
+# Re-exported so hosts can ``from mantis_agent.gym.runner import
+# PauseRequested, PauseState`` without reaching into the .checkpoint
+# private surface (#285).
+from .checkpoint import PauseRequested, PauseState  # noqa: F401
 from .gallery_trap import detect_gallery_trap, gallery_recovery_actions
+from .tool_channel import ToolChannel
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +157,13 @@ def _gallery_observed_state(recovery: dict[str, Any] | None) -> dict[str, Any]:
 
 @dataclass
 class RunResult:
-    """Final result of a GymRunner evaluation."""
+    """Final result of a GymRunner evaluation.
+
+    ``paused`` and ``pause_state`` are populated when a registered tool
+    handler raised :class:`PauseRequested` (#285). Host code can call
+    :meth:`GymRunner.resume` with the snapshot once the user has supplied
+    the requested input.
+    """
 
     task: str
     task_id: str
@@ -161,9 +172,67 @@ class RunResult:
     total_steps: int
     total_time: float
     trajectory: list[TrajectoryStep]
-    termination_reason: str  # "done", "max_steps", "loop", "env_done"
+    termination_reason: str  # "done", "max_steps", "loop", "env_done", "paused"
     terminal_reward: float = 0.0
     reward_components: dict[str, float] = field(default_factory=dict)
+    paused: bool = False
+    pause_state: PauseState | None = None
+
+
+# ── Trajectory serialization for pause snapshots (#285) ────────────────────
+
+
+def _trajectory_step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
+    """JSON-friendly snapshot of a TrajectoryStep.
+
+    Custom rather than ``dataclasses.asdict`` because ``Action.action_type``
+    is a ``str``-derived enum that ``asdict`` leaves as an enum instance —
+    not JSON-serializable. Round-tripped by :func:`_trajectory_step_from_dict`.
+    """
+    return {
+        "step": step.step,
+        "action": {
+            "action_type": step.action.action_type.value,
+            "params": dict(step.action.params),
+            "reasoning": step.action.reasoning,
+        },
+        "thinking": step.thinking,
+        "reward": step.reward,
+        "done": step.done,
+        "inference_time": step.inference_time,
+        "feedback": step.feedback,
+        "timestamp": step.timestamp,
+        "reward_components": dict(step.reward_components),
+        "frame_hash": step.frame_hash,
+        "observed_state": dict(step.observed_state),
+        "hypothesized_state": step.hypothesized_state,
+        "predicted_outcome": step.predicted_outcome,
+        "observed_outcome": step.observed_outcome,
+    }
+
+
+def _trajectory_step_from_dict(payload: dict[str, Any]) -> TrajectoryStep:
+    a = payload.get("action") or {}
+    return TrajectoryStep(
+        step=int(payload.get("step", 0)),
+        action=Action(
+            action_type=ActionType(a.get("action_type", "wait")),
+            params=dict(a.get("params") or {}),
+            reasoning=str(a.get("reasoning", "")),
+        ),
+        thinking=str(payload.get("thinking", "")),
+        reward=float(payload.get("reward", 0.0)),
+        done=bool(payload.get("done", False)),
+        inference_time=float(payload.get("inference_time", 0.0)),
+        feedback=str(payload.get("feedback", "")),
+        timestamp=float(payload.get("timestamp", time.time())),
+        reward_components=dict(payload.get("reward_components") or {}),
+        frame_hash=str(payload.get("frame_hash", "")),
+        observed_state=dict(payload.get("observed_state") or {}),
+        hypothesized_state=str(payload.get("hypothesized_state", "")),
+        predicted_outcome=str(payload.get("predicted_outcome", "")),
+        observed_outcome=str(payload.get("observed_outcome", "")),
+    )
 
 
 class GymRunner:
@@ -210,6 +279,79 @@ class GymRunner:
         self.site_config = site_config
         self._loop_detector = LoopDetector()
 
+        # ── Host-tool channel (#285) ────────────────────────────────────
+        # Mirrors MicroPlanRunner's surface so the same host integration
+        # patterns (auth_credentials, user_input, correspondent_message,
+        # …) plug into the perception-action loop. The brain emits a
+        # TOOL_CALL action; the runner short-circuits env.step and calls
+        # tool_channel.invoke. A handler can return a value (fed back as
+        # feedback) or raise PauseRequested to suspend the run.
+        self.tool_channel = ToolChannel()
+        self._pause_input: Any = None
+        # Set by ``resume()``; consumed once on the next ``run()``.
+        self._resume_state: PauseState | None = None
+
+    # ── Host-tool surface (#285) ────────────────────────────────────────
+
+    def register_tool(
+        self,
+        name: str,
+        schema: dict[str, Any],
+        handler: Any,
+    ) -> None:
+        """Register a host-provided tool callable mid-run.
+
+        ``handler`` is ``Callable[[dict[str, Any]], Any]`` — the brain's
+        parsed kwargs come in, the return value (str-rendered, truncated)
+        ends up in the trajectory step's ``feedback`` field. Raise
+        :class:`PauseRequested` from inside the handler to suspend the
+        run; the next :meth:`run` call returns a :class:`RunResult` with
+        ``paused=True`` and a serializable :class:`PauseState`.
+        """
+        self.tool_channel.register(name, schema, handler)
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        """Return registered tools as ``[{"name", "schema"}]`` — typically
+        passed to the brain so it knows what TOOL_CALL names are valid."""
+        return self.tool_channel.list()
+
+    def consume_pause_input(self, default: Any = None) -> Any:
+        """Read-once accessor for the user input supplied via
+        :meth:`resume`. Returns ``default`` when no resume is in flight,
+        and clears the slot after the first read so a subsequent step
+        doesn't see a stale value.
+        """
+        value = self._pause_input
+        self._pause_input = None
+        return default if value is None else value
+
+    def resume(
+        self,
+        pause_state: PauseState | dict[str, Any],
+        *,
+        user_input: Any = None,
+        **run_overrides: Any,
+    ) -> RunResult:
+        """Resume a paused run.
+
+        ``pause_state`` is the snapshot returned in ``RunResult.pause_state``;
+        ``user_input`` is the value the user supplied in response to the
+        handler's prompt. ``run_overrides`` are forwarded to :meth:`run` —
+        ``task`` and ``task_id`` are recovered from the snapshot, anything
+        else (``plan``, ``plan_inputs``, ``reward_fn``, …) must be
+        re-supplied by the caller exactly as it was on the original run.
+        """
+        if isinstance(pause_state, dict):
+            pause_state = PauseState.from_dict(pause_state)
+        self._resume_state = pause_state
+        self._pause_input = user_input
+        kwargs: dict[str, Any] = {
+            "task": pause_state.task,
+            "task_id": pause_state.task_id or "default",
+        }
+        kwargs.update(run_overrides)
+        return self.run(**kwargs)
+
     def _emit(self, event_type: str, **data: Any) -> None:
         """Emit an event to the viewer (if connected). Never crashes the runner."""
         if self.on_step:
@@ -230,6 +372,7 @@ class GymRunner:
         reward_fn: Any = None,
         ground_truth: dict[str, Any] | None = None,
         capture_dir: Any = None,
+        pause_input: Any = None,
     ) -> RunResult:
         """Execute a task with plan persistence, feedback, and context.
 
@@ -257,6 +400,16 @@ class GymRunner:
         logger.info(f"Starting task: {task!r} (id={task_id})")
         t0 = time.time()
 
+        # ── Pause/resume bootstrap (#285) ───────────────────────────────
+        # ``resume()`` stages a snapshot on ``_resume_state`` then
+        # re-enters ``run()``; we consume it once. ``pause_input`` (kwarg
+        # or pre-staged via ``resume()``) is the user reply the next
+        # handler can read with ``consume_pause_input``.
+        resume_state = self._resume_state
+        self._resume_state = None  # consume once
+        if pause_input is not None:
+            self._pause_input = pause_input
+
         # Screenshot capture (opt-in, e.g. rollout collection).
         capture_path = None
         if capture_dir is not None:
@@ -278,6 +431,29 @@ class GymRunner:
         total_reward = 0.0
         plan_inputs = dict(plan_inputs or {})
         done_success: bool | None = None
+
+        # If we're resuming, rehydrate the trajectory + action history so
+        # the brain sees the prior context and the loop continues at the
+        # paused step boundary. The env stays at whatever state the host
+        # left it — we deliberately do NOT replay env.step calls. We skip
+        # env.reset on any resume (even if the prior trajectory was
+        # empty), because resume() promises the host's env state
+        # survives the round-trip.
+        step_offset = 0
+        skip_env_reset = False
+        if resume_state is not None:
+            trajectory = [
+                _trajectory_step_from_dict(d)
+                for d in resume_state.trajectory_steps
+            ]
+            action_history = [t.action for t in trajectory]
+            step_offset = resume_state.step_index
+            skip_env_reset = True
+            total_reward = sum(t.reward for t in trajectory)
+            logger.info(
+                "Resuming from pause at step %d (%d trajectory steps)",
+                step_offset, len(trajectory),
+            )
 
         # Reward state — only populated when reward_fn is provided.
         episode_state: Any = None
@@ -350,28 +526,42 @@ class GymRunner:
         done_rejections: int = 0
         max_done_rejections: int = 2
 
-        # Reset environment
-        reset_kwargs: dict[str, Any] = {"task_id": task_id}
-        if start_url:
-            reset_kwargs["start_url"] = start_url
-        if seed is not None:
-            reset_kwargs["seed"] = seed
+        # Reset environment (skipped on resume — env is owned by the host
+        # across pause/resume and stays at whatever state it was in when
+        # the handler raised PauseRequested).
+        if not skip_env_reset:
+            reset_kwargs: dict[str, Any] = {"task_id": task_id}
+            if start_url:
+                reset_kwargs["start_url"] = start_url
+            if seed is not None:
+                reset_kwargs["seed"] = seed
 
-        obs = self.env.reset(task, **reset_kwargs)
-        self._loop_detector.reset()
-        frame_history.append(obs.screenshot)
-        _save_frame(obs.screenshot, 0)
-        last_url = obs.extras.get("url", "")
-        last_title = obs.extras.get("title", "")
+            obs = self.env.reset(task, **reset_kwargs)
+            self._loop_detector.reset()
+            frame_history.append(obs.screenshot)
+            _save_frame(obs.screenshot, 0)
+            last_url = obs.extras.get("url", "")
+            last_title = obs.extras.get("title", "")
 
-        self._emit(
-            "task_start", task=task, max_steps=self.max_steps,
-            screen_size=list(self.env.screen_size),
-        )
+            self._emit(
+                "task_start", task=task, max_steps=self.max_steps,
+                screen_size=list(self.env.screen_size),
+            )
+        else:
+            # Resume path — capture the current env screen so the brain
+            # has a fresh frame to reason on. _capture is the
+            # env-agnostic helper; if the env doesn't expose it we'll
+            # let the loop's first brain.think run with an empty frame
+            # buffer (rare — production envs ship _capture).
+            cap = self.env._capture() if hasattr(self.env, "_capture") else None
+            if cap is not None:
+                frame_history.append(cap.screenshot)
+                last_url = cap.extras.get("url", "") if hasattr(cap, "extras") else ""
+                last_title = cap.extras.get("title", "") if hasattr(cap, "extras") else ""
 
         termination_reason = "max_steps"
 
-        for step_num in range(1, self.max_steps + 1):
+        for step_num in range(step_offset + 1, self.max_steps + 1):
             logger.info(f"--- Step {step_num}/{self.max_steps} ---")
 
             # ── Hybrid execution: try DOM first, fall back to brain ──
@@ -566,6 +756,85 @@ class GymRunner:
                     agent_plan = self._extract_plan(thinking)
                     if agent_plan:
                         logger.info(f"Plan captured: {agent_plan[:120]}...")
+
+                # ── Host-tool dispatch (#285) ──────────────────────────
+                # Brains opt into host tools by emitting an Action of
+                # type TOOL_CALL with ``params = {"name": str, "args":
+                # dict}``. Short-circuit env.step and route through the
+                # tool channel instead. Handler return value lands in
+                # the trajectory's ``feedback`` field; a raised
+                # ``PauseRequested`` (caught inside
+                # ``ToolChannel.invoke``) is surfaced via
+                # ``self.tool_channel.pending_pause`` — we snapshot and
+                # return a ``RunResult(paused=True, ...)``.
+                if action.action_type == ActionType.TOOL_CALL:
+                    tool_name = str(
+                        action.params.get("name")
+                        or action.params.get("tool")
+                        or "",
+                    )
+                    tool_args = (
+                        action.params.get("args")
+                        or action.params.get("arguments")
+                        or {}
+                    )
+                    success, data = self.tool_channel.invoke(
+                        tool_name, dict(tool_args),
+                    )
+                    pending = self.tool_channel.pending_pause
+                    if pending is not None:
+                        # PauseRequested raised inside the handler. Append
+                        # the paused tool-call step to the trajectory FIRST
+                        # so the snapshot carries it — resume() rehydrates
+                        # the action_history from trajectory_steps, and the
+                        # brain on resume needs to see the prior tool call
+                        # in its context.
+                        self.tool_channel.clear_pause()
+                        trajectory.append(TrajectoryStep(
+                            step=step_num, action=action, thinking=thinking,
+                            reward=0.0, done=False,
+                            inference_time=inference_time,
+                            feedback=f"tool:{tool_name}:pause",
+                        ))
+                        action_history.append(action)
+                        pause_state = PauseState(
+                            session_name=task_id,
+                            step_index=step_num,
+                            pending_tool=tool_name,
+                            pending_arguments=dict(tool_args),
+                            pending_reason=pending.get("reason", "user_input"),
+                            prompt=pending.get("prompt", ""),
+                            trajectory_steps=[
+                                _trajectory_step_to_dict(t) for t in trajectory
+                            ],
+                            task=task,
+                            task_id=task_id,
+                            timestamp=time.time(),
+                        )
+                        return RunResult(
+                            task=task, task_id=task_id, success=False,
+                            total_reward=total_reward,
+                            total_steps=step_num,
+                            total_time=time.time() - t0,
+                            trajectory=trajectory,
+                            termination_reason="paused",
+                            paused=True, pause_state=pause_state,
+                        )
+                    # Normal return path — record + continue. Handler
+                    # errors come back as ``success=False`` with the
+                    # ``tool:<n>:error:…`` data string; we surface them
+                    # via ``feedback`` and keep going (mirrors the
+                    # MicroPlanRunner behaviour of never silently
+                    # swallowing a handler exception).
+                    trajectory.append(TrajectoryStep(
+                        step=step_num, action=action, thinking=thinking,
+                        reward=0.0, done=False,
+                        inference_time=inference_time,
+                        feedback=data,
+                    ))
+                    action_history.append(action)
+                    step_log.append(f"Step {step_num}: {action} → {data}")
+                    continue
 
                 if action.action_type == ActionType.DONE:
                     success = action.params.get("success", False)
