@@ -539,18 +539,34 @@ class GymRunner:
         # CUA-pure — no regex, no DOM access). When enough form fields have
         # been filled, the runner asks Holo3 vision for the visible submit
         # button and falls back to Return if the detector cannot find one.
+        #
+        # #301: a single :class:`FormController` owns the four parallel
+        # locals below. The aliases keep the rest of ``run()`` unchanged —
+        # mutations to ``force_fill_values`` / ``force_fill_used_regions``
+        # land on the controller's lists by reference. The ``submitted``
+        # bool is the one piece of state that doesn't share a reference;
+        # we sync it on the single assignment site below.
+        # ``MANTIS_FORM_CONTROLLER=disabled`` skips controller construction
+        # entirely (legacy code path) for ablation runs.
         from . import holo3_detector
-        force_fill_values: list[dict[str, str]] = holo3_detector.extract_form_values(
-            self.brain, task,
-        )
-        force_fill_used_regions: list[tuple[int, int]] = []
+        from .form_controller import FormController
+        if os.environ.get(
+            "MANTIS_FORM_CONTROLLER", "enabled",
+        ).lower() == "disabled":
+            self.form_controller = None
+            force_fill_values: list[dict[str, str]] = (
+                holo3_detector.extract_form_values(self.brain, task)
+            )
+            force_fill_used_regions: list[tuple[int, int]] = []
+            force_fill_initial_labels: list[str] = [
+                str(v.get("label") or "") for v in force_fill_values
+            ]
+        else:
+            self.form_controller = FormController.from_task(self.brain, task)
+            force_fill_values = self.form_controller.pending_values
+            force_fill_used_regions = self.form_controller.used_regions
+            force_fill_initial_labels = self.form_controller.initial_labels
         force_fill_submitted: bool = False
-        # Snapshot the initial labels so the Claude director can compute
-        # which have already been consumed (initial - current_pending).
-        # Holds field labels only — never values.
-        force_fill_initial_labels: list[str] = [
-            str(v.get("label") or "") for v in force_fill_values
-        ]
         if force_fill_values:
             logger.info(
                 "force-fill: extracted %d form values from plan via Holo3",
@@ -1141,6 +1157,8 @@ class GymRunner:
                         )
                         substituted_action = True
                     force_fill_submitted = True
+                    if self.form_controller is not None:
+                        self.form_controller.mark_submitted()
                 # Claude-director escalation: only fires when no other
                 # substitution kicked in AND the soft-loop detector says
                 # Holo3 is stuck. Asks Claude for the next single action
