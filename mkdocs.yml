@@ -142,6 +142,7 @@ nav:
       - Speculative inference: reference/speculative-inference.md
       - Perceptual diff verifier: reference/perceptual-diff.md
       - Loop recovery policy: reference/loop-recovery.md
+      - Ablation harness: reference/ablation-harness.md
   - Appendix:
       - appendix/index.md
       - Learnings: learnings.md
