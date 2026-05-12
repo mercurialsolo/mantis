@@ -32,6 +32,7 @@ from ..loop_detector import LoopDetector, phash_64
 from ._runner_helpers import is_cancelled
 from .base import GymEnvironment
 from .done_gate import DoneAcceptanceDecision, check_done_acceptance
+from .loop_recovery import decide_recovery as _decide_loop_recovery
 from .perceptual_diff import action_had_effect as _perceptual_action_had_effect
 from .predicates import (
     ObservationContext,
@@ -158,6 +159,13 @@ class TrajectoryStep:
     # ``RunResult.perceptual_summary``.
     action_effect_observed: bool | None = None
 
+    # ── #302 loop-recovery policy ───────────────────────────────────────
+    # Set to a stable reason code (see ``gym.loop_recovery.REASON_CODES``)
+    # when the policy substituted the brain's emitted action for a
+    # different action class. Empty string otherwise. Aggregate counts
+    # surface on ``RunResult.loop_recoveries_by_reason``.
+    loop_recovery_reason: str = ""
+
 
 # Subset of ``gym_result.info`` that round-trips into TrajectoryStep
 # observed_state. Excludes high-cardinality / large-blob fields (raw DOM,
@@ -227,6 +235,10 @@ class RunResult:
     # = those where both global and region hash stayed identical
     # (silent failure suspected). Surfaces on /v1/cua.
     perceptual_summary: dict[str, int] = field(default_factory=dict)
+    # #302: per-reason count of loop-recovery substitutions. Empty when
+    # the policy never fired (toggle off, no soft loops, or no rule
+    # matched). Surfaces on /v1/cua.
+    loop_recoveries_by_reason: dict[str, int] = field(default_factory=dict)
 
 
 # ── Trajectory serialization for pause snapshots (#285) ────────────────────
@@ -261,6 +273,7 @@ def _trajectory_step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
         "predicate_results": list(step.predicate_results),
         "done_rejected_reason": step.done_rejected_reason,
         "action_effect_observed": step.action_effect_observed,
+        "loop_recovery_reason": step.loop_recovery_reason,
     }
 
 
@@ -288,6 +301,7 @@ def _trajectory_step_from_dict(payload: dict[str, Any]) -> TrajectoryStep:
         predicate_results=list(payload.get("predicate_results") or []),
         done_rejected_reason=str(payload.get("done_rejected_reason", "")),
         action_effect_observed=payload.get("action_effect_observed"),
+        loop_recovery_reason=str(payload.get("loop_recovery_reason", "")),
     )
 
 
@@ -1236,6 +1250,48 @@ class GymRunner:
                     action = top_click_guard
                     substituted_action = True
 
+                # #302 loop-recovery policy. Fires only when:
+                #   1. Existing substitution chain (force-fill, force-submit,
+                #      claude-director, top-click-guard) didn't apply.
+                #   2. Soft-loop detector is currently flagging the recent
+                #      action history.
+                # The policy returns a forced action-class transition
+                # (TYPE for stuck focused click, Tab for stuck input loop
+                # without value, Return for stuck submit-shaped click on
+                # frozen frame). Loop-recovery substitution is recorded
+                # on the trajectory step's ``loop_recovery_reason``;
+                # aggregate counts surface on
+                # ``RunResult.loop_recoveries_by_reason``.
+                pending_loop_recovery_reason: str = ""
+                if (
+                    not substituted_action
+                    and self._loop_detector.is_any_loop(self.soft_loop_window)
+                ):
+                    recent_frame_hashes_for_recovery = [
+                        t.frame_hash for t in trajectory[-self.soft_loop_window:]
+                    ]
+                    recovery = _decide_loop_recovery(
+                        action=action,
+                        action_history=action_history,
+                        focused_input=last_focused_input,
+                        pending_form_values=force_fill_values,
+                        recent_frame_hashes=recent_frame_hashes_for_recovery,
+                        task=task,
+                        soft_loop_window=self.soft_loop_window,
+                    )
+                    if recovery.forced_action is not None:
+                        logger.warning(
+                            "loop-recovery: substituting %s(%s) → %s(%s) "
+                            "reason=%s detail=%s",
+                            action.action_type.value, action.params,
+                            recovery.forced_action.action_type.value,
+                            recovery.forced_action.params,
+                            recovery.reason, recovery.detail,
+                        )
+                        action = recovery.forced_action
+                        substituted_action = True
+                        pending_loop_recovery_reason = recovery.reason
+
                 # Grounded click refinement — if grounding model available,
                 # refine click coordinates before execution
                 if action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
@@ -1492,6 +1548,7 @@ class GymRunner:
                     predicate_results=step_predicate_results,
                     done_rejected_reason=pending_done_rejected_reason,
                     action_effect_observed=effect_check.effect_observed,
+                    loop_recovery_reason=pending_loop_recovery_reason,
                 ))
                 # One-shot: clear so the next step doesn't inherit it.
                 pending_done_rejected_reason = ""
@@ -1551,6 +1608,15 @@ class GymRunner:
                 "no_effect": perceptual_no_effect,
             }
 
+        # #302 loop-recovery aggregate. Per-reason count of policy
+        # substitutions. Empty when no recovery fired.
+        loop_recoveries_by_reason: dict[str, int] = {}
+        for t in trajectory:
+            if t.loop_recovery_reason:
+                loop_recoveries_by_reason[t.loop_recovery_reason] = (
+                    loop_recoveries_by_reason.get(t.loop_recovery_reason, 0) + 1
+                )
+
         result = RunResult(
             task=task, task_id=task_id, success=success,
             total_reward=total_reward, total_steps=len(trajectory),
@@ -1558,6 +1624,7 @@ class GymRunner:
             termination_reason=termination_reason,
             done_rejections_by_reason=dict(done_rejections_by_reason),
             perceptual_summary=perceptual_summary,
+            loop_recoveries_by_reason=loop_recoveries_by_reason,
         )
 
         # Terminal reward — applied last so episode() can read the full

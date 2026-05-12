@@ -141,6 +141,7 @@ nav:
       - Chrome session reuse: reference/chrome-session-reuse.md
       - Speculative inference: reference/speculative-inference.md
       - Perceptual diff verifier: reference/perceptual-diff.md
+      - Loop recovery policy: reference/loop-recovery.md
   - Appendix:
       - appendix/index.md
       - Learnings: learnings.md
