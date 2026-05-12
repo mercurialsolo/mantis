@@ -89,6 +89,27 @@ def test_click_with_empty_reasoning_not_high_risk() -> None:
     assert is_high_risk(Action(ActionType.CLICK, {"x": 1, "y": 1})) is False
 
 
+def test_click_with_keyword_in_thinking_is_high_risk() -> None:
+    """Holo3 emits bare ``click()`` actions with no Action.reasoning —
+    the keyword lives in the separate ``thinking`` channel."""
+    action = Action(ActionType.CLICK, {"x": 1, "y": 1})
+    assert is_high_risk(action, thinking="I'll click the submit button.") is True
+
+
+def test_click_with_keyword_in_task_is_high_risk() -> None:
+    """When the brain emits a bare click but the run's task prompt
+    mentions submit/login, treat the click as high-risk."""
+    action = Action(ActionType.CLICK, {"x": 1, "y": 1})
+    assert is_high_risk(action, task="Log in to the CRM with credentials.") is True
+
+
+def test_thinking_and_task_optional_args_ignored_for_non_click() -> None:
+    """The thinking / task channels only matter for CLICK classification —
+    other action types follow their own rules."""
+    wait = Action(ActionType.WAIT, {"seconds": 1.0})
+    assert is_high_risk(wait, thinking="I'll submit the form") is False
+
+
 @pytest.mark.parametrize("kind", [
     ActionType.WAIT, ActionType.DONE, ActionType.SCROLL, ActionType.TYPE,
 ])

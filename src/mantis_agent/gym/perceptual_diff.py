@@ -83,27 +83,47 @@ _HIGH_RISK_REASONING_KEYWORDS: tuple[str, ...] = (
 )
 
 
-def is_high_risk(action: Action) -> bool:
+def is_high_risk(
+    action: Action,
+    *,
+    thinking: str | None = None,
+    task: str | None = None,
+) -> bool:
     """Classify whether ``action`` warrants perceptual verification.
 
-    Today's heuristic — kept narrow on purpose so the verifier doesn't
-    fire on every click:
+    Heuristic — kept narrow on purpose so the verifier doesn't fire on
+    every click:
 
-    1. ``KEY_PRESS`` with ``Return`` / ``Enter`` — typical form submit.
-    2. ``CLICK`` whose ``reasoning`` text contains any keyword in
-       :data:`_HIGH_RISK_REASONING_KEYWORDS`.
+    1. ``KEY_PRESS`` with ``Return`` / ``Enter`` (incl. chord forms like
+       ``ctrl+Return``) — typical form submit.
+    2. ``CLICK`` whose ``Action.reasoning``, the brain's free-form
+       ``thinking``, or the run-level ``task`` text contains any keyword
+       in :data:`_HIGH_RISK_REASONING_KEYWORDS`.
 
     Returns ``False`` for ``WAIT`` / ``DONE`` / ``SCROLL`` / ``TYPE``
     actions — none of those need post-action effect verification (TYPE
     has its own ``type_verified`` flag from the env adapter).
+
+    Brains differ in where they leave the high-risk signal: Claude
+    populates ``Action.reasoning``; Holo3 emits a bare ``click()`` with
+    the reasoning in its separate ``thinking`` channel; some flows
+    encode the intent only in the task prompt. Check all three.
     """
     if action.action_type == ActionType.KEY_PRESS:
         keys = str(action.params.get("keys", "")).lower()
         return keys in {"return", "enter"} or keys.endswith("+return") or keys.endswith("+enter")
 
     if action.action_type == ActionType.CLICK:
-        reasoning = (action.reasoning or "").lower()
-        return any(kw in reasoning for kw in _HIGH_RISK_REASONING_KEYWORDS)
+        haystacks = [
+            (action.reasoning or "").lower(),
+            (thinking or "").lower(),
+            (task or "").lower(),
+        ]
+        return any(
+            kw in haystack
+            for haystack in haystacks
+            for kw in _HIGH_RISK_REASONING_KEYWORDS
+        )
 
     return False
 
@@ -169,6 +189,9 @@ def action_had_effect(
     pre_frame: "Image.Image | None",
     post_frame: "Image.Image | None",
     action: Action,
+    *,
+    thinking: str | None = None,
+    task: str | None = None,
 ) -> EffectCheck:
     """Decide whether ``action`` produced an observable effect.
 
@@ -191,7 +214,7 @@ def action_had_effect(
         return EffectCheck(effect_observed=None, reason="toggle disabled")
     if pre_frame is None or post_frame is None:
         return EffectCheck(effect_observed=None, reason="missing frame")
-    if not is_high_risk(action):
+    if not is_high_risk(action, thinking=thinking, task=task):
         return EffectCheck(effect_observed=None, reason="not high-risk")
 
     try:

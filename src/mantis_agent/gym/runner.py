@@ -1465,6 +1465,8 @@ class GymRunner:
                     pre_action_frame,
                     gym_result.observation.screenshot,
                     action,
+                    thinking=thinking,
+                    task=task,
                 )
                 if effect_check.effect_observed is False:
                     feedback = (
