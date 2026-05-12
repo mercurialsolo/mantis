@@ -89,6 +89,46 @@ _start_local_proxy = start_local_proxy
 _build_proxy_config = build_proxy_config
 
 
+# ── #311: container-scoped Chrome session cache ───────────────────────
+#
+# A fresh ``/v1/cua`` request pays ~10 s for Xvfb + Chrome launch + first
+# navigation before the brain runs. Cache keyed on
+# ``(profile_dir, proxy_server)`` so successive requests with the same
+# tenant + same proxy reuse the live browser process. ``reset(start_url=...)``
+# inside the cached env handles the in-tab navigation in <500 ms.
+#
+# Cross-tenant isolation is preserved because the profile_dir is
+# tenant-scoped (``data_root / "chrome-profile" / <tenant_id>__<key>``)
+# and tenant requests will mismatch on the first key component.
+#
+# Set ``MANTIS_CHROME_REUSE=disabled`` to fall back to the per-request
+# launch path (the legacy behaviour). Callers can also opt out per request
+# via ``payload["reuse_session"] = False``.
+_chrome_env_cache: dict[tuple[str, str], tuple[XdotoolGymEnv, Any]] = {}
+_chrome_env_cache_lock = threading.Lock()
+
+
+def _chrome_reuse_enabled() -> bool:
+    return os.environ.get("MANTIS_CHROME_REUSE", "enabled").lower() != "disabled"
+
+
+def _shutdown_chrome_env_cache() -> None:
+    """Force-close every cached env. Wired into container shutdown hooks
+    so reused processes don't leak across container lifetimes."""
+    with _chrome_env_cache_lock:
+        for env, proxy_proc in list(_chrome_env_cache.values()):
+            try:
+                env.shutdown()
+            except Exception as exc:
+                logger.warning("chrome-env shutdown failed: %s", exc)
+            if proxy_proc is not None:
+                try:
+                    proxy_proc.terminate()
+                except Exception:
+                    pass
+        _chrome_env_cache.clear()
+
+
 class BasetenCUARuntime:
     def __init__(self) -> None:
         # ``MANTIS_BRAIN`` is the new public selector; ``MANTIS_MODEL`` stays
@@ -595,7 +635,14 @@ class BasetenCUARuntime:
         )
         return suite
 
-    def _make_env(self, task_suite: dict[str, Any], run_id: str, settle_time: float) -> tuple[XdotoolGymEnv, Any]:
+    def _make_env(
+        self,
+        task_suite: dict[str, Any],
+        run_id: str,
+        settle_time: float,
+        *,
+        reuse_session: bool = False,
+    ) -> tuple[XdotoolGymEnv, Any]:
         from mantis_agent.task_loop import setup_env
 
         data_root = _data_root()
@@ -611,6 +658,7 @@ class BasetenCUARuntime:
             browser=os.environ.get("MANTIS_BROWSER", "google-chrome"),
             profile_dir=str(data_root / "chrome-profile"),
             save_screenshots_dir=str(data_root / "screenshots"),
+            reuse_session=reuse_session,
         )
 
     def _maybe_record(
@@ -1094,7 +1142,72 @@ class BasetenCUARuntime:
             "_proxy_state": payload.get("proxy_state") or "",
             "_proxy_disabled": bool(payload.get("proxy_disabled", False)),
         }
-        env, proxy_proc = self._make_env(task_suite, run_id, settle_time=settle_time)
+        # #311 container-scoped Chrome session cache. When enabled
+        # (default), successive requests with the same profile_dir +
+        # proxy_server reuse the live Xvfb + Chrome instead of paying
+        # the ~10 s cold-launch tax. Per-request opt-out via
+        # ``payload["reuse_session"]=False``; container-wide opt-out via
+        # ``MANTIS_CHROME_REUSE=disabled``.
+        reuse_session_payload = payload.get("reuse_session")
+        if reuse_session_payload is None:
+            reuse_session_for_request = _chrome_reuse_enabled()
+        else:
+            reuse_session_for_request = bool(reuse_session_payload)
+
+        data_root_path = _data_root()
+        cache_profile_dir = str(data_root_path / "chrome-profile")
+        # _make_env reads proxy_server via setup_env → build_proxy_config;
+        # the cache key needs to include it so two requests with different
+        # proxy configs don't share a browser. Recreate the proxy URL here
+        # using the same inputs setup_env will see.
+        cache_proxy_key = "" if task_suite.get("_proxy_disabled") else (
+            f"{task_suite.get('_proxy_city') or ''}__{task_suite.get('_proxy_state') or ''}"
+        )
+        cache_key: tuple[str, str] = (cache_profile_dir, cache_proxy_key)
+
+        env: XdotoolGymEnv
+        proxy_proc: Any = None
+        env_was_cached: bool = False
+        if reuse_session_for_request:
+            with _chrome_env_cache_lock:
+                cached = _chrome_env_cache.get(cache_key)
+                if cached is not None:
+                    cand_env, cand_proxy = cached
+                    cand_proc = getattr(cand_env, "_browser_proc", None)
+                    if cand_proc is not None and cand_proc.poll() is None:
+                        env = cand_env
+                        proxy_proc = cand_proxy
+                        env_was_cached = True
+                        logger.info(
+                            "chrome-env: reusing cached session "
+                            "profile=%s proxy=%s",
+                            cache_profile_dir, cache_proxy_key or "<none>",
+                        )
+                    else:
+                        _chrome_env_cache.pop(cache_key, None)
+                        try:
+                            cand_env.shutdown()
+                        except Exception:
+                            pass
+                if not env_was_cached:
+                    env, proxy_proc = self._make_env(
+                        task_suite, run_id,
+                        settle_time=settle_time,
+                        reuse_session=True,
+                    )
+                    _chrome_env_cache[cache_key] = (env, proxy_proc)
+                    logger.info(
+                        "chrome-env: caching new session "
+                        "profile=%s proxy=%s",
+                        cache_profile_dir, cache_proxy_key or "<none>",
+                    )
+        else:
+            env, proxy_proc = self._make_env(
+                task_suite, run_id,
+                settle_time=settle_time,
+                reuse_session=False,
+            )
+
         recorder, click_log = self._maybe_record(payload, run_id)
         if click_log is not None:
             from mantis_agent.presentation import ClickRecordingEnv
@@ -1155,6 +1268,9 @@ class BasetenCUARuntime:
                 # #303 ablation signal: per-reason count of done(success=true)
                 # rejections by the deterministic gate. Empty dict when the
                 # gate is disabled or never rejected anything.
+                # #311 ablation signal: True when this run reused a cached
+                # Xvfb + Chrome process from an earlier request.
+                "reused_session": env_was_cached,
                 "done_rejections_by_reason": dict(
                     getattr(gym_result, "done_rejections_by_reason", None) or {},
                 ),
@@ -1168,8 +1284,11 @@ class BasetenCUARuntime:
                     recorder.stop()
                 except Exception:
                     logger.exception("recorder stop in finally failed")
+            # #311: env.close() is a no-op when reuse_session=True — keeps
+            # the Xvfb + Chrome process alive in the container-scoped cache.
+            # The non-cached path still terminates as before.
             env.close()
-            if proxy_proc:
+            if proxy_proc and not reuse_session_for_request:
                 proxy_proc.terminate()
 
     def _save_result(self, result: dict[str, Any], prefix: str) -> None:

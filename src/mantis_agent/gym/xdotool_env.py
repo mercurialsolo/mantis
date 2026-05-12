@@ -87,6 +87,7 @@ class XdotoolGymEnv(GymEnvironment):
         profile_dir: str = "/data/chrome-profile",
         save_screenshots: str = "",
         cdp_port: int = 9222,
+        reuse_session: bool = False,
     ):
         self._start_url = start_url
         self._viewport = viewport
@@ -102,6 +103,15 @@ class XdotoolGymEnv(GymEnvironment):
         # navigation state directly instead of relying on the screenshot
         # extractor reading the address bar pixels (issue #89 §1).
         self._cdp_port = cdp_port
+
+        # #311: when True, ``close()`` is a no-op so the Xvfb + Chrome
+        # processes survive past one request. The runtime's container-
+        # scoped cache (``runtime._chrome_env_cache``) sets this so a
+        # second request on the same warm container reuses the same
+        # browser instead of paying the ~10s cold-launch tax.
+        # ``XdotoolGymEnv.shutdown`` exists for the cache to force-close
+        # the underlying processes when the container is recycled.
+        self._reuse_session = reuse_session
 
         self._xvfb_proc = None
         self._browser_proc = None
@@ -508,7 +518,22 @@ class XdotoolGymEnv(GymEnvironment):
         return GymResult(observation=obs, reward=0.0, done=False, info={})
 
     def close(self) -> None:
-        """Kill browser and Xvfb."""
+        """Kill browser and Xvfb.
+
+        When ``reuse_session=True`` (set by the container-scoped env cache
+        in #311) this is a no-op so the processes survive past one
+        request. Call :meth:`shutdown` from the cache to force-close.
+        """
+        if self._reuse_session:
+            return
+        self.shutdown()
+
+    def shutdown(self) -> None:
+        """Force-close browser and Xvfb regardless of ``reuse_session``.
+
+        The container-scoped cache calls this at recycle time so reused
+        processes don't leak across container lifetimes.
+        """
         if self._browser_proc:
             self._browser_proc.terminate()
             try:
