@@ -1172,6 +1172,8 @@ class BasetenCUARuntime:
             "predicate_verify": "MANTIS_PREDICATE_VERIFY",
             "adaptive_settle": "MANTIS_ADAPTIVE_SETTLE",
             "form_controller": "MANTIS_FORM_CONTROLLER",
+            # #298: adaptive loop-detector windows (default on).
+            "loop_adaptive": "MANTIS_LOOP_ADAPTIVE",
         }
         _toggle_overrides: dict[str, str] = {}
         _toggle_restore: dict[str, str | None] = {}
