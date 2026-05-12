@@ -92,6 +92,7 @@ See [operations/cost.md](../operations/cost.md) for the full rate-tuning workflo
 | `MANTIS_DONE_GATE` | `enabled` | Deterministic done-acceptance gate (#303). Runs cheap predicates (empty summary, plan steps incomplete, pending form values, etc.) before the model-based `verify_done`. Set to `disabled` to ablate — the runner falls through to the existing model verifier and `done_rejections_by_reason` stays empty. See [Done-acceptance gate](done-gate.md). |
 | `MANTIS_FORM_CONTROLLER` | `enabled` | First-class runtime form controller (#301) owning pending-values / used-regions / submit-latch state. Set to `disabled` to ablate — the runner falls back to the legacy scattered `force_fill_*` locals; `runner.form_controller` is `None`. See [Form controller](form-controller.md). |
 | `MANTIS_ADAPTIVE_SETTLE` | `enabled` | Replaces post-action `time.sleep(settle_time)` (#294) with a frame-stability gate (xdotool path) or `wait_for_load_state("networkidle")` gate (Playwright path), capped at the legacy budget. Set to `disabled` to ablate — both gates short-circuit back to a fixed sleep without a redeploy. See [Adaptive settle](adaptive-settle.md). |
+| `MANTIS_CHROME_REUSE` | `enabled` | Container-scoped Xvfb + Chrome session reuse (#311). Successive `/v1/cua` requests with the same `(profile_dir, proxy_key)` reuse the live browser instead of paying the ~10 s launch tax. Set to `disabled` to ablate. Per-request opt-out: `payload["reuse_session"]=false`. See [Chrome session reuse](chrome-session-reuse.md). |
 
 ## API documentation surface
 

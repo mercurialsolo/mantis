@@ -138,6 +138,7 @@ nav:
       - Done-acceptance gate: reference/done-gate.md
       - Form controller: reference/form-controller.md
       - Adaptive settle: reference/adaptive-settle.md
+      - Chrome session reuse: reference/chrome-session-reuse.md
   - Appendix:
       - appendix/index.md
       - Learnings: learnings.md

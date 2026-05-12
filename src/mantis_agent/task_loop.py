@@ -101,6 +101,7 @@ def setup_env(
     viewport: tuple[int, int] = (1280, 720),
     profile_dir: str = "",
     save_screenshots_dir: str = "/data/screenshots",
+    reuse_session: bool = False,
 ) -> tuple[Any, Any]:
     """Set up proxy + XdotoolGymEnv.
 
@@ -146,6 +147,7 @@ def setup_env(
         "human_speed": False,
         "proxy_server": proxy_server,
         "save_screenshots": f"{save_screenshots_dir}/{session_name}_{run_id}",
+        "reuse_session": reuse_session,
     }
     if display:
         env_kwargs["display"] = display
