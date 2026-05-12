@@ -66,14 +66,39 @@ def _smart_resize(height: int, width: int, factor: int = 28,
     return h_bar, w_bar
 
 
-def _model_coords_to_screen(model_x: int, model_y: int,
-                              screen_width: int, screen_height: int) -> tuple[int, int]:
-    """Convert OpenCUA's model coordinates to actual screen coordinates."""
+def _model_coords_to_screen(
+    model_x: int,
+    model_y: int,
+    screen_width: int,
+    screen_height: int,
+    scroll_offset: tuple[int, int] = (0, 0),
+) -> tuple[int, int]:
+    """Convert OpenCUA's model coordinates to dispatch-ready screen pixels.
+
+    **Input contract** (#292): the brain currently receives **viewport**
+    screenshots — xdotool's mss capture grabs the Xvfb framebuffer (which
+    equals the Chrome window size), and Playwright's ``page.screenshot()``
+    defaults to viewport-only. Model coordinates are therefore in viewport
+    space, ``screen_width`` / ``screen_height`` is the viewport size, and
+    ``scroll_offset`` defaults to ``(0, 0)`` — the smart-resize unmap is
+    the only correction needed.
+
+    ``scroll_offset`` exists for the future case where a caller switches to
+    full-page capture (e.g. CDP ``Page.captureScreenshot { captureBeyondViewport: true }``).
+    In that mode the model sees the document, emits document-space coordinates,
+    and dispatch must subtract the current ``(scrollX, scrollY)`` to land
+    on the correct viewport pixel. The runner reads scroll from
+    ``gym_result.info["scroll_offset"]`` when the env exposes it (CDP path
+    has DOM access and can run ``window.scroll{X,Y}``); xdotool envs leave
+    the field unset so this stays a no-op.
+
+    Documented input contract lives at ``docs/reference/brain-coordinates.md``.
+    """
     resized_h, resized_w = _smart_resize(screen_height, screen_width)
     rel_x = model_x / resized_w
     rel_y = model_y / resized_h
-    abs_x = int(rel_x * screen_width)
-    abs_y = int(rel_y * screen_height)
+    abs_x = int(rel_x * screen_width) - int(scroll_offset[0])
+    abs_y = int(rel_y * screen_height) - int(scroll_offset[1])
     return abs_x, abs_y
 
 
@@ -166,8 +191,15 @@ class OpenCUABrain:
         task: str,
         action_history: list[Action] | None = None,
         screen_size: tuple[int, int] = (1920, 1080),
+        scroll_offset: tuple[int, int] = (0, 0),
     ) -> InferenceResult:
-        """Run perception-reasoning-action via OpenCUA."""
+        """Run perception-reasoning-action via OpenCUA.
+
+        ``scroll_offset`` (#292): forwarded to coordinate dispatch when the
+        env captures full-page screenshots. Defaults to ``(0, 0)`` because
+        all current Mantis envs (xdotool, Playwright) capture viewport-only.
+        See :func:`_model_coords_to_screen` for the input contract.
+        """
         messages = self._build_messages(frames, task, action_history, screen_size)
 
         payload = {
@@ -192,7 +224,7 @@ class OpenCUABrain:
                 raw_output=str(e),
             )
 
-        return self._parse_response(data, screen_size)
+        return self._parse_response(data, screen_size, scroll_offset=scroll_offset)
 
     def _build_messages(
         self,
@@ -227,7 +259,12 @@ class OpenCUABrain:
 
         return messages
 
-    def _parse_response(self, data: dict, screen_size: tuple[int, int]) -> InferenceResult:
+    def _parse_response(
+        self,
+        data: dict,
+        screen_size: tuple[int, int],
+        scroll_offset: tuple[int, int] = (0, 0),
+    ) -> InferenceResult:
         """Parse OpenCUA's text response into an Action.
 
         EvoCUA sometimes outputs JSON actions instead of pyautogui format,
@@ -255,11 +292,11 @@ class OpenCUABrain:
         if pyautogui_match:
             thinking = cleaned[:pyautogui_match.start()].strip()
             action_text = pyautogui_match.group(0)
-            action = self._parse_pyautogui(action_text, screen_size)
+            action = self._parse_pyautogui(action_text, screen_size, scroll_offset)
 
         # Strategy 2: JSON action format (EvoCUA variant)
         if action is None or action.action_type == ActionType.WAIT:
-            json_action = self._parse_json_action(cleaned, screen_size)
+            json_action = self._parse_json_action(cleaned, screen_size, scroll_offset)
             if json_action is not None:
                 # Extract thinking as everything before the JSON block
                 json_match = re.search(r'\{[^{}]*"action"[^{}]*\}', cleaned)
@@ -310,7 +347,12 @@ class OpenCUABrain:
         stripped = re.sub(r'\n?```', '', stripped)
         return stripped
 
-    def _parse_json_action(self, text: str, screen_size: tuple[int, int]) -> Action | None:
+    def _parse_json_action(
+        self,
+        text: str,
+        screen_size: tuple[int, int],
+        scroll_offset: tuple[int, int] = (0, 0),
+    ) -> Action | None:
         """Parse JSON-formatted actions: {"action": "click", "x": N, "y": N}.
 
         EvoCUA sometimes outputs actions in this format instead of pyautogui.
@@ -329,13 +371,17 @@ class OpenCUABrain:
 
         if action_type == "click":
             x, y = int(obj.get("x", 0)), int(obj.get("y", 0))
-            sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
+            sx, sy = _model_coords_to_screen(
+                x, y, screen_size[0], screen_size[1], scroll_offset,
+            )
             button = obj.get("button", "left")
             return Action(ActionType.CLICK, {"x": sx, "y": sy, "button": button})
 
         if action_type in ("double_click", "doubleclick", "doubleClick"):
             x, y = int(obj.get("x", 0)), int(obj.get("y", 0))
-            sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
+            sx, sy = _model_coords_to_screen(
+                x, y, screen_size[0], screen_size[1], scroll_offset,
+            )
             return Action(ActionType.DOUBLE_CLICK, {"x": sx, "y": sy})
 
         if action_type in ("type", "typewrite", "write"):
@@ -359,7 +405,12 @@ class OpenCUABrain:
 
         return None
 
-    def _parse_pyautogui(self, text: str, screen_size: tuple[int, int]) -> Action | None:
+    def _parse_pyautogui(
+        self,
+        text: str,
+        screen_size: tuple[int, int],
+        scroll_offset: tuple[int, int] = (0, 0),
+    ) -> Action | None:
         """Parse a pyautogui command into a Mantis Action.
 
         Returns None instead of WAIT fallback so callers can try other strategies.
@@ -369,14 +420,18 @@ class OpenCUABrain:
         click_match = re.search(r'click\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', text)
         if click_match:
             mx, my = int(click_match.group(1)), int(click_match.group(2))
-            sx, sy = _model_coords_to_screen(mx, my, screen_size[0], screen_size[1])
+            sx, sy = _model_coords_to_screen(
+                mx, my, screen_size[0], screen_size[1], scroll_offset,
+            )
             return Action(ActionType.CLICK, {"x": sx, "y": sy})
 
         # doubleClick
         dbl_match = re.search(r'doubleClick\((?:x=)?(\d+),\s*(?:y=)?(\d+)\)', text)
         if dbl_match:
             mx, my = int(dbl_match.group(1)), int(dbl_match.group(2))
-            sx, sy = _model_coords_to_screen(mx, my, screen_size[0], screen_size[1])
+            sx, sy = _model_coords_to_screen(
+                mx, my, screen_size[0], screen_size[1], scroll_offset,
+            )
             return Action(ActionType.DOUBLE_CLICK, {"x": sx, "y": sy})
 
         # typewrite('text') or write('text')
