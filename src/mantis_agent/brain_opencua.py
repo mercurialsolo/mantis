@@ -84,6 +84,11 @@ class InferenceResult:
     raw_output: str
     thinking: str = ""
     tokens_used: int = 0
+    # #291: brain's structured prediction of post-action signals — either a
+    # ``{"expected": [...]}`` JSON block or a back-compat ``Predicted: ...``
+    # line. Empty when the model didn't emit one. Parsed downstream by
+    # :func:`mantis_agent.gym.predicates.parse_predicates`.
+    predicted_outcome: str = ""
 
 
 class OpenCUABrain:
@@ -282,11 +287,19 @@ class OpenCUABrain:
         if action is None:
             action = Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=f"Could not parse: {text[:100]}")
 
+        # #291: capture the brain's structured prediction (JSON ``expected``
+        # block or ``Predicted: ...`` line). Search the raw text — OpenCUA
+        # has no separate thinking channel, so the prediction lives wherever
+        # the model emitted it.
+        from .gym.predicates import extract_predicted_outcome
+        predicted = extract_predicted_outcome(text)
+
         return InferenceResult(
             action=action,
             raw_output=raw_output,
             thinking=thinking,
             tokens_used=data.get("usage", {}).get("total_tokens", 0),
+            predicted_outcome=predicted,
         )
 
     @staticmethod

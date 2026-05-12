@@ -104,6 +104,11 @@ class InferenceResult:
     raw_output: str
     thinking: str = ""
     tokens_used: int = 0
+    # #291: brain's structured prediction of post-action signals — either a
+    # ``{"expected": [...]}`` JSON block or a back-compat ``Predicted: ...``
+    # line. Empty when the model didn't emit one. Parsed downstream by
+    # :func:`mantis_agent.gym.predicates.parse_predicates`.
+    predicted_outcome: str = ""
 
 
 class ClaudeBrain:
@@ -374,11 +379,19 @@ class ClaudeBrain:
         tokens_used = data.get("usage", {})
         total_tokens = tokens_used.get("input_tokens", 0) + tokens_used.get("output_tokens", 0)
 
+        # #291: capture the brain's structured prediction (JSON ``expected``
+        # block or ``Predicted: ...`` line) for the runner to evaluate against
+        # the post-action observation. Search across thinking + assistant text
+        # — Claude tends to emit the JSON inside the assistant text block.
+        from .gym.predicates import extract_predicted_outcome
+        predicted = extract_predicted_outcome(text) or extract_predicted_outcome(thinking)
+
         return InferenceResult(
             action=action,
             raw_output=raw_output,
             thinking=full_thinking,
             tokens_used=total_tokens,
+            predicted_outcome=predicted,
         )
 
     @staticmethod

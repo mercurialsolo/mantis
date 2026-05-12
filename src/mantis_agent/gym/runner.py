@@ -31,6 +31,12 @@ from ..actions import Action, ActionType
 from ..loop_detector import LoopDetector, phash_64
 from ._runner_helpers import is_cancelled
 from .base import GymEnvironment
+from .predicates import (
+    ObservationContext,
+    evaluate_all,
+    parse_predicates,
+    world_model_error,
+)
 # Re-exported so hosts can ``from mantis_agent.gym.runner import
 # PauseRequested, PauseState`` without reaching into the .checkpoint
 # private surface (#285).
@@ -118,6 +124,19 @@ class TrajectoryStep:
     # url/title changes. The reward function compares this to predicted_outcome
     # to compute world-model error.
     observed_outcome: str = ""
+
+    # ── #291 structured predicate evaluation ────────────────────────────
+    # Per-predicate evaluation results derived from ``predicted_outcome``
+    # against the post-action observation. Each entry is
+    # ``{"predicate": str, "result": bool|None, "reason": str}`` where
+    # ``result is None`` means "couldn't measure" (the env didn't expose
+    # the signal). Empty list when the brain emitted no parseable
+    # predicates or when MANTIS_PREDICATE_VERIFY is disabled.
+    #
+    # Aggregate world-model error (fraction of evaluated predicates the
+    # brain got wrong) lands in ``reward_components["world_model_error"]``
+    # — see GymRunner.run for the wire-up.
+    predicate_results: list[dict] = field(default_factory=list)
 
 
 # Subset of ``gym_result.info`` that round-trips into TrajectoryStep
@@ -209,6 +228,7 @@ def _trajectory_step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
         "hypothesized_state": step.hypothesized_state,
         "predicted_outcome": step.predicted_outcome,
         "observed_outcome": step.observed_outcome,
+        "predicate_results": list(step.predicate_results),
     }
 
 
@@ -233,6 +253,7 @@ def _trajectory_step_from_dict(payload: dict[str, Any]) -> TrajectoryStep:
         hypothesized_state=str(payload.get("hypothesized_state", "")),
         predicted_outcome=str(payload.get("predicted_outcome", "")),
         observed_outcome=str(payload.get("observed_outcome", "")),
+        predicate_results=list(payload.get("predicate_results") or []),
     )
 
 
@@ -1258,6 +1279,10 @@ class GymRunner:
                 elif action.action_type not in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
                     last_focused_input = None
 
+                # Capture pre-action url/title for predicate evaluation BEFORE
+                # advancing them — `url_changed` etc. compare new vs. previous.
+                prev_url_for_predicates = last_url
+                prev_title_for_predicates = last_title
                 last_url = gym_result.info.get("url", last_url)
                 last_title = gym_result.info.get("title", last_title)
 
@@ -1268,18 +1293,55 @@ class GymRunner:
                 # the brain's predicted_outcome to what actually happened.
                 # frame_hash uses the same dHash as the loop detector so two
                 # trajectories at the same logical state hash equal.
+                step_frame_hash = phash_64(gym_result.observation.screenshot)
+                step_observed_state = {
+                    **_observed_state(gym_result.info),
+                    **_gallery_observed_state(gallery_recovery),
+                }
+
+                # #291 structured predicate evaluation. Default ON; set
+                # MANTIS_PREDICATE_VERIFY=disabled to ablate. Skipped when
+                # the brain emitted no predicted_outcome.
+                step_predicate_results: list[dict] = []
+                if (
+                    predicted_outcome
+                    and os.environ.get(
+                        "MANTIS_PREDICATE_VERIFY", "enabled",
+                    ).lower() != "disabled"
+                ):
+                    parsed = parse_predicates(predicted_outcome)
+                    if parsed:
+                        ctx = ObservationContext(
+                            url=str(gym_result.info.get("url", "") or ""),
+                            title=str(gym_result.info.get("title", "") or ""),
+                            focused_input=focused_input
+                                if isinstance(focused_input, dict) else None,
+                            frame_hash=step_frame_hash,
+                            prev_url=str(prev_url_for_predicates or ""),
+                            prev_title=str(prev_title_for_predicates or ""),
+                            prev_frame_hash=trajectory[-1].frame_hash
+                                if trajectory else "",
+                        )
+                        results = evaluate_all(parsed, ctx)
+                        step_predicate_results = [r.to_dict() for r in results]
+                        wm_err = world_model_error(results)
+                        if wm_err is not None:
+                            # Emit as a negative reward contribution so a
+                            # high-error step lowers total reward. Magnitude
+                            # is small (matches the existing
+                            # world_model_weight=0.05 in PlanAdherenceReward).
+                            step_components["world_model_error"] = -wm_err * 0.05
+
                 trajectory.append(TrajectoryStep(
                     step=step_num, action=action, thinking=thinking,
                     reward=step_reward, done=gym_result.done,
                     inference_time=inference_time, feedback=feedback,
                     reward_components=step_components,
-                    frame_hash=phash_64(gym_result.observation.screenshot),
-                    observed_state={
-                        **_observed_state(gym_result.info),
-                        **_gallery_observed_state(gallery_recovery),
-                    },
+                    frame_hash=step_frame_hash,
+                    observed_state=step_observed_state,
                     observed_outcome=feedback,
                     predicted_outcome=predicted_outcome,
+                    predicate_results=step_predicate_results,
                 ))
 
                 logger.info(f"Feedback: {feedback}")
