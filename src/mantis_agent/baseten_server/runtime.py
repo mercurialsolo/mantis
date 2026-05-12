@@ -1239,9 +1239,19 @@ class BasetenCUARuntime:
             except Exception as exc:
                 logger.debug("speculative reset failed (ignored): %s", exc)
 
+        # #118 per-request opt-out: ``payload["speculation"] = False``
+        # passes the inner (synchronous) brain to this run without
+        # touching the cached wrapper or container env. Lets a single
+        # deploy serve both arms of an A/B ablation.
+        brain_for_run: Any = self.brain
+        speculation_payload = payload.get("speculation")
+        if speculation_payload is False and hasattr(self.brain, "inner"):
+            brain_for_run = self.brain.inner
+            logger.info("brain: per-request override → synchronous (inner)")
+
         try:
             runner = GymRunner(
-                brain=self.brain,
+                brain=brain_for_run,
                 env=env,
                 max_steps=max_steps,
                 frames_per_inference=frames,
@@ -1305,17 +1315,18 @@ class BasetenCUARuntime:
                 # ``synchronous_starts`` = no pending speculation existed
                 # (first call after reset; typically 1 per run).
                 "speculation_summary": {
-                    "hits": int(getattr(self.brain, "hits", 0)),
-                    "misses": int(getattr(self.brain, "misses", 0)),
+                    "hits": int(getattr(brain_for_run, "hits", 0)),
+                    "misses": int(getattr(brain_for_run, "misses", 0)),
                     "synchronous_starts": int(
-                        getattr(self.brain, "synchronous_starts", 0),
+                        getattr(brain_for_run, "synchronous_starts", 0),
                     ),
                     "hit_rate": float(
-                        self.brain.hit_rate()
-                        if hasattr(self.brain, "hit_rate") else 0.0
+                        brain_for_run.hit_rate()
+                        if hasattr(brain_for_run, "hit_rate") else 0.0
                     ),
                     "enabled": (
-                        os.environ.get(
+                        brain_for_run is self.brain
+                        and os.environ.get(
                             "MANTIS_SPECULATIVE_INFERENCE", "enabled",
                         ).lower() != "disabled"
                     ),
