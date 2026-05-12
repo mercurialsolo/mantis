@@ -170,12 +170,30 @@ def test_navigate_returns_failure_when_env_reset_raises(monkeypatch):
     env.step.assert_not_called()
 
 
-def test_navigate_respects_step_param_wait_seconds(monkeypatch):
-    sleep_calls: list[float] = []
+def _capture_settle(monkeypatch) -> list[float]:
+    """Mock the #294 adaptive-settle entry point used by NavigateHandler and
+    return the list that receives the ``max_seconds`` value of each call.
+
+    NavigateHandler routes the first-paint wait and the Home settle through
+    ``adaptive_settle.settle_after_action(env, max_seconds=N)``; these tests
+    pin down the budget the handler asks for (param > env > default
+    plumbing).
+    """
+    captured: list[float] = []
+
+    def _capture(env_arg, *, max_seconds, **kwargs):
+        captured.append(float(max_seconds))
+        return 0.0
+
     monkeypatch.setattr(
-        "mantis_agent.gym.step_handlers.navigate.time.sleep",
-        lambda s: sleep_calls.append(s),
+        "mantis_agent.gym.step_handlers.navigate.adaptive_settle.settle_after_action",
+        _capture,
     )
+    return captured
+
+
+def test_navigate_respects_step_param_wait_seconds(monkeypatch):
+    captured = _capture_settle(monkeypatch)
     monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
 
     runner = _FakeRunner()
@@ -185,17 +203,14 @@ def test_navigate_respects_step_param_wait_seconds(monkeypatch):
 
     handler.execute(_step("Go to https://x.example.com/", wait_after_load_seconds=42), ctx)
 
-    # First sleep is the page-load wait (clamped to [0, 120]); second is the Home settle.
-    assert sleep_calls[0] == 42.0
-    assert sleep_calls[1] == 2
+    # First settle is the page-load wait (clamped to [0, 120]);
+    # second is the Home settle (fixed 2s).
+    assert captured[0] == 42.0
+    assert captured[1] == 2.0
 
 
 def test_navigate_clamps_wait_seconds_to_max(monkeypatch):
-    sleep_calls: list[float] = []
-    monkeypatch.setattr(
-        "mantis_agent.gym.step_handlers.navigate.time.sleep",
-        lambda s: sleep_calls.append(s),
-    )
+    captured = _capture_settle(monkeypatch)
     monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
 
     runner = _FakeRunner()
@@ -205,15 +220,11 @@ def test_navigate_clamps_wait_seconds_to_max(monkeypatch):
 
     handler.execute(_step("Go to https://x.example.com/", wait_after_load_seconds=999), ctx)
 
-    assert sleep_calls[0] == 120.0  # hard cap
+    assert captured[0] == 120.0  # hard cap
 
 
 def test_navigate_falls_back_to_env_var_for_wait(monkeypatch):
-    sleep_calls: list[float] = []
-    monkeypatch.setattr(
-        "mantis_agent.gym.step_handlers.navigate.time.sleep",
-        lambda s: sleep_calls.append(s),
-    )
+    captured = _capture_settle(monkeypatch)
     monkeypatch.setenv("MANTIS_NAV_WAIT_SECONDS", "7")
 
     runner = _FakeRunner()
@@ -222,15 +233,11 @@ def test_navigate_falls_back_to_env_var_for_wait(monkeypatch):
     handler = NavigateHandler(runner)
 
     handler.execute(_step("Open https://x.example.com/"), ctx)
-    assert sleep_calls[0] == 7.0
+    assert captured[0] == 7.0
 
 
 def test_navigate_uses_18s_default_wait(monkeypatch):
-    sleep_calls: list[float] = []
-    monkeypatch.setattr(
-        "mantis_agent.gym.step_handlers.navigate.time.sleep",
-        lambda s: sleep_calls.append(s),
-    )
+    captured = _capture_settle(monkeypatch)
     monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
 
     runner = _FakeRunner()
@@ -239,7 +246,7 @@ def test_navigate_uses_18s_default_wait(monkeypatch):
     handler = NavigateHandler(runner)
 
     handler.execute(_step("Open https://x.example.com/"), ctx)
-    assert sleep_calls[0] == 18.0
+    assert captured[0] == 18.0
 
 
 def test_navigate_step_type_property_is_navigate():
