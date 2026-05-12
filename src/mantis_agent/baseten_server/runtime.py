@@ -1340,6 +1340,14 @@ class BasetenCUARuntime:
                         ).lower() == "enabled"
                     ),
                 },
+                # #293 ablation signal: perceptual-diff verifier
+                # aggregate. ``checked`` = high-risk actions the
+                # verifier evaluated; ``no_effect`` = those where the
+                # action visibly did nothing. Empty when the verifier
+                # never fired (toggle off or no high-risk actions).
+                "perceptual_summary": dict(
+                    getattr(gym_result, "perceptual_summary", None) or {},
+                ),
                 "done_rejections_by_reason": dict(
                     getattr(gym_result, "done_rejections_by_reason", None) or {},
                 ),
