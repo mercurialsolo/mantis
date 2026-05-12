@@ -24,6 +24,12 @@ class ActionType(str, Enum):
     # Launch a binary on the desktop. Closes the symmetry gap with the host integration
     # whose Claude backend uses `bash` to start chromium. See issue #72.
     LAUNCH_APP = "launch_app"
+    # Invoke a host-registered tool (#285). ``params = {"name": str,
+    # "args": dict}``. The runner short-circuits to ``tool_channel.invoke``
+    # instead of dispatching through ``env.step`` — handlers can return a
+    # value (recorded into the trajectory ``feedback`` field) or raise
+    # ``PauseRequested`` to suspend the run for host input.
+    TOOL_CALL = "tool_call"
 
 
 @dataclass

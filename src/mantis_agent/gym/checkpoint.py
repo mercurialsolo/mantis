@@ -173,11 +173,17 @@ PauseRequested = _PauseRequested
 
 @dataclass
 class PauseState:
-    """Serializable snapshot of a paused MicroPlanRunner (#73).
+    """Serializable snapshot of a paused MicroPlanRunner or GymRunner (#73, #285).
 
     Round-trips through JSON so host can store it on
     ``plan.agent_data["host_state"]``. Resume by calling
     ``runner.resume(state, user_input=...)``.
+
+    Most fields are MicroPlanRunner-specific (``step_results``,
+    ``loop_counters``, ``listings_on_page``). GymRunner fills
+    ``trajectory_steps`` + ``task`` + ``task_id`` instead — the other
+    fields stay empty and the runner that wrote the snapshot is the
+    runner that consumes it, so cross-pollution doesn't matter.
     """
     version: int = 1
     run_key: str = ""
@@ -193,6 +199,12 @@ class PauseState:
     listings_on_page: int = 0
     checkpoint_path: str = ""
     timestamp: float = 0.0
+
+    # GymRunner extensions (#285). Empty when the snapshot came from
+    # MicroPlanRunner.
+    trajectory_steps: list[dict[str, Any]] = field(default_factory=list)
+    task: str = ""
+    task_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
