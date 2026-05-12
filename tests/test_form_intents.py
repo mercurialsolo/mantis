@@ -663,8 +663,22 @@ def test_navigate_wait_override_via_params(monkeypatch: pytest.MonkeyPatch):
     env = _FakeEnv()
     runner = _runner_with_extractor(env, extractor=MagicMock())
 
+    # #294 step-handler extension: navigate now routes the first-paint wait
+    # through adaptive_settle.settle_after_action(max_seconds=wait_seconds).
+    # Capture the `max_seconds` value the handler asks for — that's the
+    # contract these tests pin down (param > env > default plumbing).
     captured: list[float] = []
-    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+    from mantis_agent.gym import adaptive_settle
+
+    def _capture(env_arg, *, max_seconds, **kwargs):
+        captured.append(float(max_seconds))
+        return 0.0
+
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.navigate.adaptive_settle.settle_after_action",
+        _capture,
+    )
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", lambda s: None)
     # Env override would push to 60 if param were ignored.
     monkeypatch.setenv("MANTIS_NAV_WAIT_SECONDS", "60")
 
@@ -676,7 +690,7 @@ def test_navigate_wait_override_via_params(monkeypatch: pytest.MonkeyPatch):
     result = runner._execute_navigate(intent, index=0)
 
     assert result.success is True
-    # First sleep is the first-paint wait. Param=35 wins over env=60.
+    # First settle is the first-paint wait. Param=35 wins over env=60.
     assert captured[0] == 35.0
 
 
@@ -690,7 +704,16 @@ def test_navigate_wait_override_via_env(monkeypatch: pytest.MonkeyPatch):
     runner = _runner_with_extractor(env, extractor=MagicMock())
 
     captured: list[float] = []
-    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+
+    def _capture(env_arg, *, max_seconds, **kwargs):
+        captured.append(float(max_seconds))
+        return 0.0
+
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.navigate.adaptive_settle.settle_after_action",
+        _capture,
+    )
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", lambda s: None)
     monkeypatch.setenv("MANTIS_NAV_WAIT_SECONDS", "30")
 
     intent = MicroIntent(intent="Go to https://example.com", type="navigate")
@@ -707,7 +730,16 @@ def test_navigate_wait_default_unchanged(monkeypatch: pytest.MonkeyPatch):
     runner = _runner_with_extractor(env, extractor=MagicMock())
 
     captured: list[float] = []
-    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+
+    def _capture(env_arg, *, max_seconds, **kwargs):
+        captured.append(float(max_seconds))
+        return 0.0
+
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.navigate.adaptive_settle.settle_after_action",
+        _capture,
+    )
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", lambda s: None)
     monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
 
     intent = MicroIntent(intent="Go to https://example.com", type="navigate")
@@ -724,7 +756,16 @@ def test_navigate_wait_clamped_to_safe_range(monkeypatch: pytest.MonkeyPatch):
     runner = _runner_with_extractor(env, extractor=MagicMock())
 
     captured: list[float] = []
-    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", captured.append)
+
+    def _capture(env_arg, *, max_seconds, **kwargs):
+        captured.append(float(max_seconds))
+        return 0.0
+
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.navigate.adaptive_settle.settle_after_action",
+        _capture,
+    )
+    monkeypatch.setattr("mantis_agent.gym.micro_runner.time.sleep", lambda s: None)
     monkeypatch.delenv("MANTIS_NAV_WAIT_SECONDS", raising=False)
 
     intent = MicroIntent(

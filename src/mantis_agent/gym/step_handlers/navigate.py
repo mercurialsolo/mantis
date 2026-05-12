@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time  # noqa: F401 — re-exported for tests that monkeypatch navigate.time.sleep
 from typing import TYPE_CHECKING
 
 from ...actions import Action, ActionType
