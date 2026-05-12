@@ -167,6 +167,33 @@ class BasetenCUARuntime:
             self.brain = self._load_gemma4()
         else:
             raise RuntimeError(f"unsupported MANTIS_MODEL={self.model_kind!r}")
+
+        # #118: optional SpeculativeBrain wrapping. The wrapper overlaps
+        # think() with the post-action settle using a worker thread.
+        #
+        # The strict validator (Hamming distance 0) makes this quality-
+        # safe — speculative results never drive an action when the
+        # screen changed.
+        #
+        # **HOWEVER**, on single-llama.cpp deployments (Holo3 on Modal,
+        # current production config) the speculative HTTP request and
+        # the sync HTTP request serialize on the same GPU. A 55% hit
+        # rate on lu.ma still produced a +52% wall-time regression
+        # because the speculative call holds GPU time across the action
+        # dispatch and the sync fallback waits for GPU to free.
+        #
+        # Default is therefore ``disabled`` — enable explicitly on
+        # multi-replica / multi-GPU deployments where the two HTTP
+        # requests land on separate inference workers.
+        # See docs/reference/speculative-inference.md for the full
+        # ablation data.
+        if os.environ.get(
+            "MANTIS_SPECULATIVE_INFERENCE", "disabled",
+        ).lower() == "enabled":
+            from ..speculative_brain import SpeculativeBrain
+            self.brain = SpeculativeBrain(self.brain)
+            logger.info("brain: wrapped in SpeculativeBrain (#118)")
+
         self.loaded = True
 
     def _start_llama(self, model_path: Path, mmproj_path: Path | None, extra_args: list[str]) -> None:
@@ -1213,9 +1240,27 @@ class BasetenCUARuntime:
             from mantis_agent.presentation import ClickRecordingEnv
             env = ClickRecordingEnv(env, click_log)
 
+        # #118: reset speculative counters per episode so per-run hit
+        # rates surface cleanly. No-op when the brain isn't wrapped.
+        if hasattr(self.brain, "reset") and callable(self.brain.reset):
+            try:
+                self.brain.reset()
+            except Exception as exc:
+                logger.debug("speculative reset failed (ignored): %s", exc)
+
+        # #118 per-request opt-out: ``payload["speculation"] = False``
+        # passes the inner (synchronous) brain to this run without
+        # touching the cached wrapper or container env. Lets a single
+        # deploy serve both arms of an A/B ablation.
+        brain_for_run: Any = self.brain
+        speculation_payload = payload.get("speculation")
+        if speculation_payload is False and hasattr(self.brain, "inner"):
+            brain_for_run = self.brain.inner
+            logger.info("brain: per-request override → synchronous (inner)")
+
         try:
             runner = GymRunner(
-                brain=self.brain,
+                brain=brain_for_run,
                 env=env,
                 max_steps=max_steps,
                 frames_per_inference=frames,
@@ -1271,6 +1316,30 @@ class BasetenCUARuntime:
                 # #311 ablation signal: True when this run reused a cached
                 # Xvfb + Chrome process from an earlier request.
                 "reused_session": env_was_cached,
+                # #118 ablation signal: speculative-inference hit rate.
+                # ``hits`` = think() calls served from a pre-launched
+                # speculation that validated against the post-settle frame.
+                # ``misses`` = pre-launched speculations whose post-frame
+                # failed validation (page changed during settle).
+                # ``synchronous_starts`` = no pending speculation existed
+                # (first call after reset; typically 1 per run).
+                "speculation_summary": {
+                    "hits": int(getattr(brain_for_run, "hits", 0)),
+                    "misses": int(getattr(brain_for_run, "misses", 0)),
+                    "synchronous_starts": int(
+                        getattr(brain_for_run, "synchronous_starts", 0),
+                    ),
+                    "hit_rate": float(
+                        brain_for_run.hit_rate()
+                        if hasattr(brain_for_run, "hit_rate") else 0.0
+                    ),
+                    "enabled": (
+                        brain_for_run is self.brain
+                        and os.environ.get(
+                            "MANTIS_SPECULATIVE_INFERENCE", "disabled",
+                        ).lower() == "enabled"
+                    ),
+                },
                 "done_rejections_by_reason": dict(
                     getattr(gym_result, "done_rejections_by_reason", None) or {},
                 ),
