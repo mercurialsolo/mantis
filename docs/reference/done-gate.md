@@ -78,6 +78,35 @@ done(success=true) → gate (free, deterministic)
 Both rejection paths share the same `max_done_rejections` budget, so the
 total number of rejection cycles per run is bounded.
 
+## Cross-layer awareness (`pending_form_labels` kwarg)
+
+The done-gate's `pending_form_values` predicate normally reads the inner
+`FormController`'s pending list. When `GymRunner` is invoked from a
+higher-level orchestrator (`MicroPlanRunner` via `Holo3StepHandler` —
+the `/v1/predict` path), the inner runner only sees the sub-step's
+intent and has no visibility into form values that are pending across
+the broader plan.
+
+`GymRunner.run(pending_form_labels: list[str] | None = None)` lets the
+outer caller pass that cross-layer hint:
+
+```python
+gym_runner.run(
+    task=sub_step.intent,
+    task_id=f"step_{i}_{step.type}",
+    pending_form_labels=outer_runner.pending_form_labels,  # e.g. ["password", "captcha"]
+)
+```
+
+When non-`None`, the gate uses the passed list **instead of** the inner
+`FormController`'s derived list. When `None` (default), the inner
+controller's list wins — preserving the single-layer `/v1/cua`
+behaviour.
+
+`Holo3StepHandler` already reads `runner.pending_form_labels` (if the
+attribute exists) and forwards it. `MicroPlanRunner` doesn't track this
+state today; the plumbing point is in place for when it does.
+
 ## Ablation toggle
 
 To disable the gate entirely — useful for measuring whether it's pulling
