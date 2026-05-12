@@ -134,6 +134,7 @@ nav:
       - Environment variables: reference/env-vars.md
       - Glossary: reference/glossary.md
       - Coordinate spaces: reference/coordinate-spaces.md
+      - Predicate grammar: reference/predicates.md
   - Appendix:
       - appendix/index.md
       - Learnings: learnings.md
