@@ -668,7 +668,6 @@ def test_navigate_wait_override_via_params(monkeypatch: pytest.MonkeyPatch):
     # Capture the `max_seconds` value the handler asks for — that's the
     # contract these tests pin down (param > env > default plumbing).
     captured: list[float] = []
-    from mantis_agent.gym import adaptive_settle
 
     def _capture(env_arg, *, max_seconds, **kwargs):
         captured.append(float(max_seconds))
