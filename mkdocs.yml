@@ -137,6 +137,7 @@ nav:
       - Predicate grammar: reference/predicates.md
       - Done-acceptance gate: reference/done-gate.md
       - Form controller: reference/form-controller.md
+      - Adaptive settle: reference/adaptive-settle.md
   - Appendix:
       - appendix/index.md
       - Learnings: learnings.md
