@@ -139,6 +139,7 @@ nav:
       - Form controller: reference/form-controller.md
       - Adaptive settle: reference/adaptive-settle.md
       - Chrome session reuse: reference/chrome-session-reuse.md
+      - Speculative inference: reference/speculative-inference.md
   - Appendix:
       - appendix/index.md
       - Learnings: learnings.md

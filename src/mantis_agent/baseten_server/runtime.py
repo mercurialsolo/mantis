@@ -167,6 +167,24 @@ class BasetenCUARuntime:
             self.brain = self._load_gemma4()
         else:
             raise RuntimeError(f"unsupported MANTIS_MODEL={self.model_kind!r}")
+
+        # #118: wrap the inner brain in SpeculativeBrain to overlap
+        # think() with the post-action settle. With the strict default
+        # validator (Hamming distance 0), only pixel-equivalent frames
+        # consume a speculation — speculative results never drive an
+        # action when the screen visibly changed. Cost-attribution is
+        # via the SpeculativeBrain.hits / misses counters surfaced on
+        # /v1/cua responses.
+        #
+        # MANTIS_SPECULATIVE_INFERENCE=disabled keeps the bare brain
+        # (legacy serial path) for ablation A/Bs.
+        if os.environ.get(
+            "MANTIS_SPECULATIVE_INFERENCE", "enabled",
+        ).lower() != "disabled":
+            from ..speculative_brain import SpeculativeBrain
+            self.brain = SpeculativeBrain(self.brain)
+            logger.info("brain: wrapped in SpeculativeBrain (#118)")
+
         self.loaded = True
 
     def _start_llama(self, model_path: Path, mmproj_path: Path | None, extra_args: list[str]) -> None:
@@ -1213,6 +1231,14 @@ class BasetenCUARuntime:
             from mantis_agent.presentation import ClickRecordingEnv
             env = ClickRecordingEnv(env, click_log)
 
+        # #118: reset speculative counters per episode so per-run hit
+        # rates surface cleanly. No-op when the brain isn't wrapped.
+        if hasattr(self.brain, "reset") and callable(self.brain.reset):
+            try:
+                self.brain.reset()
+            except Exception as exc:
+                logger.debug("speculative reset failed (ignored): %s", exc)
+
         try:
             runner = GymRunner(
                 brain=self.brain,
@@ -1271,6 +1297,29 @@ class BasetenCUARuntime:
                 # #311 ablation signal: True when this run reused a cached
                 # Xvfb + Chrome process from an earlier request.
                 "reused_session": env_was_cached,
+                # #118 ablation signal: speculative-inference hit rate.
+                # ``hits`` = think() calls served from a pre-launched
+                # speculation that validated against the post-settle frame.
+                # ``misses`` = pre-launched speculations whose post-frame
+                # failed validation (page changed during settle).
+                # ``synchronous_starts`` = no pending speculation existed
+                # (first call after reset; typically 1 per run).
+                "speculation_summary": {
+                    "hits": int(getattr(self.brain, "hits", 0)),
+                    "misses": int(getattr(self.brain, "misses", 0)),
+                    "synchronous_starts": int(
+                        getattr(self.brain, "synchronous_starts", 0),
+                    ),
+                    "hit_rate": float(
+                        self.brain.hit_rate()
+                        if hasattr(self.brain, "hit_rate") else 0.0
+                    ),
+                    "enabled": (
+                        os.environ.get(
+                            "MANTIS_SPECULATIVE_INFERENCE", "enabled",
+                        ).lower() != "disabled"
+                    ),
+                },
                 "done_rejections_by_reason": dict(
                     getattr(gym_result, "done_rejections_by_reason", None) or {},
                 ),

@@ -93,6 +93,7 @@ See [operations/cost.md](../operations/cost.md) for the full rate-tuning workflo
 | `MANTIS_FORM_CONTROLLER` | `enabled` | First-class runtime form controller (#301) owning pending-values / used-regions / submit-latch state. Set to `disabled` to ablate — the runner falls back to the legacy scattered `force_fill_*` locals; `runner.form_controller` is `None`. See [Form controller](form-controller.md). |
 | `MANTIS_ADAPTIVE_SETTLE` | `enabled` | Replaces post-action `time.sleep(settle_time)` (#294) with a frame-stability gate (xdotool path) or `wait_for_load_state("networkidle")` gate (Playwright path), capped at the legacy budget. Set to `disabled` to ablate — both gates short-circuit back to a fixed sleep without a redeploy. See [Adaptive settle](adaptive-settle.md). |
 | `MANTIS_CHROME_REUSE` | `enabled` | Container-scoped Xvfb + Chrome session reuse (#311). Successive `/v1/cua` requests with the same `(profile_dir, proxy_key)` reuse the live browser instead of paying the ~10 s launch tax. Set to `disabled` to ablate. Per-request opt-out: `payload["reuse_session"]=false`. See [Chrome session reuse](chrome-session-reuse.md). |
+| `MANTIS_SPECULATIVE_INFERENCE` | `enabled` | Wraps the inner brain in `SpeculativeBrain` (#118) so `think()` overlaps with the post-action settle. Strict validator (Hamming distance 0) ensures speculative results never drive an action when the screen visibly changed. Set to `disabled` to ablate — `runtime.brain` stays bare. See [Speculative inference](speculative-inference.md). |
 
 ## API documentation surface
 
