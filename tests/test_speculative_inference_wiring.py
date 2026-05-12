@@ -48,12 +48,34 @@ class _StubBrain:
         return type("R", (), {"action": None, "thinking": ""})()
 
 
-def test_default_wraps_brain_in_speculative_brain(
+def test_default_keeps_bare_brain(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """Default config wraps the inner brain so /v1/cua sees speculation."""
+    """Default config leaves the inner brain bare — E2E ablation showed
+    speculation regresses wall time on single-llama.cpp deployments
+    (GPU contention between speculative + sync requests). Opt-in only."""
     monkeypatch.delenv("MANTIS_SPECULATIVE_INFERENCE", raising=False)
+    monkeypatch.setattr(
+        _runtime_module(), "_load_secret_environment", lambda: None,
+    )
+    monkeypatch.setenv("MANTIS_DATA_DIR", str(tmp_path))
+
+    runtime = _fresh_runtime()
+    runtime.model_kind = "holo3"
+    inner = _StubBrain()
+    runtime._load_holo3 = lambda: inner  # type: ignore[method-assign]
+
+    runtime.load()
+    assert runtime.brain is inner
+
+
+def test_opt_in_wraps_brain_in_speculative_brain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """MANTIS_SPECULATIVE_INFERENCE=enabled wraps the inner brain."""
+    monkeypatch.setenv("MANTIS_SPECULATIVE_INFERENCE", "enabled")
     monkeypatch.setattr(
         _runtime_module(), "_load_secret_environment", lambda: None,
     )
@@ -72,31 +94,12 @@ def test_default_wraps_brain_in_speculative_brain(
     assert runtime.loaded is True
 
 
-def test_ablation_toggle_keeps_bare_brain(
+def test_unknown_toggle_value_treated_as_disabled(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """MANTIS_SPECULATIVE_INFERENCE=disabled returns the raw inner brain."""
-    monkeypatch.setenv("MANTIS_SPECULATIVE_INFERENCE", "disabled")
-    monkeypatch.setattr(
-        _runtime_module(), "_load_secret_environment", lambda: None,
-    )
-    monkeypatch.setenv("MANTIS_DATA_DIR", str(tmp_path))
-
-    runtime = _fresh_runtime()
-    runtime.model_kind = "holo3"
-    inner = _StubBrain()
-    runtime._load_holo3 = lambda: inner  # type: ignore[method-assign]
-
-    runtime.load()
-    assert runtime.brain is inner
-
-
-def test_unknown_toggle_value_treated_as_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Any,
-) -> None:
-    """Any value other than the explicit 'disabled' keeps speculation on."""
+    """Any value other than the explicit 'enabled' keeps speculation off
+    (safe default for the wall-time regression on single-GPU backends)."""
     monkeypatch.setenv("MANTIS_SPECULATIVE_INFERENCE", "yes")
     monkeypatch.setattr(
         _runtime_module(), "_load_secret_environment", lambda: None,
@@ -109,8 +112,7 @@ def test_unknown_toggle_value_treated_as_enabled(
     runtime._load_holo3 = lambda: inner  # type: ignore[method-assign]
 
     runtime.load()
-    from mantis_agent.speculative_brain import SpeculativeBrain
-    assert isinstance(runtime.brain, SpeculativeBrain)
+    assert runtime.brain is inner
 
 
 def test_speculative_brain_resets_counters_per_episode() -> None:

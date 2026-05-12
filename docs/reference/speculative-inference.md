@@ -1,78 +1,96 @@
 # Speculative inference
 
-The brain's `think()` call is the largest per-step latency component on
-warm requests (~1.5-2.0 s for Holo3 Q8). It was previously fully serial
-with the post-action settle:
-
-```
-dispatch action → wait for settle → screenshot → think() → next action
-```
-
-Speculative inference overlaps `think()` with the settle window so the
-brain's reasoning starts *before* the next frame is captured. When the
-post-settle frame matches the frame the speculation started with, the
-speculative result is consumed directly — saving a synchronous brain
-round-trip.
+`SpeculativeBrain` wraps the inner `Brain` to overlap `think()` with the
+post-action settle window. The infrastructure is shipped; **the wrapper
+is opt-in via `MANTIS_SPECULATIVE_INFERENCE=enabled`** because the
+real-world E2E ablation on the production Holo3 + llama.cpp deployment
+showed a wall-time **regression**, not a win.
 
 Tracking issue: [#118](https://github.com/mercurialsolo/mantis/issues/118).
 
-## How it works
+## What changed
 
-`SpeculativeBrain` wraps the inner `Brain`. Each `think()` call:
+| Component | Before | After |
+|---|---|---|
+| `BasetenCUARuntime.load()` | bare brain | optional `SpeculativeBrain` wrapper |
+| `MANTIS_SPECULATIVE_INFERENCE` | — | env var; default `disabled` |
+| `/v1/cua` payload `"speculation"` | — | per-request override |
+| `/v1/cua` response | — | `speculation_summary` block |
+
+## How the wrapper works
+
+Each `think()` call:
 
 1. If a pending speculation from the previous call exists AND the new
    `frames[-1]` matches the frame the speculation started with (per
-   `phash_64` Hamming distance ≤ tolerance), consume the speculation —
-   skip the synchronous round-trip entirely.
+   `phash_64` Hamming distance ≤ tolerance), consume the speculative
+   result — skip the synchronous round-trip.
 2. Otherwise, fall through to a synchronous `inner.think()`.
 3. Either way, kick off a *new* speculation against the new frames for
    the *next* call to consume.
 
 The validator defaults to `frames_close_enough(..., max_hamming_distance=0)`
-— only pixel-equivalent frames pass. **Speculative results never drive
-an action when the screen visibly changed.** Tighter than necessary on
-SPAs with subtle animations; tunable per-deployment.
+— only pixel-equivalent frames pass.
 
-## Quality guard
+## Quality guarantee (why this is safe even though it's slower today)
 
-The safety contract:
+The strict validator makes false acceptances impossible:
 
-- **Strict validator**: with `max_hamming_distance=0`, a single bit of
-  perceptual difference invalidates the speculation. Falls through to
-  the synchronous path on every miss.
-- **Synchronous fallback on exception**: any exception in the speculative
-  `think()` aborts the speculation; the runner calls `inner.think()`
-  fresh.
+- **`max_hamming_distance=0`**: a single bit of perceptual difference
+  invalidates the speculation. Falls through to the synchronous path.
+- **Synchronous fallback on exception**: any speculative `think()`
+  exception aborts; runner calls `inner.think()` fresh.
 - **Cancel on invalidate**: the worker is freed as soon as the runner
   decides the speculation is stale.
-- **Counter parity**: `hits + misses + synchronous_starts` always equals
-  the number of `think()` calls in the episode. Hit rate is observable.
 
-## Lifecycle
+It is **mathematically impossible** for a speculative result to drive
+an action when the page visibly changed.
 
-```
-request 1:
-  step 1: no pending → synchronous_start (synchronous think); kick off speculation
-  step 2: pending validates → HIT (free think); kick off speculation
-  step 3: pending invalidates (page changed) → MISS, synchronous fallback; kick off
-  ...
-  done() → runner returns
-```
+## E2E ablation (Modal, Holo3 Q8 on llama.cpp)
 
-The runtime calls `brain.reset()` at the start of each `/v1/cua` run so
-per-run counters surface cleanly. Cross-run state never leaks.
+Identical lu.ma extract instruction (18 steps), single-deploy A/B via
+the per-request `"speculation"` override:
+
+| Run | Speculation | Steps | Wall | Hit rate |
+|---|---|---|---|---|
+| A | OFF | 18 (max_steps) | **93 s** | n/a |
+| B | ON | 18 (max_steps) | **145 s** | **55.6%** (10 hits / 18 think) |
+
+**Speculation is 52% slower despite a 55.6% hit rate.** No quality
+regression (no done_rejections, no predicate anomalies, validator behaved
+correctly), but the perf claim from the original issue doesn't hold on
+this backend.
+
+### Root cause
+
+`SpeculativeBrain` runs `think()` on a worker thread; Holo3 routes both
+the speculative AND the synchronous `think()` to the same llama.cpp
+inference server (single GPU). The two HTTP requests **serialize** on
+the GPU — the speculative call holds GPU time during the action
+dispatch, then the sync fallback (on misses) waits for the GPU to free.
+
+The wrapper helps when:
+
+- The inner brain serves requests from **separate GPUs / processes**
+  (multi-replica deployment, multi-tenant inference fleet).
+- The inner brain is **CPU-bound but heavily I/O-bound** (e.g. a remote
+  Anthropic API call where Python threads can overlap network I/O).
+- The hit rate × inference cost > GPU-contention penalty.
+
+It hurts when the brain backend has a single GPU shared across both
+concurrent requests, like Holo3 Q8 on llama.cpp today.
 
 ## API response signal
 
-`/v1/cua` responses include a `speculation_summary` block:
+`/v1/cua` responses include a `speculation_summary` block on every run:
 
 ```json
 {
   "speculation_summary": {
-    "hits": 4,
-    "misses": 1,
+    "hits": 10,
+    "misses": 7,
     "synchronous_starts": 1,
-    "hit_rate": 0.6667,
+    "hit_rate": 0.5556,
     "enabled": true
   }
 }
@@ -80,48 +98,36 @@ per-run counters surface cleanly. Cross-run state never leaks.
 
 Every run doubles as an ablation data point.
 
-## Ablation toggle
+## Toggles
 
-Per [#261](https://github.com/mercurialsolo/mantis/issues/261) discipline:
+| Lever | Effect |
+|---|---|
+| `MANTIS_SPECULATIVE_INFERENCE=enabled` | container-wide opt-in; wraps `runtime.brain` |
+| `MANTIS_SPECULATIVE_INFERENCE=disabled` (default) | bare brain, legacy serial path |
+| `payload["speculation"]=false` | per-request opt-out even when env-var is on |
 
-```bash
-MANTIS_SPECULATIVE_INFERENCE=disabled
-```
+Per-request override lets a single deploy serve both arms of an A/B
+without redeploy — useful for measuring whether the wrapper's wall-time
+profile has improved on a backend change.
 
-When disabled, `runtime.brain` stays bare (no wrapper); the runner runs
-in serial `think()` mode. `speculation_summary.enabled` reflects the
-toggle state in the API response.
+## When to enable
 
-## Expected wall-time impact
+Only on backends where the brain inference server has enough parallelism
+to serve two concurrent `think()` requests without serializing:
 
-Per-step decomposition on a warm container (post-#311 session reuse and
-#294 adaptive settle):
+- Anthropic Claude API (cloud, virtually unlimited parallelism)
+- vLLM with TP > 1 across multiple GPUs and a router that load-balances
+- Multi-replica llama.cpp behind a load balancer
 
-| Phase | Pre-#118 | Post-#118 (cache hit) |
-|---|---|---|
-| Dispatch action | <0.1 s | unchanged |
-| Settle (adaptive) | 0.3-0.7 s | overlapped with think() |
-| `think()` inference | 1.5-2.0 s | **0** (already done) |
-| Frame capture + framing | <0.5 s | unchanged |
-| **Per-step total** | ~2.5 s | **~0.8-1.2 s** |
-
-Projected ~50% per-step reduction on hit-heavy workloads. Click + scroll
-flows have the highest hit rates (visual stability); navigate / form-
-submit flows trip the validator more often and fall back to synchronous.
-
-## What this does NOT do
-
-- Doesn't speed up the FIRST think() call in a run (no pending speculation).
-- Doesn't help when every action visibly changes the page (validator
-  always misses; behaviour identical to synchronous).
-- Doesn't widen the brain's parallelism — only one speculation is
-  in-flight at a time, matching the serial step pattern.
+For Holo3 Q8 on a single llama.cpp container (current Modal production),
+**keep it disabled**.
 
 ## See also
 
-- [Adaptive settle](adaptive-settle.md) — the other half of the warm-path
-  speedup. Speculative inference benefits MORE when settle is short
-  (the overlap window shrinks but so does the wasted time).
+- [Adaptive settle](adaptive-settle.md) — the warm-path speedup that
+  actually works today.
 - [Chrome session reuse](chrome-session-reuse.md) — eliminates the
-  cold-launch cost. Combined with #118, the warm-request wall is
-  dominated by inference + dispatch.
+  cold-launch cost.
+- [#309](https://github.com/mercurialsolo/mantis/issues/309) Holo3 Q5_K_M
+  quantization — separate per-step inference win that doesn't depend on
+  parallelism.

@@ -168,19 +168,28 @@ class BasetenCUARuntime:
         else:
             raise RuntimeError(f"unsupported MANTIS_MODEL={self.model_kind!r}")
 
-        # #118: wrap the inner brain in SpeculativeBrain to overlap
-        # think() with the post-action settle. With the strict default
-        # validator (Hamming distance 0), only pixel-equivalent frames
-        # consume a speculation — speculative results never drive an
-        # action when the screen visibly changed. Cost-attribution is
-        # via the SpeculativeBrain.hits / misses counters surfaced on
-        # /v1/cua responses.
+        # #118: optional SpeculativeBrain wrapping. The wrapper overlaps
+        # think() with the post-action settle using a worker thread.
         #
-        # MANTIS_SPECULATIVE_INFERENCE=disabled keeps the bare brain
-        # (legacy serial path) for ablation A/Bs.
+        # The strict validator (Hamming distance 0) makes this quality-
+        # safe — speculative results never drive an action when the
+        # screen changed.
+        #
+        # **HOWEVER**, on single-llama.cpp deployments (Holo3 on Modal,
+        # current production config) the speculative HTTP request and
+        # the sync HTTP request serialize on the same GPU. A 55% hit
+        # rate on lu.ma still produced a +52% wall-time regression
+        # because the speculative call holds GPU time across the action
+        # dispatch and the sync fallback waits for GPU to free.
+        #
+        # Default is therefore ``disabled`` — enable explicitly on
+        # multi-replica / multi-GPU deployments where the two HTTP
+        # requests land on separate inference workers.
+        # See docs/reference/speculative-inference.md for the full
+        # ablation data.
         if os.environ.get(
-            "MANTIS_SPECULATIVE_INFERENCE", "enabled",
-        ).lower() != "disabled":
+            "MANTIS_SPECULATIVE_INFERENCE", "disabled",
+        ).lower() == "enabled":
             from ..speculative_brain import SpeculativeBrain
             self.brain = SpeculativeBrain(self.brain)
             logger.info("brain: wrapped in SpeculativeBrain (#118)")
@@ -1327,8 +1336,8 @@ class BasetenCUARuntime:
                     "enabled": (
                         brain_for_run is self.brain
                         and os.environ.get(
-                            "MANTIS_SPECULATIVE_INFERENCE", "enabled",
-                        ).lower() != "disabled"
+                            "MANTIS_SPECULATIVE_INFERENCE", "disabled",
+                        ).lower() == "enabled"
                     ),
                 },
                 "done_rejections_by_reason": dict(
