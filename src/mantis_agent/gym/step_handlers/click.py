@@ -54,6 +54,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from ...actions import Action, ActionType
+from .. import adaptive_settle
 from ..checkpoint import StepResult
 from ..log_utils import url_for_log
 from ..step_context import StepContext
@@ -91,9 +92,8 @@ class ClaudeGuidedClickHandler:
         index = int(ctx.state.get("index", 0))
 
         # Pre-settle — page may still be loading after navigate/paginate.
-        # Lifted from MicroPlanRunner._execute_step's "click" branch in EPIC #161
-        # cleanup so registry-first dispatch produces identical timing.
-        time.sleep(2)
+        # #294 adaptive-settle: cap at 2s, exit early when frame hash settles.
+        adaptive_settle.settle_after_action(env, max_seconds=2.0)
 
         # If no cached listings, scan the page (one Claude call for ALL cards)
         if runner._page_listing_index >= len(runner._page_listings):
@@ -334,7 +334,11 @@ class ClaudeGuidedClickHandler:
         # Verify: are we on a detail page? Retry once (page may still load)
         # Prefer CDP over screenshot URL extraction — issue #89 §1.
         for verify_attempt in range(2):
-            time.sleep(3 + verify_attempt * 3)  # 3s first, 6s retry
+            # #294: cap at the legacy 3s/6s budget per attempt; exit early
+            # when the navigation lands and the frame stabilises.
+            adaptive_settle.settle_after_action(
+                env, max_seconds=3.0 + verify_attempt * 3.0,
+            )
             url = runner._read_current_url()
             if not url:
                 # CDP unavailable — fall back to screenshot OCR.
@@ -460,7 +464,8 @@ class ClaudeGuidedClickHandler:
             runner.costs["gpu_steps"] += 1
             runner.costs["gpu_seconds"] += 3
             runner.costs["proxy_mb"] += 5.0
-            time.sleep(2)
+            # #294: cap at 2s for middle-click newtab settle.
+            adaptive_settle.settle_after_action(env, max_seconds=2.0)
 
             for switch_attempt in range(2):
                 url = runner._read_current_url()
@@ -528,7 +533,8 @@ class ClaudeGuidedClickHandler:
 
                 if switch_attempt == 0:
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+Tab"}))
-                    time.sleep(2)
+                    # #294: cap at 2s for tab-switch settle.
+                    adaptive_settle.settle_after_action(env, max_seconds=2.0)
         except Exception as e:
             logger.warning(f"  [claude-click] Middle-click fallback failed: {e}")
 
@@ -542,7 +548,8 @@ class ClaudeGuidedClickHandler:
         # didn't actually open a new tab.
         try:
             env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+1"}))
-            time.sleep(1)
+            # #294: cap at 1s for tab-focus settle.
+            adaptive_settle.settle_after_action(env, max_seconds=1.0)
             url = runner._read_current_url()
             if not url:
                 after = env.screenshot()
@@ -615,7 +622,8 @@ class ClaudeGuidedClickHandler:
                 runner.costs["gpu_steps"] += 1
                 runner.costs["gpu_seconds"] += 3
                 runner.costs["proxy_mb"] += 5.0
-                time.sleep(3)
+                # #294: cap at 3s for probe-area click navigation settle.
+                adaptive_settle.settle_after_action(env, max_seconds=3.0)
 
                 url = runner._read_current_url()
                 if not url:

@@ -40,6 +40,7 @@ import time
 from typing import TYPE_CHECKING
 
 from ...actions import Action, ActionType
+from .. import adaptive_settle
 from ..checkpoint import StepResult
 from ..step_context import StepContext
 
@@ -66,10 +67,9 @@ class ClaudeGuidedFilterHandler:
         index = int(ctx.state.get("index", 0))
 
         # Pre-settle — page filters may lazy-load after navigate.
-        # Lifted from MicroPlanRunner._execute_step's "filter" branch in
-        # EPIC #161 cleanup so registry-first dispatch produces identical
-        # timing.
-        time.sleep(3)
+        # #294 adaptive-settle: cap at 3s but return early when the frame
+        # hash stabilises (typical static page: ~300ms).
+        adaptive_settle.settle_after_action(env, max_seconds=3.0)
 
         # Reset sidebar to top before each filter step (scroll persists between steps).
         # Filters are spread across the sidebar: Location near top, Seller Type near bottom.
@@ -81,7 +81,7 @@ class ClaudeGuidedFilterHandler:
                 time.sleep(0.3)
         except Exception:
             pass
-        time.sleep(1)
+        adaptive_settle.settle_after_action(env, max_seconds=1.0)
 
         # Scan sidebar top-to-bottom with small scroll increments.
         # Check each viewport position for the target filter element.
@@ -135,7 +135,8 @@ class ClaudeGuidedFilterHandler:
                 # Simple click — checkbox, radio, toggle
                 env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
                 runner.costs["gpu_steps"] += 1
-                time.sleep(2)  # Wait for filter to apply
+                # #294: cap at 2s but exit early when filter settles.
+                adaptive_settle.settle_after_action(env, max_seconds=2.0)
 
             elif action == "type":
                 # Click input → clear → type value → Enter
@@ -156,14 +157,16 @@ class ClaudeGuidedFilterHandler:
                     env.step(Action(action_type=ActionType.TYPE, params={"text": value}))
                     time.sleep(0.5)
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Return"}))
-                    time.sleep(3)  # Wait for results to update
+                    # #294: cap at 3s but exit early when results land.
+                    adaptive_settle.settle_after_action(env, max_seconds=3.0)
                 runner.costs["gpu_steps"] += 1
 
             elif action == "select":
                 # Click dropdown to open → wait → screenshot → find option → click
                 env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
                 runner.costs["gpu_steps"] += 1
-                time.sleep(1.5)
+                # #294: cap at 1.5s for the dropdown to open.
+                adaptive_settle.settle_after_action(env, max_seconds=1.5)
 
                 # Take new screenshot with dropdown open
                 dropdown_shot = env.screenshot()
@@ -178,7 +181,8 @@ class ClaudeGuidedFilterHandler:
                     ox, oy = option_target["x"], option_target["y"]
                     time.sleep(random.uniform(0.3, 0.8))
                     env.step(Action(action_type=ActionType.CLICK, params={"x": ox, "y": oy}))
-                    time.sleep(2)
+                    # #294: cap at 2s for dropdown option click to settle.
+                    adaptive_settle.settle_after_action(env, max_seconds=2.0)
                 else:
                     # Dropdown option not found — close dropdown
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
@@ -190,7 +194,8 @@ class ClaudeGuidedFilterHandler:
                 # Unknown action — fall back to click
                 env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
                 runner.costs["gpu_steps"] += 1
-                time.sleep(2)
+                # #294: cap at 2s for fallback click settle.
+                adaptive_settle.settle_after_action(env, max_seconds=2.0)
 
         except Exception as e:
             logger.warning(f"  [claude-filter] Action failed: {e}")

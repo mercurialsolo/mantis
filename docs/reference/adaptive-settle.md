@@ -45,15 +45,33 @@ seconds waited (capped at `max_seconds`). On any error — page closed,
 navigating, playwright unavailable — falls back to a plain sleep of the
 remaining cap rather than skipping the settle entirely.
 
+### `settle_after_action` (step-handler shorthand)
+
+Step handlers (`filter.py`, `form.py`, `paginate.py`, `click.py`,
+`navigate.py`) drive the browser through `XdotoolGymEnv` and have no
+Playwright page handle. They use this thin wrapper:
+
+```python
+adaptive_settle.settle_after_action(env, max_seconds=N)
+```
+
+which calls `wait_until_stable(env._screenshot, max_seconds=N)`. If the
+env doesn't expose a screenshot attribute (defensive against alternate
+adapters), it falls back to `time.sleep(N)` so we never silently skip a
+settle.
+
 ## Where it fires
 
 | Site | Gate used |
 |---|---|
 | `XdotoolGymEnv.step` post-action | `wait_until_stable` (no DOM available) |
 | `PlanExecutor._settle` (navigate/type/click/key) | `wait_for_networkidle` when a Playwright page exists, else fixed sleep |
+| `MicroPlanRunner` step handlers (`filter`, `form`, `paginate`, `click`, `navigate`) | `settle_after_action` — `wait_until_stable` on `env._screenshot`, with a fixed-sleep fallback when no capture is exposed |
 
 The 10+ scattered `time.sleep(self._settle_time)` sites in `PlanExecutor`
-now route through a single `_settle()` method, so future gate
+now route through a single `_settle()` method, and the ~20 scattered
+"settle after browser action" sites in the step handlers route through
+`settle_after_action` — both consolidations mean future gate
 improvements land in one place.
 
 ## Ablation toggle

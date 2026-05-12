@@ -221,4 +221,76 @@ def test_module_exports() -> None:
     from mantis_agent.gym import adaptive_settle as m
     assert callable(m.wait_until_stable)
     assert callable(m.wait_for_networkidle)
+    assert callable(m.settle_after_action)
     assert callable(m.is_enabled)
+
+
+# ── settle_after_action: step-handler shorthand ────────────────────────
+
+
+class _StableEnv:
+    """Env stub whose ``_screenshot`` always returns the same image."""
+
+    def __init__(self) -> None:
+        self._frame = _img((50, 50, 50))
+
+    def _screenshot(self) -> Image.Image:
+        return self._frame
+
+
+class _NoCaptureEnv:
+    """Env stub with no screenshot attribute — exercises defensive fallback."""
+
+
+def test_settle_after_action_returns_quickly_on_stable_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MANTIS_ADAPTIVE_SETTLE", raising=False)
+    from mantis_agent.gym.adaptive_settle import settle_after_action
+
+    elapsed = settle_after_action(_StableEnv(), max_seconds=3.0)
+    # Two consecutive captures of the constant frame match immediately,
+    # so we land well under the 3s cap.
+    assert elapsed < 1.0
+
+
+def test_settle_after_action_falls_back_to_sleep_without_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Env without ``_screenshot`` or ``screenshot`` must still settle —
+    just with the fixed sleep, never skip."""
+    monkeypatch.delenv("MANTIS_ADAPTIVE_SETTLE", raising=False)
+    from mantis_agent.gym import adaptive_settle
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(adaptive_settle.time, "sleep", lambda s: sleeps.append(s))
+
+    elapsed = adaptive_settle.settle_after_action(
+        _NoCaptureEnv(), max_seconds=1.5,
+    )
+    assert sleeps == [1.5]
+    assert elapsed == 1.5
+
+
+def test_settle_after_action_respects_ablation_toggle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MANTIS_ADAPTIVE_SETTLE", "disabled")
+    from mantis_agent.gym import adaptive_settle
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(adaptive_settle.time, "sleep", lambda s: sleeps.append(s))
+
+    adaptive_settle.settle_after_action(_StableEnv(), max_seconds=2.0)
+    # Ablation: fall through to the fixed sleep, ignore env entirely.
+    assert sleeps == [2.0]
+
+
+def test_settle_after_action_handles_zero_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MANTIS_ADAPTIVE_SETTLE", raising=False)
+    from mantis_agent.gym.adaptive_settle import settle_after_action
+
+    assert settle_after_action(_StableEnv(), max_seconds=0.0) == 0.0
+    assert settle_after_action(_StableEnv(), max_seconds=-1.0) == 0.0
