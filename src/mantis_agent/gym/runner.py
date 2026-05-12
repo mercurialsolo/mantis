@@ -2136,9 +2136,13 @@ class GymRunner:
         if abs(prev_x - x) > 80 or abs(prev_y - y) > 40:
             return None
 
+        # #320: amount is wheel notches (each notch is one xdotool subprocess
+        # ~100 ms), not pixels. The original ``350`` was a pixel-unit value
+        # that hung the env for ~40 s on every substitution. 5 notches reveals
+        # roughly half a viewport on Chrome's default scroll step.
         return Action(
             ActionType.SCROLL,
-            {"direction": "down", "amount": 350},
+            {"direction": "down", "amount": 5},
             reasoning=(
                 "top-click guard: repeated top/header click during forward "
                 "action; scroll to reveal the in-page control"

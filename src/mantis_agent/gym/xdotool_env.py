@@ -37,6 +37,12 @@ from .base import GymEnvironment, GymObservation, GymResult
 
 logger = logging.getLogger(__name__)
 
+# #320: cap on SCROLL.amount expressed in wheel notches. Each notch costs
+# one xdotool subprocess fork (~100 ms), so an unbounded loop on
+# ``amount=350`` (a caller meant pixels) hangs the runner for ~40 s. 40 is
+# already used as the upper bound in ``browser_state._wheel_summary``.
+_MAX_SCROLL_NOTCHES = 40
+
 
 def scale_brain_to_display(
     x_brain: int | float,
@@ -685,7 +691,12 @@ class XdotoolGymEnv(GymEnvironment):
 
             case ActionType.SCROLL:
                 direction = action.params.get("direction", "down")
-                amount = action.params.get("amount", 3)
+                amount = int(action.params.get("amount", 3) or 0)
+                # #320: SCROLL.amount is "wheel notches", not pixels.
+                # Each notch is one xdotool subprocess (~100 ms). Bound the
+                # iteration count so a caller passing a pixel value (e.g. 350)
+                # can't lock the runner for ~40 s.
+                amount = max(0, min(amount, _MAX_SCROLL_NOTCHES))
                 x = action.params.get("x", self._viewport[0] // 2)
                 y = action.params.get("y", self._viewport[1] // 2)
                 x, y = self._clamp(x, y)

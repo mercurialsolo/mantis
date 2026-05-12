@@ -202,7 +202,9 @@ def test_repeated_top_click_redirects_forward_task_to_scroll() -> None:
 
     assert redirected is not None
     assert redirected.action_type == ActionType.SCROLL
-    assert redirected.params == {"direction": "down", "amount": 350}
+    # #320: amount is wheel notches, not pixels. The pre-#320 value of 350
+    # hung the env for ~40 s. Cap to a viewport-half scroll (5 notches).
+    assert redirected.params == {"direction": "down", "amount": 5}
 
 
 def test_repeated_top_click_guard_ignores_non_forward_tasks() -> None:
