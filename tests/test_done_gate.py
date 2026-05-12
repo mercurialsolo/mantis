@@ -13,6 +13,7 @@ import pytest
 
 from mantis_agent.actions import Action, ActionType
 from mantis_agent.gym.done_gate import (
+    REJECT_CODES,
     REJECT_EMPTY_SUMMARY,
     REJECT_NO_DELTA_AFTER_WAITS,
     REJECT_NO_PROGRESS_IN_WINDOW,
@@ -318,3 +319,53 @@ def test_decision_is_dataclass_with_expected_fields() -> None:
     assert d.accept is False
     assert d.reason == "x"
     assert d.detail == "y"
+
+
+# ── Public surface lock ────────────────────────────────────────────────
+
+
+def test_reject_codes_tuple_locked() -> None:
+    """Codes round-trip into TrajectoryStep.done_rejected_reason and the
+    /v1/cua API surface — renaming or removing any of these is a breaking
+    change. New codes append to the tuple. Update this test deliberately."""
+    assert REJECT_CODES == (
+        "empty_summary",
+        "plan_steps_incomplete",
+        "pending_form_values",
+        "summary_missing_required_fields",
+        "no_observed_delta_after_waits",
+        "no_progress_in_window",
+    )
+
+
+# ── _hashes_stable empty-slot policy (review fix) ──────────────────────
+
+
+def test_no_delta_skipped_when_any_window_hash_empty() -> None:
+    """All hashes in the window must be non-empty for the predicate to
+    fire — otherwise we'd declare stability based on an unpopulated slot."""
+    d = check_done_acceptance(
+        summary="Done.",
+        recent_actions=[_wait(), _wait(), _wait()],
+        recent_frame_hashes=["abc", "abc", ""],  # last slot empty
+    )
+    assert d.accept is True
+
+
+def test_no_delta_skipped_when_first_window_hash_empty() -> None:
+    """Symmetric to the above: an empty first slot also disqualifies."""
+    d = check_done_acceptance(
+        summary="Done.",
+        recent_actions=[_wait(), _wait(), _wait()],
+        recent_frame_hashes=["", "abc", "abc"],
+    )
+    assert d.accept is True
+
+
+def test_no_delta_fires_when_full_window_identical_and_truthy() -> None:
+    d = check_done_acceptance(
+        summary="Done.",
+        recent_actions=[_wait(), _wait(), _wait()],
+        recent_frame_hashes=["abc", "abc", "abc"],
+    )
+    assert d.reason == REJECT_NO_DELTA_AFTER_WAITS

@@ -92,13 +92,20 @@ def _all_recent_are_wait(actions: list[Action], window: int) -> bool:
 
 
 def _hashes_stable(hashes: list[str], window: int) -> bool:
-    """Last ``window`` frame hashes are all identical (and non-empty)."""
+    """Last ``window`` frame hashes are all identical (and non-empty).
+
+    Requires *every* hash in the window to be non-empty so the predicate
+    can't accidentally declare stability based on a slot the runner hadn't
+    populated yet. Anchoring on ``tail[0]`` (rather than ``tail[-1]``) keeps
+    the comparison symmetric — earlier or later empty slots both fail
+    consistently.
+    """
     if len(hashes) < window:
         return False
     tail = hashes[-window:]
-    if not tail[-1]:
+    if not all(tail):
         return False
-    return all(h == tail[-1] for h in tail)
+    return all(h == tail[0] for h in tail)
 
 
 def _urls_stable(urls: list[str], window: int) -> bool:

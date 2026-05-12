@@ -164,6 +164,100 @@ def test_done_gate_accepts_well_formed_done(
     assert result.done_rejections_by_reason == {}
 
 
+def test_done_rejected_reason_does_not_leak_to_subsequent_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``pending_done_rejected_reason`` is one-shot — the substituted-WAIT
+    step carries it; the next normal step must not."""
+    monkeypatch.delenv("MANTIS_DONE_GATE", raising=False)
+
+    brain = _ScriptedBrain([
+        Action(ActionType.DONE, {"success": True, "summary": ""}),
+        Action(ActionType.CLICK, {"x": 50, "y": 50}),
+        Action(ActionType.DONE, {"success": False, "summary": "stop"}),
+    ])
+    env = _StableEnv()
+    result = GymRunner(brain, env, max_steps=5).run("task")
+
+    rejected = [t for t in result.trajectory if t.done_rejected_reason]
+    assert len(rejected) == 1, (
+        f"expected exactly one step with done_rejected_reason, got "
+        f"{[(t.step, t.done_rejected_reason) for t in result.trajectory]}"
+    )
+    assert rejected[0].action.action_type == ActionType.WAIT
+    # The CLICK that follows must NOT inherit the reason.
+    click_steps = [
+        t for t in result.trajectory if t.action.action_type == ActionType.CLICK
+    ]
+    assert click_steps and click_steps[0].done_rejected_reason == ""
+
+
+def test_done_gate_skipped_when_success_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``done(success=False)`` is a real failure done — the gate must not
+    rewrite it into a WAIT just because the summary is empty."""
+    monkeypatch.delenv("MANTIS_DONE_GATE", raising=False)
+
+    brain = _ScriptedBrain([
+        Action(ActionType.DONE, {"success": False, "summary": ""}),
+    ])
+    env = _StableEnv()
+    result = GymRunner(brain, env, max_steps=5).run("task")
+
+    assert result.done_rejections_by_reason == {}
+    assert result.termination_reason == "done"
+    # success=False with no completed work → run is unsuccessful, but we
+    # accepted the failure-done immediately rather than looping.
+    assert result.success is False
+
+
+def test_done_gate_respects_max_done_rejections_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After ``max_done_rejections`` (=2) rejections, the next bad done
+    must be accepted — bound on the gate so it never traps a real done."""
+    monkeypatch.delenv("MANTIS_DONE_GATE", raising=False)
+
+    brain = _ScriptedBrain([
+        Action(ActionType.DONE, {"success": True, "summary": ""}),
+        Action(ActionType.DONE, {"success": True, "summary": ""}),
+        Action(ActionType.DONE, {"success": True, "summary": ""}),
+        Action(ActionType.DONE, {"success": True, "summary": ""}),
+    ])
+    env = _StableEnv()
+    result = GymRunner(brain, env, max_steps=10).run("task")
+
+    # Exactly two rejections; the third bad done is accepted.
+    assert (
+        result.done_rejections_by_reason.get(REJECT_EMPTY_SUMMARY) == 2
+    ), result.done_rejections_by_reason
+    assert result.termination_reason == "done"
+    assert result.success is True
+
+
+def test_done_gate_well_formed_done_terminates_successfully(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sanity strengthening of the existing accept-path test — verify the
+    run actually terminated with success=True, not just that the counter
+    stayed empty."""
+    monkeypatch.delenv("MANTIS_DONE_GATE", raising=False)
+
+    brain = _ScriptedBrain([
+        Action(ActionType.DONE, {
+            "success": True,
+            "summary": "Logged in successfully and navigated to dashboard.",
+        }),
+    ])
+    env = _StableEnv()
+    result = GymRunner(brain, env, max_steps=5).run("task")
+
+    assert result.done_rejections_by_reason == {}
+    assert result.termination_reason == "done"
+    assert result.success is True
+
+
 def test_trajectory_step_to_dict_round_trips_done_rejected_reason() -> None:
     from mantis_agent.gym.runner import (
         TrajectoryStep,
