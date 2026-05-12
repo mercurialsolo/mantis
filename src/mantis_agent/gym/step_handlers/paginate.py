@@ -43,6 +43,7 @@ import time
 from typing import TYPE_CHECKING
 
 from ...actions import Action, ActionType
+from .. import adaptive_settle
 from ..checkpoint import StepResult
 from ..step_context import StepContext
 
@@ -100,9 +101,11 @@ class PaginateHandler:
             logger.info(f"  [paginate] Layer 1: URL-based → {next_url[:80]}")
             try:
                 env.reset(task="paginate_url", start_url=next_url)
-                time.sleep(10)
+                # #294: cap at 10s for full page load after URL navigation.
+                adaptive_settle.settle_after_action(env, max_seconds=10.0)
                 env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-                time.sleep(2)
+                # #294: cap at 2s for scroll-to-top settle.
+                adaptive_settle.settle_after_action(env, max_seconds=2.0)
                 runner._current_page = next_page
                 runner._last_known_url = next_url
                 runner._set_scroll_state(context="results_top", url=next_url, page_downs=0, wheel_downs=0)
@@ -210,7 +213,8 @@ class PaginateHandler:
         # Go to bottom first so the pagination bar is likely on screen.
         try:
             env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
-            time.sleep(3)
+            # #294: cap at 3s for End-key scroll settle.
+            adaptive_settle.settle_after_action(env, max_seconds=3.0)
         except Exception:
             pass
 
@@ -222,15 +226,16 @@ class PaginateHandler:
             if attempt == 1:
                 try:
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Up"}))
-                    time.sleep(1.5)
+                    # #294: cap at 1.5s for Page_Up settle.
+                    adaptive_settle.settle_after_action(env, max_seconds=1.5)
                 except Exception:
                     pass
             elif attempt == 2:
                 try:
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "End"}))
-                    time.sleep(2)
+                    adaptive_settle.settle_after_action(env, max_seconds=2.0)
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Up"}))
-                    time.sleep(1.5)
+                    adaptive_settle.settle_after_action(env, max_seconds=1.5)
                 except Exception:
                     pass
 
@@ -277,11 +282,12 @@ class PaginateHandler:
             logger.warning(f"  [claude-paginate] Click failed: {e}")
             return StepResult(step_index=index, intent=step.intent, success=False)
 
-        # Wait for page load, then scroll to top
-        time.sleep(8)
+        # Wait for page load, then scroll to top.
+        # #294: cap at 8s for full page-load after paginate click.
+        adaptive_settle.settle_after_action(env, max_seconds=8.0)
         try:
             env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(2)
+            adaptive_settle.settle_after_action(env, max_seconds=2.0)
         except Exception:
             pass
 

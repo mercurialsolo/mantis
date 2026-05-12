@@ -111,6 +111,43 @@ def wait_until_stable(
     return time_fn() - start
 
 
+def settle_after_action(
+    env: Any,
+    *,
+    max_seconds: float,
+    poll_interval: float = 0.1,
+) -> float:
+    """Step-handler shorthand: ``wait_until_stable`` on the env's screenshot.
+
+    Replaces scattered ``time.sleep(N)`` calls in MicroPlanRunner step
+    handlers (``filter.py``, ``form.py``, ``paginate.py``, ``click.py``,
+    ``navigate.py``) that wait for the page to repaint after a browser
+    action. Step handlers don't have a Playwright page (they go through
+    :class:`XdotoolGymEnv` for action dispatch), so the screenshot-based
+    gate is the right fit.
+
+    Falls back to a plain fixed sleep when:
+
+    * ``MANTIS_ADAPTIVE_SETTLE=disabled`` (ablation toggle), or
+    * the env doesn't expose a callable ``_screenshot`` / ``screenshot``
+      attribute — defensive against alternative env adapters that may
+      lack the perceptual signal we need.
+
+    Returns seconds actually waited.
+    """
+    if not is_enabled() or max_seconds <= 0:
+        if max_seconds > 0:
+            time.sleep(max_seconds)
+        return max_seconds if max_seconds > 0 else 0.0
+    capture = getattr(env, "_screenshot", None) or getattr(env, "screenshot", None)
+    if not callable(capture):
+        time.sleep(max_seconds)
+        return max_seconds
+    return wait_until_stable(
+        capture, max_seconds=max_seconds, poll_interval=poll_interval,
+    )
+
+
 def wait_for_networkidle(
     page: Any,
     *,

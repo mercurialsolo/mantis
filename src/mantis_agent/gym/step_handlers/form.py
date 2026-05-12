@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any
 from PIL import Image
 
 from ...actions import Action, ActionType
+from .. import adaptive_settle
 from ..checkpoint import StepResult
 from ..step_context import StepContext
 
@@ -217,7 +218,9 @@ class ClaudeGuidedFormHandler:
         # at the top of this method, preserving the legacy 4s total. The
         # synthesised click→submit path that calls form via the runner
         # shim no longer adds its own pre-settle either.
-        time.sleep(4)
+        # #294 adaptive-settle: cap at 4s but exit early when the form
+        # is rendered.
+        adaptive_settle.settle_after_action(env, max_seconds=4.0)
         screenshot = _wait_for_rendered_screenshot(env)
 
         if step.type == "fill_field":

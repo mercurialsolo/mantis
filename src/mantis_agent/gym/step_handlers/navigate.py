@@ -33,10 +33,10 @@ from __future__ import annotations
 import logging
 import os
 import re
-import time
 from typing import TYPE_CHECKING
 
 from ...actions import Action, ActionType
+from .. import adaptive_settle
 from ..checkpoint import StepResult
 from ..step_context import StepContext
 
@@ -104,10 +104,13 @@ class NavigateHandler:
 
         try:
             env.reset(task="navigate", start_url=url)
-            # Wait for Cloudflare challenge to auto-solve + page render
-            time.sleep(wait_seconds)
+            # Wait for Cloudflare challenge to auto-solve + page render.
+            # #294: cap at the configured budget (default 18s); exit early
+            # when the frame hash stabilises — most sites finish first
+            # paint in 2-5s and the remaining budget is pure tax.
+            adaptive_settle.settle_after_action(env, max_seconds=wait_seconds)
             env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
-            time.sleep(2)
+            adaptive_settle.settle_after_action(env, max_seconds=2.0)
 
             # Anchor the results scan state to this URL.
             if scanner is not None:
