@@ -32,6 +32,7 @@ from ..loop_detector import LoopDetector, phash_64
 from ._runner_helpers import is_cancelled
 from .base import GymEnvironment
 from .done_gate import DoneAcceptanceDecision, check_done_acceptance
+from .perceptual_diff import action_had_effect as _perceptual_action_had_effect
 from .predicates import (
     ObservationContext,
     evaluate_all,
@@ -147,6 +148,16 @@ class TrajectoryStep:
     # rejection counts also surface on ``RunResult.done_rejections_by_reason``.
     done_rejected_reason: str = ""
 
+    # ── #293 perceptual-diff verifier ───────────────────────────────────
+    # On high-risk actions (submit, confirm, buy, send, delete, login,
+    # save, …) the runner compares the pre-action frame to the
+    # post-settle frame. ``True`` means an observable change occurred,
+    # ``False`` means the action visibly did nothing (silent failure),
+    # ``None`` means the check was skipped (toggle off / non-high-risk
+    # action / missing frame). Aggregate counts surface on
+    # ``RunResult.perceptual_summary``.
+    action_effect_observed: bool | None = None
+
 
 # Subset of ``gym_result.info`` that round-trips into TrajectoryStep
 # observed_state. Excludes high-cardinality / large-blob fields (raw DOM,
@@ -211,6 +222,11 @@ class RunResult:
     # rejected anything. Surfaces on /v1/cua so each run doubles as an
     # ablation data point.
     done_rejections_by_reason: dict[str, int] = field(default_factory=dict)
+    # #293: aggregate of perceptual-diff verifier results on high-risk
+    # actions. ``checked`` = high-risk actions evaluated, ``no_effect``
+    # = those where both global and region hash stayed identical
+    # (silent failure suspected). Surfaces on /v1/cua.
+    perceptual_summary: dict[str, int] = field(default_factory=dict)
 
 
 # ── Trajectory serialization for pause snapshots (#285) ────────────────────
@@ -244,6 +260,7 @@ def _trajectory_step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
         "observed_outcome": step.observed_outcome,
         "predicate_results": list(step.predicate_results),
         "done_rejected_reason": step.done_rejected_reason,
+        "action_effect_observed": step.action_effect_observed,
     }
 
 
@@ -270,6 +287,7 @@ def _trajectory_step_from_dict(payload: dict[str, Any]) -> TrajectoryStep:
         observed_outcome=str(payload.get("observed_outcome", "")),
         predicate_results=list(payload.get("predicate_results") or []),
         done_rejected_reason=str(payload.get("done_rejected_reason", "")),
+        action_effect_observed=payload.get("action_effect_observed"),
     )
 
 
@@ -1295,6 +1313,12 @@ class GymRunner:
                 ):
                     force_success_after_action = True
 
+                # #293: capture pre-action frame for the perceptual-diff
+                # verifier. The last entry in frame_history was the
+                # screenshot the brain reasoned on, so it's the right
+                # baseline for "did this action change the page?".
+                pre_action_frame = frame_history[-1] if frame_history else None
+
                 for pre_action in pre_actions:
                     logger.warning(
                         "force-fill: pre-type replace via %s(%s)",
@@ -1429,6 +1453,31 @@ class GymRunner:
                             # world_model_weight=0.05 in PlanAdherenceReward).
                             step_components["world_model_error"] = -wm_err * 0.05
 
+                # #293 perceptual-diff verifier — only fires for high-risk
+                # actions (submit, confirm, buy, send, delete, login, save).
+                # ``effect_observed=False`` means both global hash AND the
+                # 200×200 region around the click stayed pixel-identical;
+                # the action visibly did nothing (overlay absorbed click,
+                # validation flashed-and-vanished, etc.). Surfaces as a
+                # WARNING in next step's feedback so the brain doesn't
+                # loop on the same useless action.
+                effect_check = _perceptual_action_had_effect(
+                    pre_action_frame,
+                    gym_result.observation.screenshot,
+                    action,
+                )
+                if effect_check.effect_observed is False:
+                    feedback = (
+                        f"{feedback}; WARNING: high-risk action had no observed effect "
+                        f"({effect_check.reason})"
+                    )
+                    logger.warning(
+                        "perceptual-diff: %s(%s) produced no observed effect "
+                        "(global=%s region=%s)",
+                        action.action_type.value, action.params,
+                        effect_check.global_changed, effect_check.region_changed,
+                    )
+
                 trajectory.append(TrajectoryStep(
                     step=step_num, action=action, thinking=thinking,
                     reward=step_reward, done=gym_result.done,
@@ -1440,6 +1489,7 @@ class GymRunner:
                     predicted_outcome=predicted_outcome,
                     predicate_results=step_predicate_results,
                     done_rejected_reason=pending_done_rejected_reason,
+                    action_effect_observed=effect_check.effect_observed,
                 ))
                 # One-shot: clear so the next step doesn't inherit it.
                 pending_done_rejected_reason = ""
@@ -1482,12 +1532,30 @@ class GymRunner:
             total_steps=len(trajectory), total_time=round(total_time, 1),
         )
 
+        # #293 perceptual-diff aggregate. ``checked`` = high-risk actions
+        # the verifier evaluated. ``no_effect`` = those where the action
+        # produced no observable change. Empty dict when the verifier
+        # never fired (toggle off / no high-risk actions in the run).
+        perceptual_checked = sum(
+            1 for t in trajectory if t.action_effect_observed is not None
+        )
+        perceptual_no_effect = sum(
+            1 for t in trajectory if t.action_effect_observed is False
+        )
+        perceptual_summary: dict[str, int] = {}
+        if perceptual_checked:
+            perceptual_summary = {
+                "checked": perceptual_checked,
+                "no_effect": perceptual_no_effect,
+            }
+
         result = RunResult(
             task=task, task_id=task_id, success=success,
             total_reward=total_reward, total_steps=len(trajectory),
             total_time=total_time, trajectory=trajectory,
             termination_reason=termination_reason,
             done_rejections_by_reason=dict(done_rejections_by_reason),
+            perceptual_summary=perceptual_summary,
         )
 
         # Terminal reward — applied last so episode() can read the full

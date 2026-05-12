@@ -140,6 +140,7 @@ nav:
       - Adaptive settle: reference/adaptive-settle.md
       - Chrome session reuse: reference/chrome-session-reuse.md
       - Speculative inference: reference/speculative-inference.md
+      - Perceptual diff verifier: reference/perceptual-diff.md
   - Appendix:
       - appendix/index.md
       - Learnings: learnings.md
