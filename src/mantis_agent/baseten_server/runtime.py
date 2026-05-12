@@ -1159,6 +1159,30 @@ class BasetenCUARuntime:
         frames = int(payload.get("frames_per_inference", 1))
         settle_time = float(payload.get("settle_time", 4.0 if self.model_kind == "holo3" else 2.0))
 
+        # Per-request overrides for env-var-driven runner toggles. Lets
+        # the ablation harness do single-deploy A/B without redeploys.
+        # ``/v1/cua`` runs serially per container, so a try/finally
+        # os.environ patch is safe. ``None`` (default) keeps whatever
+        # the container's env var said. Pairs with the existing
+        # ``reuse_session`` / ``speculation`` per-request overrides.
+        _toggle_env_map: dict[str, str] = {
+            "perceptual_verify": "MANTIS_PERCEPTUAL_VERIFY",
+            "loop_recovery": "MANTIS_LOOP_RECOVERY",
+            "done_gate": "MANTIS_DONE_GATE",
+            "predicate_verify": "MANTIS_PREDICATE_VERIFY",
+            "adaptive_settle": "MANTIS_ADAPTIVE_SETTLE",
+            "form_controller": "MANTIS_FORM_CONTROLLER",
+        }
+        _toggle_overrides: dict[str, str] = {}
+        _toggle_restore: dict[str, str | None] = {}
+        for _payload_key, _env_var in _toggle_env_map.items():
+            _val = payload.get(_payload_key)
+            if _val is None:
+                continue
+            _toggle_restore[_env_var] = os.environ.get(_env_var)
+            _toggle_overrides[_env_var] = "enabled" if bool(_val) else "disabled"
+            os.environ[_env_var] = _toggle_overrides[_env_var]
+
         # _make_env reads proxy + base_url off a task_suite-shaped dict;
         # build a minimal one here rather than threading a separate path.
         session_name = "pure_cua"
@@ -1374,6 +1398,14 @@ class BasetenCUARuntime:
             env.close()
             if proxy_proc and not reuse_session_for_request:
                 proxy_proc.terminate()
+            # Restore the env-var overrides put in place at the top of
+            # this request. Pairs with the ablation harness so paired
+            # ON/OFF requests don't leak state across the boundary.
+            for _env_var, _orig in _toggle_restore.items():
+                if _orig is None:
+                    os.environ.pop(_env_var, None)
+                else:
+                    os.environ[_env_var] = _orig
 
     def _save_result(self, result: dict[str, Any], prefix: str) -> None:
         save_result_json(result, _data_root() / "results", prefix)
