@@ -134,6 +134,59 @@ The function is small and pure — call it from any env adapter.
 
 ---
 
+## Brain input contract: viewport vs full-page
+
+> Resolves [#292](https://github.com/mercurialsolo/mantis/issues/292).
+
+OpenCUA and Holo3 receive screenshots from `env.screenshot()` / `env._capture()`.
+Both envs in-tree today (`XdotoolGymEnv`, `PlaywrightGymEnv`) capture the
+**viewport** — what the user would see right now — not the full document.
+
+| Env | Capture mechanism | Captures |
+|---|---|---|
+| `XdotoolGymEnv` | `mss` grabs the Xvfb framebuffer (= Chrome window size) | Viewport |
+| `PlaywrightGymEnv` | `page.screenshot(type="png")` (default `full_page=False`) | Viewport |
+
+When the page is scrolled, the viewport screenshot still shows only the
+visible portion. The model emits coordinates relative to that viewport image,
+the smart-resize unmap (`brain_opencua._model_coords_to_screen` /
+`brain_holo3._model_coords_to_screen`) converts them back to viewport pixels,
+and dispatch hits the right element. **No scroll-offset adjustment is needed
+under this contract** — viewport pixels equal screen pixels for an Xvfb-backed
+window.
+
+### When this contract changes
+
+If a future env captures a full-page screenshot (e.g. CDP
+`Page.captureScreenshot { captureBeyondViewport: true }`), the model's
+coordinates become document-relative. A click at document `(640, 900)` on a
+viewport scrolled `500px` down should dispatch to screen `(640, 400)` — i.e.
+subtract `(scrollX, scrollY)` from the post-resize coordinates.
+
+`brain_opencua._model_coords_to_screen` accepts an optional
+`scroll_offset: tuple[int, int] = (0, 0)` parameter that does exactly this
+subtraction. The default `(0, 0)` is a no-op for current viewport-only envs.
+A future full-page caller passes the page's current scroll, and the math
+stays correct.
+
+The threading is end-to-end:
+`OpenCUABrain.think(scroll_offset=...)` →
+`_parse_response(..., scroll_offset=...)` →
+`_parse_pyautogui(..., scroll_offset=...)` /
+`_parse_json_action(..., scroll_offset=...)` →
+`_model_coords_to_screen(..., scroll_offset=...)`.
+
+When the runner detects an env that surfaces scroll state — e.g.
+`gym_result.info["scroll_offset"] = (x, y)` from a CDP-backed env that runs
+`window.scrollX/scrollY` — it can pass that through `brain.think(scroll_offset=...)`
+without any further changes to the OpenCUA brain.
+
+`Holo3Brain` mirrors the same smart-resize pattern but does not yet thread
+`scroll_offset`; if a full-page Holo3 path is added, replicate the
+OpenCUA-style threading there.
+
+---
+
 ## DPR, retina, and other distractions
 
 Xvfb has no concept of device pixel ratio. The framebuffer pixel space is
