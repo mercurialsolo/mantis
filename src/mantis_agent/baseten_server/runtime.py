@@ -1152,6 +1152,12 @@ class BasetenCUARuntime:
                         if predicate_evaluated else None
                     ),
                 },
+                # #303 ablation signal: per-reason count of done(success=true)
+                # rejections by the deterministic gate. Empty dict when the
+                # gate is disabled or never rejected anything.
+                "done_rejections_by_reason": dict(
+                    getattr(gym_result, "done_rejections_by_reason", None) or {},
+                ),
             }
             self._attach_recording_metadata(result, recorder, click_log=click_log)
             self._save_result(result, prefix="pure_cua")

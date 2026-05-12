@@ -89,6 +89,7 @@ See [operations/cost.md](../operations/cost.md) for the full rate-tuning workflo
 | Var | Default | Effect |
 |---|---|---|
 | `MANTIS_PREDICATE_VERIFY` | `enabled` | Per-step world-model verification (#291). When the brain emits a structured prediction (`{"expected": [...]}` or `Predicted: ...`), the runner parses, evaluates, and writes per-predicate booleans into the trajectory plus a `world_model_error` reward component. Set to `disabled` to ablate — `predicted_outcome` is still recorded for distillation, but no evaluation runs. See [Predicate grammar](predicates.md). |
+| `MANTIS_DONE_GATE` | `enabled` | Deterministic done-acceptance gate (#303). Runs cheap predicates (empty summary, plan steps incomplete, pending form values, etc.) before the model-based `verify_done`. Set to `disabled` to ablate — the runner falls through to the existing model verifier and `done_rejections_by_reason` stays empty. See [Done-acceptance gate](done-gate.md). |
 
 ## API documentation surface
 
