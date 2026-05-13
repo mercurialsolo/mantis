@@ -1,6 +1,9 @@
 # Modal
 
-Modal is the easiest path for ad-hoc / batch runs that benefit from scale-to-zero. The full set of Modal entry-points lives at `deploy/modal/`. The most common one is `modal_cua_server.py` which exposes the same `/v1/predict` semantics via Modal's `local_entrypoint`.
+Modal is the easiest path for ad-hoc / batch runs that benefit from scale-to-zero. `deploy/modal/modal_cua_server.py` exposes two surfaces on the same app:
+
+1. **HTTP API** ([#342](https://github.com/mercurialsolo/mantis/issues/342)) — `@modal.asgi_app()` at `https://<workspace>--mantis-cua-server-api.modal.run`, mirroring the Baseten `/v1/predict` shape. Tenant-keyed via `X-Mantis-Token`; the API container dispatches via `.spawn()` to the GPU executors and rehydrates `modal.FunctionCall.from_id(...)` on status polls.
+2. **`local_entrypoint`** — one-off CLI runs (`modal run deploy/modal/...`) for ad-hoc debugging.
 
 ## Prerequisites
 
@@ -11,7 +14,36 @@ modal token new   # authenticates this machine to your Modal workspace
 
 You'll also need an `.env` file at the repo root with the same five secrets Baseten uses. Modal's `Secret.from_dotenv()` picks them up at deploy time.
 
-## Submit a plan (one-off)
+## Deploy
+
+```bash
+uv run modal deploy deploy/modal/modal_cua_server.py
+```
+
+This creates the executor functions (`run_holo3`, `run_claude_cua`, `run_cua_*`, `run_gemma4_cua`) plus the web endpoint `api`. Each executor is its own image (Chrome + xdotool + the brain's runtime); the api image is lightweight (FastAPI + pydantic only). Modal scales each independently.
+
+## Submit a plan over HTTP (recommended)
+
+```bash
+curl -X POST https://workspace--mantis-cua-server-api.modal.run/v1/predict \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "detached": true,
+    "micro": "plans/example/extract_listings.json",
+    "profile_id":  "marketplace-prod",
+    "workflow_id": "marketplace-listings-v1",
+    "cua_model":   "holo3",
+    "max_cost": 2,
+    "max_time_minutes": 20
+  }'
+```
+
+You get back `{"run_id": "...", "status": "queued", ...}` immediately. Poll with `{"action": "status", "run_id": "..."}` until terminal. See [API / Pause / resume](../api.md#pause-resume) for the `paused` / `action=resume` shape ([#347](https://github.com/mercurialsolo/mantis/issues/347) wires it through the Modal endpoint).
+
+`profile_id` and `workflow_id` are split fields since [#341](https://github.com/mercurialsolo/mantis/issues/341) — see [Concepts](../getting-started/concepts.md#profile_id-workflow_id-the-resume-primitives-341). The Modal endpoint enforces a **per-profile lock**: two concurrent runs against the same `profile_id` get a 409 with the held `run_id` instead of silently corrupting Chrome's user-data-dir ([#342](https://github.com/mercurialsolo/mantis/issues/342)).
+
+## Submit via the `local_entrypoint` CLI (one-off / debugging)
 
 ```bash
 uv run modal run --detach deploy/modal/modal_cua_server.py \
@@ -19,10 +51,12 @@ uv run modal run --detach deploy/modal/modal_cua_server.py \
   --model holo3 \
   --max-cost 2 \
   --max-time-minutes 20 \
+  --profile-id marketplace-prod \
+  --workflow-id marketplace-listings-v1 \
   --session-name marketplace-smoke
 ```
 
-`--detach` returns immediately; the run continues in Modal. Each run gets its own GPU container, scales to zero when done.
+`--detach` returns immediately; the run continues in Modal. Each run gets its own GPU container, scales to zero when done. Useful when you don't want to mint a tenant token just to kick off a debugging run.
 
 ## Inspecting a running app
 
@@ -38,16 +72,33 @@ modal volume ls osworld-data results
 modal volume get osworld-data results/holo3_results_*.json local_results/
 ```
 
+Per-run state for HTTP submissions lives at `/data/tenants/<tenant_id>/runs/<run_id>/`:
+- `status.json` — terminal status, prompt/reason if paused, `modal_call_id` for hydration
+- `result.json` — final result envelope
+- `pause_state.json` — opaque PauseState blob (when paused)
+- `task_suite.json` — snapshot of the dispatched task_suite (used on resume)
+- `events.log` — append-only event stream
+
+## Smoke test
+
+```bash
+bash scripts/verify_modal_luma_curl.sh
+```
+
+Eight-check curl-only E2E — health, parallel-dispatch via distinct `profile_id`s, 409 on collision, status polling, cancel + lock-release, plus three `action=resume` validation paths. No Python deps — drop-in for CI or live debugging.
+
 ## When to choose Modal over Baseten
 
 | Pick Modal if… | Pick Baseten if… |
 |---|---|
 | You want true scale-to-zero (no idle GPU) | You want a stable HTTPS endpoint other services can call |
 | Bursty / batch workloads | Steady traffic |
-| You're comfortable invoking via the Modal CLI / SDK | You need a tenant-keyed multi-caller surface |
-| You want per-run cost attribution at the run level | You want per-run cost + Prometheus metrics + webhooks |
+| You want a tenant-keyed HTTP surface AND scale-to-zero | You need Prometheus metrics, idempotency-key cache, webhook fan-out on terminal status |
+| You're comfortable with Modal's cold-start (~30-60s) | You need consistently sub-second submit latency |
 
-The `/v1/predict` Tier-1/Tier-2 features (rate limits, idempotency, webhooks, allowlist, metrics) are only exposed through the FastAPI server — i.e., on Baseten / EKS / GKE / local. Modal entry-points are direct, single-tenant.
+The Modal HTTP endpoint covers `POST /v1/predict` (submit, `action=status|result|cancel|resume`), `GET /v1/health`, and `GET /v1/models`. **Not yet ported from Baseten**: Idempotency-Key cache, webhook delivery, Prometheus `/metrics`, video streaming, rate limits, concurrency caps — all tracked under [#342](https://github.com/mercurialsolo/mantis/issues/342) Phase 2.
+
+Pause / resume coverage caveat: the Modal endpoint supports `action=resume` on the **Holo3** executor only (it's the only Modal executor that uses `MicroPlanRunner` directly). Claude / EvoCUA / OpenCUA / Gemma4-CUA on Modal go through `task_loop.run_executor_lifecycle` and don't currently surface paused state. Baseten supports pause/resume across all brains. See [#347](https://github.com/mercurialsolo/mantis/issues/347).
 
 ## Browser-side runner: `mantis-plan-runner`
 
