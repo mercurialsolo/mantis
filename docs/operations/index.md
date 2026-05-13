@@ -28,7 +28,7 @@ Without `MANTIS_TENANT_KEYS_PATH` set, the server runs in single-tenant mode usi
 
 1. **Hot reload.** The keys file has a 5 s read cache. Update the file → 5 s later the new keys work / old keys are rejected. No pod restart.
 2. **Per-replica state.** Rate limits + concurrency are in-process per replica. With N replicas, the effective per-tenant cap is roughly N × the configured cap. For strict cluster-wide limits, run a single replica or swap to a Redis-backed limiter (planned Tier 2.5).
-3. **Per-tenant data isolation.** `state_key` is server-prefixed with `tenant_id`. Browser profiles and run state live under `$MANTIS_DATA_DIR/tenants/<tenant_id>/`. Tenants cannot read each other's checkpoints, profiles, or recordings.
+3. **Per-tenant data isolation.** `profile_id` / `workflow_id` / legacy `state_key` are all server-prefixed with `tenant_id` (#341). Browser profiles and run state live under `$MANTIS_DATA_DIR/tenants/<tenant_id>/`. Tenants cannot read each other's checkpoints, profiles, or recordings.
 4. **Hard caps come from env vars.** `MANTIS_MAX_STEPS_PER_PLAN`, `MANTIS_MAX_LOOP_ITERATIONS`, `MANTIS_MAX_RUNTIME_MINUTES`, `MANTIS_MAX_COST_USD` cap **above** every tenant cap. Tighten globally by lowering these.
 
 ## See also

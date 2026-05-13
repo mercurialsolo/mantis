@@ -42,7 +42,8 @@ RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -d '{
     "detached": true,
     "micro": "plans/example/extract_listings.json",
-    "state_key": "deploy-smoke",
+    "profile_id":  "deploy-smoke",
+    "workflow_id": "deploy-smoke-v1",
     "max_cost": 2,
     "max_time_minutes": 20
   }')

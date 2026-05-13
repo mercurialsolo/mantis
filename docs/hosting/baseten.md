@@ -73,7 +73,8 @@ curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -d '{
     "detached": true,
     "micro": "plans/example/extract_listings.json",
-    "state_key": "smoke-test",
+    "profile_id":  "smoke",
+    "workflow_id": "smoke-test-v1",
     "max_cost": 2,
     "max_time_minutes": 20
   }'

@@ -71,8 +71,10 @@ Plus run options (all optional):
 | Field             | Default | Effect                                                                       |
 |-------------------|---------|------------------------------------------------------------------------------|
 | `detached`        | `true`  | Return `run_id` immediately; work continues in the background                 |
-| `state_key`       | `""`    | Caller-chosen ID; server prefixes with tenant. Reuse to share Chrome profile + checkpoint. **Not safe for concurrent runs — see §4b** |
-| `resume_state`    | `false` | Reconstruct browser state from latest checkpoint at `state_key` before start  |
+| `profile_id`      | `"default"` | (#341) Chrome user-data-dir identity. Server prefixes with `tenant_id`. Sticky across plan revisions — same id ⇒ same cookies / logged-in sessions. **Two concurrent runs against the same `profile_id` collide (Chrome cannot share a user-data-dir); the Modal HTTP endpoint surfaces this as 409 — see #342.** |
+| `workflow_id`     | `plan_signature[:12]` | (#341) Checkpoint identity. Server prefixes with `tenant_id`. Rotate when the plan definition changes; pair with `resume_state` to pick up where the last run with this id stopped. Distinct `workflow_id`s under the same `profile_id` still serialize via the Chrome lock. |
+| `state_key`       | `""`    | Legacy single-field identity. When set alone, server routes to both `profile_id` and `workflow_id` (Phase 1 back-compat). Prefer the split fields in new code. |
+| `resume_state`    | `false` | Reconstruct browser state from latest checkpoint at `workflow_id` before start |
 | `max_cost`        | `25.0`  | USD cap; clamped against tenant cap                                           |
 | `max_time_minutes`| `60`    | Wall-clock cap; clamped against tenant cap                                    |
 | `proxy_disabled`  | `false` | Bypass the upstream residential proxy. Use for sites that don't bot-detect    |
@@ -85,7 +87,7 @@ Plus run options (all optional):
 | `cache_read`      | `false` | Skip the deep-extract Claude call (~$0.04/item) when the current URL is already cached fresh |
 | `cache_write`     | `false` | Persist every viable extraction so future runs (or loop iterations) hit the cache |
 | `cache_ttl_seconds` | `86400` | Entries older than this are treated as misses; 0 = never stale; max 30 days |
-| `cache_key`       | unset   | Cache namespace; defaults to `state_key`. Use one key per logical job to share extracted state |
+| `cache_key`       | unset   | Cache namespace; defaults to `workflow_id` (legacy `state_key`). Use one key per logical job to share extracted state |
 
 Detached response:
 
@@ -436,7 +438,7 @@ Two opt-in flags on `POST /v1/predict`:
   "cache_read":  true,      // skip the deep-extract Claude call on cache hit
   "cache_write": true,      // record every viable extraction to the cache file
   "cache_ttl_seconds": 86400,   // entries older than this are misses (default 1 day)
-  "cache_key":   "luma_events"  // namespace; defaults to state_key
+  "cache_key":   "luma_events"  // namespace; defaults to workflow_id (legacy state_key)
 }
 ```
 
@@ -472,42 +474,56 @@ cache even with the same key string.
 
 ---
 
-## 4b. `state_key` concurrency — one key per logical session
+## 4b. `profile_id` concurrency — one profile per logical session (#341, #342)
 
-**Two parallel runs with the same `state_key` will collide.** The
-state_key is the unit of *shared session state* across runs — it
-identifies a Chrome profile + checkpoint + (by default) extraction
-cache pool. Concurrent runs sharing it step on three things:
+**Two parallel runs with the same `profile_id` will collide.** The
+`profile_id` is the unit of *shared browser session* across runs — it
+identifies the Chrome user-data-dir (cookies / logged-in sessions).
+Concurrent runs sharing it step on the Chrome user-data-dir lock; the
+Modal HTTP endpoint surfaces this as a 409 with the held `run_id` (see
+#342). Without that gate, the second launch either fails outright or
+silently corrupts cookies / session tokens.
 
-1. **Chrome profile dir** — `<data_root>/tenants/<tenant>/chrome-profile/<state_key>/`.
-   Chrome holds an exclusive file lock per profile; the second
-   concurrent launch either fails or boots in a fallback mode that
-   silently corrupts cookies / session tokens.
-2. **Checkpoint file** — `<data_root>/tenants/<tenant>/checkpoints/<state_key>.json`.
-   Both runs persist incrementally; last-write-wins → a parallel
-   run can stomp the first's progress mid-step.
-3. **Extraction cache** — when `cache_key` defaults to `state_key`,
+`workflow_id` is the *checkpoint* identity (separate field since #341).
+Two concurrent runs with different `workflow_id`s under the same
+`profile_id` still serialize via the Chrome lock — that's a Chrome
+limitation, not a Mantis policy. Distinct `profile_id`s parallelize
+cleanly.
+
+Three artifacts are keyed:
+
+1. **Chrome user-data-dir** — `<data_root>/tenants/<tenant>/chrome-profile/<profile_id>/`.
+   Sticky across plan revisions. Chrome holds an exclusive file lock per
+   directory; the lockfile at `tenants/<tenant>/locks/<profile_id>.lock`
+   (#342) lets the Modal endpoint surface a 409 before Chrome even
+   launches.
+2. **Checkpoint file** — `<data_root>/tenants/<tenant>/checkpoints/<workflow_id>.json`.
+   Rotate `workflow_id` when the plan definition changes; pair with
+   `resume_state: true` to resume mid-flight.
+3. **Extraction cache** — when `cache_key` defaults to `workflow_id`,
    parallel writers can interleave puts and lose entries. Pull
    `cache_key` out to share cache across parallel runs (see below).
 
-### Pick the right `state_key` shape for your use case
+### Pick the right identity shape for your use case
 
-| Use case | state_key shape |
-|---|---|
-| Per-end-user session (their own Chrome profile, cookies, login) | `user:<user_id>` |
-| Per-workflow type, multi-tenant, no shared cookies | `workflow:<workflow_id>` |
-| Stateless one-shot extraction with no resume | omit / unique per call (e.g. UUID) |
-| Idempotent retry of a failed run | reuse the same `state_key` to resume from checkpoint |
+| Use case | `profile_id` | `workflow_id` |
+|---|---|---|
+| Per-end-user session (their own cookies / login) | `user:<user_id>` | `<plan_signature[:12]>` (default) |
+| Per-account, many plan revisions | stable account id | rotate per plan version |
+| Stateless one-shot extraction with no resume | `"default"` / unique UUID | unique UUID |
+| Idempotent retry of a failed run | reuse the same `profile_id` (keep cookies) | reuse the same `workflow_id` + `resume_state: true` |
+| Pre-#341 legacy callers | (omit) — pass `state_key` and the server routes it to both | (omit) |
 
 ### Pattern for parallel calls that should share extraction state but not browser state
 
-Generate a unique `state_key` per call (so Chrome profiles + checkpoints
-are isolated), but pin `cache_key` to a shared pool:
+Generate a unique `profile_id` per call (so Chrome profiles are isolated
+and parallelize), but pin `cache_key` to a shared pool:
 
 ```jsonc
 {
-  "state_key":  "user-42:job-abc-123",   // unique per parallel call
-  "cache_key":  "user-42",               // shared cache pool
+  "profile_id":  "user-42-job-abc",     // unique per parallel call — Chrome lock identity
+  "workflow_id": "user-42-job-abc",     // typically the same; rotate independently if the plan changes
+  "cache_key":   "user-42",             // shared cache pool across all of user-42's runs
   "cache_read":  true,
   "cache_write": true
 }
@@ -518,6 +534,9 @@ cache file (which is internally append-friendly per URL) without
 fighting over Chrome locks or checkpoints. The cache lookup is keyed by
 URL, so cache-hit short-circuits work even when the parallel runs
 extract overlapping listings.
+
+(Pre-#341 callers used a single `state_key` here; the server still
+routes a lone `state_key` to both `profile_id` and `workflow_id`.)
 
 ### What if I need both?
 
@@ -627,12 +646,15 @@ override.
    runs.** Sequential detached submissions don't stack against
    `max_concurrent_runs` — they each return `queued` quickly and release
    the slot. The cap protects against parallel callers.
-6. **Parallel runs MUST use unique `state_key`s.** Two concurrent
-   runs sharing a `state_key` collide on the Chrome profile lock,
-   the checkpoint file, and (by default) the extraction cache.
-   See §4b for the pattern: unique `state_key` per call + shared
+6. **Parallel runs MUST use unique `profile_id`s** (#341, #342). Two
+   concurrent runs sharing a `profile_id` collide on the Chrome
+   user-data-dir lock; the Modal HTTP endpoint returns 409 with the
+   held `run_id`. Distinct `workflow_id`s under one `profile_id` still
+   serialize via Chrome — only `profile_id` decouples parallelism.
+   See §4b for the pattern: unique `profile_id` per call + shared
    `cache_key` lets parallel runs share extraction-cache hits while
-   keeping browser state isolated.
+   keeping browser state isolated. Legacy `state_key` works as a
+   single-field shim (routes to both).
 7. **Cold-start on Modal/Baseten is ~50–90s.** First request after idle
    pays Chrome + Xvfb + llama-server boot. Subsequent calls within the
    scaledown window are ~instant.
@@ -745,7 +767,9 @@ curl -X POST "$ENDPOINT/v1/cua" \
 | `frames_per_inference` | `1` | Screenshots per step (Holo3 wants 1) |
 | `settle_time` | `2.0` | Seconds to wait after each action |
 | `detached` | `false` | Queue as background; return `run_id` to poll via `/v1/predict` actions |
-| `state_key` | unset | Reuses Chrome profile + tenant dir tied to this key |
+| `profile_id` | `"default"` | (#341) Chrome user-data-dir identity; sticky across plan revisions |
+| `workflow_id` | (auto) | (#341) Checkpoint identity; rotate when the plan changes |
+| `state_key` | unset | Legacy single-field; routes to both `profile_id` and `workflow_id` (back-compat) |
 | `max_cost` / `max_time_minutes` | tenant caps | Same clamping as `/v1/predict` |
 | `proxy_city` / `proxy_state` / `proxy_disabled` | unset / unset / `false` | Same proxy controls as `/v1/predict` |
 | `record_video` / `video_format` / `video_fps` | `false` / `mp4` / `5` | Same screencast controls as `/v1/predict` |

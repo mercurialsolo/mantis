@@ -68,7 +68,8 @@ curl -fsS -X POST http://localhost:8000/v1/predict \
   -d '{
     "detached": true,
     "micro": "plans/example/extract_listings.json",
-    "state_key": "local-smoke",
+    "profile_id":  "local-smoke",
+    "workflow_id": "local-smoke-v1",
     "max_cost": 2,
     "max_time_minutes": 20
   }'

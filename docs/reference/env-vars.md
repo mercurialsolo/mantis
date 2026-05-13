@@ -28,7 +28,7 @@ These are global hard caps; tenant config can be tighter, never looser.
 | `MANTIS_REPO_ROOT` | `/workspace/cua-agent` | Where `task_file` / `micro` paths are resolved from. |
 | `MANTIS_DEBUG_DIR` | `<MANTIS_DATA_DIR>/screenshots/claude_debug` | Where Claude extraction prompt + screenshot debug bundles land. |
 | `MANTIS_IDEMPOTENCY_DIR` | `<MANTIS_DATA_DIR>/idempotency` | Sidecar files for idempotency cache. |
-| `MANTIS_CHROME_PROFILE_DIR` | set per-request by handler | Chrome profile dir used by the Xvfb env. The handler overrides this per tenant + state_key. |
+| `MANTIS_CHROME_PROFILE_DIR` | set per-request by handler | Chrome profile dir used by the Xvfb env. The handler overrides this per tenant + `profile_id` (#341; falls back to legacy `state_key` when `profile_id` isn't set). |
 
 ## Inference
 
@@ -110,7 +110,7 @@ See [operations/cost.md](../operations/cost.md) for the full rate-tuning workflo
 The handler sets these on every `/v1/predict` so downstream code (the runtime, the JSON log formatter) can read them via `os.environ`. **Don't rely on them being set at deployment time.**
 
 - `MANTIS_TENANT_ID` — current request's tenant id
-- `MANTIS_CHROME_PROFILE_DIR` — per-tenant per-state_key Chrome profile dir for this run
+- `MANTIS_CHROME_PROFILE_DIR` — per-tenant per-`profile_id` Chrome user-data-dir for this run (#341)
 
 ## See also
 

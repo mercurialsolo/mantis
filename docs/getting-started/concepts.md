@@ -10,7 +10,7 @@ Caller                /v1/predict                 MicroPlanRunner
                                                   ┌─ BrainHolo3   (Holo3 GPU inference)
 plan, tenant ──HTTP──► validate, clamp ──────────►├─ ClaudeGrounding (refine clicks)
                        caps, namespace             ├─ ClaudeExtractor (read structured data)
-                       state_key                   ├─ DynamicPlanVerifier
+                       profile_id, workflow_id     ├─ DynamicPlanVerifier
                                                    └─ XdotoolGymEnv (Xvfb + Chrome)
                                                           │
                                                           ▼

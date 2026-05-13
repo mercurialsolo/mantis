@@ -59,7 +59,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d '{
     "detached": true,
     "plan_text": "Go to https://news.ycombinator.com/ and extract the title, points, and comment count of the top 5 stories",
-    "state_key": "hn-top5",
+    "profile_id":  "hn-anon",
+    "workflow_id": "hn-top5",
     "max_cost": 1,
     "max_time_minutes": 10
   }'
@@ -95,7 +96,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "greenhouse-ml-sf-prod",
+  "profile_id":  "greenhouse-anon",
+  "workflow_id": "greenhouse-ml-sf-prod",
   "max_cost": 4,
   "max_time_minutes": 30,
   "extraction_schema": {
@@ -161,7 +163,8 @@ ship a `site_config` block alongside the plan:
 ```jsonc
 {
   "detached": true,
-  "state_key": "redfin-sf-condos-v1",
+  "profile_id":  "redfin-anon",
+  "workflow_id": "redfin-sf-condos-v1",
   "site_config": {
     "domain": "redfin.com",
     "detail_page_pattern": "/CA/[\\w-]+/.*?/home/\\d+",
@@ -261,7 +264,8 @@ names. CSV and recording are downloadable via dedicated endpoints — see
 - **CAPTCHA / hCaptcha.** Holo3 cannot solve these. Residential proxy
   + Cloudflare auto-pass usually works; hard challenges don't.
 - **Plans >200 steps in one submission.** Server hard cap. Chunk into
-  multiple runs sharing the same `state_key` to use checkpoint resume.
+  multiple runs sharing the same `workflow_id` (and the same `profile_id`
+  if you also want to share the Chrome session) to use checkpoint resume.
 
 For these, [Library embedding](embedding-microplanrunner.md) gives you
 escape hatches via `register_tool` (host-provided tools the model can

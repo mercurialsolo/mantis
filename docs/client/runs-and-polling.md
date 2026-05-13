@@ -172,13 +172,14 @@ Cancels are cooperative — the runner finishes the current step's checkpoint wr
 
 ## Resuming
 
-If a run failed mid-way (network hiccup, replica restart, OOM), re-submit with the **same `state_key`** and `resume_state: true`:
+If a run failed mid-way (network hiccup, replica restart, OOM), re-submit with the **same `workflow_id`** and `resume_state: true`. Keep the same `profile_id` too so the resumed run reuses the logged-in Chrome session from the failed attempt (#341):
 
 ```jsonc
 {
   "detached": true,
   "micro": "plans/example/...json",
-  "state_key": "marketplace-prod",    // ← same key as the failed run
+  "profile_id":  "marketplace-prod",       // ← same profile (cookies / sessions)
+  "workflow_id": "marketplace-listings-v1", // ← same workflow (checkpoint to resume from)
   "resume_state": true,
   "max_cost": 2
 }

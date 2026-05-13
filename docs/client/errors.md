@@ -14,6 +14,7 @@ What every status code means and how to handle it.
 | **403** allowlist | Plan references a host not in tenant's `allowed_domains` | No — fix the plan or ask operator to add the domain |
 | **404** run | `action=status\|result\|logs` referenced a `run_id` your tenant doesn't own | No — wrong `run_id` or wrong tenant |
 | **404** video | No recording for the run (recording disabled or ffmpeg failed) | No |
+| **409** profile-busy | (#342, Modal HTTP endpoint only) Another run is currently holding the requested `profile_id`'s Chrome user-data-dir lock. The `detail` includes the held `run_id` so you can poll it. | Yes — wait for the held run to finish, or submit with a different `profile_id` |
 | **429** rate | Tenant exceeded `rate_limit_per_minute` | Yes — honor `Retry-After` header |
 | **429** concurrent | Tenant at `max_concurrent_runs` | Yes — honor `Retry-After` |
 | **500** | Unhandled exception | Sometimes — check `{"action":"logs", ...}` for the traceback before retrying |
@@ -51,7 +52,7 @@ A run can return `200 OK` and still have `status: failed`:
 | `timeout` | `max_time_minutes` hit | Same |
 | `gate_failed` | A `gate: true` step's verify clause was false | The site didn't reach the expected state — different filters / start URL |
 | `extract_failed` | Claude couldn't parse the screenshot into the expected schema | Schema mismatch with what's actually visible — adjust the plan |
-| `navigation_blocked` | Cloudflare 403 or sustained 5xx from the target | Wait + retry; or try with a fresh `state_key` |
+| `navigation_blocked` | Cloudflare 403 or sustained 5xx from the target | Wait + retry; or try with a fresh `profile_id` (different cookies / IP rotation) |
 
 These are partial successes — the `summary` block reflects whatever was completed (e.g., 2 of 3 listings extracted before the cap hit).
 
@@ -61,7 +62,7 @@ These are partial successes — the `summary` block reflects whatever was comple
 |---|---|
 | 4xx (except 429) | Don't retry — fix the request |
 | 429 | Honor `Retry-After`; capped exponential backoff after that |
-| 500 | Inspect `{"action":"logs"}` first; retry with a fresh `state_key` if it looks transient |
+| 500 | Inspect `{"action":"logs"}` first; retry with a fresh `workflow_id` (and a fresh `profile_id` if the failure looks tied to a corrupted Chrome session) if it looks transient |
 | 502 | Exponential backoff (5 s → 30 s → 2 min); the upstream Holo3 / Anthropic might be down |
 | 503 (auth) | Don't retry — operator action needed |
 

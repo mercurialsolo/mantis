@@ -256,7 +256,7 @@ The runtime never logs tokens, only `tenant_id`. Every request emits:
   "ts": "2026-04-28T02:14:32Z",
   "level": "INFO",
   "logger": "mantis_agent.baseten_server",
-  "msg": "predict tenant=tenant_a scope=run state_key=… detached=true action=run",
+  "msg": "predict tenant=tenant_a scope=run profile_id=… workflow_id=… detached=true action=run",
   "tenant_id": "tenant_a"
 }
 ```
