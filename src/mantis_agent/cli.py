@@ -595,6 +595,11 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
 
     from .plan_decomposer import MicroPlan, PlanDecomposer
 
+    # Raw payload retained so the env-harness path can read top-level
+    # ``task_id`` metadata that ``MicroPlan.to_dict()`` strips on
+    # round-trip. ``None`` when the plan came from a text source.
+    raw_plan_payload: dict[str, Any] | None = None
+
     if _looks_like_text_plan(plan_path):
         plan_text = plan_path.read_text(encoding="utf-8")
         if not plan_text.strip():
@@ -631,10 +636,53 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"error: cannot parse plan from {plan_path}: {exc}", file=sys.stderr)
             return EXIT_ERROR
+        raw_plan_payload = payload if isinstance(payload, dict) else None
 
     if not plan.steps:
         print("error: plan has no steps", file=sys.stderr)
         return EXIT_ERROR
+
+    # ── env harness (#336) ─────────────────────────────────────────────
+    # When ``--env <name>`` is set, boot a simulated env, template
+    # ``{{ENV_URL}}`` into the plan, and prepare grading at end of run.
+    # Skipping when ``--env`` is absent keeps the existing path bit-
+    # identical for every plan that targets a live URL.
+    env_session = None
+    env_task_id = ""
+    if args.env:
+        from .sim_envs.cli_integration import EnvSession, detect_default_runtime
+        from .sim_envs.templating import substitute_env_url
+
+        runtime = args.runtime or detect_default_runtime()
+        try:
+            env_session = EnvSession(
+                args.env,
+                runtime=runtime,
+                seed=int(args.seed),
+                now=args.now,
+                keep=bool(args.keep),
+            ).__enter__()
+        except Exception as exc:  # noqa: BLE001 — surface boot errors
+            print(f"error: env boot failed ({args.env}/{runtime}): {exc}", file=sys.stderr)
+            return EXIT_ERROR
+
+        env_url = env_session.url
+        # Substitute on the plan dict (covers params.url and intent body),
+        # then re-build the MicroPlan from the substituted payload.
+        plan_dict = plan.to_dict()
+        plan_dict = substitute_env_url(plan_dict, env_url)
+        plan = MicroPlan.from_dict(plan_dict)
+
+        # Pull task_id off the raw JSON payload (text plans land none).
+        env_task_id = ""
+        if raw_plan_payload is not None:
+            env_task_id = str(raw_plan_payload.get("task_id", "")).strip()
+        if not env_task_id:
+            env_task_id = plan_path.stem  # fall back to filename
+        print(
+            f"  env:     {args.env}  (runtime={runtime}, url={env_url}, "
+            f"task_id={env_task_id})"
+        )
 
     # Output dir.
     output_dir = Path(args.output_dir or f"outputs/run-{int(_time.time())}")
@@ -854,12 +902,57 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
         return EXIT_ERROR
 
     t0 = _time.time()
+    runner_exc: BaseException | None = None
+    step_results: list[Any] = []
     try:
-        step_results = runner.run(plan, resume=bool(args.resume))
-    except Exception as exc:  # noqa: BLE001
-        print(f"error: runner raised: {exc}", file=sys.stderr)
+        try:
+            step_results = runner.run(plan, resume=bool(args.resume))
+        except Exception as exc:  # noqa: BLE001
+            runner_exc = exc
+            print(f"error: runner raised: {exc}", file=sys.stderr)
+    finally:
+        elapsed = _time.time() - t0
+
+        # ── grading + env teardown (#336) ──────────────────────────────
+        grading_dict: dict[str, Any] | None = None
+        if env_session is not None:
+            from .gym.grading import grade_run
+            try:
+                grading = grade_run(
+                    env_session.url,
+                    env_session.admin_token,
+                    env_task_id,
+                )
+                grading_dict = grading.to_dict()
+                (output_dir / "oracle.json").write_text(
+                    json.dumps(grading_dict, indent=2) + "\n", encoding="utf-8",
+                )
+                print(
+                    f"  oracle:  passed={grading.passed} score={grading.score} "
+                    f"task_id={env_task_id}  → {output_dir / 'oracle.json'}"
+                )
+            except Exception as exc:  # noqa: BLE001 — never crash teardown
+                print(f"  oracle:  call failed: {exc}", file=sys.stderr)
+
+            # Merge env-side events into the agent trace (additive).
+            try:
+                from .sim_envs.trace_merge import merge_env_events
+
+                merge_env_events(
+                    output_dir, env_session.backend, env_session.handle,
+                    since=t0,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"  trace-merge: failed: {exc}", file=sys.stderr)
+
+            # Tear down (unless --keep). EnvSession.__exit__ is idempotent.
+            try:
+                env_session.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001
+                pass
+
+    if runner_exc is not None:
         return EXIT_ERROR
-    elapsed = _time.time() - t0
 
     # Result summary — write the structured payload then print a
     # human-readable rollup.
@@ -889,6 +982,10 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
             for r in step_results
         ],
     }
+    if grading_dict is not None:
+        # Additive — RunReport surface in result.json gains the oracle
+        # verdict. Consumers that don't know about ``grading`` ignore it.
+        result_payload["grading"] = grading_dict
     (output_dir / "result.json").write_text(
         json.dumps(result_payload, indent=2) + "\n", encoding="utf-8",
     )
@@ -1376,6 +1473,42 @@ def _build_parser() -> argparse.ArgumentParser:
         "--resume",
         action="store_true",
         help="Resume from checkpoint at --output-dir/checkpoint.json if present.",
+    )
+    # ── env harness (#336) ────────────────────────────────────────────
+    run.add_argument(
+        "--env",
+        default=None,
+        help="Simulated env to boot for this run (e.g. 'stub', 'mantis-crm'). "
+             "When set, the harness boots the env via --runtime, templates "
+             "{{ENV_URL}} into the plan, calls grade_run after, and writes "
+             "oracle.json + env_events.jsonl into --output-dir.",
+    )
+    run.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Deterministic env seed passed via SEED= (default: 42). "
+             "Only consulted when --env is set.",
+    )
+    run.add_argument(
+        "--now",
+        default="2026-01-15T09:00:00Z",
+        help="Frozen wall-clock for the env via FAKE_NOW= (default: "
+             "2026-01-15T09:00:00Z). Only consulted when --env is set.",
+    )
+    run.add_argument(
+        "--runtime",
+        choices=("local", "modal", "e2b"),
+        default=None,
+        help="Where to boot the env: local (Docker / subprocess stub), modal "
+             "(one app per env), or e2b (reserved, not implemented in v1). "
+             "Defaults to modal when running on Modal, local otherwise.",
+    )
+    run.add_argument(
+        "--keep",
+        action="store_true",
+        help="Leave the env running after the plan finishes (for debugging). "
+             "Default: env is torn down on exit.",
     )
     run.set_defaults(func=cmd_plan_run)
 
