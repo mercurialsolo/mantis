@@ -18,7 +18,9 @@ Quick definitions for project-specific terms. For deeper explanations, follow th
 | **Polished video** | The composed walkthrough (title card → captioned run with action overlays → outro card) produced when `record_video: true`. |
 | **Raw recording** | The unprocessed Xvfb screencast. Available via `?raw=1` on the video endpoint. |
 | **`run_id`** | Server-generated identifier for a detached run. Format: `<YYYYMMDD>_<HHMMSS>_<random_hex>`. |
-| **`state_key`** | Caller-chosen identifier for a workflow. Server prefixes it with `tenant_id` to isolate. Controls browser-profile reuse and checkpoint resume. |
+| **`profile_id`** | (#341) Caller-chosen Chrome user-data-dir identity. Server prefixes with `tenant_id` to isolate. Sticky across plan revisions — same id ⇒ same cookies / logged-in sessions. Defaults to `"default"` (one profile per tenant). |
+| **`workflow_id`** | (#341) Caller-chosen checkpoint identity. Server prefixes with `tenant_id` to isolate. Rotate when the plan definition changes; pair with `resume_state: true` to pick up where the last run with this id stopped. Defaults to `plan_signature[:12]`. |
+| **`state_key`** | Legacy single-field identity. When set alone, the server routes it to both `profile_id` and `workflow_id` for back-compat. Prefer the split fields in new code; see [#341](https://github.com/mercurialsolo/mantis/issues/341). |
 | **Step** | One element of a micro-plan. Has `intent`, `type`, optional `section`, `gate`, `verify`, `loop_target`, etc. |
 | **Task suite** | Multi-task plan format (`{tasks: [...]}`). Each task has its own `verify` predicate. |
 | **Tenant** | A unit of isolation. Each tenant has its own token, scopes, caps, browser profile dir, run dir, and optionally its own Anthropic key. |

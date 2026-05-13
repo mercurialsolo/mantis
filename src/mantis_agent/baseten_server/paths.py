@@ -32,27 +32,54 @@ def tenant_root(tenant: TenantConfig) -> Path:
 
       /workspace/mantis-data/tenants/<tenant_id>/
         ├── runs/<run_id>/{status,result,leads,events}
-        ├── checkpoints/<state_key>.json
-        ├── chrome-profile/<state_key>/
+        ├── checkpoints/<workflow_id>.json
+        ├── chrome-profile/<profile_id>/
+        ├── locks/<profile_id>          (#342)
         └── screenshots/<run_id>/
     """
     root = data_root() / "tenants" / safe_state_key(tenant.tenant_id)
-    for child in ("runs", "checkpoints", "chrome-profile", "screenshots"):
+    for child in ("runs", "checkpoints", "chrome-profile", "screenshots", "locks"):
         (root / child).mkdir(parents=True, exist_ok=True)
     return root
 
 
 def tenant_state_key(tenant: TenantConfig, caller_state_key: str | None) -> str:
-    """Server-namespaced state key. Caller's value is sanitized + prefixed."""
+    """Server-namespaced state key. Caller's value is sanitized + prefixed.
+
+    Legacy single-field identity (#341). New code should call
+    :func:`tenant_profile_id` and :func:`tenant_workflow_id` instead.
+    """
     base = safe_state_key(caller_state_key or "default")
     return f"{safe_state_key(tenant.tenant_id)}__{base}"
 
 
-def tenant_chrome_profile(tenant: TenantConfig, state_key: str) -> Path:
-    """Per-tenant, per-state-key Chrome profile dir."""
-    profile = tenant_root(tenant) / "chrome-profile" / safe_state_key(state_key)
+def tenant_profile_id(tenant: TenantConfig, caller_profile_id: str | None) -> str:
+    """Server-namespaced profile id (Chrome user-data-dir identity, #341)."""
+    base = safe_state_key(caller_profile_id or "default")
+    return f"{safe_state_key(tenant.tenant_id)}__{base}"
+
+
+def tenant_workflow_id(tenant: TenantConfig, caller_workflow_id: str | None) -> str:
+    """Server-namespaced workflow id (checkpoint identity, #341)."""
+    base = safe_state_key(caller_workflow_id or "default")
+    return f"{safe_state_key(tenant.tenant_id)}__{base}"
+
+
+def tenant_chrome_profile(tenant: TenantConfig, profile_id: str) -> Path:
+    """Per-tenant, per-profile Chrome user-data-dir (#341)."""
+    profile = tenant_root(tenant) / "chrome-profile" / safe_state_key(profile_id)
     profile.mkdir(parents=True, exist_ok=True)
     return profile
+
+
+def tenant_lock_path(tenant: TenantConfig, profile_id: str) -> Path:
+    """Per-tenant, per-profile lockfile (#342).
+
+    A non-empty file at this path means a run is currently using the
+    profile. The lock holder writes its ``run_id`` into the file so a
+    concurrent submitter can return a 409 with the conflicting run.
+    """
+    return tenant_root(tenant) / "locks" / f"{safe_state_key(profile_id)}.lock"
 
 
 def repo_root() -> Path:

@@ -47,7 +47,7 @@ Every field except `tenant_id` is optional and falls back to the `DEFAULT_TENANT
 
 | Field | Default | Purpose |
 |---|---|---|
-| `tenant_id` | (required) | Identifier used as the prefix for `state_key`, browser profile dir, run dir, log lines, and metric labels. Pick something stable and human-readable. |
+| `tenant_id` | (required) | Identifier used as the prefix for `profile_id` / `workflow_id` / legacy `state_key`, browser profile dir, run dir, log lines, and metric labels. Pick something stable and human-readable. |
 | `scopes` | `["run", "status", "result", "logs"]` | Which actions this token can perform. Use `["status", "result"]` for read-only consumers. |
 | `max_concurrent_runs` | 5 | Per-tenant concurrency gauge. 6th in-flight run returns 429. |
 | `max_cost_per_run` | 25.0 | Per-tenant cost cap (clamps each request's `max_cost`). |
@@ -256,7 +256,7 @@ The runtime never logs tokens, only `tenant_id`. Every request emits:
   "ts": "2026-04-28T02:14:32Z",
   "level": "INFO",
   "logger": "mantis_agent.baseten_server",
-  "msg": "predict tenant=tenant_a scope=run state_key=… detached=true action=run",
+  "msg": "predict tenant=tenant_a scope=run profile_id=… workflow_id=… detached=true action=run",
   "tenant_id": "tenant_a"
 }
 ```

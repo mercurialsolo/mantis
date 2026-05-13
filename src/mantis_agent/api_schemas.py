@@ -72,7 +72,15 @@ class PredictRequest(BaseModel):
 
     # Run options
     detached: bool = True
+    # Identity (#341).
+    # ``state_key`` is the legacy single field; when set alone the server
+    # routes it to both ``profile_id`` and ``workflow_id`` for back-compat.
+    # New callers should set ``profile_id`` (Chrome user-data-dir identity,
+    # sticky across plan revisions) and ``workflow_id`` (checkpoint identity,
+    # rotated when the plan definition changes) independently.
     state_key: Optional[str] = None
+    profile_id: Optional[str] = None
+    workflow_id: Optional[str] = None
     resume_state: bool = False
     max_cost: float = Field(default=MAX_COST_USD, gt=0)
     max_time_minutes: int = Field(default=MAX_RUNTIME_MINUTES, gt=0)
@@ -182,9 +190,12 @@ class PureCUARequest(BaseModel):
     frames_per_inference: int = Field(default=1, ge=1, le=8)
 
     # Run options (mirrors PredictRequest shape so tenant caps clamp the
-    # same way).
+    # same way). ``state_key`` / ``profile_id`` / ``workflow_id`` semantics
+    # match PredictRequest (#341).
     detached: bool = False
     state_key: Optional[str] = None
+    profile_id: Optional[str] = None
+    workflow_id: Optional[str] = None
     max_cost: float = Field(default=MAX_COST_USD, gt=0)
     max_time_minutes: int = Field(default=MAX_RUNTIME_MINUTES, gt=0)
 

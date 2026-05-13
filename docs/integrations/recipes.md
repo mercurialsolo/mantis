@@ -29,7 +29,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "greenhouse-openai-eng-sf",
+  "profile_id":  "greenhouse-prod",
+  "workflow_id": "greenhouse-openai-eng-sf",
   "max_cost": 4,
   "max_time_minutes": 30,
   "extraction_schema": {
@@ -87,7 +88,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "amazon-mech-keyboards",
+  "profile_id":  "amazon-anon",
+  "workflow_id": "amazon-mech-keyboards",
   "max_cost": 3,
   "max_time_minutes": 25,
   "extraction_schema": {
@@ -154,7 +156,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "techcrunch-ai-recent",
+  "profile_id":  "techcrunch-anon",
+  "workflow_id": "techcrunch-ai-recent",
   "max_cost": 2,
   "max_time_minutes": 20,
   "extraction_schema": {
@@ -209,7 +212,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "zillow-sf-condos-1m-2m",
+  "profile_id":  "zillow-anon",
+  "workflow_id": "zillow-sf-condos-1m-2m",
   "max_cost": 5,
   "max_time_minutes": 35,
   "extraction_schema": {
@@ -282,7 +286,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "crm-edit-lead-industry",
+  "profile_id":  "crm-prod-sdr-alice",
+  "workflow_id": "crm-edit-lead-industry",
   "max_cost": 2,
   "max_time_minutes": 15,
   "micro": [
@@ -357,7 +362,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d '{
     "detached": true,
     "plan_text": "1. Go to https://crm.example.com\n2. Log in with user ID alice password <password>\n3. Go to the Leads Page\n4. Select the first lead with the \"Qualified\" status\n5. Go to the Edit Lead page for this lead\n6. Update the Industry Vertical to \"Space Exploration\"\n7. Click \"Update Lead\"",
-    "state_key": "crm-edit-lead-text",
+    "profile_id":  "crm-prod-sdr-alice",
+    "workflow_id": "crm-edit-lead-text",
     "max_cost": 2,
     "max_time_minutes": 15
   }'
@@ -395,7 +401,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "linkedin-post-weekly",
+  "profile_id":  "linkedin-acct-sales-team",
+  "workflow_id": "linkedin-post-weekly",
   "max_cost": 2,
   "max_time_minutes": 15,
   "micro": [
@@ -458,7 +465,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "reddit-post-r-mysub",
+  "profile_id":  "reddit-acct-mod",
+  "workflow_id": "reddit-post-r-mysub",
   "max_cost": 1.5,
   "max_time_minutes": 12,
   "micro": [
@@ -518,7 +526,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "instagram-post-feed",
+  "profile_id":  "instagram-acct-brand",
+  "workflow_id": "instagram-post-feed",
   "max_cost": 2.5,
   "max_time_minutes": 18,
   "micro": [
@@ -591,7 +600,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "admin-fetch-user-by-email",
+  "profile_id":  "admin-prod-ops",
+  "workflow_id": "admin-fetch-user-by-email",
   "max_cost": 1.5,
   "max_time_minutes": 10,
   "extraction_schema": {
@@ -668,7 +678,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "crm-upsert-contact-bob",
+  "profile_id":  "crm-prod-sdr-alice",
+  "workflow_id": "crm-upsert-contact-bob",
   "max_cost": 2,
   "max_time_minutes": 15,
   "micro": [
@@ -737,7 +748,8 @@ curl -fsS -X POST "$MANTIS_ENDPOINT/v1/predict" \
   -d @- <<'JSON'
 {
   "detached": true,
-  "state_key": "refund-order-ord-91234",
+  "profile_id":  "shopify-admin-prod",
+  "workflow_id": "refund-order-ord-91234",
   "max_cost": 2,
   "max_time_minutes": 15,
   "micro": [
@@ -814,14 +826,15 @@ Rough calibration (Holo3 / Claude / IPRoyal proxy on the Baseten H100):
 | 3-5 | 5-8 | 6-10 min | $0.50-$1.00 |
 | 10 | 15 | 15-20 min | $1.50-$2.50 |
 | 20 | 30 | 30-40 min | $3-$5 |
-| 50+ | Chunk via state_key resume | n/a | n/a |
+| 50+ | Chunk via `workflow_id` + `resume_state` | n/a | n/a |
 
 Bump `loop_count` higher than your target (1.5×) — it absorbs failures on
 spam-skipped listings and dead detail pages. Hard caps:
 `MANTIS_MAX_LOOP_ITERATIONS=50`, `MANTIS_MAX_STEPS_PER_PLAN=200`.
 
 For >50 items, split into multiple `/v1/predict` runs sharing the same
-`state_key` and pass `resume_state: true` — the runner picks up at the
+`workflow_id` (and the same `profile_id` if you want to reuse the Chrome
+session) and pass `resume_state: true` — the runner picks up at the
 last checkpoint.
 
 ---

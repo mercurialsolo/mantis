@@ -83,8 +83,10 @@ from .paths import (
     new_run_id,
     repo_root,
     tenant_chrome_profile,
+    tenant_profile_id,
     tenant_root,
     tenant_state_key,
+    tenant_workflow_id,
 )
 from .runtime import BasetenCUARuntime
 
@@ -190,6 +192,8 @@ _load_secret_environment = load_secret_environment
 _data_root = data_root
 _tenant_root = tenant_root
 _tenant_state_key = tenant_state_key
+_tenant_profile_id = tenant_profile_id
+_tenant_workflow_id = tenant_workflow_id
 _tenant_chrome_profile = tenant_chrome_profile
 _repo_root = repo_root
 _new_run_id = new_run_id
@@ -446,11 +450,25 @@ async def _handle_predict(
         int(payload.get("max_time_minutes", MAX_RUNTIME_MINUTES)),
         tenant.max_time_minutes_per_run,
     )
-    payload["state_key"] = _tenant_state_key(tenant, payload.get("state_key"))
+    # Identity resolution (#341): legacy ``state_key`` routes to both; new
+    # callers can pass ``profile_id`` / ``workflow_id`` independently.
+    caller_state_key = payload.get("state_key")
+    caller_profile_id = payload.get("profile_id")
+    caller_workflow_id = payload.get("workflow_id")
+    if caller_profile_id or caller_workflow_id:
+        payload["profile_id"] = _tenant_profile_id(tenant, caller_profile_id)
+        payload["workflow_id"] = _tenant_workflow_id(tenant, caller_workflow_id)
+    else:
+        legacy = _tenant_state_key(tenant, caller_state_key)
+        payload["profile_id"] = legacy
+        payload["workflow_id"] = legacy
+    # Downstream callers still read ``state_key``; keep it set to the
+    # workflow identity so checkpoint paths and cache keys stay stable.
+    payload["state_key"] = payload["workflow_id"]
 
     os.environ["ANTHROPIC_API_KEY"] = _resolve_anthropic_key(tenant)
     os.environ["MANTIS_TENANT_ID"] = tenant.tenant_id
-    profile_dir = _tenant_chrome_profile(tenant, payload["state_key"])
+    profile_dir = _tenant_chrome_profile(tenant, payload["profile_id"])
     os.environ["MANTIS_CHROME_PROFILE_DIR"] = str(profile_dir)
 
     is_run_mode = req.action is None
@@ -544,9 +562,10 @@ async def _handle_predict(
         payload["_tenant_id"] = tenant.tenant_id
 
     logger.info(
-        "predict tenant=%s scope=run state_key=%s detached=%s action=%s",
+        "predict tenant=%s scope=run profile_id=%s workflow_id=%s detached=%s action=%s",
         tenant.tenant_id,
-        payload["state_key"],
+        payload["profile_id"],
+        payload["workflow_id"],
         payload.get("detached", True),
         req.action or "run",
     )
@@ -672,11 +691,25 @@ async def cua_v1(
         int(payload.get("max_time_minutes", MAX_RUNTIME_MINUTES)),
         tenant.max_time_minutes_per_run,
     )
-    payload["state_key"] = _tenant_state_key(tenant, payload.get("state_key"))
+    # Identity resolution (#341): legacy ``state_key`` routes to both; new
+    # callers can pass ``profile_id`` / ``workflow_id`` independently.
+    caller_state_key = payload.get("state_key")
+    caller_profile_id = payload.get("profile_id")
+    caller_workflow_id = payload.get("workflow_id")
+    if caller_profile_id or caller_workflow_id:
+        payload["profile_id"] = _tenant_profile_id(tenant, caller_profile_id)
+        payload["workflow_id"] = _tenant_workflow_id(tenant, caller_workflow_id)
+    else:
+        legacy = _tenant_state_key(tenant, caller_state_key)
+        payload["profile_id"] = legacy
+        payload["workflow_id"] = legacy
+    # Downstream callers still read ``state_key``; keep it set to the
+    # workflow identity so checkpoint paths and cache keys stay stable.
+    payload["state_key"] = payload["workflow_id"]
 
     os.environ["ANTHROPIC_API_KEY"] = _resolve_anthropic_key(tenant)
     os.environ["MANTIS_TENANT_ID"] = tenant.tenant_id
-    profile_dir = _tenant_chrome_profile(tenant, payload["state_key"])
+    profile_dir = _tenant_chrome_profile(tenant, payload["profile_id"])
     os.environ["MANTIS_CHROME_PROFILE_DIR"] = str(profile_dir)
 
     # URL allowlist: enforce on start_url + any URL embedded in the
@@ -736,9 +769,10 @@ async def cua_v1(
     )
 
     logger.info(
-        "cua tenant=%s state_key=%s detached=%s start_url=%s",
+        "cua tenant=%s profile_id=%s workflow_id=%s detached=%s start_url=%s",
         tenant.tenant_id,
-        payload["state_key"],
+        payload["profile_id"],
+        payload["workflow_id"],
         payload.get("detached", False),
         payload.get("start_url", ""),
     )

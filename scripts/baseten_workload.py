@@ -117,6 +117,10 @@ def command_run(args: argparse.Namespace) -> int:
         "max_cost": args.max_cost,
         "max_time_minutes": args.max_time_minutes,
     }
+    if args.profile_id:
+        payload["profile_id"] = args.profile_id
+    if args.workflow_id:
+        payload["workflow_id"] = args.workflow_id
     if args.proxy_city:
         payload["proxy_city"] = args.proxy_city
     if args.proxy_state:
@@ -191,6 +195,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--attach", action="store_true", help="block until Baseten returns a result")
     run.add_argument("--micro", default=DEFAULT_MICRO)
     run.add_argument("--state-key", default="boattrader-miami-private-v1")
+    run.add_argument("--profile-id", default="", help="Chrome user-data-dir identity (#341)")
+    run.add_argument("--workflow-id", default="", help="Checkpoint identity (#341)")
     run.add_argument("--resume-state", action="store_true")
     run.add_argument("--max-cost", type=float, default=10.0)
     run.add_argument("--max-time-minutes", type=int, default=180)

@@ -10,7 +10,7 @@ Caller                /v1/predict                 MicroPlanRunner
                                                   ┌─ BrainHolo3   (Holo3 GPU inference)
 plan, tenant ──HTTP──► validate, clamp ──────────►├─ ClaudeGrounding (refine clicks)
                        caps, namespace             ├─ ClaudeExtractor (read structured data)
-                       state_key                   ├─ DynamicPlanVerifier
+                       profile_id, workflow_id     ├─ DynamicPlanVerifier
                                                    └─ XdotoolGymEnv (Xvfb + Chrome)
                                                           │
                                                           ▼
@@ -72,26 +72,32 @@ Useful per-step modifiers:
 
 Mantis is multi-tenant from Tier 1. A *tenant* is just a record in the operator's keys file mapping an `X-Mantis-Token` to:
 
-- `tenant_id` — the namespace prefix used in `state_key` and on the data volume
+- `tenant_id` — the namespace prefix used in `profile_id` / `workflow_id` / legacy `state_key` and on the data volume
 - `scopes` — which actions this token can do (`run`, `status`, `result`, `logs`)
 - `max_concurrent_runs`, `max_cost_per_run`, `max_time_minutes_per_run`, `rate_limit_per_minute` — caps the server enforces in addition to the global hard caps
 - `anthropic_secret_name` — which Anthropic key this tenant's runs use (each tenant can bring its own billing)
 - `allowed_domains` — wildcards matched against `navigate` URLs in submitted plans
 - `webhook_url`, `webhook_secret_name` — optional run-completion callback
 
-Plans submitted by tenant A cannot read tenant B's checkpoints, profiles, or recordings — `state_key` is server-prefixed with the tenant id and the data volume is namespaced.
+Plans submitted by tenant A cannot read tenant B's checkpoints, profiles, or recordings — `profile_id` / `workflow_id` (and legacy `state_key`) are all server-prefixed with the tenant id and the data volume is namespaced.
 
-## state_key — the resume primitive
+## `profile_id` + `workflow_id` — the resume primitives (#341)
 
-`state_key` is the most important per-run field after the plan itself. It controls:
+The two most important per-run fields after the plan itself. They were one field — `state_key` — until [#341](https://github.com/mercurialsolo/mantis/issues/341) split them because they have opposite rotation lifetimes.
 
-| | Behavior |
-|---|---|
-| Browser profile | A Chrome profile dir at `tenants/<tenant_id>/chrome-profile/<state_key>/` is created or reused. Cookies + sessions persist across runs with the same key. |
-| Checkpoint resume | The runner saves progress to `tenants/<tenant_id>/checkpoints/<state_key>.json`. Pass `resume_state: true` to pick up where the last run left off. |
-| Idempotency | (Not the same as `Idempotency-Key` header) — `state_key` is the *workflow* identity, the header is the *request* identity. |
+| | Field | Behavior |
+|---|---|---|
+| Browser profile | `profile_id` | A Chrome user-data-dir at `tenants/<tenant_id>/chrome-profile/<profile_id>/` is created or reused. Cookies + logged-in sessions persist across runs. **Sticky** — keep this stable so you don't have to log back in every time the plan changes. |
+| Checkpoint | `workflow_id` | The runner saves progress to `tenants/<tenant_id>/checkpoints/<workflow_id>.json`. Pass `resume_state: true` to pick up where the last run with this id left off. **Rotate** when the plan definition changes meaningfully — resuming step `N/12` of an old plan against a new layout is incoherent. |
+| Idempotency | (not these) | The `Idempotency-Key` header is the *request* identity (24h dedup); `workflow_id` is the *workflow* identity. |
 
-Pick `state_key` to match the conceptual workflow: `marketplace-miami-listings-v1`, `crm-prod`, `customer-12345-onboarding`. Reuse the same key across runs of the same workflow; pick a new key when the workflow definition changes.
+Pick `profile_id` to match the *account or persona* — e.g. `alice-prod`, `customer-12345`. Pick `workflow_id` to match the *plan revision* — e.g. `marketplace-miami-listings-v3`, the default is `plan_signature[:12]`.
+
+Same account running 5 different workflows in parallel? Pass one `profile_id` and five distinct `workflow_id`s. (Note: Chrome serializes those runs because two processes cannot share a user-data-dir at the same time — distinct `profile_id`s are required for true parallelism. See [#342](https://github.com/mercurialsolo/mantis/issues/342) for the Modal HTTP endpoint that surfaces this as a 409 instead of silent corruption.)
+
+### Legacy `state_key`
+
+The single-field `state_key` still works — when set alone, the server routes it to both `profile_id` and `workflow_id` for back-compat. New code should set the two fields independently. The result envelope echoes all three fields so callers can grep either.
 
 ## The cost meter
 

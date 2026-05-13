@@ -10,8 +10,10 @@ Once you have an authenticated session, every plan submission lands on `POST /v1
   "micro":       "plans/example/...json",            // OR
   "plan_text":   "Plain English description",        //
 
-  "state_key":         "stable-workflow-id",         // namespaced server-side
-  "resume_state":      false,                        // continue from last checkpoint
+  "profile_id":        "alice-prod",                 // (#341) Chrome user-data-dir; sticky across plan revisions
+  "workflow_id":       "marketplace-listings-v3",    // (#341) checkpoint id; rotate when the plan changes
+  // "state_key": "legacy-single-field",            // pre-#341 callers; routes to BOTH on the server for back-compat
+  "resume_state":      false,                        // continue from last checkpoint at workflow_id
   "max_cost":          2.0,                          // clamped to tenant cap
   "max_time_minutes":  20,
   "proxy_city":        "Miami",                      // optional IPRoyal geo override
@@ -49,7 +51,8 @@ Have a stable workflow you'll run many times?
       -d '{
         "detached": true,
         "micro": "plans/example/extract_listings.json",
-        "state_key": "marketplace-prod",
+        "profile_id": "marketplace-prod",
+        "workflow_id": "marketplace-listings-v1",
         "max_cost": 2,
         "max_time_minutes": 20
       }'
@@ -65,7 +68,8 @@ Have a stable workflow you'll run many times?
       -d '{
         "detached": true,
         "plan_text": "Go to a marketplace listings site, filter to private sellers above $35,000 in Florida, extract listing details for the first 3 listings.",
-        "state_key": "ad-hoc-1",
+        "profile_id": "ad-hoc",
+        "workflow_id": "ad-hoc-marketplace-1",
         "max_cost": 2
       }'
     ```
@@ -81,7 +85,8 @@ Have a stable workflow you'll run many times?
     {
       "detached": true,
       "task_suite": $(cat tasks/crm/crm_tasks.json),
-      "state_key": "crm-$(date +%s)",
+      "profile_id": "crm-prod",
+      "workflow_id": "crm-$(date +%s)",
       "max_cost": 5,
       "max_time_minutes": 30
     }
@@ -99,7 +104,8 @@ Have a stable workflow you'll run many times?
       -d '{
         "detached": true,
         "task_file": "tasks/crm/crm_tasks.json",
-        "state_key": "crm-prod"
+        "profile_id": "crm-prod",
+        "workflow_id": "crm-tasks-v1"
       }'
     ```
 

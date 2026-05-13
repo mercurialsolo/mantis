@@ -71,7 +71,9 @@ curl -X POST "$ENDPOINT/v1/cua" \
 | `frames_per_inference` | `1` | Screenshots fed to the brain per step. Holo3 wants 1 |
 | `settle_time` | `2.0` | Seconds to wait after each action before re-screenshotting |
 | `detached` | `false` | Queue as background; return `run_id` to poll via `/v1/predict` actions |
-| `state_key` | unset | Reuses the Chrome profile + tenant dir tied to this key |
+| `profile_id` | `"default"` | (#341) Chrome user-data-dir identity; sticky across plan revisions |
+| `workflow_id` | `plan_signature[:12]` | (#341) Checkpoint identity; rotate when the plan changes |
+| `state_key` | unset | Legacy single-field identity. When set alone, routes to both `profile_id` and `workflow_id` (back-compat) |
 | `max_cost` | `25.0` | USD cap (mostly informational — pure CUA spends nothing on Claude) |
 | `max_time_minutes` | `60` | Wall-clock cap; clamped against tenant cap |
 | `proxy_city` / `proxy_state` | unset | Geo override (allowlist-gated) |
@@ -141,7 +143,9 @@ Useful flags:
 | `--start-url` | Initial URL for the browser |
 | `--max-steps` | Cap on the CUA loop |
 | `--settle-time` | Seconds to wait after each action |
-| `--state-key` | Namespace Chrome profile + checkpoint dir |
+| `--profile-id` | (#341) Chrome user-data-dir identity (sticky across plan revisions) |
+| `--workflow-id` | (#341) Checkpoint identity (rotate on plan change; pair with `--resume-state`) |
+| `--state-key` | Legacy single-field; routes to both `--profile-id` and `--workflow-id` |
 | `--detached` | Queue as background; print `run_id` and exit |
 | `--proxy-disabled` | Skip the residential proxy |
 | `--record-video` | Capture screencast |

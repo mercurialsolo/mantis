@@ -75,8 +75,10 @@ Plus the run options:
 | Field | Default | Description |
 |---|---|---|
 | `detached` | `true` | Return a `run_id` immediately and continue work in the background. Set `false` to block until done (only useful for short plans — 5–10s). |
-| `state_key` | `""` | Caller-chosen identifier; the server prefixes it with `tenant_id` so callers can't collide. Reuse the same key across runs to share checkpoint state and Chrome profile (cookies, sessions). |
-| `resume_state` | `false` | Reconstruct browser state from the latest checkpoint at `state_key` before starting. |
+| `profile_id` | `"default"` | (#341) Chrome user-data-dir identity. Server prefixes with `tenant_id`. Sticky across plan revisions — same id ⇒ same cookies / logged-in sessions. |
+| `workflow_id` | `plan_signature[:12]` | (#341) Checkpoint identity. Server prefixes with `tenant_id`. Rotate when the plan definition changes; pair with `resume_state` to pick up where the last run with this id stopped. |
+| `state_key` | `""` | Legacy single-field identity. When set alone, the server routes it to both `profile_id` and `workflow_id` (back-compat). Prefer the split fields above in new code; see [#341](https://github.com/mercurialsolo/mantis/issues/341). |
+| `resume_state` | `false` | Reconstruct browser state from the latest checkpoint at `workflow_id` before starting. |
 | `max_cost` | `25.0` | Cap in USD; clamped against the tenant cap. |
 | `max_time_minutes` | `60` | Wall-clock cap; clamped against the tenant cap. |
 | `proxy_city`, `proxy_state` | unset | Optional IPRoyal geo overrides. Subject to allowlist. |
@@ -218,7 +220,8 @@ RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -d '{
     "detached": true,
     "plan_text": "Extract the first 3 listings from <your URL>: year, make, model, price, phone, url.",
-    "state_key": "smoke-test",
+    "profile_id":  "smoke",
+    "workflow_id": "smoke-test-v1",
     "resume_state": false,
     "max_cost": 2,
     "max_time_minutes": 20
@@ -373,8 +376,8 @@ For comparison, equivalent Claude-only CUA flow ~$0.50–$1.50 per listing.
 |---|---|
 | Tenant token confidentiality | Stored in Baseten secrets; constant-time compare on validation; never echoed in logs |
 | Per-tenant Anthropic key | Resolved from the tenant's `anthropic_secret_name` — keys are not shared across tenants |
-| Per-tenant browser profile | Mounted at `/workspace/mantis-data/tenants/<tenant_id>/chrome-profile/<state_key>/` — cookies cannot bleed across tenants |
-| Per-tenant run state | Same volume layout — `state_key` is server-prefixed so callers cannot read another tenant's checkpoint |
+| Per-tenant browser profile | Mounted at `/workspace/mantis-data/tenants/<tenant_id>/chrome-profile/<profile_id>/` — cookies cannot bleed across tenants |
+| Per-tenant run state | Same volume layout — `profile_id` / `workflow_id` / legacy `state_key` are all server-prefixed so callers cannot read another tenant's checkpoint |
 | Plan injection (e.g., `loop_count: 999_999`) | Server-side hard caps clamp the values; oversized plans are rejected with `400` |
 | Upstream credential leak | `/v1/chat/completions` strips `X-Mantis-Token`, `Authorization`, `Cookie` before forwarding to in-pod llama.cpp |
 
@@ -452,7 +455,8 @@ RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -d '{
     "detached": true,
     "micro": "plans/example/extract_listings.json",
-    "state_key": "demo-recording",
+    "profile_id":  "demo-recording",
+    "workflow_id": "demo-recording-v1",
     "max_cost": 2,
     "max_time_minutes": 20,
     "record_video": true,

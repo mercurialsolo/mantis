@@ -39,6 +39,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "detached": not args.attach,
         "state_key": args.state_key,
+        "profile_id": args.profile_id,
+        "workflow_id": args.workflow_id,
         "resume_state": False,
         "max_cost": args.max_cost,
         "max_time_minutes": args.max_time_minutes,
@@ -77,6 +79,8 @@ def main() -> int:
     parser.add_argument("--start-url", default="about:blank")
     parser.add_argument("--session-name", default="text_plan_bench")
     parser.add_argument("--state-key", default="text-plan-bench-1")
+    parser.add_argument("--profile-id", default="", help="Chrome user-data-dir identity (#341)")
+    parser.add_argument("--workflow-id", default="", help="Checkpoint identity (#341)")
     parser.add_argument("--max-steps", type=int, default=500)
     parser.add_argument("--max-cost", type=float, default=50.0)
     parser.add_argument("--max-time-minutes", type=int, default=200)

@@ -33,7 +33,8 @@ RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -d '{
     "detached": true,
     "micro": "plans/example/extract_listings.json",
-    "state_key": "first-quickstart",
+    "profile_id": "first-quickstart",
+    "workflow_id": "first-quickstart-v1",
     "max_cost": 2,
     "max_time_minutes": 20,
     "record_video": true
@@ -147,7 +148,7 @@ You ran one orchestrated extraction against a live website, used both Holo3 (che
 
 ## Next steps
 
-- Read the [Concepts](concepts.md) page so you understand `state_key`, `max_cost`, gates, and sections before designing your own plan.
+- Read the [Concepts](concepts.md) page so you understand `profile_id` / `workflow_id`, `max_cost`, gates, and sections before designing your own plan.
 - Browse the [Plan formats](plan-formats.md) to pick the right shape for your workflow.
 - Want to host your own instance? Go to [Hosting](../hosting/index.md).
 - Building an integration? Start with [Client](../client/index.md) → [Authentication](../client/auth.md).

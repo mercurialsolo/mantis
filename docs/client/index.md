@@ -28,7 +28,8 @@ client = MantisClient.from_env()
 result = client.run_to_completion(
     PredictRequest(
         micro="plans/example/extract_listings.json",
-        state_key="marketplace-prod",
+        profile_id="marketplace-prod",
+        workflow_id="marketplace-listings-v1",
         max_cost=2,
         max_time_minutes=20,
         record_video=True,
@@ -49,7 +50,8 @@ For longer runs where you want to surface progress to a UI:
 ```python
 handle = client.predict(PredictRequest(
     micro="plans/example/extract_listings.json",
-    state_key="marketplace-prod",
+    profile_id="marketplace-prod",
+    workflow_id="marketplace-listings-v1",
     record_video=True,
 ))
 

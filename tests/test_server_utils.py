@@ -18,6 +18,7 @@ from mantis_agent.server_utils import (
     micro_plan_steps_to_dicts,
     parse_lead_row,
     plan_signature_from_steps,
+    resolve_ids,
     result_summary,
     safe_state_key,
     save_result_json,
@@ -258,6 +259,8 @@ def test_build_micro_result_includes_dynamic_verification():
         model_name="Holo3-35B-A3B",
         elapsed_seconds=120.5,
         state_key="test_key",
+        profile_id="alice",
+        workflow_id="plan_v3",
         checkpoint_path="/data/checkpoints/test.json",
         plan_signature="abc123",
         resume_state=False,
@@ -273,6 +276,9 @@ def test_build_micro_result_includes_dynamic_verification():
     assert result["viable"] == 2
     assert result["leads_with_phone"] == 1
     assert result["state_key"] == "test_key"
+    # #341: split identities echoed in the envelope.
+    assert result["profile_id"] == "alice"
+    assert result["workflow_id"] == "plan_v3"
 
     # THE CRITICAL CHECK: dynamic_verification must be present
     assert "dynamic_verification" in result
@@ -339,9 +345,86 @@ def test_build_micro_suite_structure():
     assert suite["session_name"] == "micro_example_com"
     assert suite["_max_cost"] == 3.0
     assert suite["_state_key"] == "my_key"
+    # Phase 1 back-compat (#341): legacy state_key routes to both identities.
+    assert suite["_profile_id"] == "my_key"
+    assert suite["_workflow_id"] == "my_key"
     assert suite["_micro_plan"] == steps
     assert suite["tasks"] == []
     assert suite["_checkpoint_path"].endswith("my_key.json")
+
+
+# ── #341: profile_id / workflow_id split ─────────────────────────────
+
+
+def test_resolve_ids_legacy_state_key_routes_to_both():
+    pid, wid = resolve_ids(state_key="abc", plan_signature="deadbeef")
+    assert pid == "abc"
+    assert wid == "abc"
+
+
+def test_resolve_ids_new_fields_win_over_state_key():
+    pid, wid = resolve_ids(
+        state_key="legacy", profile_id="alice", workflow_id="plan_v3"
+    )
+    assert pid == "alice"
+    assert wid == "plan_v3"
+
+
+def test_resolve_ids_workflow_defaults_to_signature_prefix():
+    pid, wid = resolve_ids(profile_id="alice", plan_signature="deadbeef1234567890")
+    assert pid == "alice"
+    assert wid == "deadbeef1234"  # first 12 hex chars
+
+
+def test_resolve_ids_profile_defaults_to_default():
+    pid, wid = resolve_ids(workflow_id="plan_v1", plan_signature="abc")
+    assert pid == "default"
+    assert wid == "plan_v1"
+
+
+def test_resolve_ids_no_input_uses_defaults():
+    pid, wid = resolve_ids(plan_signature="cafe000000000000")
+    assert pid == "default"
+    assert wid == "cafe00000000"
+
+
+def test_resolve_ids_sanitizes():
+    pid, wid = resolve_ids(profile_id="alice@prod!", workflow_id="plan v2")
+    assert pid == "alice_prod"
+    assert wid == "plan_v2"
+
+
+def test_build_micro_suite_split_identities():
+    steps = [{"intent": "nav", "type": "navigate"}]
+    suite = build_micro_suite(
+        steps,
+        "example.com",
+        profile_id="alice",
+        workflow_id="plan_v3",
+    )
+    assert suite["_profile_id"] == "alice"
+    assert suite["_workflow_id"] == "plan_v3"
+    # state_key tracks workflow_id for downstream back-compat readers.
+    assert suite["_state_key"] == "plan_v3"
+    # Checkpoint path uses workflow_id, NOT profile_id.
+    assert suite["_checkpoint_path"].endswith("plan_v3.json")
+
+
+def test_profile_id_preserved_across_workflow_rotation():
+    """Regression guard for the core motivation of #341.
+
+    Rotating workflow_id (because the plan definition changed) must not
+    invalidate the Chrome profile. The two suites below share a profile
+    but use different checkpoints — exactly what coupling under one
+    state_key prevented.
+    """
+    steps_v1 = [{"intent": "nav", "type": "navigate"}]
+    steps_v2 = [{"intent": "nav", "type": "navigate"}, {"intent": "click", "type": "click"}]
+    suite_v1 = build_micro_suite(steps_v1, "example.com", profile_id="alice", workflow_id="v1")
+    suite_v2 = build_micro_suite(steps_v2, "example.com", profile_id="alice", workflow_id="v2")
+    assert suite_v1["_profile_id"] == suite_v2["_profile_id"] == "alice"
+    assert suite_v1["_workflow_id"] != suite_v2["_workflow_id"]
+    assert suite_v1["_checkpoint_path"] != suite_v2["_checkpoint_path"]
 
 
 def test_micro_plan_steps_to_dicts():
