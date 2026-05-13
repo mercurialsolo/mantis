@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ macro.name }} — macros{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb"><a href="/macros">Macros</a></div>
+    <h1>{{ macro.name }}</h1>
+    <div class="muted">{{ macro.id }} · folder: {{ macro.folder }}</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>Template</h2></div>
+  <div class="panel-body">
+    <pre data-testid="macro-template">{{ macro.body }}</pre>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>Preview against a ticket</h2></div>
+  <div class="panel-body">
+    <form method="get" action="">
+      <label>Ticket id:</label>
+      <input type="text" name="preview_ticket" value="{{ preview_ticket_id }}" placeholder="ticket_…" data-testid="preview-ticket-input"/>
+      <button type="submit" class="secondary">Preview</button>
+    </form>
+    {% if preview_ticket_id %}
+      <div class="email-body" data-testid="macro-preview">{{ preview_body }}</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

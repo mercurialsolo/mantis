@@ -167,6 +167,33 @@ class SiteConfig:
         )
 
     @classmethod
+    def default_mantis_helpdesk(cls) -> SiteConfig:
+        """Patterns for the mantis-helpdesk simulated env (#333).
+
+        URL shape:
+
+        * ``/tickets``                — paginated inbox (results)
+        * ``/tickets/<ticket_id>``    — record detail (thread + composer)
+        * ``/macros``, ``/macros/<id>`` — read-only macros library
+        * ``/triggers``               — read-only triggers list
+        * Pagination is ``?page=N``.
+
+        Gate verify prompt nudges the runner toward helpdesk-shaped
+        filter confirmation ("the inbox shows N tickets filtered by …").
+        """
+        return cls(
+            domain="mantis-helpdesk",
+            detail_page_pattern=r"/(tickets|macros)/[\w_-]+$",
+            results_page_pattern=r"/(tickets|macros|triggers)/?$",
+            pagination_format="page={n}",
+            pagination_type="query_param",
+            pagination_strip_pattern=r"[?&]page=\d+",
+            gate_verify_prompt=(
+                "Page is a helpdesk inbox view filtered by these active criteria: "
+            ),
+        )
+
+    @classmethod
     def default_boattrader(cls) -> SiteConfig:
         """The current hardcoded BoatTrader patterns for backward compatibility."""
         return cls(

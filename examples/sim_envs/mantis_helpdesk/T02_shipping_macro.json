@@ -1,0 +1,46 @@
+{
+  "task_id": "T02_shipping_macro",
+  "source_plan": "Find every ticket whose body mentions a six-digit order number starting with 12 (regex \\b12\\d{4}\\b). For each, apply the 'Shipping delay' macro (macro_shipping_delay) as a public reply. The macro substitutes {{requester.first_name}} and {{agent.name}} when rendered.",
+  "domain": "mantis-helpdesk",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the search for likely shipping tickets at {{ENV_URL}}/search?q=order",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/search?q=order"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "List every ticket whose body contains a six-digit order number starting with 12. Use the per-ticket detail view to confirm the body before acting.",
+      "section": "analyse",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "For each matching ticket, post the 'macro_shipping_delay' macro via /tickets/<id>/apply_macro with visibility=public. Do NOT leak the requester's PII into the body — the macro itself contains no PII.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/macros/macro_shipping_delay"},
+      "hints": {}
+    }
+  ]
+}

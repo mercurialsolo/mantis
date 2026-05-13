@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}mantis-helpdesk{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" data-testid="sidebar">
+    <div class="brand"><span class="logo">m</span> mantis helpdesk</div>
+    <nav>
+      <a href="/" class="{% if request.url.path == '/' %}active{% endif %}" data-testid="nav-home"><span class="nav-ico">⌂</span> Home</a>
+      <div class="nav-section">Inbox</div>
+      <a href="/tickets" class="{% if request.url.path.startswith('/tickets') %}active{% endif %}" data-testid="nav-tickets"><span class="nav-ico">✉</span> Tickets</a>
+      <a href="/tickets?sla_soon=1&status=new,open,pending" data-testid="nav-sla-soon"><span class="nav-ico">⚠</span> SLA breaching</a>
+      <a href="/tickets?status=new" data-testid="nav-new"><span class="nav-ico">●</span> New</a>
+      <div class="nav-section">Knowledge</div>
+      <a href="/macros" class="{% if request.url.path.startswith('/macros') %}active{% endif %}" data-testid="nav-macros"><span class="nav-ico">☰</span> Macros</a>
+      <a href="/triggers" class="{% if request.url.path.startswith('/triggers') %}active{% endif %}" data-testid="nav-triggers"><span class="nav-ico">↺</span> Triggers</a>
+      <div class="nav-section">Insights</div>
+      <a href="/reports" class="{% if request.url.path == '/reports' %}active{% endif %}" data-testid="nav-reports"><span class="nav-ico">▤</span> Reports</a>
+      <a href="/audit" class="{% if request.url.path.startswith('/audit') %}active{% endif %}" data-testid="nav-audit"><span class="nav-ico">◷</span> Audit log</a>
+    </nav>
+  </aside>
+  <div>
+    <header class="topbar">
+      <form class="search-form" action="/search" method="get">
+        <input type="text" name="q" placeholder="Search tickets, requesters…" value="{{ request.query_params.get('q') or '' }}" data-testid="topbar-search"/>
+      </form>
+      <div class="user-chip"><span class="avatar">YS</span> You · Agent</div>
+    </header>
+    <main class="workspace">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+</body>
+</html>

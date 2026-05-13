@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Audit log — mantis-helpdesk{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Audit log</h1><span class="muted">{{ items|length }} most recent</span></div>
+
+<div class="panel">
+  <table class="data-table" data-testid="audit-table">
+    <thead><tr><th>When</th><th>Operation</th><th>Target</th><th>Payload</th></tr></thead>
+    <tbody>
+    {% for i in items %}
+      <tr>
+        <td>{{ i.occurred_at }}</td>
+        <td><span class="pill">{{ i.operation }}</span></td>
+        <td>{{ i.target_type }} · {{ i.target_id }}</td>
+        <td><pre>{{ i.payload|tojson }}</pre></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="empty">No audit entries yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

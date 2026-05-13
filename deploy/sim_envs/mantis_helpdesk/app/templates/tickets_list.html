@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Inbox — mantis-helpdesk{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Inbox</div>
+    <h1>Tickets</h1>
+  </div>
+  <span class="muted">{{ "{:,}".format(total) }} total · page {{ page }}/{{ pages }}</span>
+</div>
+
+<form class="filters" method="get" action="/tickets" data-testid="tickets-filter">
+  <input type="text" name="q" value="{{ filters.q }}" placeholder="Subject or body…" class="grow" data-testid="filter-q"/>
+  <select name="status" data-testid="filter-status">
+    <option value="">All statuses</option>
+    {% for s in ["new", "open", "pending", "solved", "closed"] %}
+      <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <select name="priority" data-testid="filter-priority">
+    <option value="">All priorities</option>
+    {% for p in ["urgent", "high", "normal", "low"] %}
+      <option value="{{ p }}" {% if filters.priority == p %}selected{% endif %}>{{ p }}</option>
+    {% endfor %}
+  </select>
+  <select name="group" data-testid="filter-group">
+    <option value="">All groups</option>
+    {% for g in groups %}
+      <option value="{{ g.id }}" {% if filters.group == g.id %}selected{% endif %}>{{ g.name }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="assignee" value="{{ filters.assignee }}" placeholder="Assignee" data-testid="filter-assignee"/>
+  <input type="text" name="tag" value="{{ filters.tag }}" placeholder="Tag" data-testid="filter-tag"/>
+  <label class="muted" style="display:inline-flex; gap:6px; align-items:center;">
+    <input type="checkbox" name="sla_soon" value="1" {% if filters.sla_soon %}checked{% endif %} data-testid="filter-sla-soon"/> SLA-soon
+  </label>
+  <button type="submit" data-testid="filter-apply">Apply</button>
+</form>
+
+<div class="panel">
+<form id="bulk-form" data-testid="bulk-form">
+  <table class="data-table" data-testid="tickets-table">
+    <thead>
+      <tr>
+        <th class="check-col"><input type="checkbox" id="check-all" data-testid="check-all"/></th>
+        <th>Subject</th>
+        <th>Status</th>
+        <th>Priority</th>
+        <th>Group</th>
+        <th>Assignee</th>
+        <th>Requester</th>
+        <th>SLA</th>
+        <th>Tags</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for t in tickets %}
+      <tr data-testid="ticket-row" data-ticket-id="{{ t.id }}">
+        <td><input type="checkbox" name="ids" value="{{ t.id }}" class="row-check" data-testid="check-{{ t.id }}"/></td>
+        <td>
+          <a href="/tickets/{{ t.id }}" data-testid="ticket-link-{{ t.id }}">{{ t.subject }}</a>
+          <div class="muted">{{ t.id }}{% if t.visibility == 'internal' %} · <span class="pill">internal-only</span>{% endif %}</div>
+        </td>
+        <td><span class="status-pill status-{{ t.status }}">{{ t.status }}</span></td>
+        <td><span class="priority-pill priority-{{ t.priority }}">{{ t.priority }}</span></td>
+        <td>{{ t.group_id or "—" }}</td>
+        <td>{{ t.assignee_id or "—" }}</td>
+        <td>{{ t.requester_name or t.requester_id }}</td>
+        <td>
+          {% if t.sla_breach_at and t.sla_breach_at <= now %}
+            <span class="sla-badge sla-breached" data-testid="sla-breached">breached</span>
+          {% else %}
+            <span class="muted">{{ t.sla_breach_at }}</span>
+          {% endif %}
+        </td>
+        <td>{% for tg in t.tags %}<span class="tag">{{ tg }}</span>{% endfor %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="empty">No tickets match these filters.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="bulk-actions">
+    <span class="muted">Bulk on selected:</span>
+    <button type="submit" formaction="/tickets/bulk/tag" formmethod="post" data-testid="bulk-tag-apply">
+      Add tag <input type="text" name="tag" placeholder="tag" data-testid="bulk-tag-input"/>
+    </button>
+    <button type="submit" formaction="/tickets/bulk/status" formmethod="post" data-testid="bulk-status-apply">
+      Set status
+      <select name="new_status" data-testid="bulk-status-select">
+        {% for s in ["new","open","pending","solved","closed"] %}
+          <option value="{{ s }}">{{ s }}</option>
+        {% endfor %}
+      </select>
+    </button>
+    <button type="submit" formaction="/tickets/bulk/assign" formmethod="post" data-testid="bulk-assign-apply">
+      Assign to <input type="text" name="assignee_id" placeholder="agent_…" data-testid="bulk-assign-input"/>
+    </button>
+    <button type="submit" formaction="/tickets/bulk/group" formmethod="post" data-testid="bulk-group-apply">
+      Move group <input type="text" name="group_id" placeholder="group_…" data-testid="bulk-group-input"/>
+    </button>
+    <button type="submit" formaction="/tickets/bulk/close" formmethod="post" data-testid="bulk-close-apply">Close</button>
+  </div>
+</form>
+</div>
+
+<nav class="pagination">
+  {% if page > 1 %}<a href="?page={{ page - 1 }}" data-testid="page-prev">‹ Prev</a>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a href="?page={{ page + 1 }}" data-testid="page-next">Next ›</a>{% endif %}
+</nav>
+
+<script>
+document.getElementById('check-all')?.addEventListener('change', (e) => {
+  document.querySelectorAll('.row-check').forEach(cb => { cb.checked = e.target.checked; });
+});
+document.getElementById('bulk-form')?.addEventListener('submit', (e) => {
+  const checked = Array.from(document.querySelectorAll('.row-check:checked')).map(cb => cb.value);
+  if (checked.length === 0) return;
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.name = 'ids';
+  hidden.value = checked.join(',');
+  e.target.appendChild(hidden);
+  document.querySelectorAll('.row-check').forEach(cb => cb.disabled = true);
+});
+</script>
+{% endblock %}
