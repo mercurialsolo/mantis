@@ -164,6 +164,12 @@ the runner catches and turns into a clean pause (next).
 
 ### 4. `PauseRequested` + `runner.resume()` — OTP / 2FA / human-in-the-loop ([#73](https://github.com/mercurialsolo/mantis/issues/73))
 
+> **HTTP callers**: the same surface is now wired through `/v1/predict` —
+> see [API / Pause / resume](../api.md#pause-resume) and
+> [Client / Paused runs](../client/runs-and-polling.md#paused-runs).
+> The default `request_user_input` tool below is registered server-side
+> on every detached run; HTTP callers don't need to register it themselves.
+
 ```python
 def request_user_input(args):
     staged = runner.consume_pause_input(default=None)

@@ -65,10 +65,17 @@ class PredictRequest(BaseModel):
     micro_path: Optional[str] = None  # alias for micro
     plan_text: Optional[str] = None
 
-    # Action mode (status / result / logs / cancel for an existing run)
-    action: Optional[Literal["status", "result", "logs", "cancel"]] = None
+    # Action mode (status / result / logs / cancel / resume for an existing run).
+    # ``resume`` (#344) requires ``user_input`` and a paused run; the server
+    # rehydrates the stored PauseState and continues the runner from where
+    # the host tool raised PauseRequested.
+    action: Optional[Literal["status", "result", "logs", "cancel", "resume"]] = None
     run_id: Optional[str] = None
     tail: Optional[int] = Field(default=None, ge=1, le=10000)
+    # Caller-supplied value handed to ``runner.consume_pause_input(...)`` on
+    # resume (OTP code, 2FA token, free-text confirmation, etc.). Opaque
+    # to the server. Required on ``action="resume"``; ignored otherwise.
+    user_input: Optional[Any] = None
 
     # Run options
     detached: bool = True
@@ -141,7 +148,9 @@ class PredictRequest(BaseModel):
         if self.action is not None:
             if not self.run_id:
                 raise ValueError(f"action={self.action!r} requires run_id")
-            return self  # poll/cancel modes don't need a plan
+            if self.action == "resume" and self.user_input is None:
+                raise ValueError("action='resume' requires user_input")
+            return self  # poll/cancel/resume modes don't need a plan
 
         # Run mode: at least one plan-shape must be present
         plan_provided = any(
@@ -347,3 +356,11 @@ class RunStatus(BaseModel):
     finished_at: Optional[str] = None
     summary: Optional[dict[str, Any]] = None
     error: Optional[str] = None
+    # #344: paused-run surface. When ``status == "paused"``, ``prompt`` is
+    # the message the registered tool passed to PauseRequested (e.g. "Enter
+    # the 6-digit code"), ``reason`` is the PauseRequested.reason
+    # ("user_input" by default), and ``pause_state`` is an opaque dict
+    # the caller hands back verbatim on ``action="resume"``.
+    prompt: Optional[str] = None
+    reason: Optional[str] = None
+    pause_state: Optional[dict[str, Any]] = None
