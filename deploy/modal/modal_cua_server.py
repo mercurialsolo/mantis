@@ -45,6 +45,16 @@ from mantis_agent.server_utils import (
 app = modal.App("mantis-cua-server")
 vol = modal.Volume.from_name("osworld-data", create_if_missing=True)
 
+
+# #346: ``add_local_python_source`` only copies ``.py`` files. Every brain
+# imports ``mantis_agent.prompts``, which reads ``prompts/files/*.txt`` at
+# module-init time — missing those data files crashes the container with
+# ``FileNotFoundError`` before the executor runs. Bundle them explicitly
+# wherever we mount ``mantis_agent``.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_PROMPTS_FILES_LOCAL = os.path.join(_REPO_ROOT, "src", "mantis_agent", "prompts", "files")
+_PROMPTS_FILES_REMOTE = "/root/mantis_agent/prompts/files"
+
 # ── Model configs ───────────────────────────────────────────────────
 
 CUA_MODELS = {
@@ -127,7 +137,11 @@ planner_base_image = (
     )
     .pip_install("huggingface-hub[cli]", "requests")
 )
-planner_image = planner_base_image.add_local_python_source("mantis_agent")
+planner_image = (
+    planner_base_image
+    .add_local_python_source("mantis_agent")
+    .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
+)
 
 # EvoCUA executor: vLLM + real Chrome + Xvfb + xdotool (zero automation fingerprints)
 executor_image = (
@@ -149,6 +163,7 @@ executor_image = (
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
     )
     .add_local_python_source("mantis_agent")
+    .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
 )
 
 
@@ -1036,7 +1051,7 @@ def _run_gemma4_cua_executor(
     ).pip_install(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
-    ).add_local_python_source("mantis_agent"),
+    ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours — Gemma4 via llama.cpp is slower per step
@@ -1067,6 +1082,7 @@ claude_executor_image = (
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
     )
     .add_local_python_source("mantis_agent")
+    .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
 )
 
 
@@ -1189,6 +1205,7 @@ api_image = (
         "anthropic",
     )
     .add_local_python_source("mantis_agent")
+    .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
 )
 
 
@@ -1581,7 +1598,7 @@ def api():
     ).pip_install(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
-    ).add_local_python_source("mantis_agent"),
+    ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
@@ -1667,7 +1684,7 @@ def _make_page_task(original_task: dict, worker_id: int, page: int) -> dict:
     ).pip_install(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
-    ).add_local_python_source("mantis_agent"),
+    ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours per page worker
