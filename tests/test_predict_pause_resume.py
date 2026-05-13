@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import threading
 import time
 from pathlib import Path
 from typing import Any
