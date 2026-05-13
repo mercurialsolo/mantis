@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+# ``deploy/modal/modal_cua_server.py`` imports the ``modal`` SDK at module
+# scope. It's a deploy-time dependency, not a test dependency, so CI
+# environments often don't have it installed. Skip cleanly rather than
+# blowing up at collection.
+pytest.importorskip("modal")
+
 from fastapi.testclient import TestClient
 
 from mantis_agent import tenant_auth as ta_mod
