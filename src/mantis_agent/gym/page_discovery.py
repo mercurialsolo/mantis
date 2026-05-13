@@ -131,8 +131,22 @@ class PageElement:
 class PageDiscovery:
     """Discover interactive elements on a page and let the brain choose.
 
+    Two backends are supported:
+
+    1. **Playwright** — pass a Playwright ``Page`` (or an env that
+       exposes one via a ``.page`` attribute). Discovery and click
+       execution use Playwright's native API.
+    2. **CDP** (#300) — pass an env that implements
+       ``cdp_evaluate(expression)`` (e.g.
+       :class:`XdotoolGymEnv`). Discovery and click execution use
+       Chrome DevTools Protocol ``Runtime.evaluate``, so the
+       production xdotool path gets DOM access without spinning up a
+       separate Playwright session.
+
     Args:
         page: Playwright Page object (or env with .page property).
+        env: Env exposing ``.page`` (Playwright) and/or
+            ``cdp_evaluate`` / ``cdp_click_at_point`` (CDP).
         max_elements: Maximum elements to include in the brain prompt.
     """
 
@@ -150,15 +164,38 @@ class PageDiscovery:
             return self._env.page
         return None
 
+    @property
+    def _cdp_capable(self) -> bool:
+        """True iff the env exposes the CDP DOM evaluation shim (#300)."""
+        return self._env is not None and hasattr(self._env, "cdp_evaluate")
+
+    def _evaluate_js(self, expression: str):
+        """Run a JS expression against the active page.
+
+        Prefers Playwright (returns parsed value directly); falls back
+        to CDP ``Runtime.evaluate`` via the env's ``cdp_evaluate`` shim
+        when no Playwright page is wired. Returns ``None`` when neither
+        backend is available.
+        """
+        page = self._page
+        if page is not None:
+            return page.evaluate(expression)
+        if self._cdp_capable:
+            return self._env.cdp_evaluate(expression)
+        return None
+
     def discover(self) -> list[PageElement]:
         """Scan the current page and return all interactive elements."""
-        if self._page is None:
+        if self._page is None and not self._cdp_capable:
             return []
 
         try:
-            raw_elements = self._page.evaluate(DISCOVER_ELEMENTS_JS)
+            raw_elements = self._evaluate_js(DISCOVER_ELEMENTS_JS)
         except Exception as e:
             logger.warning(f"Element discovery failed: {e}")
+            return []
+
+        if not raw_elements:
             return []
 
         elements = []
@@ -247,42 +284,79 @@ If no element matches, reply: NONE"""
         return None
 
     def click_element(self, index: int) -> bool:
-        """Click an element by its discovery index using Playwright."""
+        """Click an element by its discovery index.
+
+        Uses Playwright ``page.mouse.click`` when a Playwright page is
+        wired; otherwise falls back to a CDP-backed click via the env's
+        ``cdp_click_at_point`` shim (#300). Returns ``False`` if neither
+        backend can dispatch.
+        """
         el = self.get_element_by_index(index)
-        if not el or not self._page:
+        if not el:
             return False
 
-        try:
-            # Use bbox center for clicking (most reliable)
-            cx = el.bbox.get("x", 0) + el.bbox.get("w", 0) // 2
-            cy = el.bbox.get("y", 0) + el.bbox.get("h", 0) // 2
-            self._page.mouse.click(cx, cy)
-            return True
-        except Exception as e:
-            logger.warning(f"Click element [{index}] failed: {e}")
-            return False
+        cx = el.bbox.get("x", 0) + el.bbox.get("w", 0) // 2
+        cy = el.bbox.get("y", 0) + el.bbox.get("h", 0) // 2
+
+        page = self._page
+        if page is not None:
+            try:
+                page.mouse.click(cx, cy)
+                return True
+            except Exception as e:
+                logger.warning(f"Click element [{index}] failed: {e}")
+                return False
+        if self._cdp_capable and hasattr(self._env, "cdp_click_at_point"):
+            try:
+                return bool(self._env.cdp_click_at_point(cx, cy))
+            except Exception as e:
+                logger.warning(f"CDP click element [{index}] failed: {e}")
+                return False
+        return False
 
     def type_into_element(self, index: int, text: str) -> bool:
-        """Click an element and type text into it."""
+        """Click an element and type text into it.
+
+        Playwright backend: focuses via ``mouse.click`` + ``keyboard.type``.
+        CDP backend: ``cdp_click_at_point`` to focus, then defers typing
+        to whatever the env exposes (xdotool's _xdotool_type path on
+        :class:`XdotoolGymEnv`). Returns ``False`` when no backend can
+        carry both steps.
+        """
         el = self.get_element_by_index(index)
-        if not el or not self._page:
+        if not el:
             return False
 
-        try:
-            cx = el.bbox.get("x", 0) + el.bbox.get("w", 0) // 2
-            cy = el.bbox.get("y", 0) + el.bbox.get("h", 0) // 2
-            self._page.mouse.click(cx, cy)
+        cx = el.bbox.get("x", 0) + el.bbox.get("w", 0) // 2
+        cy = el.bbox.get("y", 0) + el.bbox.get("h", 0) // 2
 
-            import time
-            time.sleep(0.3)
-
-            # Clear existing value and type new one
-            self._page.keyboard.press("Control+a")
-            self._page.keyboard.type(text)
-            return True
-        except Exception as e:
-            logger.warning(f"Type into element [{index}] failed: {e}")
+        page = self._page
+        if page is not None:
+            try:
+                page.mouse.click(cx, cy)
+                import time
+                time.sleep(0.3)
+                page.keyboard.press("Control+a")
+                page.keyboard.type(text)
+                return True
+            except Exception as e:
+                logger.warning(f"Type into element [{index}] failed: {e}")
+                return False
+        if self._cdp_capable and hasattr(self._env, "cdp_click_at_point"):
+            try:
+                if not self._env.cdp_click_at_point(cx, cy):
+                    return False
+            except Exception as e:
+                logger.warning(f"CDP focus element [{index}] failed: {e}")
+                return False
+            cdp_type = getattr(self._env, "_cdp_insert_text", None)
+            if callable(cdp_type):
+                try:
+                    return bool(cdp_type(text))
+                except Exception as e:
+                    logger.warning(f"CDP type element [{index}] failed: {e}")
             return False
+        return False
 
     def select_option(self, index: int, value: str) -> bool:
         """Select an option in a dropdown element."""

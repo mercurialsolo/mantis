@@ -1561,6 +1561,58 @@ class GymRunner:
                     )
                     gym_result = self.env.step(pre_action)
                     action_history.append(pre_action)
+
+                # #300: SoM-anchored click. When the policy promotes SoM
+                # for unstructured clicks AND the env exposes a CDP
+                # ``cdp_click_at_point`` method, hand the click off to
+                # ``document.elementFromPoint(x,y).click()`` instead of
+                # the xdotool mouse pipeline. Fixes the #88 row-click
+                # failure (xdotool's synthetic ``mousedown`` doesn't
+                # route to React's onClick on some SPAs) without
+                # changing the brain's emitted coordinates.
+                #
+                # Only fires on a plain CLICK that wasn't already
+                # substituted by force-fill / force-submit / loop-recovery
+                # — those carry their own execution semantics.
+                #
+                # On success, the original CLICK is swapped for a brief
+                # WAIT so :meth:`env.step` still runs the settle / capture
+                # loop but doesn't *also* fire the xdotool click. On
+                # failure (no DOM element at (x,y), CDP unreachable, JS
+                # threw) the original action falls through untouched.
+                pending_executor_backend: str = "vision"
+                if (
+                    not substituted_action
+                    and action.action_type == ActionType.CLICK
+                    and getattr(self.routing_policy, "som_for_unstructured_clicks", False)
+                    and hasattr(self.env, "cdp_click_at_point")
+                ):
+                    raw_x = action.params.get("x")
+                    raw_y = action.params.get("y")
+                    if raw_x is not None and raw_y is not None:
+                        try:
+                            cdp_ok = bool(self.env.cdp_click_at_point(
+                                int(raw_x), int(raw_y),
+                            ))
+                        except Exception as exc:
+                            logger.warning("SoM CDP click raised: %s", exc)
+                            cdp_ok = False
+                        if cdp_ok:
+                            logger.info(
+                                "SoM: dispatched CDP click at (%s,%s); "
+                                "swapping xdotool click for no-op wait",
+                                raw_x, raw_y,
+                            )
+                            pending_executor_backend = "som"
+                            action = Action(
+                                ActionType.WAIT,
+                                {"seconds": 0.0},
+                                reasoning=(
+                                    f"SoM: CDP-dispatched click at "
+                                    f"({raw_x},{raw_y})"
+                                ),
+                            )
+
                 gym_result = self.env.step(action)
                 action_history.append(action)
                 for post_action in post_actions:
@@ -1727,7 +1779,7 @@ class GymRunner:
                     done_rejected_reason=pending_done_rejected_reason,
                     action_effect_observed=effect_check.effect_observed,
                     loop_recovery_reason=pending_loop_recovery_reason,
-                    executor_backend="vision",
+                    executor_backend=pending_executor_backend,
                 ))
                 # One-shot: clear so the next step doesn't inherit it.
                 pending_done_rejected_reason = ""

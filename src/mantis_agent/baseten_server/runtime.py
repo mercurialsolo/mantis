@@ -1287,12 +1287,24 @@ class BasetenCUARuntime:
             logger.info("brain: per-request override → synchronous (inner)")
 
         try:
+            # #300: attach :class:`PageDiscovery` whenever the env
+            # exposes the CDP DOM shim (``cdp_evaluate``). The SoM
+            # branch in :meth:`GymRunner.run` only fires when both a
+            # plan-step / site-config opts in AND the runner has a
+            # discovery instance, so attaching it unconditionally is
+            # a no-op on legacy callers but unlocks the plan-step
+            # SoM path on production xdotool.
+            page_discovery: Any = None
+            if hasattr(env, "cdp_evaluate"):
+                from ..gym.page_discovery import PageDiscovery
+                page_discovery = PageDiscovery(env=env)
             runner = GymRunner(
                 brain=brain_for_run,
                 env=env,
                 max_steps=max_steps,
                 frames_per_inference=frames,
                 grounding=None,  # pure CUA: no Claude grounding
+                page_discovery=page_discovery,
             )
             gym_result = runner.run(
                 task=instruction,
