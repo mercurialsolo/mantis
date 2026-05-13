@@ -237,6 +237,37 @@ The same shape is produced by both `mantis plan run` (local) and
 `mantis plan run-modal` (remote) — post-mortem tools can consume one
 schema regardless of where the browser ran.
 
+#### Diagnosing a failed plan
+
+The post-mortem flow starts in `result.json` and falls through to the
+runner logs only when needed:
+
+1. **Read `failure_class` on each failed step.** The class → likely-cause
+   → first-action table is the canonical reference and lives in
+   [Errors / Diagnosing a failed step](../client/errors.md#diagnosing-a-failed-step).
+   `final_url` + `page_title` + `last_action` give you the rest of the
+   step's state at failure time.
+
+2. **Decode `screenshot_b64`** to see what the agent saw:
+
+   ```bash
+   jq -r '.steps[] | select(.success == false) | .screenshot_b64' \
+       outputs/<run>/result.json \
+     | head -1 | base64 -d > failed_step.png
+   ```
+
+3. **Fall through to logs only for `failure_class=unknown`** (or when
+   you need the Holo3 / Claude prompt context, exception traceback,
+   etc.). Two access paths surface the same Python logger output:
+
+   | Audience | How |
+   |---|---|
+   | HTTP API integrator | `{"action":"logs","run_id":"…","tail":500}` — returns the runner thread's `events.log` tail. See [Errors / When `failure_class` isn't enough](../client/errors.md#when-failure_class-isnt-enough). |
+   | Operator (CLI / direct Modal) | `modal app logs mantis-plan-runner` — full container stdout / stderr (covers cases the per-run `events.log` doesn't, e.g. tinyproxy spawn failures or pre-runner Xvfb crashes). |
+
+   `diagnose_proxy` (operator-only) is the proxy-stack-specific fallback —
+   see [Modal hosting / Diagnostics](../hosting/modal.md).
+
 ### `mantis plan run-modal <path>`
 
 Like `plan run`, but the **browser, decomposer, grounding, and
