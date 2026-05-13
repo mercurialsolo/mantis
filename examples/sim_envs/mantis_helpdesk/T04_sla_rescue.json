@@ -1,0 +1,46 @@
+{
+  "task_id": "T04_sla_rescue",
+  "source_plan": "Find every open ticket whose SLA breaches within the next 2 hours (or has already breached). For each, reassign to an active agent in the same group whose current open-ticket count is less than 3. Spread the load — no agent should end with more than 3 of these target tickets.",
+  "domain": "mantis-helpdesk",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the SLA-soon queue at {{ENV_URL}}/tickets?sla_soon=1&status=new,open,pending",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/tickets?sla_soon=1&status=new,open,pending"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "List every ticket in this queue with its group_id. For each group, identify active agents (role=agent, is_active=1, group_id matches) with current open-ticket count < 3.",
+      "section": "analyse",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Reassign each target ticket via {{ENV_URL}}/tickets/<id>/assign with assignee_id=<chosen_agent>. Confirm no single agent receives more than 3 target tickets. Do NOT post any reply during this plan.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/tickets?sla_soon=1&status=new,open,pending"},
+      "hints": {}
+    }
+  ]
+}

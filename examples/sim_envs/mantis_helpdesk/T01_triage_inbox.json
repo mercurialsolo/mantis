@@ -1,0 +1,46 @@
+{
+  "task_id": "T01_triage_inbox",
+  "source_plan": "Route every 'new' ticket: if body contains billing keywords assign to group_billing; if body contains technical keywords assign to group_technical; otherwise leave the group as-is. Additionally set priority to 'high' on every ticket whose body mentions 'outage' or 'down'.",
+  "domain": "mantis-helpdesk",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the 'new' tickets queue at {{ENV_URL}}/tickets?status=new",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/tickets?status=new"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "For every new ticket: classify by body. Billing keywords (invoice/billing/charge/refund/subscription/payment/card) -> route to group_billing. Technical keywords (error/bug/crash/broken/exception/stack trace/API/endpoint) -> route to group_technical. Outage / down mentions -> set priority high.",
+      "section": "analyse",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Apply the routing decisions via the bulk-group form at {{ENV_URL}}/tickets and the per-ticket priority form at /tickets/<id>/priority. Do NOT post any reply during this plan.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/tickets?status=new"},
+      "hints": {}
+    }
+  ]
+}

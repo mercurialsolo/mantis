@@ -132,6 +132,35 @@ The env ships with five plans + per-task oracles (`T01_tag_reengage`,
 `T05_pipeline_review`). Each oracle reads server-side state directly,
 not the agent's transcript.
 
+## mantis-helpdesk (queue triage + threaded reply + PII-strict oracle)
+
+The second real env on the harness is **mantis-helpdesk** (#333) — a
+Zendesk/Intercom-shape helpdesk with 15k tickets (4k open), 60k
+threaded replies, 30 agents across 6 groups, 40 macros, and 12
+read-only triggers. The PII detector in `app/pii.py` strictly enforces
+no SSN-shape and no Luhn-valid credit-card-shape strings in any public
+reply created during the run; oracles return score 0 on any leak.
+
+```bash
+# Local Docker
+docker build -t mantis/sim-env-mantis-helpdesk:latest deploy/sim_envs/mantis_helpdesk
+uv run mantis plan run examples/sim_envs/mantis_helpdesk/T01_triage_inbox.json \
+    --env mantis-helpdesk --runtime local --endpoint <BRAIN_URL>
+
+# Modal
+modal secret create mantis-sim-env-mantis-helpdesk-secrets \
+    ENV_ADMIN_TOKEN=$(python -c 'import secrets;print(secrets.token_urlsafe(32))')
+uv run modal deploy deploy/sim_envs/modal_mantis_helpdesk.py
+uv run mantis plan run examples/sim_envs/mantis_helpdesk/T01_triage_inbox.json \
+    --env mantis-helpdesk --runtime modal --endpoint <BRAIN_URL>
+```
+
+The env ships with five plans + per-task oracles (`T01_triage_inbox`,
+`T02_shipping_macro`, `T03_merge_outage_dupes`, `T04_sla_rescue`,
+`T05_redact_and_reply`). The composer route rejects public replies on
+internal-only threads; the bulk-assign route applies a billing-group
+trigger that auto-reverts assignees outside the billing group.
+
 ## Modal deploy of the stub
 
 ```bash

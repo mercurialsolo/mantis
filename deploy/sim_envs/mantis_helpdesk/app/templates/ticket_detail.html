@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}{{ ticket.subject }} — mantis-helpdesk{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb"><a href="/tickets">Tickets</a></div>
+    <h1 data-testid="ticket-subject">{{ ticket.subject }}</h1>
+    <div class="muted">{{ ticket.id }}{% if ticket.visibility == 'internal' %} · <span class="pill">internal-only thread</span>{% endif %}</div>
+  </div>
+  <span style="margin-left:auto"></span>
+  <span class="status-pill status-{{ ticket.status }}" data-testid="ticket-status">{{ ticket.status }}</span>
+  <span class="priority-pill priority-{{ ticket.priority }}" data-testid="ticket-priority">{{ ticket.priority }}</span>
+  {% if ticket.sla_breach_at and ticket.sla_breach_at <= now %}
+    <span class="sla-badge sla-breached" data-testid="sla-breached">SLA breached</span>
+  {% endif %}
+</div>
+
+<div class="detail-layout">
+  <aside class="right-rail">
+    <div class="panel">
+      <div class="panel-header"><h2>Requester</h2></div>
+      <div class="panel-body">
+        <dl class="kv">
+          <dt>Name</dt><dd data-testid="requester-name">{{ ticket.requester_name }}</dd>
+          <dt>Email</dt><dd data-testid="requester-email">{{ ticket.requester_email }}</dd>
+          <dt>Locale</dt><dd>{{ ticket.requester_locale }}</dd>
+          <dt>Group</dt><dd>{{ ticket.group_id or "—" }}</dd>
+          <dt>Assignee</dt><dd>{{ ticket.assignee_id or "unassigned" }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><h2>Other tickets</h2></div>
+      <div class="panel-body">
+        <ul>
+        {% for ot in other_tickets %}
+          <li><a href="/tickets/{{ ot.id }}">{{ ot.subject }}</a> <span class="muted">({{ ot.status }})</span></li>
+        {% else %}
+          <li class="empty">No other tickets from this requester.</li>
+        {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header"><h2>Quick mutations</h2></div>
+      <div class="panel-body">
+        <form action="/tickets/{{ ticket.id }}/priority" method="post" data-testid="form-priority">
+          <label>Priority</label>
+          <select name="priority">
+            {% for p in ["low","normal","high","urgent"] %}
+              <option value="{{ p }}" {% if ticket.priority == p %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="secondary" data-testid="set-priority">Set</button>
+        </form>
+        <form action="/tickets/{{ ticket.id }}/status" method="post" data-testid="form-status">
+          <label>Status</label>
+          <select name="status">
+            {% for s in ["new","open","pending","solved","closed"] %}
+              <option value="{{ s }}" {% if ticket.status == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="secondary" data-testid="set-status">Set</button>
+        </form>
+        <form action="/tickets/{{ ticket.id }}/group" method="post" data-testid="form-group">
+          <label>Group</label>
+          <select name="group_id">
+            <option value="">—</option>
+            {% for g in groups %}
+              <option value="{{ g.id }}" {% if ticket.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="secondary" data-testid="set-group">Set</button>
+        </form>
+        <form action="/tickets/{{ ticket.id }}/assign" method="post" data-testid="form-assign">
+          <label>Assignee</label>
+          <input type="text" name="assignee_id" value="{{ ticket.assignee_id or '' }}" placeholder="agent_…"/>
+          <button type="submit" class="secondary" data-testid="set-assign">Assign</button>
+        </form>
+        <form action="/tickets/{{ ticket.id }}/tag" method="post" data-testid="form-tag">
+          <label>Add tag</label>
+          <input type="text" name="tag" placeholder="tag"/>
+          <button type="submit" class="secondary" data-testid="add-tag">Add</button>
+        </form>
+        <form action="/tickets/{{ ticket.id }}/merge" method="post" data-testid="form-merge">
+          <label>Merge losers (comma ids)</label>
+          <input type="text" name="loser_ids" placeholder="ticket_…,ticket_…"/>
+          <button type="submit" class="secondary" data-testid="merge-losers">Merge into this</button>
+        </form>
+        <form action="/tickets/{{ ticket.id }}/escalate" method="post" data-testid="form-escalate">
+          <label>Escalate to</label>
+          <input type="text" name="related_id" placeholder="ticket_…"/>
+          <button type="submit" class="secondary" data-testid="escalate-to">Escalate</button>
+        </form>
+      </div>
+    </div>
+  </aside>
+
+  <section>
+    <div class="tabs" data-testid="ticket-tabs">
+      <a class="tab {% if tab == 'thread' %}active{% endif %}" href="?tab=thread" data-testid="tab-thread">Thread</a>
+      <a class="tab {% if tab == 'internal' %}active{% endif %}" href="?tab=internal" data-testid="tab-internal">Internal notes</a>
+      <a class="tab {% if tab == 'related' %}active{% endif %}" href="?tab=related" data-testid="tab-related">Related</a>
+      <a class="tab {% if tab == 'history' %}active{% endif %}" href="?tab=history" data-testid="tab-history">History</a>
+    </div>
+
+    <div class="panel">
+      <div class="panel-body">
+        <div class="ticket-body" data-testid="ticket-body">
+          <strong>Original message</strong>
+          <pre>{{ ticket.body }}</pre>
+        </div>
+
+        {% if tab == 'thread' %}
+        <ul class="timeline" data-testid="public-thread">
+          {% for r in public_thread %}
+            <li>
+              <div class="row1"><span class="activity-type">{{ r.author_id }}</span> <span class="muted">{{ r.created_at }}</span></div>
+              <div class="body">{{ r.body }}</div>
+            </li>
+          {% else %}
+            <li class="empty">No public replies yet.</li>
+          {% endfor %}
+        </ul>
+        {% elif tab == 'internal' %}
+        <ul class="timeline" data-testid="internal-thread">
+          {% for r in internal_thread %}
+            <li class="internal-note">
+              <div class="row1"><span class="activity-type">{{ r.author_id }}</span> · internal · <span class="muted">{{ r.created_at }}</span></div>
+              <div class="body">{{ r.body }}</div>
+            </li>
+          {% else %}
+            <li class="empty">No internal notes yet.</li>
+          {% endfor %}
+        </ul>
+        {% elif tab == 'related' %}
+        <ul class="timeline" data-testid="related-list">
+          {% for r in related %}
+            <li>
+              <a href="/tickets/{{ r.id }}">{{ r.subject }}</a>
+              <span class="muted">· {{ r.relation }} · {{ r.status }}</span>
+            </li>
+          {% else %}
+            <li class="empty">No related tickets.</li>
+          {% endfor %}
+        </ul>
+        {% elif tab == 'history' %}
+        <ul class="timeline" data-testid="history-list">
+          {% for h in history %}
+            <li>
+              <div class="row1"><span class="activity-type">{{ h.operation }}</span> <span class="muted">{{ h.occurred_at }}</span></div>
+              <div class="body muted">{{ h.payload_json }}</div>
+            </li>
+          {% else %}
+            <li class="empty">No history yet.</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+
+        <form class="composer" action="/tickets/{{ ticket.id }}/reply" method="post" data-testid="composer">
+          <div class="composer-row">
+            <label><input type="radio" name="visibility" value="public" checked data-testid="composer-public"/> Public reply</label>
+            <label><input type="radio" name="visibility" value="internal" data-testid="composer-internal"/> Internal note</label>
+          </div>
+          <div class="composer-row">
+            <label>Apply macro</label>
+            <select name="macro_id" data-testid="composer-macro">
+              <option value="">— none —</option>
+              {% for m in macros %}
+                <option value="{{ m.id }}">{{ m.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <textarea name="body" rows="5" placeholder="Type your reply…" data-testid="composer-body"></textarea>
+          <div class="composer-row">
+            <label>CC</label>
+            <input type="text" name="cc" placeholder="emails, comma-separated" data-testid="composer-cc"/>
+            <label>BCC</label>
+            <input type="text" name="bcc" placeholder="emails, comma-separated" data-testid="composer-bcc"/>
+          </div>
+          <div class="composer-row">
+            <button type="submit" data-testid="composer-submit">Send reply</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

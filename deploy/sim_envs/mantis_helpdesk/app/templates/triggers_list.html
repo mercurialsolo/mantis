@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Triggers — mantis-helpdesk{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Knowledge</div>
+    <h1>Triggers</h1>
+  </div>
+</div>
+
+<div class="panel">
+  <table class="data-table" data-testid="triggers-table">
+    <thead><tr><th>ID</th><th>Name</th><th>Active</th><th>Condition</th><th>Action</th></tr></thead>
+    <tbody>
+    {% for t in items %}
+      <tr>
+        <td>{{ t.id }}</td>
+        <td>{{ t.name }} <div class="muted">{{ t.description }}</div></td>
+        <td>{% if t.is_active %}<span class="pill">active</span>{% else %}<span class="muted">off</span>{% endif %}</td>
+        <td><pre>{{ t.condition|tojson }}</pre></td>
+        <td><pre>{{ t.action|tojson }}</pre></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

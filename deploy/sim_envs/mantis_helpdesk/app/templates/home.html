@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Helpdesk dashboard</h1>
+  <span class="muted">{{ now }}</span>
+</div>
+<div class="kpi-grid">
+  <div class="kpi">
+    <div class="label">Open tickets</div>
+    <div class="value">{{ "{:,}".format(open_count) }}</div>
+    <div class="sub"><a href="/tickets?status=new,open,pending">View inbox</a></div>
+  </div>
+  <div class="kpi">
+    <div class="label">SLA breaches</div>
+    <div class="value" data-testid="kpi-breach">{{ "{:,}".format(breach_count) }}</div>
+    <div class="sub"><a href="/tickets?sla_soon=1&status=new,open,pending">Rescue queue</a></div>
+  </div>
+  <div class="kpi">
+    <div class="label">Tickets total</div>
+    <div class="value">{{ "{:,}".format(total) }}</div>
+    <div class="sub"><a href="/reports">Reports</a></div>
+  </div>
+</div>
+<div class="panel" style="margin-top:18px">
+  <div class="panel-header"><h2>Quick links</h2></div>
+  <div class="panel-body">
+    <ul>
+      <li><a href="/tickets?status=new">New tickets to triage</a></li>
+      <li><a href="/tickets?priority=high&status=new,open,pending">High-priority open</a></li>
+      <li><a href="/macros">Macros library</a></li>
+      <li><a href="/triggers">Configured triggers</a></li>
+      <li><a href="/audit">Recent audit activity</a></li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

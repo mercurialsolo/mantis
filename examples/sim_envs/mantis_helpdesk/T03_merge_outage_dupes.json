@@ -1,0 +1,46 @@
+{
+  "task_id": "T03_merge_outage_dupes",
+  "source_plan": "Thirty tickets in the 'new' queue are duplicate reports of the same login outage from different requesters (ticket_07001..ticket_07030). Merge them all into the survivor ticket_07000 and reply publicly on the survivor with the status-page link (https://status.mantis.example/login-outage-2026-01-15).",
+  "domain": "mantis-helpdesk",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the outage cluster at {{ENV_URL}}/tickets?q=outage&status=new to confirm the 30 duplicate reports.",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/tickets?q=outage&status=new"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "Confirm the 30 duplicates are ticket_07001..ticket_07030 and the survivor target is ticket_07000.",
+      "section": "analyse",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "On the survivor at {{ENV_URL}}/tickets/ticket_07000 use the Merge form with loser_ids=ticket_07001,...,ticket_07030 (comma-separated). Then post a public reply on the survivor containing the status page URL https://status.mantis.example/login-outage-2026-01-15.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/tickets/ticket_07000"},
+      "hints": {}
+    }
+  ]
+}

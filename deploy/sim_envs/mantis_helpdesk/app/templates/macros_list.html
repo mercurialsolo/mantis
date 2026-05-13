@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Macros — mantis-helpdesk{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Knowledge</div>
+    <h1>Macros</h1>
+  </div>
+  <span class="muted">{{ macros|length }} listed</span>
+</div>
+
+<form class="filters" method="get" action="/macros" data-testid="macros-filter">
+  <select name="folder" data-testid="filter-folder">
+    <option value="">All folders</option>
+    {% for f in folders %}
+      <option value="{{ f }}" {% if active_folder == f %}selected{% endif %}>{{ f }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Apply</button>
+</form>
+
+<div class="panel">
+  <table class="data-table" data-testid="macros-table">
+    <thead><tr><th>ID</th><th>Name</th><th>Folder</th></tr></thead>
+    <tbody>
+    {% for m in macros %}
+      <tr><td><a href="/macros/{{ m.id }}" data-testid="macro-link-{{ m.id }}">{{ m.id }}</a></td>
+          <td>{{ m.name }}</td><td>{{ m.folder }}</td></tr>
+    {% else %}
+      <tr><td colspan="3" class="empty">No macros.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Reports — mantis-helpdesk{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Reports</h1></div>
+
+<div class="kpi-grid">
+  <div class="kpi"><div class="label">Near SLA breach</div><div class="value" data-testid="kpi-near-breach">{{ near_breach }}</div><div class="sub">within 2h</div></div>
+  <div class="kpi"><div class="label">Already breached</div><div class="value" data-testid="kpi-breached">{{ already_breached }}</div></div>
+  <div class="kpi"><div class="label">Urgent open</div><div class="value">{{ by_priority.urgent or 0 }}</div></div>
+  <div class="kpi"><div class="label">High open</div><div class="value">{{ by_priority.high or 0 }}</div></div>
+</div>
+
+<div class="panel" style="margin-top:18px">
+  <div class="panel-header"><h2>Open tickets by group</h2></div>
+  <div class="panel-body">
+    <table class="data-table" data-testid="open-by-group">
+      <thead><tr><th>Group</th><th>Open</th></tr></thead>
+      <tbody>
+      {% for r in by_group %}
+        <tr><td>{{ r.group_name }}</td><td>{{ "{:,}".format(r.open_count) }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>SLA breach trend</h2></div>
+  <div class="panel-body">
+    <p class="muted">In a real helpdesk this is a chart; here we render the same numbers as a tiny summary.</p>
+    <ul>
+      <li>Near breach (within 2h): <strong>{{ near_breach }}</strong></li>
+      <li>Already breached: <strong>{{ already_breached }}</strong></li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

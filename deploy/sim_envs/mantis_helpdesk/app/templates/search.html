@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Search — mantis-helpdesk{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Search</div>
+    <h1>Results for "{{ q }}"</h1>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>Tickets ({{ tickets|length }})</h2></div>
+  <div class="panel-body">
+    <ul>
+    {% for t in tickets %}
+      <li><a href="/tickets/{{ t.id }}">{{ t.subject }}</a> <span class="muted">· {{ t.status }} · {{ t.priority }}</span></li>
+    {% else %}
+      <li class="empty">No matching tickets.</li>
+    {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>Requesters ({{ requesters|length }})</h2></div>
+  <div class="panel-body">
+    <ul>
+    {% for r in requesters %}
+      <li>{{ r.name }} <span class="muted">· {{ r.email }} · {{ r.id }}</span></li>
+    {% else %}
+      <li class="empty">No matching requesters.</li>
+    {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endblock %}
