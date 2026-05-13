@@ -490,6 +490,7 @@ def run_plan(
     from mantis_agent.extraction import ClaudeExtractor
     from mantis_agent.grounding import ClaudeGrounding
     from mantis_agent.gym.micro_runner import MicroPlanRunner
+    from mantis_agent.gym.result_payload import pack_step as _pack_step
     from mantis_agent.gym.xdotool_env import XdotoolGymEnv
     from mantis_agent.plan_decomposer import MicroPlan, PlanDecomposer
     from mantis_agent.site_config import SiteConfig
@@ -585,17 +586,7 @@ def run_plan(
         "elapsed_seconds": round(elapsed, 2),
         "final_url": final_url,
         "costs": dict(getattr(runner, "costs", {})),
-        "steps": [
-            {
-                "index": r.step_index,
-                "intent": r.intent,
-                "success": r.success,
-                "data": getattr(r, "data", ""),
-                "duration": getattr(r, "duration", 0.0),
-                "steps_used": getattr(r, "steps_used", 0),
-            }
-            for r in step_results
-        ],
+        "steps": [_pack_step(r) for r in step_results],
     }
 
 

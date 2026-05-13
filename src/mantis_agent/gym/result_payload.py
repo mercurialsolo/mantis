@@ -1,0 +1,84 @@
+"""Shared StepResult → result.json serialization.
+
+Both ``mantis plan run`` (local) and ``mantis plan run-modal`` (the
+Modal entrypoint) write a ``result.json`` with a ``steps`` array.
+Keeping the packaging in one place ensures the two paths can't drift —
+a failed step looks the same whether the browser ran on the laptop or
+inside Modal.
+
+Successful steps stay slim (index / intent / success / data / duration
+/ steps_used). Failed steps carry the diagnostics added by the
+executor in :func:`~.run_executor._stamp_failure_context`:
+
+* ``failure_class`` — one of the categories from :mod:`~.failure_class`
+* ``final_url`` — browser URL at the moment of failure
+* ``page_title`` — page title at the moment of failure
+* ``last_action`` — the final :class:`~mantis_agent.actions.Action`
+  dispatched before the step recorded failure
+* ``screenshot_b64`` — base64-encoded PNG of the post-failure
+  viewport, when available
+
+The screenshot is only included on failure to keep success payloads
+small — successful step screenshots already get the per-run keep cap
+enforced by :meth:`MicroPlanRunner._enforce_screenshot_cap`.
+"""
+
+from __future__ import annotations
+
+import base64
+from typing import Any
+
+
+def _as_str(value: Any, default: str = "") -> str:
+    """Coerce optional StepResult fields to a JSON-safe string.
+
+    A real ``StepResult`` populates these fields with strings or empties.
+    Some tests / hosts hand the executor a ``MagicMock`` or a near-duck;
+    coerce defensively so the result payload always round-trips through
+    ``json.dumps``.
+    """
+    return value if isinstance(value, str) else default
+
+
+def pack_step(r: Any) -> dict:
+    payload = {
+        "index": r.step_index,
+        "intent": r.intent,
+        "success": bool(r.success),
+        "data": _as_str(getattr(r, "data", "")),
+        "duration": float(getattr(r, "duration", 0.0)),
+        "steps_used": int(getattr(r, "steps_used", 0)),
+    }
+
+    if payload["success"]:
+        return payload
+
+    payload["final_url"] = _as_str(getattr(r, "final_url", ""))
+    payload["page_title"] = _as_str(getattr(r, "page_title", ""))
+
+    # Honor a runner-stamped class if present; otherwise classify here
+    # as a fallback. This keeps the schema self-describing even when
+    # the StepResult bypassed the executor (host integrations, sim-env
+    # halts, legacy resume paths).
+    failure_class = _as_str(getattr(r, "failure_class", ""))
+    if not failure_class:
+        from .failure_class import classify
+        failure_class = classify(payload["data"], payload["page_title"])
+    payload["failure_class"] = failure_class or "unknown"
+
+    from ..actions import Action
+
+    last_action = getattr(r, "last_action", None)
+    if isinstance(last_action, Action):
+        at = last_action.action_type
+        payload["last_action"] = {
+            "type": getattr(at, "value", str(at)),
+            "params": dict(last_action.params or {}),
+            "reasoning": last_action.reasoning or "",
+        }
+
+    screenshot_png = getattr(r, "screenshot_png", None)
+    if isinstance(screenshot_png, (bytes, bytearray)) and screenshot_png:
+        payload["screenshot_b64"] = base64.b64encode(bytes(screenshot_png)).decode("ascii")
+
+    return payload

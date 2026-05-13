@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..actions import Action, ActionType
 from ..plan_decomposer import MicroIntent
+from . import failure_class as failure_class_mod
 from . import step_snapshot
 from .checkpoint import RunCheckpoint, StepResult
 
@@ -342,6 +343,8 @@ class RunExecutor:
             runner._active_checkpoint_context = None
         if step_result.screenshot_png is None:
             step_result.screenshot_png = runner._capture_screenshot_bytes()
+        if not step_result.success:
+            _stamp_failure_context(step_result, runner.env)
         state.results.append(step_result)
         runner._enforce_screenshot_cap(state.results)
         runner._invoke_step_callback(step_result)
@@ -778,6 +781,33 @@ class RunExecutor:
             if plan.steps[j].type == step_type:
                 return j
         return None
+
+
+# ── Failure diagnostics ────────────────────────────────────────────────
+
+
+def _stamp_failure_context(step_result: StepResult, env: Any) -> None:
+    """Snapshot URL + page title + failure class onto a failed StepResult.
+
+    Best-effort: every probe is wrapped in ``try/except`` because the
+    failure path must not raise — even if CDP is unreachable or the
+    Playwright page is in a half-torn-down state, the StepResult still
+    needs to land.
+    """
+    try:
+        url, title = failure_class_mod.read_failure_context(env)
+    except Exception as exc:
+        logger.debug("failure context probe raised: %s", exc)
+        url, title = "", ""
+    step_result.final_url = url
+    step_result.page_title = title
+    try:
+        step_result.failure_class = failure_class_mod.classify(
+            step_result.data or "", title,
+        )
+    except Exception as exc:
+        logger.debug("failure classifier raised: %s", exc)
+        step_result.failure_class = "unknown"
 
 
 # ── #156 per-action observability ──────────────────────────────────────

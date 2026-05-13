@@ -195,6 +195,48 @@ Key flags:
 Exit code is 0 if every step succeeded, 1 if any failed or the runner
 raised. Useful as a CI gate against staging endpoints.
 
+#### `result.json` schema
+
+```jsonc
+{
+  "plan_signature": "abc12345",
+  "session": "staff-crm",
+  "step_count": 14,
+  "successes": 12,
+  "failures": 2,
+  "elapsed_seconds": 732.4,
+  "final_url": "https://crm.example.test/leads",
+  "costs": { "claude_extract": 0.13, "gpu_steps": 47 },
+  "steps": [
+    { "index": 0, "intent": "Navigate…", "success": true,
+      "data": "", "duration": 3.2, "steps_used": 1 },
+    { "index": 7, "intent": "Fill the search field", "success": false,
+      "data": "fill_error: input not found",
+      "duration": 12.4, "steps_used": 8,
+      "failure_class": "selector_miss",
+      "final_url": "https://crm.example.test/leads",
+      "page_title": "Leads — CRM",
+      "last_action": { "type": "click", "params": {"x": 220, "y": 140},
+                       "reasoning": "click search input" },
+      "screenshot_b64": "<base64 PNG of the post-failure viewport>" }
+  ]
+}
+```
+
+Failed steps additionally carry:
+
+| Field | Meaning |
+|---|---|
+| `failure_class` | One of `cf_challenge` / `http_4xx` / `http_5xx` / `nav_timeout` / `selector_miss` / `extractor_error` / `budget_exceeded` / `unknown`. Branch on this in dashboards instead of regex-ing `data`. |
+| `final_url` | Browser URL at the moment of failure (best-effort; empty on env teardown). |
+| `page_title` | Page title at the moment of failure. CF interstitials surface here even when `data` is empty. |
+| `last_action` | The final `Action` dispatched before the step recorded failure (`{type, params, reasoning}`). Omitted when no action ran. |
+| `screenshot_b64` | Base64-encoded PNG of the post-failure viewport. Omitted on success and when capture failed. |
+
+The same shape is produced by both `mantis plan run` (local) and
+`mantis plan run-modal` (remote) — post-mortem tools can consume one
+schema regardless of where the browser ran.
+
 ### `mantis plan run-modal <path>`
 
 Like `plan run`, but the **browser, decomposer, grounding, and
