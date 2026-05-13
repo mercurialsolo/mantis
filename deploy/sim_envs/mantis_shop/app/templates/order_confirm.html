@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Order {{ order.number }} — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Checkout / confirmation</div>
+    <h1>Order {{ order.number }} placed</h1>
+  </div>
+  <span class="pill status-paid">paid</span>
+</div>
+<div class="panel">
+  <div class="panel-body">
+    <p class="muted">Thanks. Order ID: <strong>{{ order.id }}</strong>. Total ${{ "%.2f"|format(order.total) }}.</p>
+    <table class="data-table">
+      <thead><tr><th>Line</th><th>Title</th><th>SKU</th><th>Qty</th><th>Unit</th></tr></thead>
+      <tbody>
+        {% for it in items %}
+          <tr>
+            <td>{{ it.line_no }}</td>
+            <td>{{ it.title }}</td>
+            <td>{{ it.sku }}</td>
+            <td>{{ it.quantity }}</td>
+            <td>${{ "%.2f"|format(it.unit_price) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <a href="/catalog">Continue shopping</a>
+  </div>
+</div>
+{% endblock %}

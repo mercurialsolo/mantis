@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ product.title }} — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb"><a href="/catalog">Catalog</a> / {{ product.category }}</div>
+    <h1>{{ product.title }}</h1>
+  </div>
+  <span class="pill">★ {{ product.rating }}</span>
+</div>
+
+{% if error %}
+  <div class="alert" data-testid="pdp-error">{{ error }}</div>
+{% endif %}
+
+<div class="pdp-layout">
+  <div class="pdp-img">
+    {% if product.image_url %}<span class="muted">image at {{ product.image_url }}</span>{% else %}<span class="muted">no image (intentional in seed)</span>{% endif %}
+  </div>
+  <div class="pdp-body">
+    <div class="muted">{{ product.sku }}</div>
+    <div class="pdp-price">
+      {% if product.sale_price %}
+        <span class="sale">${{ "%.2f"|format(product.sale_price) }}</span>
+        <span class="strike">${{ "%.2f"|format(product.base_price) }}</span>
+      {% else %}
+        <span>${{ "%.2f"|format(product.base_price) }}</span>
+      {% endif %}
+    </div>
+    <p class="pdp-desc">{{ product.description_md }}</p>
+
+    <form method="post" action="/cart/add" data-testid="pdp-add-form">
+      <div class="variant-picker" data-testid="variant-picker">
+        <label class="muted">Variant</label>
+        <select name="variant_id" data-testid="variant-select">
+          {% for v in variants %}
+            <option value="{{ v.id }}" {% if v.stock == 0 %}disabled{% endif %} data-testid="variant-opt-{{ v.size }}-{{ v.color }}">
+              Size {{ v.size }} · {{ v.color }}{% if v.stock == 0 %} (out of stock){% endif %}{% if v.locked_regions %} (no ship: {{ v.locked_regions|join(', ') }}){% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="composer-row" style="margin-top:8px">
+        <label class="muted">Quantity</label>
+        <input type="number" name="quantity" value="1" min="1" max="20" data-testid="qty-input"/>
+        <button type="submit" data-testid="add-to-cart">Add to cart</button>
+      </div>
+    </form>
+
+    <details style="margin-top:12px">
+      <summary class="muted">Variant matrix (in-stock + shippability)</summary>
+      <table class="data-table" data-testid="variant-matrix">
+        <thead><tr><th>SKU</th><th>Size</th><th>Color</th><th>Stock</th><th>No-ship regions</th></tr></thead>
+        <tbody>
+          {% for v in variants %}
+            <tr>
+              <td>{{ v.sku }}</td>
+              <td>{{ v.size }}</td>
+              <td>{{ v.color }}</td>
+              <td>{{ v.stock }}</td>
+              <td>{{ v.locked_regions|join(', ') or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  </div>
+</div>
+{% endblock %}

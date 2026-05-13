@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Checkout — address — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Checkout</h1>
+</div>
+{% include "_checkout_steps.html" %}
+
+{% if error %}
+  <div class="alert" data-testid="address-error">{{ error }}</div>
+{% endif %}
+
+<div class="panel">
+  <div class="panel-header"><h2>Shipping address</h2></div>
+  <div class="panel-body">
+    <form method="post" action="/checkout/address" data-testid="address-form">
+      <div class="muted">Choose a saved address:</div>
+      <div class="saved-addresses">
+        {% for a in saved_addresses %}
+          <label class="address-card" data-testid="saved-{{ a.id }}">
+            <input type="radio" name="saved_address_id" value="{{ a.id }}" {% if a.is_default %}checked{% endif %}/>
+            <div>
+              <div><strong>{{ a.line1 }}</strong></div>
+              <div class="muted">{{ a.city }}, {{ a.region }} {{ a.zip }}</div>
+            </div>
+          </label>
+        {% endfor %}
+      </div>
+      <details style="margin-top:14px">
+        <summary class="muted">Or enter a new address</summary>
+        <div class="address-fields" style="margin-top:8px">
+          <input type="text" name="line1" placeholder="Street address" data-testid="addr-line1"/>
+          <input type="text" name="city" placeholder="City" data-testid="addr-city"/>
+          <input type="text" name="region" placeholder="State (2 letters)" maxlength="2" data-testid="addr-region"/>
+          <input type="text" name="zip" placeholder="ZIP" data-testid="addr-zip"/>
+        </div>
+      </details>
+      <div style="margin-top:14px">
+        <button type="submit" data-testid="address-continue">Continue to shipping →</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

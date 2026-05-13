@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Checkout — shipping — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Checkout</h1></div>
+{% include "_checkout_steps.html" %}
+
+<div class="panel">
+  <div class="panel-header"><h2>Shipping method</h2></div>
+  <div class="panel-body">
+    <form method="post" action="/checkout/shipping" data-testid="shipping-form">
+      {% for m in methods %}
+        <label class="shipping-option" data-testid="ship-{{ m.code }}">
+          <input type="radio" name="method" value="{{ m.code }}" {% if loop.first %}checked{% endif %}/>
+          <span>{{ m.label }}</span>
+          <span class="muted">+ ${{ "%.2f"|format(m.price) }}</span>
+        </label>
+      {% endfor %}
+      <div style="margin-top:14px">
+        <a href="/checkout/address"><button type="button" class="secondary">← Back</button></a>
+        <button type="submit" data-testid="shipping-continue">Continue to payment →</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

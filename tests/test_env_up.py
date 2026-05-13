@@ -73,13 +73,17 @@ def test_local_backend_starts_and_stops_stub_env():
 
 
 def test_local_backend_two_starts_get_distinct_urls():
+    # Two subprocess stubs in parallel under a loaded CI runner can take
+    # noticeably longer than the 10s ceiling used elsewhere — bump to 30s
+    # so the test reflects the same budget the default ``wait_healthy``
+    # uses in production.
     backend = LocalBackend()
     h1 = backend.start("stub-test")
     h2 = backend.start("stub-test")
     try:
         assert h1.url != h2.url
-        backend.wait_healthy(h1, timeout_s=10.0)
-        backend.wait_healthy(h2, timeout_s=10.0)
+        backend.wait_healthy(h1, timeout_s=30.0)
+        backend.wait_healthy(h2, timeout_s=30.0)
     finally:
         backend.stop(h1)
         backend.stop(h2)

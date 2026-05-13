@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Orders — admin — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Admin / Orders</div>
+    <h1>Orders</h1>
+  </div>
+  <span class="muted">{{ "{:,}".format(total) }} total · page {{ page }}/{{ pages }}</span>
+</div>
+
+<form class="filters" method="get" action="/admin/orders" data-testid="orders-filter">
+  <select name="status" data-testid="filter-status">
+    <option value="">All statuses</option>
+    {% for s in ["paid", "fulfilled", "refunded", "cancelled"] %}
+      <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="coupon" value="{{ filters.coupon }}" placeholder="Coupon code (e.g. BOGO)" data-testid="filter-coupon"/>
+  <input type="text" name="customer" value="{{ filters.customer }}" placeholder="Customer ID" data-testid="filter-customer"/>
+  <input type="text" name="since_days" value="{{ filters.since_days }}" placeholder="Last N days" data-testid="filter-since"/>
+  <button type="submit" data-testid="filter-apply">Apply</button>
+</form>
+
+<div class="panel">
+  <form id="orders-bulk" action="/admin/orders/bulk/add_to_view" method="post" data-testid="orders-bulk-form">
+    <table class="data-table" data-testid="orders-table">
+      <thead>
+        <tr>
+          <th class="check-col"><input type="checkbox" id="check-all" data-testid="check-all"/></th>
+          <th>Order</th><th>Status</th><th>Customer</th><th>Total</th><th>Coupons</th><th>Placed</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in orders %}
+          <tr data-testid="order-row" data-order-id="{{ o.id }}">
+            <td><input type="checkbox" name="ids" value="{{ o.id }}" class="row-check" data-testid="check-{{ o.id }}"/></td>
+            <td><a href="/admin/orders/{{ o.id }}" data-testid="order-link-{{ o.id }}">{{ o.number }}</a><div class="muted">{{ o.id }}</div></td>
+            <td><span class="pill status-{{ o.status }}">{{ o.status }}</span></td>
+            <td>{{ o.customer_id }}</td>
+            <td>${{ "%.2f"|format(o.total) }}</td>
+            <td>{{ o.coupon_codes }}</td>
+            <td class="muted">{{ o.placed_at }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="7" class="empty">No orders match these filters.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="bulk-actions">
+      <span class="muted">Bulk: add selected to saved view</span>
+      <select name="view_id" data-testid="bulk-view-select">
+        {% for v in saved_views %}
+          <option value="{{ v.id }}">{{ v.title }} ({{ v.id }})</option>
+        {% endfor %}
+      </select>
+      <button type="submit" data-testid="bulk-add-to-view">Add to view</button>
+    </div>
+  </form>
+</div>
+
+<nav class="pagination">
+  {% if page > 1 %}
+    <a href="?{% if filters.status %}status={{ filters.status }}&{% endif %}{% if filters.coupon %}coupon={{ filters.coupon }}&{% endif %}{% if filters.customer %}customer={{ filters.customer }}&{% endif %}{% if filters.since_days %}since_days={{ filters.since_days }}&{% endif %}page={{ page - 1 }}" data-testid="page-prev">‹ Prev</a>
+  {% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}
+    <a href="?{% if filters.status %}status={{ filters.status }}&{% endif %}{% if filters.coupon %}coupon={{ filters.coupon }}&{% endif %}{% if filters.customer %}customer={{ filters.customer }}&{% endif %}{% if filters.since_days %}since_days={{ filters.since_days }}&{% endif %}page={{ page + 1 }}" data-testid="page-next">Next ›</a>
+  {% endif %}
+</nav>
+
+<script>
+document.getElementById('check-all')?.addEventListener('change', (e) => {
+  document.querySelectorAll('.row-check').forEach(cb => { cb.checked = e.target.checked; });
+});
+document.getElementById('orders-bulk')?.addEventListener('submit', (e) => {
+  const checked = Array.from(document.querySelectorAll('.row-check:checked')).map(cb => cb.value);
+  if (checked.length === 0) return;
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden'; hidden.name = 'ids'; hidden.value = checked.join(',');
+  e.target.appendChild(hidden);
+  document.querySelectorAll('.row-check').forEach(cb => cb.disabled = true);
+});
+</script>
+{% endblock %}

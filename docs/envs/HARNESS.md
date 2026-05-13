@@ -161,6 +161,38 @@ The env ships with five plans + per-task oracles (`T01_triage_inbox`,
 internal-only threads; the bulk-assign route applies a billing-group
 trigger that auto-reverts assignees outside the billing group.
 
+## mantis-shop (Shopify-shape storefront + admin)
+
+The third env on the harness is **mantis-shop** (#334) — a
+Shopify-shape storefront with PDP variant pickers, multi-step
+checkout, and an admin surface for orders/products/coupons. 2,000
+products with a size/color variant matrix, 5,000 historical orders,
+3,000 customers + saved addresses + mocked payment methods, 40
+collections, 15 coupons (pct / amount / BOGO), and a deliberate
+"looks-stackable-but-server-rejects" coupon pair the agent must
+respect.
+
+```bash
+# Local Docker
+docker build -t mantis/sim-env-mantis-shop:latest deploy/sim_envs/mantis_shop
+uv run mantis plan run examples/sim_envs/mantis_shop/T01_buy_jacket.json \
+    --env mantis-shop --runtime local --endpoint <BRAIN_URL>
+
+# Modal
+modal secret create mantis-sim-env-mantis-shop-secrets \
+    ENV_ADMIN_TOKEN=$(python -c 'import secrets;print(secrets.token_urlsafe(32))')
+uv run modal deploy deploy/sim_envs/modal_mantis_shop.py
+uv run mantis plan run examples/sim_envs/mantis_shop/T01_buy_jacket.json \
+    --env mantis-shop --runtime modal --endpoint <BRAIN_URL>
+```
+
+The env ships with five plans + per-task oracles (`T01_buy_jacket`,
+`T02_refund_line_item`, `T03_create_coupon`, `T04_export_bogo_orders`,
+`T05_inventory_adjust`). Server-side constraints (variant stock,
+region locks, coupon stacking, ZIP validation) are all enforced in
+FastAPI handlers — the agent cannot bypass them via JS-only checks
+or DOM manipulation.
+
 ## Modal deploy of the stub
 
 ```bash

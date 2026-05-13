@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Products — admin — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Admin / Products</div>
+    <h1>Products</h1>
+  </div>
+  <span class="muted">{{ "{:,}".format(total) }} total · page {{ page }}/{{ pages }}</span>
+</div>
+
+<form class="filters" method="get" action="/admin/products" data-testid="products-filter">
+  <input type="text" name="q" value="{{ filters.q }}" placeholder="title or SKU" class="grow" data-testid="filter-q"/>
+  <input type="text" name="category" value="{{ filters.category }}" placeholder="category slug" data-testid="filter-category"/>
+  <button type="submit">Apply</button>
+</form>
+
+<div class="panel">
+  <div class="panel-header">
+    <h2>Inventory adjust by SKU</h2>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="/admin/products/inventory/adjust_by_sku" class="composer-row" data-testid="inv-adjust-form">
+      <input type="text" name="sku" placeholder="SKU (e.g. TEE-BLK-M)" data-testid="adjust-sku"/>
+      <input type="number" name="delta" placeholder="delta (e.g. 50)" data-testid="adjust-delta"/>
+      <input type="text" name="reason" placeholder="Reason" style="flex:1" data-testid="adjust-reason"/>
+      <button type="submit" data-testid="adjust-submit">Adjust inventory</button>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <table class="data-table" data-testid="products-table">
+    <thead><tr><th>ID</th><th>SKU</th><th>Title</th><th>Category</th><th>Base</th><th>Sale</th></tr></thead>
+    <tbody>
+      {% for p in products %}
+        <tr><td><a href="/admin/products/{{ p.id }}">{{ p.id }}</a></td>
+          <td>{{ p.sku }}</td>
+          <td>{{ p.title }}</td>
+          <td>{{ p.category }}</td>
+          <td>${{ "%.2f"|format(p.base_price) }}</td>
+          <td>{% if p.sale_price %}${{ "%.2f"|format(p.sale_price) }}{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<nav class="pagination">
+  {% if page > 1 %}
+    <a href="?{% if filters.q %}q={{ filters.q }}&{% endif %}{% if filters.category %}category={{ filters.category }}&{% endif %}page={{ page - 1 }}">‹ Prev</a>
+  {% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}
+    <a href="?{% if filters.q %}q={{ filters.q }}&{% endif %}{% if filters.category %}category={{ filters.category }}&{% endif %}page={{ page + 1 }}">Next ›</a>
+  {% endif %}
+</nav>
+{% endblock %}

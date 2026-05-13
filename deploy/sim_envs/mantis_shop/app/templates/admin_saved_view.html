@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ view.title }} — saved view — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Admin / Saved views / {{ view.id }}</div>
+    <h1>{{ view.title }}</h1>
+  </div>
+  <span class="muted">{{ members|length }} order{% if members|length != 1 %}s{% endif %}</span>
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>Add order to this view</h2></div>
+  <div class="panel-body">
+    <form method="post" action="/admin/saved_views/{{ view.id }}/add" class="composer-row" data-testid="view-add-form">
+      <input type="text" name="order_id" placeholder="order_xxxxx" data-testid="view-add-order"/>
+      <button type="submit" data-testid="view-add-submit">Add</button>
+    </form>
+    <div class="muted" style="margin-top:6px">{{ view.description }}</div>
+  </div>
+</div>
+
+<div class="panel">
+  <table class="data-table" data-testid="view-members-table">
+    <thead><tr><th>Order</th><th>Status</th><th>Total</th><th>Coupons</th><th>Placed</th></tr></thead>
+    <tbody>
+      {% for o in members %}
+        <tr data-testid="view-member-{{ o.id }}">
+          <td><a href="/admin/orders/{{ o.id }}">{{ o.number }}</a><div class="muted">{{ o.id }}</div></td>
+          <td><span class="pill status-{{ o.status }}">{{ o.status }}</span></td>
+          <td>${{ "%.2f"|format(o.total) }}</td>
+          <td>{{ o.coupon_codes }}</td>
+          <td class="muted">{{ o.placed_at }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">No orders in this view yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

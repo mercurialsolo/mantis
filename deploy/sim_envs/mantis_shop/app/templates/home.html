@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Welcome to mantis-shop</h1>
+  <span class="muted">{{ now }}</span>
+</div>
+<div class="kpi-grid">
+  <div class="kpi">
+    <div class="label">Products</div>
+    <div class="value">{{ "{:,}".format(product_count) }}</div>
+    <div class="sub"><a href="/catalog">Browse</a></div>
+  </div>
+  <div class="kpi">
+    <div class="label">Orders</div>
+    <div class="value">{{ "{:,}".format(order_count) }}</div>
+    <div class="sub"><a href="/admin/orders">Orders admin</a></div>
+  </div>
+  <div class="kpi">
+    <div class="label">Customers</div>
+    <div class="value">{{ "{:,}".format(customer_count) }}</div>
+    <div class="sub muted">accounts</div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:18px">
+  <div class="panel-header"><h2>Featured (on sale)</h2></div>
+  <div class="panel-body">
+    <div class="product-grid">
+      {% for p in featured %}
+        <a class="product-card" href="/products/{{ p.id }}" data-testid="featured-{{ p.id }}">
+          <div class="product-card-img">
+            {% if p.image_url %}<span class="muted">image</span>{% else %}<span class="muted">no image</span>{% endif %}
+          </div>
+          <div class="product-card-title">{{ p.title }}</div>
+          <div class="product-card-price">
+            <span class="sale">${{ "%.2f"|format(p.sale_price) }}</span>
+            <span class="strike">${{ "%.2f"|format(p.base_price) }}</span>
+          </div>
+        </a>
+      {% else %}
+        <div class="empty">No sale products at the moment.</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

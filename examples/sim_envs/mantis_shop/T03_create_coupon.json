@@ -1,0 +1,33 @@
+{
+  "task_id": "T03_create_coupon",
+  "source_plan": "Create a 20%-off coupon for category outerwear-women expiring 2026-02-15, max 100 uses.",
+  "domain": "mantis-shop",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the admin coupons page at {{ENV_URL}}/admin/coupons.",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/admin/coupons"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Submit the create-coupon form with code (any new code, e.g. WINTER20OUTER), kind=pct, value=20, scope_category=outerwear-women, stackable unchecked, expires_at=2026-02-15, max_uses=100.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

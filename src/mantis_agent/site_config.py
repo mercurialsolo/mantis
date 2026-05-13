@@ -194,6 +194,43 @@ class SiteConfig:
         )
 
     @classmethod
+    def default_mantis_shop(cls) -> SiteConfig:
+        """Patterns for the mantis-shop simulated env (#334).
+
+        URL shape:
+
+        * ``/catalog``                 — paginated product grid (results)
+        * ``/products/<product_id>``   — PDP (detail)
+        * ``/admin/orders``            — paginated orders list (results)
+        * ``/admin/orders/<order_id>`` — order detail
+        * ``/admin/products``,
+          ``/admin/products/<product_id>`` — admin product editor
+        * ``/admin/coupons``           — coupon list/create
+        * Pagination on every list view is ``?page=N``.
+
+        The gate-verify prompt nudges the runner toward Shopify-shape
+        catalog filter confirmation ("page shows N products filtered by
+        …"). Storefront and admin share the prompt — both surfaces are
+        list+detail underneath.
+        """
+        return cls(
+            domain="mantis-shop",
+            detail_page_pattern=(
+                r"/(products|admin/orders|admin/products|admin/saved_views"
+                r"|admin/coupons)/[\w_-]+$"
+            ),
+            results_page_pattern=(
+                r"/(catalog|cart|admin/orders|admin/products|admin/coupons)/?$"
+            ),
+            pagination_format="page={n}",
+            pagination_type="query_param",
+            pagination_strip_pattern=r"[?&]page=\d+",
+            gate_verify_prompt=(
+                "Page is a shop list view filtered by these active criteria: "
+            ),
+        )
+
+    @classmethod
     def default_boattrader(cls) -> SiteConfig:
         """The current hardcoded BoatTrader patterns for backward compatibility."""
         return cls(
