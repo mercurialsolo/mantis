@@ -27,8 +27,10 @@ Tracking issue: [#311](https://github.com/mercurialsolo/mantis/issues/311).
   configs don't share a browser.
 
 Cross-tenant isolation is preserved because the profile_dir is
-tenant-scoped (`tenants/<tenant_id>/chrome-profile/<safe_state_key>`)
-and tenant requests will mismatch on the first key component.
+tenant-scoped (`tenants/<tenant_id>/chrome-profile/<safe_profile_id>`,
+keyed by `profile_id` since #341 — fallback to legacy `state_key` when
+`profile_id` is not set) and tenant requests will mismatch on the first
+key component.
 
 ## Lifecycle
 

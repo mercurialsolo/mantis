@@ -566,6 +566,8 @@ class BasetenCUARuntime:
             max_time_minutes=int(payload.get("max_time_minutes", 180)),
             resume_state=bool(payload.get("resume_state", False)),
             state_key=str(payload.get("state_key") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            workflow_id=str(payload.get("workflow_id") or ""),
             checkpoint_dir=str(data_root / "checkpoints"),
             proxy_city=str(payload.get("proxy_city") or os.environ.get("MANTIS_PROXY_CITY", "")),
             proxy_state=str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
@@ -654,6 +656,8 @@ class BasetenCUARuntime:
             max_time_minutes=int(payload.get("max_time_minutes", 180)),
             resume_state=bool(payload.get("resume_state", False)),
             state_key=str(payload.get("state_key") or ""),
+            profile_id=str(payload.get("profile_id") or ""),
+            workflow_id=str(payload.get("workflow_id") or ""),
             checkpoint_dir=str(data_root / "checkpoints"),
             proxy_city=str(payload.get("proxy_city") or os.environ.get("MANTIS_PROXY_CITY", "")),
             proxy_state=str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
@@ -1030,13 +1034,15 @@ class BasetenCUARuntime:
                     som_for_unstructured_clicks=bool(som_override),
                 )
 
+            workflow_id = task_suite.get("_workflow_id") or task_suite.get("_state_key", "")
+            profile_id = task_suite.get("_profile_id") or task_suite.get("_state_key", "")
             runner = MicroPlanRunner(
                 brain=self.brain,
                 env=env,
                 grounding=grounding,
                 extractor=extractor,
                 checkpoint_path=checkpoint_path,
-                run_key=task_suite.get("_state_key", session_name),
+                run_key=workflow_id or session_name,
                 session_name=session_name,
                 plan_signature=task_suite.get("_plan_signature", ""),
                 resume_state=resume_state,
@@ -1060,6 +1066,8 @@ class BasetenCUARuntime:
                 model_name=self.model_kind,
                 elapsed_seconds=time.time() - t0,
                 state_key=task_suite.get("_state_key", ""),
+                profile_id=profile_id,
+                workflow_id=workflow_id,
                 checkpoint_path=checkpoint_path,
                 plan_signature=task_suite.get("_plan_signature", ""),
                 resume_state=resume_state,

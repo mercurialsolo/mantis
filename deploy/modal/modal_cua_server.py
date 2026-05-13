@@ -667,13 +667,16 @@ def _run_holo3_executor(
 
         resume_state = bool(task_suite.get("_resume_state", False))
         state_key = task_suite.get("_state_key", "")
+        profile_id = task_suite.get("_profile_id", state_key)
+        workflow_id = task_suite.get("_workflow_id", state_key)
         checkpoint_path = task_suite.get("_checkpoint_path") or f"/data/checkpoints/micro_{session_name}_{run_id}.json"
         plan_signature = task_suite.get("_plan_signature", "")
 
         print(f"\n  === MICRO-INTENT MODE ({len(micro_plan.steps)} steps) ===")
         print(micro_plan.summary())
-        if state_key:
-            print(f"  State key:  {state_key}")
+        if profile_id or workflow_id:
+            print(f"  Profile:    {profile_id}")
+            print(f"  Workflow:   {workflow_id}")
             print(f"  Resume:     {'on' if resume_state else 'off'}")
             print(f"  Checkpoint: {checkpoint_path}")
 
@@ -682,7 +685,7 @@ def _run_holo3_executor(
             grounding=grounding, extractor=extractor,
             on_step=viewer_event_bus.emit if viewer_event_bus else None,
             checkpoint_path=checkpoint_path,
-            run_key=state_key or session_name,
+            run_key=workflow_id or session_name,
             session_name=session_name,
             plan_signature=plan_signature,
             resume_state=resume_state,
@@ -703,6 +706,8 @@ def _run_holo3_executor(
             model_name="Holo3-35B-A3B (micro)",
             elapsed_seconds=time.time() - t0,
             state_key=state_key,
+            profile_id=profile_id,
+            workflow_id=workflow_id,
             checkpoint_path=checkpoint_path,
             plan_signature=plan_signature,
             resume_state=resume_state,
@@ -731,6 +736,8 @@ def _run_holo3_executor(
             "viable": viable,
             "steps": result["steps_executed"],
             "state_key": state_key,
+            "profile_id": profile_id,
+            "workflow_id": workflow_id,
             "checkpoint_path": checkpoint_path,
             "status": result.get("costs", {}).get("status", ""),
             "dynamic_verification_summary": result.get("dynamic_verification_summary"),
@@ -1340,6 +1347,8 @@ def main(
     max_time_minutes: int = 180,
     resume_state: bool = False,
     state_key: str = "",
+    profile_id: str = "",
+    workflow_id: str = "",
     graph_learn: bool = False,
     graph_learn_only: bool = False,
     proxy_provider: str = "oxylabs",
@@ -1365,7 +1374,8 @@ def main(
     Learning: --learn --learn-samples 5   (build site playbook from N samples)
     Verification: --verify   (enable step verification during execution)
     Micro: --micro plan.txt   (decompose → micro-intents → execute with checkpoint/reverse)
-    Resume: --resume-state --state-key my-run   (reuse externalized micro state across sessions)
+    Resume: --resume-state --workflow-id my-run   (reuse externalized micro state across sessions)
+            --profile-id alice-prod  (Chrome user-data-dir identity, sticky across plan revisions, #341)
     Graph: --graph-learn   (probe + graph + compile + execute) --graph-learn-only (no execution)
     Proxy: --proxy-provider privateproxy|oxylabs|iproyal --proxy-city miami --proxy-state florida
     """
@@ -1527,12 +1537,14 @@ def main(
             max_time_minutes=max_time_minutes,
             resume_state=resume_state,
             state_key=state_key,
+            profile_id=profile_id,
+            workflow_id=workflow_id,
             objective=objective_dict,
         )
-        resolved_state_key = task_suite["_state_key"]
 
-        print(f"  State:   {resolved_state_key}")
-        print(f"  Resume:  {'on' if resume_state else 'off'}")
+        print(f"  Profile:  {task_suite['_profile_id']}")
+        print(f"  Workflow: {task_suite['_workflow_id']}")
+        print(f"  Resume:   {'on' if resume_state else 'off'}")
 
         task_file_contents = json.dumps(task_suite)
 

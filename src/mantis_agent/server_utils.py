@@ -338,9 +338,50 @@ def plan_signature_from_steps(steps: list[dict[str, Any]]) -> str:
 
 
 def safe_state_key(raw: str) -> str:
-    """Sanitize a string into a safe filesystem/state key."""
+    """Sanitize a string into a safe filesystem/state key.
+
+    Despite the legacy name, this is now used for ``profile_id``,
+    ``workflow_id``, ``tenant_id``, and any other identifier that lands on
+    disk. Kept as ``safe_state_key`` for back-compat with all existing
+    callers; new code can call it whatever fits semantically.
+    """
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._")
     return cleaned or "micro_state"
+
+
+def resolve_ids(
+    *,
+    state_key: str = "",
+    profile_id: str = "",
+    workflow_id: str = "",
+    plan_signature: str = "",
+) -> tuple[str, str]:
+    """Resolve caller inputs into ``(profile_id, workflow_id)`` (#341).
+
+    Behavior matrix:
+
+    * Caller set ``profile_id`` / ``workflow_id`` → use them (new shape).
+      Missing ``workflow_id`` defaults to ``plan_signature[:12]``;
+      missing ``profile_id`` defaults to ``"default"``.
+    * Caller set only legacy ``state_key`` → route to both (Phase 1
+      back-compat; preserves today's "one key controls profile + checkpoint"
+      behavior). Eventually deprecated; see issue #341.
+    * Neither set → ``profile_id="default"``, ``workflow_id=plan_signature[:12]``.
+
+    Outputs are sanitized via :func:`safe_state_key`.
+    """
+    if profile_id or workflow_id:
+        wf_default = plan_signature[:12] if plan_signature else "default"
+        wid = safe_state_key(workflow_id or wf_default)
+        pid = safe_state_key(profile_id or "default")
+        return pid, wid
+
+    if state_key:
+        sk = safe_state_key(state_key)
+        return sk, sk
+
+    wf_default = plan_signature[:12] if plan_signature else "default"
+    return safe_state_key("default"), safe_state_key(wf_default)
 
 
 # ── Time and ID utilities ─────────────────────────────────────────
@@ -415,6 +456,8 @@ def build_micro_result(
     model_name: str,
     elapsed_seconds: float,
     state_key: str = "",
+    profile_id: str = "",
+    workflow_id: str = "",
     checkpoint_path: str = "",
     plan_signature: str = "",
     resume_state: bool = False,
@@ -462,7 +505,9 @@ def build_micro_result(
         "steps_executed": len(step_results),
         "viable": len(leads),
         "leads_with_phone": sum(1 for lead in leads if runner._lead_has_phone(lead)),
-        "state_key": state_key,
+        "state_key": state_key or workflow_id,
+        "profile_id": profile_id or state_key,
+        "workflow_id": workflow_id or state_key,
         "checkpoint_path": checkpoint_path,
         "plan_signature": plan_signature,
         "resume_state": resume_state,
@@ -603,6 +648,8 @@ def build_micro_suite(
     max_time_minutes: int = 180,
     resume_state: bool = False,
     state_key: str = "",
+    profile_id: str = "",
+    workflow_id: str = "",
     checkpoint_dir: str = "/data/checkpoints",
     proxy_city: str = "",
     proxy_state: str = "",
@@ -614,12 +661,32 @@ def build_micro_suite(
     Used by both Modal main() and Baseten _micro_suite_from_path().
     When ``objective`` is provided, it's embedded so downstream code
     (e.g. ClaudeExtractor) can build an ExtractionSchema from it.
+
+    Identity resolution (#341):
+
+    * ``profile_id`` keys the Chrome user-data-dir.
+    * ``workflow_id`` keys the runner checkpoint file.
+    * ``state_key`` is the legacy single-field input; when set alone it
+      routes to both (Phase 1 back-compat).
+
+    The returned suite carries ``_profile_id`` + ``_workflow_id`` for new
+    consumers, plus ``_state_key`` (= ``workflow_id``) for downstream
+    code that hasn't migrated yet.
     """
     signature = plan_signature_from_steps(micro_plan_steps)
     safe_domain = domain.replace(".", "_")
-    default_key = f"micro_{safe_domain}_{signature[:12]}"
-    resolved_key = safe_state_key(state_key or default_key)
-    checkpoint_path = f"{checkpoint_dir}/{resolved_key}.json"
+    default_wf = f"micro_{safe_domain}_{signature[:12]}"
+
+    if not (profile_id or workflow_id or state_key):
+        workflow_id = default_wf
+
+    resolved_profile, resolved_workflow = resolve_ids(
+        state_key=state_key,
+        profile_id=profile_id,
+        workflow_id=workflow_id,
+        plan_signature=signature,
+    )
+    checkpoint_path = f"{checkpoint_dir}/{resolved_workflow}.json"
 
     suite: dict[str, Any] = {
         "session_name": f"micro_{safe_domain}",
@@ -627,7 +694,9 @@ def build_micro_suite(
         "_max_cost": max_cost,
         "_max_time_minutes": max_time_minutes,
         "_resume_state": resume_state,
-        "_state_key": resolved_key,
+        "_profile_id": resolved_profile,
+        "_workflow_id": resolved_workflow,
+        "_state_key": resolved_workflow,
         "_checkpoint_path": checkpoint_path,
         "_plan_signature": signature,
         "_proxy_city": proxy_city,

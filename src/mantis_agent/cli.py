@@ -1228,6 +1228,10 @@ def cmd_cua_run(args: argparse.Namespace) -> int:
     }
     if args.state_key:
         body["state_key"] = args.state_key
+    if args.profile_id:
+        body["profile_id"] = args.profile_id
+    if args.workflow_id:
+        body["workflow_id"] = args.workflow_id
     if args.proxy_city:
         body["proxy_city"] = args.proxy_city
     if args.proxy_state:
@@ -1674,8 +1678,22 @@ def _build_parser() -> argparse.ArgumentParser:
     cua_run.add_argument(
         "--state-key",
         default=None,
-        help="Optional state key to namespace the Chrome profile / "
-             "checkpoint dir on the deployment.",
+        help="Legacy single-field identity (#341). When set alone, the "
+             "server routes it to both --profile-id and --workflow-id. "
+             "Prefer the split flags below for new code.",
+    )
+    cua_run.add_argument(
+        "--profile-id",
+        default=None,
+        help="Chrome user-data-dir identity (#341). Sticky across plan "
+             "revisions — same id => same cookies / logged-in sessions.",
+    )
+    cua_run.add_argument(
+        "--workflow-id",
+        default=None,
+        help="Checkpoint identity (#341). Rotate when the plan definition "
+             "changes; pair with --resume-state to pick up where the last "
+             "run with this id left off.",
     )
     cua_run.add_argument(
         "--detached",
