@@ -1,0 +1,72 @@
+{
+  "task_id": "T01_buy_jacket",
+  "source_plan": "Buy a size-M blue jacket under $100, ship to the seeded Brooklyn address, apply coupon SPRING15.",
+  "domain": "mantis-shop",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the storefront catalog at {{ENV_URL}}/catalog?category=outerwear-women&max_price=100 to filter to women's outerwear under $100.",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/catalog?category=outerwear-women&max_price=100"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Open the PDP for product_00001 (Heritage Field Jacket) at {{ENV_URL}}/products/product_00001.",
+      "section": "navigate",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/products/product_00001"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "On the PDP variant picker pick size M and color BLUE (variant id variant_00001_M_BLUE, sku JACKET-001-M-BLUE), then submit the add-to-cart form with quantity 1.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Go to {{ENV_URL}}/cart and apply coupon SPRING15 using the coupon form.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/cart"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Begin checkout: open {{ENV_URL}}/checkout/address and pick the saved Brooklyn address (id addr_brooklyn_001), then continue through the shipping (standard), payment (any saved method), and review steps, finally clicking Place order on the review page.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/checkout/address"},
+      "hints": {}
+    }
+  ]
+}

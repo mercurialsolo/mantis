@@ -1,0 +1,46 @@
+{
+  "task_id": "T04_export_bogo_orders",
+  "source_plan": "Find all orders in the last 7 days that used coupon BOGO; export to saved view saved_view_bogo_recent.",
+  "domain": "mantis-shop",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the admin orders list filtered to coupon BOGO and the last 7 days at {{ENV_URL}}/admin/orders?coupon=BOGO&since_days=7.",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/admin/orders?coupon=BOGO&since_days=7"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "Read the order ids in the filtered orders table. These are the export targets.",
+      "section": "analyse",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Select every visible BOGO order via the checkboxes, choose saved_view_bogo_recent in the bulk view-selector, and click 'Add to view' to submit /admin/orders/bulk/add_to_view.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

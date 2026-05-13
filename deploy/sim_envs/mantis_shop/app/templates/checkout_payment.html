@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Checkout — payment — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Checkout</h1></div>
+{% include "_checkout_steps.html" %}
+
+<div class="panel">
+  <div class="panel-header"><h2>Payment method (mocked)</h2></div>
+  <div class="panel-body">
+    <form method="post" action="/checkout/payment" data-testid="payment-form">
+      {% for pm in payment_methods %}
+        <label class="payment-option" data-testid="pay-{{ pm.id }}">
+          <input type="radio" name="payment_method_id" value="{{ pm.id }}" {% if loop.first %}checked{% endif %}/>
+          <span>{{ pm.brand|upper }} •••• {{ pm.last4 }}</span>
+          <span class="muted">{{ pm.label }}</span>
+        </label>
+      {% else %}
+        <div class="empty">No saved payment methods.</div>
+      {% endfor %}
+      <div style="margin-top:14px">
+        <a href="/checkout/shipping"><button type="button" class="secondary">← Back</button></a>
+        <button type="submit" data-testid="payment-continue">Continue to review →</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

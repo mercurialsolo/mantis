@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Coupons — admin — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Admin / Coupons</div>
+    <h1>Coupons</h1>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert" data-testid="coupons-error">{{ error }}</div>
+{% endif %}
+
+<div class="panel">
+  <div class="panel-header"><h2>Create coupon</h2></div>
+  <div class="panel-body">
+    <form method="post" action="/admin/coupons/create" data-testid="create-coupon-form">
+      <div class="composer-row">
+        <input type="text" name="code" placeholder="CODE" data-testid="coupon-code"/>
+        <select name="kind" data-testid="coupon-kind">
+          <option value="pct">% off</option>
+          <option value="amount">$ off</option>
+          <option value="bogo">BOGO</option>
+        </select>
+        <input type="text" name="value" placeholder="value (20 for 20%, 5 for $5)" data-testid="coupon-value"/>
+      </div>
+      <div class="composer-row" style="margin-top:6px">
+        <select name="scope_category" data-testid="coupon-scope">
+          <option value="">No category scope</option>
+          {% for c in categories %}
+            <option value="{{ c }}">{{ c }}</option>
+          {% endfor %}
+        </select>
+        <label><input type="checkbox" name="stackable" value="1" data-testid="coupon-stackable"/> stackable</label>
+        <input type="text" name="expires_at" placeholder="expires (2026-02-15)" data-testid="coupon-expires"/>
+        <input type="text" name="max_uses" placeholder="max uses" data-testid="coupon-max-uses"/>
+        <button type="submit" data-testid="create-coupon-submit">Create</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <table class="data-table" data-testid="coupons-table">
+    <thead><tr><th>Code</th><th>Kind</th><th>Value</th><th>Scope</th><th>Stackable</th><th>Expires</th><th>Max uses</th><th>Uses</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+      {% for c in coupons %}
+        <tr data-testid="coupon-row-{{ c.code }}">
+          <td><strong>{{ c.code }}</strong></td>
+          <td>{{ c.kind }}</td>
+          <td>{{ c.value }}</td>
+          <td>{{ c.scope_category or '—' }}</td>
+          <td>{% if c.stackable %}yes{% else %}no{% endif %}</td>
+          <td class="muted">{{ c.expires_at or '—' }}</td>
+          <td>{{ c.max_uses if c.max_uses is not none else '—' }}</td>
+          <td>{{ c.uses_count }}</td>
+          <td>{% if c.disabled_at %}<span class="pill status-cancelled">disabled</span>{% else %}<span class="pill status-paid">active</span>{% endif %}</td>
+          <td>
+            {% if not c.disabled_at %}
+              <form method="post" action="/admin/coupons/{{ c.code }}/disable" style="display:inline">
+                <button class="secondary" data-testid="disable-{{ c.code }}">Disable</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

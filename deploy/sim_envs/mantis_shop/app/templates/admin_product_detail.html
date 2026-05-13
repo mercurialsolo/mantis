@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ product.title }} — admin — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb"><a href="/admin/products">Products</a> / {{ product.id }}</div>
+    <h1>{{ product.title }}</h1>
+  </div>
+  <span class="pill">{{ product.category }}</span>
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>Edit product</h2></div>
+  <div class="panel-body">
+    <form method="post" action="/admin/products/{{ product.id }}/edit" data-testid="product-edit-form">
+      <label class="muted">Title</label>
+      <input type="text" name="title" value="{{ product.title }}" style="width:100%"/>
+      <label class="muted">Description</label>
+      <textarea name="description_md" style="width:100%;min-height:80px">{{ product.description_md }}</textarea>
+      <label class="muted">Base price</label>
+      <input type="text" name="base_price" value="{{ product.base_price }}"/>
+      <label class="muted">Sale price</label>
+      <input type="text" name="sale_price" value="{{ product.sale_price or '' }}"/>
+      <div><button type="submit" data-testid="save-product">Save</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>Variants &amp; inventory</h2></div>
+  <table class="data-table" data-testid="variant-inventory-table">
+    <thead><tr><th>SKU</th><th>Size</th><th>Color</th><th>Stock</th><th>Adjust</th></tr></thead>
+    <tbody>
+      {% for v in variants %}
+        <tr>
+          <td>{{ v.sku }}</td><td>{{ v.size }}</td><td>{{ v.color }}</td><td>{{ v.stock }}</td>
+          <td>
+            <form method="post" action="/admin/products/{{ product.id }}/inventory/{{ v.id }}" class="composer-row">
+              <input type="number" name="delta" placeholder="delta" style="width:90px"/>
+              <input type="text" name="reason" placeholder="reason" style="width:180px"/>
+              <button type="submit" class="secondary">Apply</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

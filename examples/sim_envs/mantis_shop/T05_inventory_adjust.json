@@ -1,0 +1,33 @@
+{
+  "task_id": "T05_inventory_adjust",
+  "source_plan": "Increase inventory of sku=TEE-BLK-M by 50 with reason 'restock from warehouse'.",
+  "domain": "mantis-shop",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the admin products page at {{ENV_URL}}/admin/products.",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/admin/products"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Use the 'Inventory adjust by SKU' form on the admin products page. Set sku=TEE-BLK-M, delta=50, reason='restock from warehouse', then submit.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

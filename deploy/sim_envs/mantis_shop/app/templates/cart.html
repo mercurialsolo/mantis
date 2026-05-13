@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Cart — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb"><a href="/catalog">Shop</a></div>
+    <h1>Your cart</h1>
+  </div>
+  <span class="muted">{{ items|length }} line{% if items|length != 1 %}s{% endif %}</span>
+</div>
+
+{% if error %}
+  <div class="alert" data-testid="cart-error">{{ error }}</div>
+{% endif %}
+
+<div class="panel" data-testid="cart-panel">
+  <table class="data-table" data-testid="cart-table">
+    <thead>
+      <tr>
+        <th>Item</th><th>Size / Color</th><th>Unit price</th><th>Qty</th><th>Line total</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+        <tr data-testid="cart-row" data-variant-id="{{ it.variant_id }}">
+          <td>
+            <a href="/products/{{ it.product_id }}">{{ it.title }}</a>
+            <div class="muted">{{ it.sku }}</div>
+          </td>
+          <td>{{ it.size }} · {{ it.color }}</td>
+          <td>${{ "%.2f"|format(it.unit_price) }}</td>
+          <td>
+            <form method="post" action="/cart/update" style="display:inline-flex;gap:6px">
+              <input type="hidden" name="variant_id" value="{{ it.variant_id }}"/>
+              <input type="number" name="quantity" value="{{ it.quantity }}" min="0" max="50" data-testid="cart-qty-{{ it.variant_id }}"/>
+              <button type="submit" class="secondary">Update</button>
+            </form>
+          </td>
+          <td>${{ "%.2f"|format(it.unit_price * it.quantity) }}</td>
+          <td>
+            <form method="post" action="/cart/remove" style="display:inline">
+              <input type="hidden" name="variant_id" value="{{ it.variant_id }}"/>
+              <button type="submit" class="secondary" data-testid="remove-{{ it.variant_id }}">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">Cart is empty. <a href="/catalog">Continue shopping →</a></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="cart-foot">
+  <div class="panel" style="flex:1">
+    <div class="panel-header"><h2>Coupon</h2></div>
+    <div class="panel-body">
+      <form method="post" action="/cart/apply-coupon" class="composer-row" data-testid="apply-coupon-form">
+        <input type="text" name="code" placeholder="Coupon code" data-testid="coupon-input"/>
+        <button type="submit" data-testid="apply-coupon">Apply</button>
+      </form>
+      <div class="muted" style="margin-top:6px">
+        Applied: {% if coupons %}{{ coupons|join(', ') }}{% else %}none{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="panel" style="width:280px" data-testid="totals">
+    <div class="panel-header"><h2>Totals</h2></div>
+    <div class="panel-body">
+      <dl class="kv">
+        <dt>Subtotal</dt><dd>${{ "%.2f"|format(totals.subtotal) }}</dd>
+        <dt>Discount</dt><dd>-${{ "%.2f"|format(totals.discount) }}</dd>
+        <dt>Shipping</dt><dd>${{ "%.2f"|format(totals.shipping) }}</dd>
+        <dt>Total</dt><dd><strong data-testid="cart-total">${{ "%.2f"|format(totals.total) }}</strong></dd>
+      </dl>
+      {% if items %}
+        <a href="/checkout/address"><button data-testid="goto-checkout">Checkout →</button></a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -76,6 +76,7 @@ def _image_for_env(env_name: str) -> str | None:
     registry = {
         "mantis-crm": "mantis/sim-env-mantis-crm:latest",
         "mantis-helpdesk": "mantis/sim-env-mantis-helpdesk:latest",
+        "mantis-shop": "mantis/sim-env-mantis-shop:latest",
     }
     return registry.get(env_name)
 

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}mantis-shop{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" data-testid="sidebar">
+    <div class="brand"><span class="logo">m</span> mantis-shop</div>
+    <nav>
+      <div class="nav-section">Shop</div>
+      <a href="/" class="{% if request.url.path == '/' %}active{% endif %}" data-testid="nav-home"><span class="nav-ico">⌂</span> Home</a>
+      <a href="/catalog" class="{% if request.url.path == '/catalog' %}active{% endif %}" data-testid="nav-catalog"><span class="nav-ico">▦</span> Catalog</a>
+      <a href="/cart" class="{% if request.url.path.startswith('/cart') %}active{% endif %}" data-testid="nav-cart"><span class="nav-ico">🛒</span> Cart</a>
+      <a href="/checkout/address" class="{% if request.url.path.startswith('/checkout') %}active{% endif %}" data-testid="nav-checkout"><span class="nav-ico">✓</span> Checkout</a>
+      <div class="nav-section">Admin</div>
+      <a href="/admin/orders" class="{% if request.url.path.startswith('/admin/orders') %}active{% endif %}" data-testid="nav-admin-orders"><span class="nav-ico">▤</span> Orders</a>
+      <a href="/admin/products" class="{% if request.url.path.startswith('/admin/products') %}active{% endif %}" data-testid="nav-admin-products"><span class="nav-ico">◫</span> Products</a>
+      <a href="/admin/coupons" class="{% if request.url.path.startswith('/admin/coupons') %}active{% endif %}" data-testid="nav-admin-coupons"><span class="nav-ico">%</span> Coupons</a>
+      <a href="/admin/saved_views/saved_view_bogo_recent" class="{% if request.url.path.startswith('/admin/saved_views') %}active{% endif %}" data-testid="nav-admin-views"><span class="nav-ico">☰</span> Saved views</a>
+    </nav>
+  </aside>
+  <div>
+    <header class="topbar">
+      <form class="search-form" action="/catalog" method="get">
+        <input type="text" name="q" placeholder="Search products…" value="{{ request.query_params.get('q') or '' }}" data-testid="topbar-search"/>
+      </form>
+      <div class="user-chip"><span class="avatar">TC</span> Test Customer</div>
+    </header>
+    <main class="workspace">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+</body>
+</html>

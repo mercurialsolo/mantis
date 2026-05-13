@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Order {{ order.number }} — admin — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb"><a href="/admin/orders">Orders</a> / {{ order.id }}</div>
+    <h1>Order {{ order.number }}</h1>
+  </div>
+  <span class="pill status-{{ order.status }}">{{ order.status }}</span>
+</div>
+
+<div class="detail-layout">
+  <aside>
+    <div class="panel">
+      <div class="panel-header"><h2>Summary</h2></div>
+      <div class="panel-body">
+        <dl class="kv">
+          <dt>Customer</dt><dd>{{ order.customer_id }}</dd>
+          <dt>Subtotal</dt><dd>${{ "%.2f"|format(order.subtotal) }}</dd>
+          <dt>Discount</dt><dd>-${{ "%.2f"|format(order.discount_total) }}</dd>
+          <dt>Shipping</dt><dd>${{ "%.2f"|format(order.shipping_total) }}</dd>
+          <dt>Total</dt><dd><strong>${{ "%.2f"|format(order.total) }}</strong></dd>
+          <dt>Coupons</dt><dd>{{ order.coupon_codes }}</dd>
+          <dt>Placed</dt><dd>{{ order.placed_at }}</dd>
+          <dt>Ship to</dt><dd>{{ address.line1 or '' }}<br><span class="muted">{{ address.city or '' }}, {{ address.region or '' }} {{ address.zip or '' }}</span></dd>
+        </dl>
+        <form method="post" action="/admin/orders/{{ order.id }}/fulfill" style="display:inline">
+          <button class="secondary" data-testid="fulfill">Mark fulfilled</button>
+        </form>
+        <form method="post" action="/admin/orders/{{ order.id }}/cancel" style="display:inline">
+          <button class="secondary" data-testid="cancel">Cancel</button>
+        </form>
+      </div>
+    </div>
+  </aside>
+  <div>
+    <nav class="tabs">
+      <a class="tab {% if tab == 'items' %}active{% endif %}" href="?tab=items" data-testid="tab-items">Items</a>
+      <a class="tab {% if tab == 'refunds' %}active{% endif %}" href="?tab=refunds" data-testid="tab-refunds">Refunds</a>
+      <a class="tab {% if tab == 'audit' %}active{% endif %}" href="?tab=audit" data-testid="tab-audit">Audit</a>
+    </nav>
+    {% if tab == 'items' %}
+      <div class="panel">
+        <table class="data-table" data-testid="items-table">
+          <thead><tr><th>Line</th><th>Title</th><th>SKU</th><th>Unit</th><th>Qty</th><th>Total</th></tr></thead>
+          <tbody>
+            {% for it in items %}
+              <tr><td>{{ it.line_no }}</td><td>{{ it.title }}</td><td>{{ it.sku }}</td>
+                <td>${{ "%.2f"|format(it.unit_price) }}</td><td>{{ it.quantity }}</td>
+                <td>${{ "%.2f"|format(it.unit_price * it.quantity) }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% elif tab == 'refunds' %}
+      <div class="panel">
+        <div class="panel-header"><h2>Issue a refund</h2></div>
+        <div class="panel-body">
+          <form method="post" action="/admin/orders/{{ order.id }}/refund" data-testid="refund-form">
+            <div class="composer-row">
+              <label class="muted">Line</label>
+              <input type="number" name="line_no" placeholder="leave blank for full refund" data-testid="refund-line-no"/>
+              <label class="muted">Amount</label>
+              <input type="text" name="amount" placeholder="default = line total" data-testid="refund-amount"/>
+            </div>
+            <div style="margin-top:8px">
+              <input type="text" name="reason" placeholder="Reason (e.g. damaged)" style="width:60%" data-testid="refund-reason"/>
+              <label style="margin-left:8px"><input type="checkbox" name="notify_customer" value="1" data-testid="refund-notify"/> Notify customer</label>
+              <button type="submit" data-testid="refund-submit">Refund</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <div class="panel">
+        <table class="data-table">
+          <thead><tr><th>ID</th><th>Line</th><th>Amount</th><th>Reason</th><th>Notified</th><th>At</th></tr></thead>
+          <tbody>
+            {% for r in refunds %}
+              <tr data-testid="refund-row-{{ r.id }}">
+                <td>{{ r.id }}</td>
+                <td>{{ r.line_no or '—' }}</td>
+                <td>${{ "%.2f"|format(r.amount) }}</td>
+                <td>{{ r.reason }}</td>
+                <td>{% if r.notify_customer %}yes{% else %}no{% endif %}</td>
+                <td class="muted">{{ r.created_at }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="6" class="empty">No refunds yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="panel">
+        <table class="data-table">
+          <thead><tr><th>When</th><th>Op</th><th>Target</th><th>Payload</th></tr></thead>
+          <tbody>
+            {% for a in audit_rows %}
+              <tr><td class="muted">{{ a.occurred_at }}</td><td>{{ a.operation }}</td>
+                <td>{{ a.target_type }}/{{ a.target_id }}</td>
+                <td><code>{{ a.payload_json }}</code></td></tr>
+            {% else %}
+              <tr><td colspan="4" class="empty">No audit rows.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,46 @@
+{
+  "task_id": "T02_refund_line_item",
+  "source_plan": "Refund line item 2 of order #4421 with reason 'damaged'; mark notify-customer true.",
+  "domain": "mantis-shop",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the admin order detail for order #4421 at {{ENV_URL}}/admin/orders/order_04421.",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/admin/orders/order_04421"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Open the Refunds tab on order #4421 at {{ENV_URL}}/admin/orders/order_04421?tab=refunds.",
+      "section": "navigate",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/admin/orders/order_04421?tab=refunds"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Submit the refund form: line_no=2, reason='damaged', notify_customer=on. Leave amount blank so the server defaults to the full line total.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

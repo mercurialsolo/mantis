@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Checkout — review — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Review &amp; place order</h1></div>
+{% include "_checkout_steps.html" %}
+
+<div class="checkout-grid">
+  <div class="panel">
+    <div class="panel-header"><h2>Items</h2></div>
+    <div class="panel-body">
+      <table class="data-table">
+        <thead><tr><th>Item</th><th>SKU</th><th>Qty</th><th>Line total</th></tr></thead>
+        <tbody>
+          {% for it in items %}
+            <tr>
+              <td>{{ it.title }} <span class="muted">{{ it.size }} · {{ it.color }}</span></td>
+              <td>{{ it.sku }}</td>
+              <td>{{ it.quantity }}</td>
+              <td>${{ "%.2f"|format(it.unit_price * it.quantity) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header"><h2>Shipping to</h2></div>
+    <div class="panel-body">
+      <div><strong>{{ address.line1 }}</strong></div>
+      <div class="muted">{{ address.city }}, {{ address.region }} {{ address.zip }}</div>
+      <div class="muted">Method: {{ cart.shipping_method }}</div>
+      <div class="muted">Payment: {{ cart.payment_method_id }}</div>
+      <div class="muted">Coupons: {% if coupons %}{{ coupons|join(', ') }}{% else %}—{% endif %}</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header"><h2>Totals</h2></div>
+    <div class="panel-body">
+      <dl class="kv">
+        <dt>Subtotal</dt><dd>${{ "%.2f"|format(totals.subtotal) }}</dd>
+        <dt>Discount</dt><dd>-${{ "%.2f"|format(totals.discount) }}</dd>
+        <dt>Shipping</dt><dd>${{ "%.2f"|format(totals.shipping) }}</dd>
+        <dt>Total</dt><dd><strong data-testid="review-total">${{ "%.2f"|format(totals.total) }}</strong></dd>
+      </dl>
+      <form method="post" action="/checkout/place_order" data-testid="place-order-form">
+        <a href="/checkout/payment"><button type="button" class="secondary">← Back</button></a>
+        <button type="submit" data-testid="place-order">Place order</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

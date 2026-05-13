@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Catalog — mantis-shop{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Shop</div>
+    <h1>Catalog</h1>
+  </div>
+  <span class="muted">{{ "{:,}".format(total) }} products · page {{ page }}/{{ pages }}</span>
+</div>
+
+<form class="filters" method="get" action="/catalog" data-testid="catalog-filter">
+  <select name="category" data-testid="filter-category">
+    <option value="">All categories</option>
+    {% for c in categories %}
+      <option value="{{ c }}" {% if filters.category == c %}selected{% endif %}>{{ c }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="q" value="{{ filters.q }}" placeholder="Search title…" class="grow" data-testid="filter-q"/>
+  <input type="text" name="max_price" value="{{ filters.max_price }}" placeholder="Max $" data-testid="filter-max-price"/>
+  <button type="submit" data-testid="filter-apply">Apply</button>
+</form>
+
+<div class="panel">
+  <div class="panel-body">
+    <div class="product-grid">
+      {% for p in products %}
+        <a class="product-card" href="/products/{{ p.id }}" data-testid="product-card-{{ p.id }}">
+          <div class="product-card-img">
+            {% if p.image_url %}<span class="muted">image</span>{% else %}<span class="muted">no image</span>{% endif %}
+          </div>
+          <div class="product-card-meta">{{ p.category }}</div>
+          <div class="product-card-title">{{ p.title }}</div>
+          <div class="product-card-price">
+            {% if p.sale_price %}
+              <span class="sale">${{ "%.2f"|format(p.sale_price) }}</span>
+              <span class="strike">${{ "%.2f"|format(p.base_price) }}</span>
+            {% else %}
+              <span>${{ "%.2f"|format(p.base_price) }}</span>
+            {% endif %}
+          </div>
+        </a>
+      {% else %}
+        <div class="empty">No products match these filters.</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<nav class="pagination">
+  {% if page > 1 %}
+    <a href="?{% if filters.category %}category={{ filters.category }}&{% endif %}{% if filters.q %}q={{ filters.q }}&{% endif %}{% if filters.max_price %}max_price={{ filters.max_price }}&{% endif %}page={{ page - 1 }}" data-testid="page-prev">‹ Prev</a>
+  {% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}
+    <a href="?{% if filters.category %}category={{ filters.category }}&{% endif %}{% if filters.q %}q={{ filters.q }}&{% endif %}{% if filters.max_price %}max_price={{ filters.max_price }}&{% endif %}page={{ page + 1 }}" data-testid="page-next">Next ›</a>
+  {% endif %}
+</nav>
+{% endblock %}
