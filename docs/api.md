@@ -432,6 +432,15 @@ The server rehydrates the stored `PauseState`, calls `runner.resume(state, user_
 | `400 plan signature mismatch on resume` | Disk-stored `pause_state.plan_signature` doesn't match the current plan derived from the stored payload — usually means someone edited the on-disk state |
 | `404 unknown run_id` | No `status.json` for that `run_id` on this tenant |
 
+### Deployment coverage
+
+| Deployment | Pause / resume |
+|---|---|
+| **Baseten** (`/v1/predict` via `BasetenCUARuntime`) | ✅ All brains — Holo3, Claude, EvoCUA, OpenCUA, Gemma4-CUA. Default `request_user_input` tool registered on every detached run ([#344](https://github.com/mercurialsolo/mantis/issues/344)). |
+| **Modal HTTP endpoint** (`@modal.asgi_app()` at `<workspace>--mantis-cua-server-api.modal.run`) | ✅ Holo3 micro path only — that's the only Modal executor that constructs `MicroPlanRunner` directly. Claude / EvoCUA / OpenCUA / Gemma4-CUA on Modal go through `task_loop.run_executor_lifecycle` and don't currently surface paused state ([#347](https://github.com/mercurialsolo/mantis/issues/347)). |
+| **Modal `local_entrypoint`** (CLI: `modal run ...`) | ❌ Not wired. Use HTTP endpoint or embed the library. |
+| **Library-embedded** (`MicroPlanRunner` / `GymRunner` direct) | ✅ Always — pause/resume is a property of the runner. The HTTP surfaces above are wrappers on top. |
+
 ### Library-embedded integrations
 
 If you embed `MicroPlanRunner` / `GymRunner` directly (no HTTP), the same primitives are available in-process via `runner.run_with_status(plan)` returning `RunnerResult(paused=True, pause_state=...)`, plus `runner.resume(state, user_input=..., plan=plan)`. See [Embedding MicroPlanRunner](integrations/embedding-microplanrunner.md) for the canonical walkthrough — the HTTP surface is just a wrapper on top of the same library API.
