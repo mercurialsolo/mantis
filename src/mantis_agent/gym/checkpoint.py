@@ -65,9 +65,18 @@ class StepResult:
     screenshot_png: bytes | None = field(default=None, repr=False, compare=False)
     last_action: Action | None = field(default=None, repr=False, compare=False)
 
+    # #300 follow-up: which dispatch path executed the *primary* click /
+    # input action for this step. ``"som"`` = CDP-anchored
+    # :meth:`~.xdotool_env.XdotoolGymEnv.cdp_click_at_point` (Set-of-Mark
+    # routing — bypasses xdotool's mouse pipeline so SPA row clicks fire
+    # the right DOM handlers). ``"vision"`` = legacy xdotool click. ``""``
+    # = step type didn't dispatch a routable action (extract_data, gate,
+    # navigate, etc.). Aggregate counts surface on the run result.
+    executor_backend: str = ""
+
     _PERSISTED: ClassVar[tuple[str, ...]] = (
         "step_index", "intent", "success", "data", "steps_used", "duration", "reversed",
-        "skip", "skip_reason",
+        "skip", "skip_reason", "executor_backend",
     )
 
     def to_dict(self) -> dict[str, Any]:

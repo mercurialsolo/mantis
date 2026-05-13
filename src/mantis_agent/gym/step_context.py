@@ -68,6 +68,13 @@ class StepContext:
     # Configuration
     site_config: Any | None = None  # SiteConfig — is_results_page, is_detail_page, etc.
 
+    # #300 follow-up: dispatch policy for clicks (and, later, type/scroll).
+    # Handlers consult ``routing_policy.som_for_unstructured_clicks``
+    # before falling through to xdotool. Default None = "no policy
+    # wired" = handlers skip SoM and execute as before, so legacy
+    # callers see no behavior change.
+    routing_policy: Any | None = None
+
     # Optional pluggable channels
     tool_channel: Any | None = None
     extraction_cache: Any | None = None

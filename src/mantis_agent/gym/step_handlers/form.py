@@ -271,7 +271,18 @@ class ClaudeGuidedFormHandler:
             try:
                 # Click the field, clear any pre-filled value, then type.
                 time.sleep(random.uniform(0.3, 0.8))
-                env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                # #300: SoM-anchored focus click. Only the FIRST click
+                # gets the SoM dispatch — the triple-click that follows
+                # is xdotool-only because it needs to land at the same
+                # X-level coordinate to trigger text selection. The CDP
+                # ``el.click()`` doesn't reliably emit the
+                # ``selectionchange`` event a triple-click depends on.
+                from ..som_dispatch import try_som_click
+                if try_som_click(env, x, y, ctx.routing_policy):
+                    ctx.state["_executor_backend"] = "som"
+                else:
+                    env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                    ctx.state["_executor_backend"] = "vision"
                 runner.costs["gpu_steps"] += 1
                 time.sleep(0.4)
                 # Triple-click to select existing text (more reliable than ctrl+a in some inputs)
@@ -527,7 +538,20 @@ class ClaudeGuidedFormHandler:
                 # delta, so without the visual diff every such submit
                 # was being demoted to failure.
                 runner._last_submit_pre_screenshot = screenshot
-                env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                # #300: SoM-anchored submit click — the canonical #88
+                # failure mode (SPA Login / Update button whose
+                # onPointerDown stops propagation so xdotool's
+                # mousedown doesn't reach the onClick handler). CDP
+                # ``el.click()`` dispatches the synthetic event chain
+                # React / Vue / Svelte actually listen for. Falls
+                # through to xdotool on policy-off / no CDP / no
+                # element at point.
+                from ..som_dispatch import try_som_click
+                if try_som_click(env, x, y, ctx.routing_policy):
+                    ctx.state["_executor_backend"] = "som"
+                else:
+                    env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+                    ctx.state["_executor_backend"] = "vision"
                 runner.costs["gpu_seconds"] += runner._adaptive_submit_settle(
                     url_before=url_before,
                 )
@@ -612,7 +636,16 @@ class ClaudeGuidedFormHandler:
                 return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
             try:
                 time.sleep(random.uniform(0.3, 0.8))
-                env.step(Action(action_type=ActionType.CLICK, params={"x": target["x"], "y": target["y"]}))
+                # #300: SoM-anchored dropdown-open click. Same React
+                # onClick / onPointerDown story as the submit click —
+                # custom-styled dropdowns (Headless UI, MUI Select)
+                # often miss xdotool mousedown.
+                from ..som_dispatch import try_som_click
+                if try_som_click(env, target["x"], target["y"], ctx.routing_policy):
+                    ctx.state["_executor_backend"] = "som"
+                else:
+                    env.step(Action(action_type=ActionType.CLICK, params={"x": target["x"], "y": target["y"]}))
+                    ctx.state["_executor_backend"] = "vision"
                 runner.costs["gpu_steps"] += 1
                 time.sleep(1.5)  # Allow option list to render
             except Exception as e:
@@ -639,7 +672,16 @@ class ClaudeGuidedFormHandler:
                 return StepResult(step_index=index, intent=step.intent, success=False, data="option_not_found")
             try:
                 time.sleep(random.uniform(0.2, 0.6))
-                env.step(Action(action_type=ActionType.CLICK, params={"x": option_target["x"], "y": option_target["y"]}))
+                # #300: SoM-anchored option-pick click (Phase 2 of
+                # select_option). The picked option is the
+                # ``executor_backend`` we want to record on the
+                # StepResult — overwrite the open-click tag set above.
+                from ..som_dispatch import try_som_click
+                if try_som_click(env, option_target["x"], option_target["y"], ctx.routing_policy):
+                    ctx.state["_executor_backend"] = "som"
+                else:
+                    env.step(Action(action_type=ActionType.CLICK, params={"x": option_target["x"], "y": option_target["y"]}))
+                    ctx.state["_executor_backend"] = "vision"
                 runner.costs["gpu_steps"] += 1
                 time.sleep(0.8)
                 # Blur the dropdown so any pending onChange / onBlur

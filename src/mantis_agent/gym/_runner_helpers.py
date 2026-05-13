@@ -722,6 +722,7 @@ def build_step_context(runner: "MicroPlanRunner", index: int):
         dynamic_verifier=runner.dynamic_verifier,
         scanner=runner.scanner,
         site_config=runner.site_config,
+        routing_policy=getattr(runner, "routing_policy", None),
         tool_channel=runner.tool_channel,
         extraction_cache=runner.extraction_cache,
         state={"index": index},
@@ -839,14 +840,14 @@ def execute_step(
                     step_index=index, intent=step.intent, success=False,
                     data="filters_not_applied",
                 )
-            return registry.get("click").execute(step, ctx)
+            return _stamp_backend(registry.get("click").execute(step, ctx), ctx)
         synthesised = MicroIntent(
             intent=step.intent, type="submit",
             budget=step.budget, section=step.section,
             required=step.required,
             params={"label": (step.params or {}).get("label", "")},
         )
-        return registry.get("submit").execute(synthesised, ctx)
+        return _stamp_backend(registry.get("submit").execute(synthesised, ctx), ctx)
 
     if step.gate and runner.extractor:
         print(f"  [gate] Verifying: {(step.verify or step.intent)[:80]}")
@@ -864,7 +865,7 @@ def execute_step(
 
     if step.claude_only:
         ctx = build_step_context(runner, index)
-        return registry.get("extract_url").execute(step, ctx)
+        return _stamp_backend(registry.get("extract_url").execute(step, ctx), ctx)
 
     if step.type == "paginate":
         if not ensure_results_filters(runner, index):
@@ -873,7 +874,7 @@ def execute_step(
                 data="filters_not_applied",
             )
         ctx = build_step_context(runner, index)
-        return registry.get("paginate").execute(step, ctx)
+        return _stamp_backend(registry.get("paginate").execute(step, ctx), ctx)
 
     if step.type == "navigate_back" and runner._opened_detail_in_new_tab:
         return execute_close_detail_tab(runner, step, index)
@@ -881,9 +882,27 @@ def execute_step(
     handler = registry.get(step.type)
     if handler is not None:
         ctx = build_step_context(runner, index)
-        return handler.execute(step, ctx)
+        return _stamp_backend(handler.execute(step, ctx), ctx)
 
     return runner._execute_holo3_step(step, index)
+
+
+def _stamp_backend(result: StepResult, ctx: Any) -> StepResult:
+    """Tag ``result.executor_backend`` from the handler's scratch dict.
+
+    Handlers that dispatch a click via :func:`gym.som_dispatch.try_som_click`
+    set ``ctx.state["_executor_backend"]`` to ``"som"`` (or ``"vision"``
+    when the SoM path was checked and missed). This stamp moves that
+    onto the StepResult so the per-step backend is visible on the
+    /v1/predict aggregate without every handler touching the
+    :class:`StepResult` field by hand. Handlers that don't dispatch a
+    routable click leave the scratch unset; the StepResult stays with
+    the default ``executor_backend=""``.
+    """
+    backend = ctx.state.get("_executor_backend", "") if ctx is not None else ""
+    if backend and not result.executor_backend:
+        result.executor_backend = backend
+    return result
 
 
 # ── Per-handler shims ─────────────────────────────────────────────────

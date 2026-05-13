@@ -50,6 +50,7 @@ from .predicates import (
 # private surface (#285).
 from .checkpoint import PauseRequested, PauseState  # noqa: F401
 from .gallery_trap import detect_gallery_trap, gallery_recovery_actions
+from .som_dispatch import try_som_click
 from .tool_channel import ToolChannel
 
 logger = logging.getLogger(__name__)
@@ -1584,34 +1585,28 @@ class GymRunner:
                 if (
                     not substituted_action
                     and action.action_type == ActionType.CLICK
-                    and getattr(self.routing_policy, "som_for_unstructured_clicks", False)
-                    and hasattr(self.env, "cdp_click_at_point")
                 ):
                     raw_x = action.params.get("x")
                     raw_y = action.params.get("y")
-                    if raw_x is not None and raw_y is not None:
-                        try:
-                            cdp_ok = bool(self.env.cdp_click_at_point(
-                                int(raw_x), int(raw_y),
-                            ))
-                        except Exception as exc:
-                            logger.warning("SoM CDP click raised: %s", exc)
-                            cdp_ok = False
-                        if cdp_ok:
-                            logger.info(
-                                "SoM: dispatched CDP click at (%s,%s); "
-                                "swapping xdotool click for no-op wait",
-                                raw_x, raw_y,
-                            )
-                            pending_executor_backend = "som"
-                            action = Action(
-                                ActionType.WAIT,
-                                {"seconds": 0.0},
-                                reasoning=(
-                                    f"SoM: CDP-dispatched click at "
-                                    f"({raw_x},{raw_y})"
-                                ),
-                            )
+                    if (
+                        raw_x is not None
+                        and raw_y is not None
+                        and try_som_click(self.env, raw_x, raw_y, self.routing_policy)
+                    ):
+                        logger.info(
+                            "SoM: dispatched CDP click at (%s,%s); "
+                            "swapping xdotool click for no-op wait",
+                            raw_x, raw_y,
+                        )
+                        pending_executor_backend = "som"
+                        action = Action(
+                            ActionType.WAIT,
+                            {"seconds": 0.0},
+                            reasoning=(
+                                f"SoM: CDP-dispatched click at "
+                                f"({raw_x},{raw_y})"
+                            ),
+                        )
 
                 gym_result = self.env.step(action)
                 action_history.append(action)
