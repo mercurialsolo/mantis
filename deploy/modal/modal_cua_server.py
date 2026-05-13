@@ -1171,6 +1171,406 @@ def run_claude_cua(task_file_contents: str, claude_model: str = "claude-sonnet-4
     return _run_claude_executor(task_file_contents, claude_model=claude_model, **kwargs)
 
 
+# ═══════════════════════════════════════════════════════════════════
+# D) HTTP API (#342) — concurrent multi-plan submission via ASGI
+# ═══════════════════════════════════════════════════════════════════
+
+# Lightweight image — no Chrome, no CUDA, no vLLM. Just FastAPI +
+# pydantic + the mantis_agent package. The ASGI container only validates,
+# locks, and dispatches; all heavy work happens in the executor functions
+# above via .spawn().
+api_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "fastapi>=0.110",
+        "uvicorn[standard]>=0.27",
+        "pydantic>=2.0",
+        "requests",
+        "anthropic",
+    )
+    .add_local_python_source("mantis_agent")
+)
+
+
+def _executor_for_model(model: str):
+    """Map ``cua_model`` → the appropriate ``@app.function`` executor."""
+    table = {
+        "evocua-8b": run_cua_1gpu,
+        "evocua-32b": run_cua_2gpu,
+        "opencua-32b": run_cua_4gpu,
+        "opencua-72b": run_cua_8gpu,
+        "holo3": run_holo3,
+        "gemma4-cua": run_gemma4_cua,
+        "claude": run_claude_cua,
+    }
+    return table.get(model, run_holo3)
+
+
+def _build_suite_from_payload(payload: dict) -> str:
+    """Build the ``task_file_contents`` string the executors expect.
+
+    Supports three pre-decomposed shapes for Phase 1 of #342:
+
+    * ``task_suite`` dict — used verbatim.
+    * ``task_file_contents`` string — used verbatim.
+    * ``micro`` ending in ``.json`` — loaded, packed via
+      :func:`build_micro_suite` with the resolved identity (#341).
+
+    ``plan_text`` and ``.txt`` ``micro`` paths require Claude
+    decomposition and are explicitly out of scope for Phase 1 — see
+    issue #342 Phase 2.
+    """
+    if payload.get("task_suite"):
+        return json.dumps(payload["task_suite"])
+    if payload.get("task_file_contents"):
+        return payload["task_file_contents"]
+
+    micro = payload.get("micro") or payload.get("micro_path") or ""
+    if not micro or not micro.endswith(".json"):
+        raise ValueError(
+            "Modal HTTP endpoint v1 requires task_suite, task_file_contents, "
+            "or a .json micro path. Free-text decomposition is Phase 2 (#342)."
+        )
+
+    from pathlib import Path as _Path
+    from mantis_agent.plan_decomposer import MicroPlan, PlanDecomposer
+
+    path = _Path(micro)
+    if not path.is_absolute():
+        repo_root = _Path(os.environ.get("MANTIS_REPO_ROOT", "/workspace/cua-agent"))
+        path = repo_root / path
+    if not path.exists():
+        raise FileNotFoundError(f"micro plan not found: {path}")
+
+    raw_steps = json.loads(path.read_text())
+    micro_plan = MicroPlan(domain=path.stem)
+    for step in raw_steps:
+        micro_plan.steps.append(PlanDecomposer._build_intent(step))
+
+    steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
+    suite = build_micro_suite(
+        steps_dicts,
+        micro_plan.domain,
+        max_cost=float(payload.get("max_cost", 10.0)),
+        max_time_minutes=int(payload.get("max_time_minutes", 180)),
+        resume_state=bool(payload.get("resume_state", False)),
+        state_key=str(payload.get("state_key") or ""),
+        profile_id=str(payload.get("profile_id") or ""),
+        workflow_id=str(payload.get("workflow_id") or ""),
+        proxy_city=str(payload.get("proxy_city") or ""),
+        proxy_state=str(payload.get("proxy_state") or ""),
+        proxy_disabled=bool(payload.get("proxy_disabled", False)),
+    )
+    return json.dumps(suite)
+
+
+def _run_dir(tenant_id: str, run_id: str):
+    from pathlib import Path as _Path
+    from mantis_agent.server_utils import safe_state_key as _safe
+    root = _Path(os.environ.get("MANTIS_DATA_DIR", "/data"))
+    return root / "tenants" / _safe(tenant_id) / "runs" / _safe(run_id)
+
+
+def _commit_volume() -> None:
+    """Best-effort ``vol.commit()`` — no-op when the Modal volume isn't mounted (tests)."""
+    try:
+        vol.commit()
+    except Exception:
+        pass
+
+
+def _write_status(tenant_id: str, run_id: str, status: dict) -> None:
+    run_dir = _run_dir(tenant_id, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "status.json").write_text(json.dumps(status, indent=2))
+    _commit_volume()
+
+
+def _read_status(tenant_id: str, run_id: str) -> dict | None:
+    path = _run_dir(tenant_id, run_id) / "status.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _write_result(tenant_id: str, run_id: str, result: dict) -> None:
+    run_dir = _run_dir(tenant_id, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "result.json").write_text(json.dumps(result, indent=2))
+    _commit_volume()
+
+
+def _read_result(tenant_id: str, run_id: str) -> dict | None:
+    path = _run_dir(tenant_id, run_id) / "result.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def build_api_app(executor_resolver=None, function_call_lookup=None):
+    """Construct the FastAPI app exposed by the Modal ASGI endpoint (#342).
+
+    Factored into a plain function (not wrapped by ``@modal.asgi_app()``)
+    so unit tests can drive it through ``fastapi.testclient.TestClient``
+    without going through Modal's runtime.
+
+    * ``executor_resolver(model) -> executor_fn`` — overrides the
+      built-in ``_executor_for_model`` map. Tests pass a stub that
+      returns a fake ``.spawn(...)`` handle.
+    * ``function_call_lookup(call_id) -> FunctionCall`` — overrides
+      ``modal.FunctionCall.from_id``. Tests pass a stub that returns
+      a fake ``.get(timeout=...) / .cancel()`` interface so polling
+      doesn't need a live Modal runtime.
+    """
+    from datetime import datetime, timezone
+
+    from fastapi import Depends, FastAPI, HTTPException, Request
+
+    from mantis_agent.baseten_server.middleware import require_run_scope
+    from mantis_agent.server.run_dispatch import (
+        DispatchError,
+        acquire_profile_lock,
+        prepare_predict_payload,
+        read_profile_lock,
+        release_profile_lock,
+    )
+    from mantis_agent.server_utils import new_run_id as _mint_run_id
+    from mantis_agent.tenant_auth import TenantConfig
+
+    resolve_executor = executor_resolver or _executor_for_model
+    lookup_function_call = function_call_lookup or modal.FunctionCall.from_id
+
+    fastapi_app = FastAPI(
+        title="Mantis CUA (Modal)",
+        version="0.1",
+        description="Concurrent multi-plan submission via @modal.asgi_app — #342",
+    )
+
+    @fastapi_app.get("/v1/health")
+    def health() -> dict:
+        return {"status": "ok", "service": "mantis-cua-modal-api"}
+
+    @fastapi_app.get("/v1/models")
+    def models() -> dict:
+        return {
+            "object": "list",
+            "data": [
+                {"id": name, "object": "model", "owned_by": "mantis"}
+                for name in (
+                    "evocua-8b", "evocua-32b", "opencua-32b", "opencua-72b",
+                    "holo3", "gemma4-cua", "claude",
+                )
+            ],
+        }
+
+    @fastapi_app.post("/v1/predict")
+    async def predict(
+        request: Request,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        try:
+            raw = await request.json()
+        except Exception:
+            raise HTTPException(400, "request body must be JSON")
+        try:
+            payload = prepare_predict_payload(raw, tenant)
+        except DispatchError as exc:
+            raise HTTPException(exc.status_code, exc.detail) from exc
+
+        # Action mode: poll/cancel an existing run.
+        if payload.get("action"):
+            return _do_action(payload, tenant)
+
+        # Run mode: build suite, lock the profile, spawn the executor.
+        try:
+            task_file_contents = _build_suite_from_payload(payload)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        profile_id = payload["profile_id"]
+        workflow_id = payload["workflow_id"]
+        run_id = _mint_run_id()
+
+        # 409 if another run is using this profile (Chrome lock).
+        if not acquire_profile_lock(tenant, profile_id, run_id):
+            existing = read_profile_lock(tenant, profile_id)
+            raise HTTPException(
+                409,
+                f"profile_id {profile_id!r} is busy; held by run_id={existing!r}. "
+                "Use a different profile_id or wait for the existing run to finish.",
+            )
+
+        model = payload.get("cua_model") or payload.get("model") or "holo3"
+        executor_fn = resolve_executor(model)
+
+        # Forward only what the executors accept. `task_file_contents`
+        # is positional; everything else is **kwargs.
+        spawn_kwargs: dict = {
+            "max_steps": int(payload.get("max_steps", 30)),
+        }
+        if model != "claude":
+            spawn_kwargs["cua_model"] = model
+        try:
+            call_handle = executor_fn.spawn(
+                task_file_contents=task_file_contents,
+                **spawn_kwargs,
+            )
+        except Exception as exc:
+            release_profile_lock(tenant, profile_id)
+            raise HTTPException(500, f"executor spawn failed: {exc}") from exc
+
+        now = datetime.now(timezone.utc).isoformat()
+        status = {
+            "run_id": run_id,
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+            "modal_call_id": getattr(call_handle, "object_id", "") or "",
+            "tenant_id": tenant.tenant_id,
+            "profile_id": profile_id,
+            "workflow_id": workflow_id,
+            "state_key": payload["state_key"],
+            "model": model,
+        }
+        _write_status(tenant.tenant_id, run_id, status)
+
+        run_dir = _run_dir(tenant.tenant_id, run_id)
+        return {
+            "status": "queued",
+            "mode": "detached",
+            "run_id": run_id,
+            "created_at": now,
+            "updated_at": now,
+            "model": model,
+            "payload": {
+                "profile_id": profile_id,
+                "workflow_id": workflow_id,
+            },
+            "status_path": str(run_dir / "status.json"),
+            "result_path": str(run_dir / "result.json"),
+            "csv_path": str(run_dir / "leads.csv"),
+            "events_path": str(run_dir / "events.log"),
+        }
+
+    def _do_action(payload: dict, tenant: TenantConfig) -> dict:
+        """Handle ``action=status|result|cancel`` against an existing run."""
+        run_id = str(payload.get("run_id") or "")
+        if not run_id:
+            raise HTTPException(400, "action requires run_id")
+        status = _read_status(tenant.tenant_id, run_id)
+        if status is None:
+            raise HTTPException(404, f"unknown run_id: {run_id}")
+
+        action = payload["action"]
+        if action == "cancel":
+            if status.get("status") in {"queued", "running"}:
+                call_id = status.get("modal_call_id", "")
+                if call_id:
+                    try:
+                        lookup_function_call(call_id).cancel()
+                    except Exception:
+                        pass
+                status["status"] = "cancelled"
+                status["updated_at"] = datetime.now(timezone.utc).isoformat()
+                _write_status(tenant.tenant_id, run_id, status)
+                release_profile_lock(tenant, status.get("profile_id", ""))
+            return status
+
+        # status / result: check the FunctionCall handle if still running.
+        if status.get("status") in {"queued", "running"}:
+            call_id = status.get("modal_call_id", "")
+            if call_id:
+                try:
+                    result = lookup_function_call(call_id).get(timeout=0.1)
+                except modal.exception.OutputExpiredError:
+                    status["status"] = "expired"
+                except Exception as exc:
+                    # TimeoutError from .get(timeout=0.1) means still running.
+                    msg = str(type(exc).__name__).lower()
+                    if "timeout" not in msg:
+                        # Real error — mark failed, release the lock.
+                        status["status"] = "failed"
+                        status["error"] = f"{type(exc).__name__}: {exc}"
+                        status["updated_at"] = datetime.now(timezone.utc).isoformat()
+                        _write_status(tenant.tenant_id, run_id, status)
+                        release_profile_lock(tenant, status.get("profile_id", ""))
+                    else:
+                        status["status"] = "running"
+                else:
+                    status["status"] = "succeeded"
+                    status["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    _write_status(tenant.tenant_id, run_id, status)
+                    _write_result(tenant.tenant_id, run_id, result if isinstance(result, dict) else {"result": result})
+                    release_profile_lock(tenant, status.get("profile_id", ""))
+
+        if action == "result":
+            if status.get("status") != "succeeded":
+                return {**status, "result": None}
+            result = _read_result(tenant.tenant_id, run_id)
+            return {**status, "result": result}
+        return status
+
+    @fastapi_app.get("/v1/runs/{run_id}/status")
+    def get_status(
+        run_id: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        return _do_action({"action": "status", "run_id": run_id}, tenant)
+
+    @fastapi_app.get("/v1/runs/{run_id}/result")
+    def get_result(
+        run_id: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        return _do_action({"action": "result", "run_id": run_id}, tenant)
+
+    @fastapi_app.post("/v1/runs/{run_id}/cancel")
+    def cancel_run(
+        run_id: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        return _do_action({"action": "cancel", "run_id": run_id}, tenant)
+
+    return fastapi_app
+
+
+@app.function(
+    image=api_image,
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],
+    timeout=300,
+    memory=2048,
+    cpu=2,
+    scaledown_window=600,
+)
+@modal.concurrent(max_inputs=64)
+@modal.asgi_app()
+def api():
+    """Mantis CUA HTTP API on Modal (#342).
+
+    Mirrors the Baseten ``/v1/predict`` shape: caller submits a plan with
+    ``detached: true`` (default), gets back ``{run_id, status, ...}``,
+    polls via ``action=status|result|cancel`` with the same ``run_id``.
+
+    Concurrency: ``@modal.concurrent(max_inputs=64)`` lets one ASGI
+    container service many concurrent submissions; each spawned
+    executor opens its own dedicated container (1 input per container,
+    matching the pre-existing executor decorators).
+
+    Per-profile lock: two concurrent runs against the same
+    ``profile_id`` get a 409 with the conflicting ``run_id`` — Chrome
+    cannot share a user-data-dir between processes (#341 motivation,
+    #342 enforcement).
+    """
+    return build_api_app()
+
+
 @app.function(
     gpu="A100-80GB",
     image=planner_base_image.run_commands(
