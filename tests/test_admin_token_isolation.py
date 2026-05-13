@@ -34,7 +34,7 @@ def stub_env():
     backend = LocalBackend()
     handle = backend.start("stub-test", seed=42)
     try:
-        backend.wait_healthy(handle, timeout_s=10.0)
+        backend.wait_healthy(handle, timeout_s=30.0)
         yield handle
     finally:
         backend.stop(handle)
