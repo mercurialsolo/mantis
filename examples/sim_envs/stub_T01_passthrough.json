@@ -1,0 +1,33 @@
+{
+  "task_id": "T01_stub_passthrough",
+  "source_plan": "Stub-env smoke test for #336 harness.\nNavigate to the stub env landing page and confirm it loaded.",
+  "domain": "stub",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the stub env landing page at {{ENV_URL}}/",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "Confirm the page shows the 'mantis stub env' heading",
+      "section": "verify",
+      "required": false,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}
