@@ -15,4 +15,5 @@
 | [Perceptual diff verifier](perceptual-diff.md) | Detects silent failures on high-risk actions by comparing pre/post frame hashes |
 | [Loop recovery policy](loop-recovery.md) | Forces action-class transitions (Tab / Return / Type) when the brain loops on a no-effect class |
 | [Adaptive loop windows](adaptive-loop-windows.md) | Per-call adjustment of the soft/hard loop-detection windows by recent action diversity + state progress |
+| [Adaptive click tolerance](adaptive-click-tol.md) | Drift-loop tolerance scaled by screen DPI and per-action element class (button / link / dropdown) |
 | [Ablation harness](ablation-harness.md) | Single-deploy paired ON/OFF A/B against `/v1/cua`; required for quality-touching PRs |
