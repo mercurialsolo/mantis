@@ -16,7 +16,7 @@
 | `mantis_brain_escalation_total` | counter | `tenant_id`, `from_brain`, `to_brain` | One increment per `BrainLadder.think()`. `to_brain` = `primary\|fallback` |
 | `mantis_loop_termination_total` | counter | `tenant_id`, `reason` | One increment per run. reason = `completed\|halted\|cancelled\|paused\|budget_cap\|time_cap` |
 | `mantis_plan_branch_total` | counter | `tenant_id`, `branch`, `outcome` | Special-case dispatch routes: `gate_verify\|claude_only\|navigate_back_close_tab\|click_listings\|click_single_element` × `taken\|skipped\|aborted` |
-| `mantis_step_latency_seconds` | histogram | `tenant_id`, `phase` | phase = `perceive\|think\|act\|settle`. Buckets: 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 20s, 30s |
+| `mantis_step_latency_seconds` | histogram | `tenant_id`, `phase` | phase = `perceive\|think\|act\|settle\|claude_ground\|claude_extract\|claude_verify\|load\|overhead` (epic [#362](https://github.com/mercurialsolo/mantis/issues/362)). Buckets: 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 20s, 30s |
 | `mantis_grounding_cache_hits_total` | counter | `tenant_id` | Cache hits on the (frame-region + description) coordinate cache (#117) |
 | `mantis_grounding_cache_misses_total` | counter | `tenant_id` | Cache misses (incl. expirations) |
 | `mantis_grounding_cache_evictions_total` | counter | `tenant_id` | LRU evictions (capacity hit) |

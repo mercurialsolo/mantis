@@ -207,11 +207,14 @@ PLAN_BRANCH_TOTAL = _counter(
 )
 
 # Per-step latency histogram, labelled by phase. ``phase`` is one of
-# ``perceive | think | act | settle``. Buckets cover the 50ms – 30s
-# window most browser CUA steps land in.
+# the buckets from :mod:`.gym.time_meter` — perceive / think / act /
+# settle / claude_ground / claude_extract / claude_verify / load /
+# overhead (epic #362). Buckets cover the 50ms – 30s window most
+# browser CUA steps land in.
 STEP_LATENCY_SECONDS = _histogram(
     "mantis_step_latency_seconds",
-    "Latency of one step phase (perceive | think | act | settle).",
+    "Latency of one step phase (perceive | think | act | settle | claude_ground "
+    "| claude_extract | claude_verify | load | overhead).",
     ("tenant_id", "phase"),
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0),
 )

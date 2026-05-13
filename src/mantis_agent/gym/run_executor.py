@@ -337,12 +337,21 @@ class RunExecutor:
         }
         pre_snapshot = step_snapshot.capture(runner)
         runner._pre_step_snapshot = pre_snapshot
+        meter = getattr(runner, "time_meter", None)
         try:
-            step_result = runner._execute_step(effective_step, state.step_index)
+            if meter is not None:
+                with meter.measure("act", step_idx=state.step_index):
+                    step_result = runner._execute_step(effective_step, state.step_index)
+            else:
+                step_result = runner._execute_step(effective_step, state.step_index)
         finally:
             runner._active_checkpoint_context = None
         if step_result.screenshot_png is None:
-            step_result.screenshot_png = runner._capture_screenshot_bytes()
+            if meter is not None:
+                with meter.measure("perceive", step_idx=state.step_index):
+                    step_result.screenshot_png = runner._capture_screenshot_bytes()
+            else:
+                step_result.screenshot_png = runner._capture_screenshot_bytes()
         if not step_result.success:
             _stamp_failure_context(step_result, runner.env)
         state.results.append(step_result)
