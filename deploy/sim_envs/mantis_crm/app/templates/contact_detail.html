@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}{{ contact.name }} — mantis-crm{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb"><a href="/contacts">Contacts</a> / {{ contact.id }}</div>
+    <h1>{{ contact.name }}</h1>
+  </div>
+  <span class="pill">{{ contact.lifecycle_stage or "no stage" }}</span>
+</div>
+
+<div class="detail-layout">
+  <!-- LEFT: profile card -->
+  <aside>
+    <div class="panel" data-testid="profile-panel">
+      <div class="profile-header">
+        <div class="avatar-lg">{{ (contact.name or "?")[:1] | upper }}</div>
+        <div class="who">
+          <h1 style="font-size:16px;margin:0">{{ contact.name }}</h1>
+          <div class="meta">{{ contact.email or "—" }}</div>
+          <div class="meta">{{ contact.phone or "—" }}</div>
+        </div>
+      </div>
+      <div class="panel-body">
+        <dl class="kv">
+          <dt>Company</dt><dd>{% if contact.company_id %}<a href="/companies/{{ contact.company_id }}">{{ contact.company_name or contact.company_id }}</a>{% else %}—{% endif %}</dd>
+          <dt>Owner</dt><dd>{{ contact.owner_id or "—" }}</dd>
+          <dt>Source</dt><dd>{{ contact.source or "—" }}</dd>
+          <dt>Created</dt><dd>{{ contact.created_at }}</dd>
+          <dt>Last activity</dt><dd>{{ contact.last_activity_at or "—" }}</dd>
+          <dt>Lead score</dt>
+          <dd>
+            <span class="score-bar"><span class="fill" style="width:{{ lead_score }}%"></span></span>
+            <span class="score-num" data-testid="lead-score">{{ lead_score }}</span>
+          </dd>
+          <dt>Tags</dt>
+          <dd>
+            {% for t in contact.tags %}<span class="tag">{{ t }}</span>{% endfor %}
+            <form action="/contacts/{{ contact.id }}/tag" method="post" style="display:inline-flex;gap:4px;margin-top:6px" data-testid="add-tag-form">
+              <input type="text" name="tag" placeholder="add tag" style="width:120px" data-testid="tag-input"/>
+              <button type="submit" class="secondary" data-testid="tag-submit">+</button>
+            </form>
+          </dd>
+        </dl>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Merge duplicates</h2></div>
+      <form class="panel-body" action="/contacts/{{ contact.id }}/merge" method="post" data-testid="merge-form">
+        <input type="text" name="loser_ids"
+               placeholder="contact_00002, contact_00003"
+               style="width:100%" data-testid="merge-losers-input" />
+        <p class="muted" style="margin:6px 0">Absorbs the listed contacts (and their activities + deals) into this one.</p>
+        <button type="submit" data-testid="merge-submit">Merge into this contact</button>
+      </form>
+    </div>
+  </aside>
+
+  <!-- RIGHT: tabs + content -->
+  <section>
+    <div class="tabs" data-testid="contact-tabs">
+      <a class="tab {% if tab == 'activity' %}active{% endif %}" href="?tab=activity" data-testid="tab-activity">Activity ({{ activities | length }})</a>
+      <a class="tab {% if tab == 'tasks' %}active{% endif %}" href="?tab=tasks" data-testid="tab-tasks">Tasks ({{ tasks | length }})</a>
+      <a class="tab {% if tab == 'notes' %}active{% endif %}" href="?tab=notes" data-testid="tab-notes">Notes ({{ notes | length }})</a>
+      <a class="tab {% if tab == 'deals' %}active{% endif %}" href="?tab=deals" data-testid="tab-deals">Deals ({{ related_deals | length }})</a>
+      <a class="tab {% if tab == 'history' %}active{% endif %}" href="?tab=history" data-testid="tab-history">History</a>
+    </div>
+
+    {% if tab == 'activity' %}
+      <div class="panel" data-testid="activity-panel">
+        <form class="composer" action="/contacts/{{ contact.id }}/activity" method="post" data-testid="activity-form">
+          <div class="composer-row">
+            <select name="activity_type" data-testid="activity-type">
+              <option value="meeting">Log meeting</option>
+              <option value="call">Log call</option>
+              <option value="email">Log email</option>
+              <option value="note">Log note</option>
+            </select>
+            <input type="text" name="occurred_at" placeholder="2026-01-14T09:00:00Z (optional)" data-testid="activity-occurred-at"/>
+            <button type="submit" data-testid="activity-submit">Save activity</button>
+          </div>
+          <textarea name="body" placeholder="What happened? (notes, summary, action items…)" data-testid="activity-body"></textarea>
+        </form>
+        <ul class="timeline">
+          {% for a in activities %}
+            <li>
+              <div class="row1"><span class="activity-type">{{ a.activity_type }}</span><span>·</span><span>{{ a.occurred_at }}</span><span>·</span><span>{{ a.actor_id or "—" }}</span></div>
+              <div class="body">{{ a.body }}</div>
+            </li>
+          {% else %}
+            <li class="empty">No activity logged. Start above.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% elif tab == 'tasks' %}
+      <div class="panel" data-testid="tasks-panel">
+        <form class="composer" action="/tasks/create" method="post" data-testid="task-form">
+          <input type="hidden" name="target_type" value="contact"/>
+          <input type="hidden" name="target_id" value="{{ contact.id }}"/>
+          <div class="composer-row">
+            <input type="text" name="title" placeholder="Task title" style="flex:1" data-testid="task-title" required/>
+            <input type="text" name="due_date" placeholder="2026-02-01" data-testid="task-due"/>
+            <select name="priority" data-testid="task-priority"><option>low</option><option selected>normal</option><option>high</option></select>
+            <input type="text" name="assignee_id" placeholder="user_00001" data-testid="task-assignee"/>
+            <button type="submit" data-testid="task-submit">Add task</button>
+          </div>
+        </form>
+        <table class="data-table">
+          <thead><tr><th>Status</th><th>Title</th><th>Due</th><th>Priority</th><th>Assignee</th><th></th></tr></thead>
+          <tbody>
+            {% for t in tasks %}
+              <tr>
+                <td>{% if t.completed_at %}<span class="pill" style="background:var(--green-soft);color:var(--green)">done</span>{% else %}<span class="pill">open</span>{% endif %}</td>
+                <td>{{ t.title }}</td>
+                <td class="{% if not t.completed_at and t.due_date and t.due_date < contact.last_activity_at %}overdue{% endif %}">{{ t.due_date or "—" }}</td>
+                <td class="priority-{{ t.priority }}">{{ t.priority }}</td>
+                <td>{{ t.assignee_id or "—" }}</td>
+                <td>
+                  {% if not t.completed_at %}
+                    <form action="/tasks/{{ t.id }}/complete" method="post" style="display:inline">
+                      <button type="submit" class="secondary" data-testid="task-complete-{{ t.id }}">Complete</button>
+                    </form>
+                  {% endif %}
+                </td>
+              </tr>
+            {% else %}
+              <tr><td colspan="6" class="empty">No tasks on this contact.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% elif tab == 'notes' %}
+      <div class="panel" data-testid="notes-panel">
+        <form class="composer" action="/notes/create" method="post" data-testid="note-form">
+          <input type="hidden" name="target_type" value="contact"/>
+          <input type="hidden" name="target_id" value="{{ contact.id }}"/>
+          <textarea name="body_md" placeholder="Note (markdown supported)…" required data-testid="note-body"></textarea>
+          <div class="composer-row">
+            <label><input type="checkbox" name="pinned" value="1" data-testid="note-pinned"/> Pin to top</label>
+            <button type="submit" data-testid="note-submit">Save note</button>
+          </div>
+        </form>
+        <ul class="timeline">
+          {% for n in notes %}
+            <li class="{% if n.pinned %}pinned-note{% endif %}">
+              <div class="row1">
+                <span class="activity-type">note</span><span>·</span>
+                <span>{{ n.created_at }}</span><span>·</span>
+                <span>{{ n.author_id or "—" }}</span>
+                {% if n.pinned %}<span class="pill" style="background:var(--amber-soft);color:var(--amber)">pinned</span>{% endif %}
+              </div>
+              <div class="body">{{ n.body_md }}</div>
+            </li>
+          {% else %}
+            <li class="empty">No notes yet.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% elif tab == 'deals' %}
+      <div class="panel" data-testid="deals-panel">
+        <table class="data-table">
+          <thead><tr><th>Deal</th><th>Stage</th><th>Amount</th><th>Expected close</th><th>Owner</th></tr></thead>
+          <tbody>
+            {% for d in related_deals %}
+              <tr>
+                <td><a href="/deals/{{ d.id }}">{{ d.name }}</a></td>
+                <td><span class="stage-pill stage-{{ d.stage | replace(' ', '-') }}">{{ d.stage }}</span></td>
+                <td>${{ "{:,.0f}".format(d.amount) }}</td>
+                <td>{{ d.expected_close }}</td>
+                <td>{{ d.owner_id }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="5" class="empty">No deals tied to this contact.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="panel" data-testid="history-panel">
+        <div class="panel-header"><h2>Lifecycle transitions</h2></div>
+        <ul class="timeline">
+          {% for t in transitions %}
+            <li><div class="row1"><span class="activity-type">stage</span><span>·</span><span>{{ t.occurred_at }}</span></div>
+                <div class="body">{{ t.from_stage or "—" }} → <strong>{{ t.to_stage }}</strong></div></li>
+          {% else %}
+            <li class="empty">No stage transitions recorded.</li>
+          {% endfor %}
+        </ul>
+        <div class="panel-header"><h2>Recent changes</h2></div>
+        <p class="muted" style="padding:14px"><a href="/audit/contact/{{ contact.id }}">View full audit history →</a></p>
+      </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

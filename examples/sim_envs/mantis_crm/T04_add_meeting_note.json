@@ -1,0 +1,46 @@
+{
+  "task_id": "T04_add_meeting_note",
+  "source_plan": "Add a meeting note dated yesterday to Sarah Chen's contact record with the body 'discussed Q3 expansion'.",
+  "domain": "mantis-crm",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Search for Sarah Chen at {{ENV_URL}}/search?q=Sarah+Chen",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/search?q=Sarah+Chen"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Open Sarah Chen's contact detail page from the search results.",
+      "section": "navigate",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Use the 'Log activity' form on the contact detail page. Set type to 'meeting', body to 'discussed Q3 expansion', and occurred_at to 2026-01-14T09:00:00Z (yesterday).",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

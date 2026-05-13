@@ -1,0 +1,46 @@
+{
+  "task_id": "T05_pipeline_review",
+  "source_plan": "Export to the 'Pipeline Review (Q1)' saved list every deal owned by user_00005 with amount > $50,000 closing this quarter (by 2026-03-31).",
+  "domain": "mantis-crm",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the pipeline filtered by owner at {{ENV_URL}}/deals?owner=user_00005",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/deals?owner=user_00005"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "List every deal in this view whose amount > $50,000 AND expected_close is between 2026-01-15 and 2026-03-31 (this quarter).",
+      "section": "analyse",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Open the 'Pipeline Review (Q1)' list at {{ENV_URL}}/lists/list_pipeline_review and add the qualifying deal ids via the 'Add to list' form (member_type=deal, comma-separated ids).",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/lists/list_pipeline_review"},
+      "hints": {}
+    }
+  ]
+}

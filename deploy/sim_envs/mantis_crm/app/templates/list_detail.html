@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ list.name }} — mantis-crm{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>{{ list.name }}</h1>
+  <span class="muted">{{ list.id }} · {{ list.kind }}</span>
+</section>
+<div class="card" data-testid="list-card">
+  <h2>Members ({{ members | length }})</h2>
+  <ul>
+    {% for m in members %}
+      <li>{{ m.member_type }} · <a href="/{{ m.member_type }}s/{{ m.member_id }}">{{ m.member_id }}</a></li>
+    {% else %}
+      <li class="empty">No members. Add some below.</li>
+    {% endfor %}
+  </ul>
+  <h2>Add to list</h2>
+  <form action="/lists/{{ list.id }}/add" method="post" data-testid="list-add-form">
+    <select name="member_type" data-testid="list-add-member-type">
+      <option value="deal">deal</option>
+      <option value="contact">contact</option>
+    </select>
+    <input type="text" name="member_ids"
+           placeholder="deal_00042, deal_00077, …"
+           data-testid="list-add-ids" />
+    <button type="submit" data-testid="list-add-submit">Add</button>
+  </form>
+  {% if filter_def %}
+    <h2>Filter definition</h2>
+    <pre>{{ filter_def | tojson(indent=2) }}</pre>
+  {% endif %}
+</div>
+{% endblock %}

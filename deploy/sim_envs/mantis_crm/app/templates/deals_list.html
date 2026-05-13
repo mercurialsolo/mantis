@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Pipeline — mantis-crm{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div><div class="breadcrumb">Records</div><h1>Deals</h1></div>
+</div>
+<form class="filters" method="get" action="/deals">
+  <input type="text" name="owner" value="{{ filters.owner }}" placeholder="Owner (e.g. user_00005)"/>
+  <select name="stage">
+    <option value="">All stages</option>
+    {% for s in stages %}<option value="{{ s }}" {% if filters.stage == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <button type="submit">Apply</button>
+</form>
+<form action="/deals/bulk/stage" method="post" data-testid="deals-bulk-form">
+  <div class="pipeline">
+    {% for stage in stages %}
+      <div class="kanban-col" data-stage="{{ stage }}">
+        <div class="col-header">
+          <span class="stage-pill stage-{{ stage | replace(' ', '-') }}">{{ stage }}</span>
+          <span class="count">{{ columns[stage] | length }}</span>
+        </div>
+        <div class="col-body">
+          {% for d in columns[stage] %}
+            <div class="deal-card">
+              <label style="display:flex; gap:6px; align-items:center;">
+                <input type="checkbox" name="ids" value="{{ d.id }}" class="row-check"/>
+                <a class="deal-name" href="/deals/{{ d.id }}" data-testid="deal-link-{{ d.id }}">{{ d.name }}</a>
+              </label>
+              <div class="deal-meta">{{ d.owner_id }}</div>
+              <div class="deal-meta">close · {{ d.expected_close }}</div>
+              <div class="deal-amount">${{ "{:,.0f}".format(d.amount) }}</div>
+            </div>
+          {% else %}
+            <div class="empty">—</div>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  <div class="bulk-actions">
+    <span class="muted">Move selected →</span>
+    <select name="stage" data-testid="bulk-stage">
+      {% for s in stages %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    </select>
+    <button type="submit" data-testid="bulk-stage-apply">Update stage</button>
+  </div>
+</form>
+<script>
+document.querySelector('[data-testid=deals-bulk-form]')?.addEventListener('submit', (e) => {
+  const checked = Array.from(document.querySelectorAll('.row-check:checked')).map(cb => cb.value);
+  if (checked.length === 0) { e.preventDefault(); return; }
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.name = 'ids';
+  hidden.value = checked.join(',');
+  e.target.appendChild(hidden);
+  document.querySelectorAll('.row-check').forEach(cb => cb.disabled = true);
+});
+</script>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Companies — mantis-crm{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>Companies</h1>
+  <span class="muted">{{ "{:,}".format(total) }} total · page {{ page }}/{{ pages }}</span>
+</section>
+<form class="filters" method="get" action="/companies">
+  <input type="text" name="q" value="{{ filters.q }}" placeholder="Name or domain…"/>
+  <input type="text" name="industry" value="{{ filters.industry }}" placeholder="Industry"/>
+  <button type="submit">Apply</button>
+</form>
+<table class="data-table" data-testid="companies-table">
+  <thead><tr><th>ID</th><th>Name</th><th>Domain</th><th>Size</th><th>ARR</th><th>Industry</th><th>Parent</th></tr></thead>
+  <tbody>
+  {% for co in companies %}
+    <tr>
+      <td><a href="/companies/{{ co.id }}">{{ co.id }}</a></td>
+      <td>{{ co.name }}</td>
+      <td>{{ co.domain or "—" }}</td>
+      <td>{{ co.size_band or "—" }}</td>
+      <td>{{ co.arr_band or "—" }}</td>
+      <td>{{ co.industry or "—" }}</td>
+      <td>{% if co.parent_company_id %}<a href="/companies/{{ co.parent_company_id }}">{{ co.parent_company_id }}</a>{% else %}—{% endif %}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="7" class="empty">No companies.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<nav class="pagination">
+  {% if page > 1 %}<a href="?{% if filters.q %}q={{ filters.q }}&{% endif %}{% if filters.industry %}industry={{ filters.industry }}&{% endif %}page={{ page - 1 }}">‹ Prev</a>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a href="?{% if filters.q %}q={{ filters.q }}&{% endif %}{% if filters.industry %}industry={{ filters.industry }}&{% endif %}page={{ page + 1 }}">Next ›</a>{% endif %}
+</nav>
+{% endblock %}

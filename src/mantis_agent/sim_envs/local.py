@@ -72,8 +72,11 @@ def _image_for_env(env_name: str) -> str | None:
     override = os.environ.get(override_key, "").strip()
     if override:
         return override
-    # No real images registered yet — child env PRs (#332+) populate this.
-    return None
+    # Canonical per-env images. Child env PRs append to this table.
+    registry = {
+        "mantis-crm": "mantis/sim-env-mantis-crm:latest",
+    }
+    return registry.get(env_name)
 
 
 # ── port allocation ────────────────────────────────────────────────────

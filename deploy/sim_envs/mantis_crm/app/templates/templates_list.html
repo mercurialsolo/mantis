@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Email templates — mantis-crm{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Workspace</div>
+    <h1>Email templates</h1>
+  </div>
+  <span class="muted">{{ templates | length }} shown</span>
+</div>
+<form class="filters" method="get" action="/templates">
+  <select name="folder">
+    <option value="">All folders</option>
+    {% for f in folders %}<option value="{{ f }}" {% if active_folder == f %}selected{% endif %}>{{ f }}</option>{% endfor %}
+  </select>
+  <button type="submit">Apply</button>
+</form>
+<div class="panel">
+  <table class="data-table">
+    <thead><tr><th>Template</th><th>Subject</th><th>Folder</th></tr></thead>
+    <tbody>
+      {% for t in templates %}
+        <tr>
+          <td><a href="/templates/{{ t.id }}">{{ t.name }}</a><div class="muted">{{ t.id }}</div></td>
+          <td>{{ t.subject }}</td>
+          <td><span class="pill">{{ t.folder }}</span></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="3" class="empty">No templates.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

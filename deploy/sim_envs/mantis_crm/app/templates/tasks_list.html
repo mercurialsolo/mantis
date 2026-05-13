@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Tasks — mantis-crm{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Workspace</div>
+    <h1>Tasks</h1>
+  </div>
+  <span class="muted">{{ "{:,}".format(total) }} total · page {{ page }}/{{ pages }}</span>
+</div>
+<form class="filters" method="get" action="/tasks">
+  <select name="status">
+    <option value="open" {% if filters.status == 'open' %}selected{% endif %}>Open</option>
+    <option value="completed" {% if filters.status == 'completed' %}selected{% endif %}>Completed</option>
+    <option value="all" {% if filters.status == 'all' %}selected{% endif %}>All</option>
+  </select>
+  <input type="text" name="assignee" value="{{ filters.assignee }}" placeholder="Assignee (user id)"/>
+  <label><input type="checkbox" name="overdue" value="1" {% if filters.overdue %}checked{% endif %}/> overdue only</label>
+  <button type="submit">Apply</button>
+</form>
+<div class="panel">
+  <table class="data-table">
+    <thead>
+      <tr><th>Status</th><th>Title</th><th>Due</th><th>Priority</th><th>Target</th><th>Assignee</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for t in tasks %}
+        <tr>
+          <td>{% if t.completed_at %}<span class="pill" style="background:var(--green-soft);color:var(--green)">done</span>{% else %}<span class="pill">open</span>{% endif %}</td>
+          <td>{{ t.title }}</td>
+          <td class="{% if not t.completed_at and t.due_date and t.due_date < now %}overdue{% endif %}">{{ t.due_date or "—" }}</td>
+          <td class="priority-{{ t.priority }}">{{ t.priority }}</td>
+          <td>{% if t.target_id %}<a href="/{{ t.target_type }}s/{{ t.target_id }}">{{ t.target_id }}</a>{% else %}—{% endif %}</td>
+          <td>{{ t.assignee_id or "—" }}</td>
+          <td>
+            {% if not t.completed_at %}
+              <form action="/tasks/{{ t.id }}/complete" method="post" style="display:inline">
+                <button type="submit" class="secondary">Complete</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="empty">No tasks match.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<nav class="pagination">
+  {% if page > 1 %}<a href="?status={{ filters.status }}&assignee={{ filters.assignee }}{% if filters.overdue %}&overdue=1{% endif %}&page={{ page - 1 }}">‹ Prev</a>{% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a href="?status={{ filters.status }}&assignee={{ filters.assignee }}{% if filters.overdue %}&overdue=1{% endif %}&page={{ page + 1 }}">Next ›</a>{% endif %}
+</nav>
+{% endblock %}

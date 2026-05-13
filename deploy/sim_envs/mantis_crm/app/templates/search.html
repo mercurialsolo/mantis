@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Search — mantis-crm{% endblock %}
+{% block content %}
+<section class="page-header"><h1>Search</h1></section>
+<form class="filters" method="get" action="/search">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search…" autofocus />
+  <button type="submit">Search</button>
+</form>
+{% if q %}
+<div class="two-col">
+  <div class="card">
+    <h2>Contacts ({{ contacts | length }})</h2>
+    <ul>
+      {% for c in contacts %}
+        <li><a href="/contacts/{{ c.id }}">{{ c.name }}</a> — {{ c.email or "" }}</li>
+      {% else %}<li class="empty">No matching contacts.</li>{% endfor %}
+    </ul>
+  </div>
+  <div class="card">
+    <h2>Companies ({{ companies | length }})</h2>
+    <ul>
+      {% for co in companies %}
+        <li><a href="/companies/{{ co.id }}">{{ co.name }}</a> — {{ co.domain or "" }}</li>
+      {% else %}<li class="empty">No matching companies.</li>{% endfor %}
+    </ul>
+    <h2>Deals ({{ deals | length }})</h2>
+    <ul>
+      {% for d in deals %}
+        <li><a href="/deals/{{ d.id }}">{{ d.name }}</a> — {{ d.stage }} · ${{ "{:,.0f}".format(d.amount) }}</li>
+      {% else %}<li class="empty">No matching deals.</li>{% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

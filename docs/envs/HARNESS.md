@@ -106,6 +106,32 @@ Runs every plan in `plans/<env>/` against a fresh env instance per
 plan, writes per-plan dirs + `bench_summary.json`, prints a one-line
 oracle pass/fail table. Exit code 0 iff every plan passed the oracle.
 
+## mantis-crm (first real env)
+
+The first env landed on this harness is **mantis-crm** (#332) — a
+Salesforce/HubSpot-shape CRM with 50k contacts, 12k deals, 200k
+activities, tasks, notes, email templates with merge fields, lifecycle
+transitions, forecast and audit log.
+
+```bash
+# Local Docker
+docker build -t mantis/sim-env-mantis-crm:latest deploy/sim_envs/mantis_crm
+uv run mantis plan run examples/sim_envs/mantis_crm/T01_tag_reengage.json \
+    --env mantis-crm --runtime local --endpoint <BRAIN_URL>
+
+# Modal
+modal secret create mantis-sim-env-mantis-crm-secrets \
+    ENV_ADMIN_TOKEN=$(python -c 'import secrets;print(secrets.token_urlsafe(32))')
+uv run modal deploy deploy/sim_envs/modal_mantis_crm.py
+uv run mantis plan run examples/sim_envs/mantis_crm/T01_tag_reengage.json \
+    --env mantis-crm --runtime modal --endpoint <BRAIN_URL>
+```
+
+The env ships with five plans + per-task oracles (`T01_tag_reengage`,
+`T02_merge_acme_dupes`, `T03_at_risk_deals`, `T04_add_meeting_note`,
+`T05_pipeline_review`). Each oracle reads server-side state directly,
+not the agent's transcript.
+
 ## Modal deploy of the stub
 
 ```bash

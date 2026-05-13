@@ -1,0 +1,46 @@
+{
+  "task_id": "T02_merge_acme_dupes",
+  "source_plan": "Find duplicate contacts at @acme.com. Merge them into the contact with the most activities. Do not lose any history.",
+  "domain": "mantis-crm",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Search for @acme.com at {{ENV_URL}}/search?q=acme.com",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/search?q=acme.com"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "List every contact whose email is alice.lead@acme.com. For each, open the detail page and count the activities. Pick the one with the most activities as the survivor.",
+      "section": "analyse",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Open the survivor contact at {{ENV_URL}}/contacts/<survivor_id> and use the Merge form to absorb the other duplicates (pass their ids comma-separated).",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/contacts"},
+      "hints": {}
+    }
+  ]
+}

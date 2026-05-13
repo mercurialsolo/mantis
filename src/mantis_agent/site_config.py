@@ -140,6 +140,33 @@ class SiteConfig:
         return f"{base_clean}{fmt.format(n=page)}"
 
     @classmethod
+    def default_mantis_crm(cls) -> SiteConfig:
+        """Patterns for the mantis-crm simulated env (#332).
+
+        URL shape:
+
+        * ``/contacts``                — paginated list (results)
+        * ``/contacts/<contact_id>``   — record detail
+        * ``/companies``, ``/companies/<id>``, ``/deals``, ``/deals/<id>``
+          mirror the same shape.
+        * Pagination is ``?page=N``.
+
+        Gate verify prompt nudges the runner toward CRM-shaped filter
+        confirmation ("the page shows N contacts filtered by …").
+        """
+        return cls(
+            domain="mantis-crm",
+            detail_page_pattern=r"/(contacts|companies|deals|lists)/[\w_-]+$",
+            results_page_pattern=r"/(contacts|companies|deals|lists)/?$",
+            pagination_format="page={n}",
+            pagination_type="query_param",
+            pagination_strip_pattern=r"[?&]page=\d+",
+            gate_verify_prompt=(
+                "Page is a CRM list view filtered by these active criteria: "
+            ),
+        )
+
+    @classmethod
     def default_boattrader(cls) -> SiteConfig:
         """The current hardcoded BoatTrader patterns for backward compatibility."""
         return cls(
