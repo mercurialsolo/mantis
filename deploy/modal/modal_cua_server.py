@@ -627,8 +627,9 @@ def _run_holo3_executor(
     # ── Micro-intent mode: run MicroPlanRunner ──
     micro_plan_data = task_suite.get("_micro_plan")
     if micro_plan_data:
-        from mantis_agent.plan_decomposer import MicroPlan, MicroIntent
+        from mantis_agent.gym.checkpoint import PauseRequested, PauseState
         from mantis_agent.gym.micro_runner import MicroPlanRunner
+        from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
 
         micro_plan = MicroPlan(domain=session_name)
         for s in micro_plan_data:
@@ -708,7 +709,48 @@ def _run_holo3_executor(
             max_cost=task_suite.get("_max_cost", 10.0),
             max_time_minutes=task_suite.get("_max_time_minutes", 180),
         )
-        step_results = micro_runner.run(micro_plan, resume=resume_state)
+
+        # #347: default ``request_user_input`` host tool. Brains that emit
+        # ``Action(TOOL_CALL, name="request_user_input")`` get a paused-run
+        # snapshot on the first call, and the staged ``user_input`` on the
+        # second (after action=resume rehydrates).
+        def _request_user_input(args):
+            staged = micro_runner.consume_pause_input(default=None)
+            if staged is None:
+                raise PauseRequested(
+                    reason="user_input",
+                    prompt=str(args.get("prompt", "")),
+                )
+            return staged
+        micro_runner.register_tool(
+            "request_user_input",
+            {
+                "type": "object",
+                "properties": {"prompt": {"type": "string"}},
+                "additionalProperties": False,
+            },
+            _request_user_input,
+        )
+
+        # #347: resume continuation. The Modal API container layers
+        # ``_resume_pause_state`` + ``_resume_user_input`` onto the
+        # task_suite on action=resume; we feed them to runner.resume().
+        resume_blob = task_suite.get("_resume_pause_state")
+        if resume_blob is not None:
+            pause_state_obj = (
+                PauseState.from_dict(resume_blob)
+                if isinstance(resume_blob, dict) else resume_blob
+            )
+            runner_result = micro_runner.resume(
+                pause_state_obj,
+                user_input=task_suite.get("_resume_user_input"),
+                plan=micro_plan,
+            )
+        else:
+            runner_result = micro_runner.run_with_status(
+                micro_plan, resume=resume_state,
+            )
+        step_results = runner_result.steps
 
         # Build standardized result with dynamic verification
         from pathlib import Path as _Path
@@ -746,7 +788,7 @@ def _run_holo3_executor(
                 viewer_ctx.__exit__(None, None, None)
             except Exception:
                 pass
-        return {
+        envelope = {
             "mode": "micro",
             "viable": viable,
             "steps": result["steps_executed"],
@@ -756,7 +798,18 @@ def _run_holo3_executor(
             "checkpoint_path": checkpoint_path,
             "status": result.get("costs", {}).get("status", ""),
             "dynamic_verification_summary": result.get("dynamic_verification_summary"),
+            "run_id": run_id,
         }
+        # #347: surface paused state to the Modal API container. The poll
+        # path detects ``_paused`` on the FunctionCall result and writes
+        # pause_state.json + flips status.json to paused for the next
+        # action=resume round-trip.
+        if runner_result.paused and runner_result.pause_state is not None:
+            envelope["_paused"] = True
+            envelope["pause_state"] = runner_result.pause_state.to_dict()
+            envelope["prompt"] = runner_result.pause_state.prompt
+            envelope["reason"] = runner_result.pause_state.pending_reason
+        return envelope
 
     # ── Learning mode: run LearningRunner instead of normal task loop ──
     learn_mode = task_suite.get("_learn", False)
@@ -1330,6 +1383,42 @@ def _read_result(tenant_id: str, run_id: str) -> dict | None:
         return None
 
 
+def _write_pause_state(tenant_id: str, run_id: str, pause_state: dict) -> None:
+    """Persist the paused-run snapshot for the next action=resume (#347)."""
+    run_dir = _run_dir(tenant_id, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "pause_state.json").write_text(json.dumps(pause_state, indent=2))
+    _commit_volume()
+
+
+def _read_pause_state(tenant_id: str, run_id: str) -> dict | None:
+    path = _run_dir(tenant_id, run_id) / "pause_state.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _write_task_suite(tenant_id: str, run_id: str, task_file_contents: str) -> None:
+    """Snapshot the raw task_suite string so resume can re-spawn the executor (#347)."""
+    run_dir = _run_dir(tenant_id, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "task_suite.json").write_text(task_file_contents)
+    _commit_volume()
+
+
+def _read_task_suite(tenant_id: str, run_id: str) -> str | None:
+    path = _run_dir(tenant_id, run_id) / "task_suite.json"
+    if not path.exists():
+        return None
+    try:
+        return path.read_text()
+    except Exception:
+        return None
+
+
 def build_api_app(executor_resolver=None, function_call_lookup=None):
     """Construct the FastAPI app exposed by the Modal ASGI endpoint (#342).
 
@@ -1454,8 +1543,12 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
             "workflow_id": workflow_id,
             "state_key": payload["state_key"],
             "model": model,
+            "max_steps": int(payload.get("max_steps", 30)),
         }
         _write_status(tenant.tenant_id, run_id, status)
+        # #347: snapshot the suite so a later action=resume can re-spawn
+        # the executor with the same plan + identity + caps.
+        _write_task_suite(tenant.tenant_id, run_id, task_file_contents)
 
         run_dir = _run_dir(tenant.tenant_id, run_id)
         return {
@@ -1476,7 +1569,7 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         }
 
     def _do_action(payload: dict, tenant: TenantConfig) -> dict:
-        """Handle ``action=status|result|cancel`` against an existing run."""
+        """Handle ``action=status|result|cancel|resume`` against an existing run."""
         run_id = str(payload.get("run_id") or "")
         if not run_id:
             raise HTTPException(400, "action requires run_id")
@@ -1486,9 +1579,9 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
 
         action = payload["action"]
         if action == "cancel":
-            if status.get("status") in {"queued", "running"}:
+            if status.get("status") in {"queued", "running", "paused"}:
                 call_id = status.get("modal_call_id", "")
-                if call_id:
+                if call_id and status.get("status") != "paused":
                     try:
                         lookup_function_call(call_id).cancel()
                     except Exception:
@@ -1498,6 +1591,79 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
                 _write_status(tenant.tenant_id, run_id, status)
                 release_profile_lock(tenant, status.get("profile_id", ""))
             return status
+
+        if action == "resume":
+            # #347: rehydrate a paused Modal run. Validate, layer the
+            # caller's user_input + stored pause_state onto the saved
+            # task_suite, re-spawn the executor, update modal_call_id.
+            if status.get("status") != "paused":
+                raise HTTPException(
+                    400,
+                    f"action='resume' requires a paused run; "
+                    f"run_id={run_id!r} is in status={status.get('status')!r}",
+                )
+            user_input = payload.get("user_input")
+            if user_input is None:
+                raise HTTPException(400, "action='resume' requires user_input")
+            pause_state_blob = _read_pause_state(tenant.tenant_id, run_id)
+            if pause_state_blob is None:
+                raise HTTPException(
+                    404, f"pause_state.json missing for run {run_id!r}",
+                )
+            saved_suite = _read_task_suite(tenant.tenant_id, run_id)
+            if saved_suite is None:
+                raise HTTPException(
+                    404, f"task_suite.json missing for run {run_id!r}",
+                )
+            # Re-acquire the profile lock under the same run_id; the
+            # paused state released it, so this is the gate against a
+            # concurrent submission stealing the profile while the human
+            # was fetching the OTP.
+            profile_id = status.get("profile_id", "")
+            if not acquire_profile_lock(tenant, profile_id, run_id):
+                held = read_profile_lock(tenant, profile_id)
+                raise HTTPException(
+                    409,
+                    f"profile_id {profile_id!r} is now busy with run_id={held!r}; "
+                    "cannot resume while another run holds the lock.",
+                )
+            # Layer the resume hints onto the task_suite and re-spawn.
+            try:
+                suite_dict = json.loads(saved_suite)
+            except Exception as exc:
+                release_profile_lock(tenant, profile_id)
+                raise HTTPException(500, f"corrupt task_suite.json: {exc}") from exc
+            suite_dict["_resume_pause_state"] = pause_state_blob
+            suite_dict["_resume_user_input"] = user_input
+            model = status.get("model", "holo3")
+            executor_fn = resolve_executor(model)
+            spawn_kwargs: dict = {
+                "max_steps": int(status.get("max_steps", 30)),
+            }
+            if model != "claude":
+                spawn_kwargs["cua_model"] = model
+            try:
+                call_handle = executor_fn.spawn(
+                    task_file_contents=json.dumps(suite_dict),
+                    **spawn_kwargs,
+                )
+            except Exception as exc:
+                release_profile_lock(tenant, profile_id)
+                raise HTTPException(500, f"executor spawn failed: {exc}") from exc
+            now = datetime.now(timezone.utc).isoformat()
+            status["status"] = "running"
+            status["resumed_at"] = now
+            status["updated_at"] = now
+            status["modal_call_id"] = getattr(call_handle, "object_id", "") or ""
+            # Clear stale pause-surface fields on the resumed status.
+            status["prompt"] = ""
+            status["reason"] = ""
+            _write_status(tenant.tenant_id, run_id, status)
+            return {
+                "run_id": run_id,
+                "status": "running",
+                "resumed_at": now,
+            }
 
         # status / result: check the FunctionCall handle if still running.
         if status.get("status") in {"queued", "running"}:
@@ -1520,11 +1686,37 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
                     else:
                         status["status"] = "running"
                 else:
-                    status["status"] = "succeeded"
-                    status["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    _write_status(tenant.tenant_id, run_id, status)
-                    _write_result(tenant.tenant_id, run_id, result if isinstance(result, dict) else {"result": result})
-                    release_profile_lock(tenant, status.get("profile_id", ""))
+                    # #347: the executor surfaces ``_paused`` when a host
+                    # tool raised PauseRequested. Persist the snapshot,
+                    # flip status to paused, release the lock so the
+                    # next action=resume can re-acquire under the same
+                    # run_id.
+                    if isinstance(result, dict) and result.get("_paused"):
+                        pause_blob = result.get("pause_state") or {}
+                        _write_pause_state(tenant.tenant_id, run_id, pause_blob)
+                        status["status"] = "paused"
+                        status["paused_at"] = datetime.now(timezone.utc).isoformat()
+                        status["updated_at"] = status["paused_at"]
+                        status["prompt"] = str(result.get("prompt", ""))
+                        status["reason"] = str(result.get("reason", "user_input"))
+                        _write_status(tenant.tenant_id, run_id, status)
+                        release_profile_lock(tenant, status.get("profile_id", ""))
+                    else:
+                        status["status"] = "succeeded"
+                        status["updated_at"] = datetime.now(timezone.utc).isoformat()
+                        _write_status(tenant.tenant_id, run_id, status)
+                        _write_result(
+                            tenant.tenant_id,
+                            run_id,
+                            result if isinstance(result, dict) else {"result": result},
+                        )
+                        release_profile_lock(tenant, status.get("profile_id", ""))
+
+        # action=status on a paused run: inline pause_state for the caller.
+        if action == "status" and status.get("status") == "paused":
+            pause_blob = _read_pause_state(tenant.tenant_id, run_id)
+            if pause_blob is not None:
+                status["pause_state"] = pause_blob
 
         if action == "result":
             if status.get("status") != "succeeded":

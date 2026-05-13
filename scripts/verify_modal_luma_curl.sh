@@ -39,7 +39,7 @@ fail() { echo "❌ $*" >&2; exit 1; }
 ok()   { echo "✅ $*"; }
 
 # ── 1. health ────────────────────────────────────────────────────
-echo "[1/5] GET ${ENDPOINT}/v1/health"
+echo "[1/8] GET ${ENDPOINT}/v1/health"
 health_status=$(curl -fsSL -o /tmp/mantis_health.json -w '%{http_code}' "${ENDPOINT}/v1/health")
 [[ "${health_status}" == "200" ]] || fail "health returned ${health_status}"
 grep -q '"status":"ok"' /tmp/mantis_health.json || fail "health body missing status:ok"
@@ -65,7 +65,7 @@ SUITE=$(jq -n \
     }')
 
 # ── 2. first submit returns 200 + run_id ────────────────────────
-echo "[2/5] POST /v1/predict — first luma submit"
+echo "[2/8] POST /v1/predict — first luma submit"
 submit_body=$(jq -n \
     --argjson suite "${SUITE}" \
     --arg profile "${PROFILE_ID}" \
@@ -96,7 +96,7 @@ got_workflow=$(jq -r '.payload.workflow_id' "${submit_resp}")
 ok "first submit 200 — run_id=${run_id}, profile_id=${got_profile}"
 
 # ── 3. duplicate profile_id → 409 ───────────────────────────────
-echo "[3/5] POST /v1/predict — duplicate profile_id (expect 409)"
+echo "[3/8] POST /v1/predict — duplicate profile_id (expect 409)"
 dup_resp=$(mktemp)
 dup_status=$(curl -sS -o "${dup_resp}" -w '%{http_code}' \
     -X POST "${ENDPOINT}/v1/predict" "${H_AUTH[@]}" "${H_JSON[@]}" -d "${submit_body}")
@@ -105,7 +105,7 @@ grep -q "${run_id}" "${dup_resp}" || fail "409 detail must surface the held run_
 ok "duplicate 409 — held run_id surfaced in detail"
 
 # ── 4. status poll until terminal-or-paused ─────────────────────
-echo "[4/5] POST /v1/predict — action=status until non-running"
+echo "[4/8] POST /v1/predict — action=status until non-running"
 poll_body=$(jq -n --arg run_id "${run_id}" '{action: "status", run_id: $run_id}')
 deadline=$(( $(date +%s) + 60 ))
 final_status=""
@@ -124,7 +124,7 @@ done
 ok "status reached ${final_status} for run_id=${run_id}"
 
 # ── 5. cancel + re-submit succeeds ──────────────────────────────
-echo "[5/5] cancel + re-submit on same profile_id"
+echo "[5/8] cancel + re-submit on same profile_id"
 cancel_body=$(jq -n --arg run_id "${run_id}" '{action: "cancel", run_id: $run_id}')
 cancel_resp=$(curl -sS -X POST "${ENDPOINT}/v1/predict" \
     "${H_AUTH[@]}" "${H_JSON[@]}" -d "${cancel_body}")
@@ -145,5 +145,43 @@ ok "re-submit 200 — new run_id=${new_run_id} (lock released)"
 curl -sS -X POST "${ENDPOINT}/v1/predict" "${H_AUTH[@]}" "${H_JSON[@]}" \
     -d "$(jq -n --arg run_id "${new_run_id}" '{action: "cancel", run_id: $run_id}')" >/dev/null
 
+# ── 6-8. action=resume validation paths (#347) ──────────────────
+# Full pause/resume E2E requires a brain that emits TOOL_CALL
+# request_user_input. The unit tests cover that with a mocked executor.
+# Here we just verify the HTTP wiring: each invalid resume shape lands
+# on the expected status code.
+
+echo "[6/8] resume validation: missing user_input → expect 400"
+resume_no_input_body=$(jq -n --arg run_id "${new_run_id}" '{action: "resume", run_id: $run_id}')
+resume_no_input_resp=$(mktemp)
+resume_no_input_status=$(curl -sS -o "${resume_no_input_resp}" -w '%{http_code}' \
+    -X POST "${ENDPOINT}/v1/predict" "${H_AUTH[@]}" "${H_JSON[@]}" -d "${resume_no_input_body}")
+[[ "${resume_no_input_status}" == "400" ]] \
+    || fail "missing user_input → expected 400, got ${resume_no_input_status}: $(cat "${resume_no_input_resp}")"
+grep -q "user_input" "${resume_no_input_resp}" \
+    || fail "400 detail must mention user_input: $(cat "${resume_no_input_resp}")"
+ok "missing user_input → 400 with user_input in detail"
+
+echo "[7/8] resume validation: unknown run_id → expect 404"
+resume_unknown_resp=$(mktemp)
+resume_unknown_status=$(curl -sS -o "${resume_unknown_resp}" -w '%{http_code}' \
+    -X POST "${ENDPOINT}/v1/predict" "${H_AUTH[@]}" "${H_JSON[@]}" \
+    -d '{"action": "resume", "run_id": "does-not-exist", "user_input": "x"}')
+[[ "${resume_unknown_status}" == "404" ]] \
+    || fail "unknown run_id → expected 404, got ${resume_unknown_status}: $(cat "${resume_unknown_resp}")"
+ok "unknown run_id → 404"
+
+echo "[8/8] resume validation: non-paused run → expect 400"
+resume_nonpaused_body=$(jq -n --arg run_id "${new_run_id}" \
+    '{action: "resume", run_id: $run_id, user_input: "x"}')
+resume_nonpaused_resp=$(mktemp)
+resume_nonpaused_status=$(curl -sS -o "${resume_nonpaused_resp}" -w '%{http_code}' \
+    -X POST "${ENDPOINT}/v1/predict" "${H_AUTH[@]}" "${H_JSON[@]}" -d "${resume_nonpaused_body}")
+[[ "${resume_nonpaused_status}" == "400" ]] \
+    || fail "non-paused → expected 400, got ${resume_nonpaused_status}: $(cat "${resume_nonpaused_resp}")"
+grep -qi "paused" "${resume_nonpaused_resp}" \
+    || fail "400 detail must explain the non-paused state: $(cat "${resume_nonpaused_resp}")"
+ok "non-paused → 400 with 'paused' in detail"
+
 echo
-echo "🎉 All 5 curl checks passed against ${ENDPOINT}."
+echo "🎉 All 8 curl checks passed against ${ENDPOINT}."
