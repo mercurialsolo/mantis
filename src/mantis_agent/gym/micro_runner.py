@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import random
 import time  # noqa: F401 — re-exported for tests that monkeypatch micro_runner.time.sleep
 from typing import TYPE_CHECKING, Any
 
@@ -82,7 +83,16 @@ class MicroPlanRunner:
         context_budget: Any = None,  # ContextBudget | None — typed in body to avoid import cycle
         seen_url_predicate: Any = None,  # Callable[[str], bool] | None
         routing_policy: Any = None,  # RoutingPolicy | None — typed in body to avoid import cycle
+        seed: int | None = None,
     ):
+        # Seed the global RNG so per-action human_speed delays
+        # (random.uniform / random.randint in playwright_env.py +
+        # xdotool_env.py + step_handlers/*) are reproducible across
+        # runs of the same plan. ``None`` preserves the previous
+        # non-deterministic behavior.
+        if seed is not None:
+            random.seed(seed)
+        self.seed = seed
         self.brain, self.env, self.grounding, self.extractor = (
             brain, env, grounding, extractor
         )
