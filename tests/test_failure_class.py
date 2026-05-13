@@ -4,8 +4,6 @@ rely on a stable set of class strings."""
 
 from __future__ import annotations
 
-import pytest
-
 from mantis_agent.gym.failure_class import classify, read_failure_context
 
 
