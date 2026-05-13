@@ -1,0 +1,46 @@
+{
+  "task_id": "T01_tag_reengage",
+  "source_plan": "Tag every contact with no last_activity_at in 90 days at companies with arr_band >= 1M+ as 'reengage'.",
+  "domain": "mantis-crm",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the contacts list at {{ENV_URL}}/contacts",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/contacts"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "Identify the set of qualifying contacts: at companies with ARR band 1M+ or 10M+ AND last_activity_at more than 90 days before 2026-01-15.",
+      "section": "analyse",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Open the bulk-tag endpoint at {{ENV_URL}}/contacts. Use the multi-select + bulk add-tag form to tag every qualifying contact as 'reengage'.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/contacts"},
+      "hints": {}
+    }
+  ]
+}

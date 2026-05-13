@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Forecast — mantis-crm{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div><div class="breadcrumb">Insights</div><h1>Forecast</h1></div>
+  <span class="muted">Weighted pipeline = Σ (amount × win probability per stage)</span>
+</div>
+<div class="kpi-grid">
+  <div class="kpi"><div class="label">Raw pipeline</div><div class="value">${{ "{:,.0f}".format(raw_total) }}</div></div>
+  <div class="kpi"><div class="label">Weighted pipeline</div><div class="value">${{ "{:,.0f}".format(weighted_total) }}</div><div class="sub">probability-adjusted</div></div>
+</div>
+<div class="panel" style="margin-top:14px">
+  <table class="data-table">
+    <thead><tr><th>Stage</th><th>Deals</th><th>Amount</th><th>Win prob</th><th>Weighted</th></tr></thead>
+    <tbody>
+      {% for r in breakdown %}
+        <tr>
+          <td><span class="stage-pill stage-{{ r.stage | replace(' ', '-') }}">{{ r.stage }}</span></td>
+          <td>{{ r.deal_count }}</td>
+          <td>${{ "{:,.0f}".format(r.amount_sum) }}</td>
+          <td>{{ "{:.0%}".format(r.win_prob) }}</td>
+          <td>${{ "{:,.0f}".format(r.weighted) }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

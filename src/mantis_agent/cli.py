@@ -851,12 +851,23 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
 
     # Site config — neutral by default. ``--detail-page-pattern`` is the
     # per-plan override hook; without it we rely on the path-extension
-    # heuristic from #211.
+    # heuristic from #211. When ``--env <name>`` is set, we auto-load
+    # ``SiteConfig.default_<env>()`` if one exists (#336 §8).
     from .site_config import SiteConfig
 
     site_config = SiteConfig(
         detail_page_pattern=args.detail_page_pattern or "",
     )
+    if args.env:
+        method_name = f"default_{args.env.replace('-', '_')}"
+        factory = getattr(SiteConfig, method_name, None)
+        if factory is not None:
+            env_site_config = factory()
+            # ``--detail-page-pattern`` still wins if the user passed one.
+            if args.detail_page_pattern:
+                env_site_config.detail_page_pattern = args.detail_page_pattern
+            site_config = env_site_config
+            print(f"  site:    SiteConfig.{method_name}() auto-loaded for --env {args.env}")
 
     # Wire the runner. ``session_name`` flows into checkpoint paths and
     # the dynamic verifier; derive a stable label from the plan filename

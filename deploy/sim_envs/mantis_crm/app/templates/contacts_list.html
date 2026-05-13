@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Contacts — mantis-crm{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">Records</div>
+    <h1>Contacts</h1>
+  </div>
+  <span class="muted">{{ "{:,}".format(total) }} total · page {{ page }}/{{ pages }}</span>
+  <span style="margin-left:auto"></span>
+  <a href="/export/contacts.csv?{% if filters.q %}q={{ filters.q }}&{% endif %}{% if filters.stage %}stage={{ filters.stage }}&{% endif %}{% if filters.owner %}owner={{ filters.owner }}&{% endif %}{% if filters.tag %}tag={{ filters.tag }}{% endif %}" data-testid="export-csv"><button class="secondary">Export CSV</button></a>
+</div>
+
+<form class="filters" method="get" action="/contacts" data-testid="contacts-filter">
+  <input type="text" name="q" value="{{ filters.q }}" placeholder="Name, email, company…" class="grow" data-testid="filter-q"/>
+  <select name="stage" data-testid="filter-stage">
+    <option value="">All lifecycle stages</option>
+    {% for s in ["lead", "mql", "sql", "customer", "evangelist", "churned"] %}
+      <option value="{{ s }}" {% if filters.stage == s %}selected{% endif %}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="owner" value="{{ filters.owner }}" placeholder="Owner" data-testid="filter-owner"/>
+  <input type="text" name="tag" value="{{ filters.tag }}" placeholder="Tag" data-testid="filter-tag"/>
+  <button type="submit" data-testid="filter-apply">Apply</button>
+</form>
+
+<div class="panel">
+<form id="bulk-form" action="/contacts/bulk/tag" method="post" data-testid="bulk-form">
+  <table class="data-table" data-testid="contacts-table">
+    <thead>
+      <tr>
+        <th class="check-col"><input type="checkbox" id="check-all" data-testid="check-all"/></th>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Phone</th>
+        <th>Company</th>
+        <th>Stage</th>
+        <th>Owner</th>
+        <th>Last activity</th>
+        <th>Tags</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for c in contacts %}
+      <tr data-testid="contact-row" data-contact-id="{{ c.id }}">
+        <td><input type="checkbox" name="ids" value="{{ c.id }}" class="row-check" data-testid="check-{{ c.id }}"/></td>
+        <td><a href="/contacts/{{ c.id }}" data-testid="contact-link-{{ c.id }}">{{ c.name }}</a><div class="muted">{{ c.id }}</div></td>
+        <td>{{ c.email or "—" }}</td>
+        <td>{{ c.phone or "—" }}</td>
+        <td>{% if c.company_id %}<a href="/companies/{{ c.company_id }}">{{ c.company_name or c.company_id }}</a>{% else %}—{% endif %}</td>
+        <td>{% if c.lifecycle_stage %}<span class="pill">{{ c.lifecycle_stage }}</span>{% else %}—{% endif %}</td>
+        <td>{{ c.owner_id or "—" }}</td>
+        <td>{{ c.last_activity_at or "—" }}</td>
+        <td>{% for t in c.tags %}<span class="tag">{{ t }}</span>{% endfor %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="empty">No contacts match these filters.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="bulk-actions">
+    <span class="muted">Bulk action on selected:</span>
+    <input type="text" name="tag" placeholder="tag name (e.g. reengage)" data-testid="bulk-tag-input"/>
+    <button type="submit" data-testid="bulk-apply">Add tag</button>
+  </div>
+</form>
+</div>
+
+<nav class="pagination">
+  {% if page > 1 %}
+    <a href="?{% if filters.q %}q={{ filters.q }}&{% endif %}{% if filters.stage %}stage={{ filters.stage }}&{% endif %}{% if filters.owner %}owner={{ filters.owner }}&{% endif %}{% if filters.tag %}tag={{ filters.tag }}&{% endif %}page={{ page - 1 }}" data-testid="page-prev">‹ Prev</a>
+  {% endif %}
+  <span>Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}
+    <a href="?{% if filters.q %}q={{ filters.q }}&{% endif %}{% if filters.stage %}stage={{ filters.stage }}&{% endif %}{% if filters.owner %}owner={{ filters.owner }}&{% endif %}{% if filters.tag %}tag={{ filters.tag }}&{% endif %}page={{ page + 1 }}" data-testid="page-next">Next ›</a>
+  {% endif %}
+</nav>
+
+<script>
+document.getElementById('check-all')?.addEventListener('change', (e) => {
+  document.querySelectorAll('.row-check').forEach(cb => { cb.checked = e.target.checked; });
+});
+document.getElementById('bulk-form')?.addEventListener('submit', (e) => {
+  const checked = Array.from(document.querySelectorAll('.row-check:checked')).map(cb => cb.value);
+  if (checked.length === 0) return;
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.name = 'ids';
+  hidden.value = checked.join(',');
+  e.target.appendChild(hidden);
+  document.querySelectorAll('.row-check').forEach(cb => cb.disabled = true);
+});
+</script>
+{% endblock %}

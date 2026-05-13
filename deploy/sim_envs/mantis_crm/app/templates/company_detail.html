@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ company.name }} — mantis-crm{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>{{ company.name }}</h1>
+  <span class="muted">{{ company.id }} · {{ company.domain or "—" }}</span>
+</section>
+<div class="two-col">
+  <div class="card">
+    <h2>Profile</h2>
+    <dl>
+      <dt>Domain</dt><dd>{{ company.domain or "—" }}</dd>
+      <dt>Size</dt><dd>{{ company.size_band or "—" }}</dd>
+      <dt>ARR band</dt><dd><span data-testid="company-arr-band">{{ company.arr_band or "—" }}</span></dd>
+      <dt>Industry</dt><dd>{{ company.industry or "—" }}</dd>
+      <dt>Parent</dt><dd>
+        {% if company.parent_company_id %}
+          <a href="/companies/{{ company.parent_company_id }}">{{ company.parent_company_id }}</a>
+        {% else %}—{% endif %}
+      </dd>
+    </dl>
+  </div>
+  <div class="card">
+    <h2>Contacts ({{ contacts | length }})</h2>
+    <ul>
+      {% for c in contacts %}
+        <li><a href="/contacts/{{ c.id }}">{{ c.name }}</a> — {{ c.email or "" }} <span class="muted">[{{ c.lifecycle_stage or "—" }}]</span></li>
+      {% else %}
+        <li class="empty">No contacts at this company.</li>
+      {% endfor %}
+    </ul>
+    <h2>Deals ({{ deals | length }})</h2>
+    <ul>
+      {% for d in deals %}
+        <li><a href="/deals/{{ d.id }}">{{ d.name }}</a> — {{ d.stage }} · ${{ "{:,.0f}".format(d.amount) }}</li>
+      {% else %}
+        <li class="empty">No deals at this company.</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endblock %}

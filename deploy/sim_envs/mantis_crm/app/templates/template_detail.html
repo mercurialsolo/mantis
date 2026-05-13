@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ template.name }} — mantis-crm{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb"><a href="/templates">Templates</a> / {{ template.id }}</div>
+    <h1>{{ template.name }}</h1>
+  </div>
+  <span class="pill">{{ template.folder }}</span>
+</div>
+<div class="detail-layout">
+  <aside>
+    <div class="panel">
+      <div class="panel-header"><h2>Preview with contact</h2></div>
+      <form class="panel-body" method="get" action="">
+        <input type="text" name="preview_contact" placeholder="contact_00001"
+               value="{{ preview_contact_id }}" style="width:100%" data-testid="preview-contact-input"/>
+        <p class="muted" style="margin:6px 0">Merge fields supported: <code>{{ '{{contact.first_name}}' }}</code>, <code>{{ '{{company.name}}' }}</code>, <code>{{ '{{user.name}}' }}</code>.</p>
+        <button type="submit">Preview</button>
+      </form>
+    </div>
+  </aside>
+  <section>
+    <div class="panel">
+      <div class="panel-header"><h2>Subject</h2></div>
+      <div class="panel-body"><div class="email-body">{{ preview_subject }}</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Body</h2></div>
+      <div class="panel-body"><div class="email-body">{{ preview_body }}</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><h2>Raw template</h2></div>
+      <div class="panel-body">
+        <p class="muted">Subject:</p><pre>{{ template.subject }}</pre>
+        <p class="muted">Body:</p><pre>{{ template.body }}</pre>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

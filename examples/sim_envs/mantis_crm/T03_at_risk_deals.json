@@ -1,0 +1,46 @@
+{
+  "task_id": "T03_at_risk_deals",
+  "source_plan": "Move all deals in the 'Proposal' stage whose expected_close is more than 30 days in the past to 'At Risk'.",
+  "domain": "mantis-crm",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the pipeline at {{ENV_URL}}/deals?stage=Proposal",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/deals?stage=Proposal"},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "Identify every Proposal-stage deal whose expected_close is before 2025-12-16 (more than 30 days before 2026-01-15).",
+      "section": "analyse",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Multi-select the qualifying deals on the kanban and use the bulk stage-change form to move them to 'At Risk'.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/deals?stage=Proposal"},
+      "hints": {}
+    }
+  ]
+}

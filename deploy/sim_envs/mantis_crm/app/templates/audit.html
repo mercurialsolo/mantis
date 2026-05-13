@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Audit log — mantis-crm{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <div class="breadcrumb">{% if target_type %}<a href="/audit">Audit log</a> / {{ target_type }}/{{ target_id }}{% else %}Insights{% endif %}</div>
+    <h1>Audit log</h1>
+  </div>
+  <span class="muted">{{ items | length }} entries</span>
+</div>
+<div class="panel">
+  <table class="data-table">
+    <thead><tr><th>When</th><th>Operation</th><th>Target</th><th>Payload</th></tr></thead>
+    <tbody>
+      {% for it in items %}
+        <tr>
+          <td>{{ it.occurred_at }}</td>
+          <td><span class="pill">{{ it.operation }}</span></td>
+          <td>{% if it.target_id %}{{ it.target_type }} · <a href="/{{ it.target_type }}s/{{ it.target_id }}">{{ it.target_id }}</a>{% else %}{{ it.target_type }}{% endif %}</td>
+          <td><code style="font-size:11px">{{ it.payload | tojson }}</code></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">No audit entries.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

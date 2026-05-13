@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}mantis-crm{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" data-testid="sidebar">
+    <div class="brand"><span class="logo">m</span> mantis</div>
+    <nav>
+      <a href="/" class="{% if request.url.path == '/' %}active{% endif %}" data-testid="nav-home"><span class="nav-ico">⌂</span> Home</a>
+      <div class="nav-section">Records</div>
+      <a href="/contacts" class="{% if request.url.path.startswith('/contacts') %}active{% endif %}" data-testid="nav-contacts"><span class="nav-ico">◉</span> Contacts</a>
+      <a href="/companies" class="{% if request.url.path.startswith('/companies') %}active{% endif %}" data-testid="nav-companies"><span class="nav-ico">▣</span> Companies</a>
+      <a href="/deals" class="{% if request.url.path.startswith('/deals') %}active{% endif %}" data-testid="nav-deals"><span class="nav-ico">⛴</span> Deals</a>
+      <div class="nav-section">Workspace</div>
+      <a href="/tasks" class="{% if request.url.path.startswith('/tasks') %}active{% endif %}" data-testid="nav-tasks"><span class="nav-ico">☑</span> Tasks</a>
+      <a href="/templates" class="{% if request.url.path.startswith('/templates') %}active{% endif %}" data-testid="nav-templates"><span class="nav-ico">✉</span> Templates</a>
+      <a href="/lists/list_pipeline_review" class="{% if request.url.path.startswith('/lists') %}active{% endif %}" data-testid="nav-lists"><span class="nav-ico">☰</span> Lists</a>
+      <div class="nav-section">Insights</div>
+      <a href="/reports" class="{% if request.url.path == '/reports' %}active{% endif %}" data-testid="nav-reports"><span class="nav-ico">▤</span> Reports</a>
+      <a href="/forecast" class="{% if request.url.path == '/forecast' %}active{% endif %}" data-testid="nav-forecast"><span class="nav-ico">↗</span> Forecast</a>
+      <a href="/audit" class="{% if request.url.path.startswith('/audit') %}active{% endif %}" data-testid="nav-audit"><span class="nav-ico">◷</span> Audit log</a>
+    </nav>
+  </aside>
+  <div>
+    <header class="topbar">
+      <form class="search-form" action="/search" method="get">
+        <input type="text" name="q" placeholder="Search contacts, companies, deals…" value="{{ request.query_params.get('q') or '' }}" data-testid="topbar-search"/>
+      </form>
+      <div class="user-chip"><span class="avatar">YS</span> You · Sales</div>
+    </header>
+    <main class="workspace">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+</body>
+</html>

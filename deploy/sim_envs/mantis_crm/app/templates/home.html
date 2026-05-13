@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <h1>Welcome back</h1>
+  <span class="muted">{{ now }}</span>
+</div>
+<div class="kpi-grid">
+  <div class="kpi">
+    <div class="label">Contacts</div>
+    <div class="value">{{ "{:,}".format(contact_count) }}</div>
+    <div class="sub"><a href="/contacts">View all</a></div>
+  </div>
+  <div class="kpi">
+    <div class="label">Companies</div>
+    <div class="value">{{ "{:,}".format(company_count) }}</div>
+    <div class="sub"><a href="/companies">View all</a></div>
+  </div>
+  <div class="kpi">
+    <div class="label">Deals</div>
+    <div class="value">{{ "{:,}".format(deal_count) }}</div>
+    <div class="sub"><a href="/deals">View pipeline</a></div>
+  </div>
+</div>
+<div class="panel" style="margin-top:18px">
+  <div class="panel-header"><h2>Quick links</h2></div>
+  <div class="panel-body">
+    <ul>
+      <li><a href="/tasks?status=open&overdue=1">My overdue tasks</a></li>
+      <li><a href="/deals?stage=Proposal">Proposal-stage deals</a></li>
+      <li><a href="/forecast">Forecast (weighted pipeline)</a></li>
+      <li><a href="/audit">Recent activity (audit log)</a></li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

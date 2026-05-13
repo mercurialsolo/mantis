@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ deal.name }} — mantis-crm{% endblock %}
+{% block content %}
+<section class="page-header">
+  <h1>{{ deal.name }}</h1>
+  <span class="muted">{{ deal.id }} · {{ deal.stage }} · ${{ "{:,.0f}".format(deal.amount) }}</span>
+</section>
+<div class="card" data-testid="deal-profile">
+  <dl>
+    <dt>Contact</dt><dd>
+      {% if deal.contact_id %}<a href="/contacts/{{ deal.contact_id }}">{{ deal.contact_name or deal.contact_id }}</a>{% else %}—{% endif %}
+    </dd>
+    <dt>Company</dt><dd>
+      {% if deal.company_id %}<a href="/companies/{{ deal.company_id }}">{{ deal.company_name or deal.company_id }}</a>{% else %}—{% endif %}
+    </dd>
+    <dt>Owner</dt><dd>{{ deal.owner_id }}</dd>
+    <dt>Expected close</dt><dd>{{ deal.expected_close }}</dd>
+  </dl>
+  <form action="/deals/{{ deal.id }}/stage" method="post" data-testid="stage-form">
+    <label>Change stage:
+      <select name="stage" data-testid="stage-select">
+        {% for s in stages %}
+          <option value="{{ s }}" {% if s == deal.stage %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" data-testid="stage-submit">Update stage</button>
+  </form>
+</div>
+<div class="card">
+  <h2>Activity</h2>
+  <ul class="timeline">
+    {% for a in activities %}
+      <li><span class="activity-type">{{ a.activity_type }}</span>
+          <span class="muted">{{ a.occurred_at }}</span>
+          <p>{{ a.body }}</p></li>
+    {% else %}
+      <li class="empty">No activities logged on this deal.</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endblock %}

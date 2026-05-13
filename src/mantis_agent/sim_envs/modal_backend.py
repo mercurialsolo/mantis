@@ -134,28 +134,33 @@ class ModalBackend:
                 extra={"app_name": "mantis-sim-env-stub", "run_suffix": run_suffix},
             )
 
-        # Per-env apps: each env PR lands its own deploy file. We look
-        # for ``<app_name>``'s ``web`` function. If absent we surface a
-        # clear error that points at the missing deploy.
-        try:
-            fn = modal.Function.from_name(app_name, "web")
-            url = fn.get_web_url()
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(
-                f"Modal app {app_name!r} not found. Per-env deploy files "
-                f"land in deploy/sim_envs/<env>.py. For development you "
-                f"can override the env image with MANTIS_SIM_ENV_IMAGE_<NAME> "
-                f"and use --runtime local instead."
-            ) from exc
-
-        return RuntimeHandle(
-            env_name=env_name,
-            url=url,
-            admin_token=token,
-            backend=self.name,
-            started_at=time.time(),
-            extra={"app_name": app_name, "run_suffix": run_suffix},
-        )
+        # Per-env apps: each env PR lands its own deploy file. We resolve
+        # the shared (long-lived) app first; per-run app suffixing is
+        # deferred until batch volume justifies it.
+        shared_app_name = f"{APP_NAME_PREFIX}-{env_name}"
+        candidates = [shared_app_name, app_name]
+        last_exc: Exception | None = None
+        for name in candidates:
+            try:
+                fn = modal.Function.from_name(name, "web")
+                url = fn.get_web_url()
+                return RuntimeHandle(
+                    env_name=env_name,
+                    url=url,
+                    admin_token=token,
+                    backend=self.name,
+                    started_at=time.time(),
+                    extra={"app_name": name, "run_suffix": run_suffix},
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+        raise RuntimeError(
+            f"Modal apps {candidates!r} not found. Per-env deploy files "
+            f"land in deploy/sim_envs/<env>.py (e.g. "
+            f"deploy/sim_envs/modal_mantis_crm.py). For dev, override "
+            f"the env image with MANTIS_SIM_ENV_IMAGE_<NAME> and use "
+            f"--runtime local instead."
+        ) from last_exc
 
     def wait_healthy(self, handle: RuntimeHandle, *, timeout_s: float = 60.0) -> None:
         # Modal cold start is 5-15s; bump the default timeout vs local.

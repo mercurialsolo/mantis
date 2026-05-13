@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Reports — mantis-crm{% endblock %}
+{% block content %}
+<section class="page-header"><h1>Reports</h1></section>
+<div class="three-col">
+  <div class="card">
+    <h2>Deals by stage</h2>
+    <table class="data-table"><thead><tr><th>Stage</th><th>Count</th></tr></thead><tbody>
+      {% for r in deals_by_stage %}
+        <tr><td><a href="/deals?stage={{ r.stage }}">{{ r.stage }}</a></td><td>{{ r.count }}</td></tr>
+      {% endfor %}
+    </tbody></table>
+  </div>
+  <div class="card">
+    <h2>Contacts by source</h2>
+    <table class="data-table"><thead><tr><th>Source</th><th>Count</th></tr></thead><tbody>
+      {% for r in contacts_by_source %}
+        <tr><td>{{ r.source or "—" }}</td><td>{{ r.count }}</td></tr>
+      {% endfor %}
+    </tbody></table>
+  </div>
+  <div class="card">
+    <h2>Activity by user</h2>
+    <table class="data-table"><thead><tr><th>User</th><th>Count</th></tr></thead><tbody>
+      {% for r in activity_by_user %}
+        <tr><td>{{ r.user_id or "—" }}</td><td>{{ r.count }}</td></tr>
+      {% endfor %}
+    </tbody></table>
+  </div>
+</div>
+{% endblock %}
