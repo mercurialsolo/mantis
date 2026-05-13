@@ -1174,6 +1174,8 @@ class BasetenCUARuntime:
             "form_controller": "MANTIS_FORM_CONTROLLER",
             # #298: adaptive loop-detector windows (default on).
             "loop_adaptive": "MANTIS_LOOP_ADAPTIVE",
+            # #296: screen-DPI / element-class drift tolerance (default on).
+            "adaptive_click_tol": "MANTIS_ADAPTIVE_CLICK_TOL",
         }
         _toggle_overrides: dict[str, str] = {}
         _toggle_restore: dict[str, str | None] = {}

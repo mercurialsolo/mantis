@@ -31,6 +31,7 @@ from ..actions import Action, ActionType
 from ..loop_detector import (
     LoopDetector,
     adaptive_loop_enabled as _loop_adaptive_enabled,
+    compute_click_tol_px,
     phash_64,
 )
 from ._runner_helpers import is_cancelled
@@ -352,7 +353,15 @@ class GymRunner:
         # SoM-friendly sites. Default None → flag is False → behaviour
         # unchanged.
         self.site_config = site_config
-        self._loop_detector = LoopDetector()
+        # #296: scale drift tolerance by env screen diagonal so 4K isn't
+        # too tight and phone-class viewports keep the legacy 8 px floor.
+        # ``MANTIS_ADAPTIVE_CLICK_TOL=disabled`` short-circuits to the
+        # floor so the ablation harness can A/B without redeploys.
+        try:
+            tol = compute_click_tol_px(env.screen_size)
+        except Exception:
+            tol = 8
+        self._loop_detector = LoopDetector(click_tol_px=tol)
 
         # ── Cooperative cancellation (#288) ─────────────────────────────
         # Mirrors MicroPlanRunner.__init__'s `cancel_event` semantics

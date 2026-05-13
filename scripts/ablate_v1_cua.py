@@ -28,6 +28,7 @@ Available toggles (per-request override surface added to /v1/cua):
     perceptual_verify (#293)   loop_recovery (#302)   done_gate (#303)
     predicate_verify (#291)    adaptive_settle (#294)  form_controller (#301)
     reuse_session (#311)       speculation (#118)     loop_adaptive (#298)
+    adaptive_click_tol (#296)
 """
 
 from __future__ import annotations

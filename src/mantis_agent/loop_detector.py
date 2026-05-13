@@ -21,10 +21,18 @@ thresholds by recent action diversity + observed state progress, so
 pagination doesn't trigger spurious soft nudges and clear traps fire
 sooner. Enabled by default; ``MANTIS_LOOP_ADAPTIVE=disabled`` falls
 back to fixed windows for ablation.
+
+#296: ``compute_click_tol_px`` derives the drift tolerance from screen
+diagonal so a fixed 8 px isn't too tight on 4K or too loose on a phone.
+``LoopDetector._effective_click_tol`` applies a per-action class
+multiplier (button 1.5×, link 0.5×, …) when the action's reasoning
+text classifies the target. ``MANTIS_ADAPTIVE_CLICK_TOL=disabled``
+forces the hardcoded ``click_tol_px`` for ablation.
 """
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -43,6 +51,28 @@ _SCROLL_LIKE_ACTIONS: frozenset[ActionType] = frozenset(
 )
 _SCROLL_LIKE_KEYS: frozenset[str] = frozenset(
     {"page_down", "pagedown", "page_up", "pageup", "down", "up", "j", "k"}
+)
+
+# #296: per-class drift-tolerance multipliers applied when the action's
+# reasoning text classifies the target. Buttons cluster widely (large
+# hit areas; brain often re-clicks the centroid), links cluster tightly
+# (text targets — even small drift means a different word).
+_CLASS_TOL_MULTIPLIERS: tuple[tuple[str, float], ...] = (
+    # Order matters: longer / more specific keywords first so the
+    # ambiguous "submit" doesn't match before "submit button".
+    ("submit button", 1.5),
+    ("button", 1.5),
+    ("submit", 1.5),
+    ("dropdown", 0.75),
+    ("select", 0.75),
+    ("menu item", 0.75),
+    ("link", 0.5),
+    ("anchor", 0.5),
+    ("listing", 1.0),
+    ("card", 1.0),
+    ("input field", 1.0),
+    ("form field", 1.0),
+    ("text field", 1.0),
 )
 
 
@@ -104,6 +134,9 @@ class LoopDetector:
 
         Applies to CLICK / DOUBLE_CLICK / DRAG. Other action types fall back to
         byte-equality (handled by :meth:`is_repeat_loop`).
+
+        #296: tolerance is :meth:`_effective_click_tol` of the first sample's
+        reasoning — a button gets 1.5×, a link gets 0.5×.
         """
         recent = self._tail(window)
         if recent is None:
@@ -118,15 +151,16 @@ class LoopDetector:
         first_xy = (first.params.get("x"), first.params.get("y"))
         if first_xy[0] is None or first_xy[1] is None:
             return False
+        tol = self._effective_click_tol(first)
         for s in recent[1:]:
             if s.action.action_type != first.action_type:
                 return False
             x, y = s.action.params.get("x"), s.action.params.get("y")
             if x is None or y is None:
                 return False
-            if abs(x - first_xy[0]) > self.click_tol_px:
+            if abs(x - first_xy[0]) > tol:
                 return False
-            if abs(y - first_xy[1]) > self.click_tol_px:
+            if abs(y - first_xy[1]) > tol:
                 return False
         return True
 
@@ -260,6 +294,23 @@ class LoopDetector:
             return False
         return self.is_any_loop(effective)
 
+    def _effective_click_tol(self, action: Action) -> int:
+        """#296: per-action drift tolerance.
+
+        Defaults to :attr:`click_tol_px`. Scaled by class multiplier when
+        the action's reasoning text classifies the target (button → 1.5×,
+        link → 0.5×, …) AND ``MANTIS_ADAPTIVE_CLICK_TOL`` is on (default).
+        Falls back to the raw attribute when the toggle is off so the
+        ablation harness can A/B without redeploys.
+        """
+        if not adaptive_click_tol_enabled():
+            return self.click_tol_px
+        reasoning = (action.reasoning or "").lower()
+        for keyword, multiplier in _CLASS_TOL_MULTIPLIERS:
+            if keyword in reasoning:
+                return max(1, int(round(self.click_tol_px * multiplier)))
+        return self.click_tol_px
+
     @staticmethod
     def _action_signature(action: Action) -> tuple:
         """Stable signature used by :meth:`pattern_diversity`.
@@ -378,3 +429,43 @@ def adaptive_loop_enabled() -> bool:
     """
     raw = os.environ.get("MANTIS_LOOP_ADAPTIVE", "enabled").strip().lower()
     return raw not in {"disabled", "0", "false", "off", "no"}
+
+
+def adaptive_click_tol_enabled() -> bool:
+    """#296: gate for screen-DPI / element-class drift tolerance.
+
+    Default-on. ``MANTIS_ADAPTIVE_CLICK_TOL=disabled`` (or ``0`` /
+    ``false``) forces the hardcoded ``LoopDetector.click_tol_px`` for
+    A/B comparison without redeploys.
+    """
+    raw = os.environ.get("MANTIS_ADAPTIVE_CLICK_TOL", "enabled").strip().lower()
+    return raw not in {"disabled", "0", "false", "off", "no"}
+
+
+def compute_click_tol_px(viewport: tuple[int, int], *, floor: int = 8) -> int:
+    """#296: drift tolerance baseline scaled by screen diagonal.
+
+    The legacy ``click_tol_px = 8`` is too tight on 4K (legitimate
+    micro-retries flagged as drift loops) and approximately right on
+    1080p. Scale ``0.4 %`` of the diagonal so 4K gets ~18 px and 8K
+    gets ~37 px, with a ``floor`` so phone-class viewports keep the
+    legacy value:
+
+    | Viewport            | Diagonal | Tolerance |
+    |---------------------|----------|-----------|
+    | 1280 × 800 (default)| 1430 px  | 8 px (floor) |
+    | 1366 × 768 (laptop) | 1567 px  | 8 px (floor) |
+    | 1920 × 1080 (FHD)   | 2202 px  | 9 px |
+    | 2560 × 1440 (QHD)   | 2937 px  | 12 px |
+    | 3840 × 2160 (4K)    | 4404 px  | 18 px |
+
+    The harness toggles tolerance via ``MANTIS_ADAPTIVE_CLICK_TOL``;
+    when off, callers should pass the legacy ``8`` constructor default.
+    """
+    if not adaptive_click_tol_enabled():
+        return floor
+    w, h = viewport
+    if w <= 0 or h <= 0:
+        return floor
+    diag = math.sqrt(w * w + h * h)
+    return max(floor, int(round(0.004 * diag)))
