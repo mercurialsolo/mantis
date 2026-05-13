@@ -1386,6 +1386,16 @@ class BasetenCUARuntime:
                 "done_rejections_by_reason": dict(
                     getattr(gym_result, "done_rejections_by_reason", None) or {},
                 ),
+                # #295 / #300 ablation signal: per-backend trajectory-step
+                # counts. ``plan`` = :class:`PlanExecutor` deterministic
+                # dispatch, ``som`` = :class:`PageDiscovery` Set-of-Mark
+                # dispatch, ``vision`` = brain-driven raw-coordinate
+                # dispatch. Empty dict on hosts that don't wire a
+                # PlanExecutor or PageDiscovery (the routing falls
+                # straight through to ``vision``).
+                "executor_backend_counts": dict(
+                    getattr(gym_result, "executor_backend_counts", None) or {},
+                ),
             }
             self._attach_recording_metadata(result, recorder, click_log=click_log)
             self._save_result(result, prefix="pure_cua")
