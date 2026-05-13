@@ -81,6 +81,7 @@ class MicroPlanRunner:
         navigation_primitives_emit_skip: set[str] | None = None,
         context_budget: Any = None,  # ContextBudget | None — typed in body to avoid import cycle
         seen_url_predicate: Any = None,  # Callable[[str], bool] | None
+        routing_policy: Any = None,  # RoutingPolicy | None — typed in body to avoid import cycle
     ):
         self.brain, self.env, self.grounding, self.extractor = (
             brain, env, grounding, extractor
@@ -119,6 +120,16 @@ class MicroPlanRunner:
         # policy (URL set, content hash, CRM lookup, …) entirely.
         # Default ``None`` preserves today's behavior.
         self.seen_url_predicate = seen_url_predicate
+        # #300 follow-up: dispatch policy for unstructured CLICK actions
+        # in step handlers. Default ``None`` resolves to
+        # :meth:`RoutingPolicy.from_env`, which reads
+        # ``MANTIS_ROUTE_SOM_CLICKS`` so a deploy can flip the policy
+        # without a code change. Tests / explicit callers pass an
+        # instance to bypass the env override.
+        if routing_policy is None:
+            from .runner import RoutingPolicy
+            routing_policy = RoutingPolicy.from_env()
+        self.routing_policy = routing_policy
         self.on_step, self.max_retries = on_step, max_retries
         self.checkpoint_path, self.run_key = checkpoint_path, run_key
         self.session_name, self.plan_signature = session_name, plan_signature

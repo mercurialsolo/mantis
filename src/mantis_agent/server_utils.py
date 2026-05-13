@@ -440,6 +440,18 @@ def build_micro_result(
         "checks": dynamic_verification.get("checks", []),
     }
 
+    # #300: per-backend trajectory aggregate. ``plan`` / ``som`` /
+    # ``vision`` counts mirror :class:`gym.runner.RunResult.executor_backend_counts`
+    # on the /v1/cua path. Empty dict on legacy hosts whose handlers
+    # don't tag a backend (no behavior change for those callers).
+    executor_backend_counts: dict[str, int] = {}
+    for r in step_results:
+        backend = getattr(r, "executor_backend", "") or ""
+        if backend:
+            executor_backend_counts[backend] = (
+                executor_backend_counts.get(backend, 0) + 1
+            )
+
     return {
         "run_id": run_id,
         "provider": provider,
@@ -458,6 +470,7 @@ def build_micro_result(
         "dynamic_verification": dynamic_verification,
         "dynamic_verification_summary": dynamic_verification_summary,
         "leads": leads,
+        "executor_backend_counts": executor_backend_counts,
         "step_details": [
             {
                 "step": r.step_index,
@@ -465,6 +478,7 @@ def build_micro_result(
                 "success": r.success,
                 "steps": r.steps_used,
                 "data": r.data[:300] if r.data else "",
+                "executor_backend": getattr(r, "executor_backend", "") or "",
             }
             for r in step_results
         ],

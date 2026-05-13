@@ -315,9 +315,23 @@ class ClaudeGuidedClickHandler:
         except Exception:
             pre_click_screenshot = None
 
-        # Click
+        # Click — #300: try SoM-anchored CDP dispatch first when the
+        # routing policy promotes it AND the env exposes the CDP click
+        # shim. Falls through to legacy xdotool on policy-off /
+        # capability-miss / no-element-at-point. The result is recorded
+        # on the StepResult's ``executor_backend`` tag (visible on the
+        # /v1/predict response aggregate).
+        primary_click_backend = "vision"
+        from ..som_dispatch import try_som_click
         try:
-            env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
+            if try_som_click(env, x, y, ctx.routing_policy):
+                primary_click_backend = "som"
+                logger.info(
+                    f"  [claude-click] SoM CDP click at ({x},{y}) — "
+                    f"skipped xdotool"
+                )
+            else:
+                env.step(Action(action_type=ActionType.CLICK, params={"x": x, "y": y}))
             runner.costs["gpu_steps"] += 1
             runner.costs["gpu_seconds"] += 3
             runner.costs["proxy_mb"] += 5.0
@@ -330,6 +344,8 @@ class ClaudeGuidedClickHandler:
                 reason=f"click_failed:{e}",
             )
             return StepResult(step_index=index, intent=step.intent, success=False)
+        # Stash so the rest of execute() can tag the eventual StepResult.
+        ctx.state["_executor_backend"] = primary_click_backend
 
         # Verify: are we on a detail page? Retry once (page may still load)
         # Prefer CDP over screenshot URL extraction — issue #89 §1.
