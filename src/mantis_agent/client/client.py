@@ -247,6 +247,24 @@ class MantisClient:
         """
         return self._post_predict({"action": "cancel", "run_id": run_id})
 
+    def resume(self, run_id: str, user_input: Any) -> dict:
+        """``POST /v1/predict {action: resume, run_id, user_input}`` (#344).
+
+        Hands ``user_input`` (OTP code, 2FA token, confirmation, etc.) to
+        a paused run. The server rehydrates the stored ``PauseState``,
+        calls ``runner.resume(state, user_input=...)``, and continues
+        from the paused step. Subsequent :meth:`status` polls return
+        ``running`` until a terminal status (or another pause).
+
+        Raises :class:`MantisError` (400) on plan-signature mismatch, on
+        a run that's not currently paused, or when ``user_input`` is missing.
+        """
+        return self._post_predict({
+            "action": "resume",
+            "run_id": run_id,
+            "user_input": user_input,
+        })
+
     # ── /v1/cua pass-through ────────────────────────────────────────────
 
     def cua_run(
@@ -348,6 +366,13 @@ class MantisClient:
         indicator in a UI without re-implementing the polling loop.
         Raises :class:`MantisTimeoutError` on timeout (the run is *not*
         cancelled — call :meth:`cancel` explicitly if needed).
+
+        ``paused`` is **non-terminal** (#344): if a run pauses for OTP /
+        2FA / human-in-the-loop confirmation, the loop keeps polling
+        until the caller resumes it via :meth:`resume` (or until the
+        run cancels / times out). Inspect ``status.status == "paused"``
+        inside ``on_status`` to detect the pause and surface
+        ``status.prompt`` to the user.
         """
         if poll_interval_s <= 0:
             raise ValueError("poll_interval_s must be > 0")

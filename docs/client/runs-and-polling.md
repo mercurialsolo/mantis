@@ -187,6 +187,39 @@ If a run failed mid-way (network hiccup, replica restart, OOM), re-submit with t
 
 The runner picks up from the last checkpoint (extracted leads kept, browser profile + cookies still on the volume). You get a new `run_id` but the same logical workflow continues.
 
+## Paused runs
+
+> OTP / 2FA / human-in-the-loop confirmation — [#344](https://github.com/mercurialsolo/mantis/issues/344).
+
+A run can pause mid-flight — for OTP / 2FA / explicit human confirmation — without failing. The default `request_user_input` host tool is wired into every `/v1/predict` run: if the brain emits `Action(TOOL_CALL, name="request_user_input", params={"prompt": "..."})`, the runner snapshots state and the run's status flips to `paused`.
+
+```python
+from mantis_agent.client import MantisClient
+
+client = MantisClient.from_env()
+handle = client.predict({"micro": "plans/login-flow.json", "profile_id": "alice"})
+
+def on_status(s):
+    if s.status == "paused":
+        code = input(s.prompt + " ")    # surface to the human
+        client.resume(handle.run_id, user_input=code)
+
+# wait_for_completion polls past `paused` (it's NON-terminal); the
+# on_status callback above handles the prompt + calls resume() and
+# the loop continues to terminal succeeded / failed / cancelled.
+final = client.wait_for_completion(handle.run_id, on_status=on_status)
+```
+
+Key points:
+
+* `paused` is **non-terminal**. `wait_for_completion` keeps polling — it only stops on `succeeded` / `failed` / `cancelled` (the `TERMINAL_STATUSES` set is unchanged).
+* `RunStatus.prompt`, `RunStatus.reason`, and `RunStatus.pause_state` are populated when status is `paused`. The pause_state is opaque — the server keeps the canonical copy on disk, so you don't need to send it back yourself.
+* `client.resume(run_id, user_input=...)` is synchronous: it returns `{status: running}` once the worker has been kicked back into the runner. The continuation runs in the background; keep polling status until terminal.
+* The runner can pause more than once on the same run (OTP → confirmation → another OTP). Each pause flips status back to `paused` with a fresh `prompt`; resume the same way.
+* Plan-signature mismatch on resume returns 400 — usually a sign that someone edited the on-disk state, since the plan can't change between submit and resume.
+
+See [API / Pause / resume](../api.md#pause-resume) for the full request/response shapes.
+
 ## See also
 
 - [Recordings](recordings.md) — fetching the screencast

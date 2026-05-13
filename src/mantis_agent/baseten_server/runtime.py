@@ -272,7 +272,7 @@ class BasetenCUARuntime:
 
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = str(payload.get("action") or payload.get("op") or "").lower()
-        if action in {"status", "result", "logs"}:
+        if action in {"status", "result", "logs", "resume"}:
             return self._detached_action(action, payload)
         if action == "graph_learn":
             return self._graph_learn(payload)
@@ -370,6 +370,41 @@ class BasetenCUARuntime:
         with (run_dir / "events.log").open("a") as handle:
             handle.write(line + "\n")
 
+    def _save_pause_state(self, run_id: str, pause_state: dict[str, Any]) -> Path:
+        """Persist a paused run's :class:`PauseState` blob (#344)."""
+        run_dir = self._run_path(run_id, create=True)
+        path = run_dir / "pause_state.json"
+        self._write_json_atomic(path, pause_state)
+        return path
+
+    def _read_pause_state(self, run_id: str) -> dict[str, Any]:
+        """Read pause_state.json; returns ``{}`` when absent (#344)."""
+        path = self._run_path(run_id) / "pause_state.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+
+    def _save_resume_payload(self, run_id: str, payload: dict[str, Any]) -> Path:
+        """Persist the original payload so resume can rebuild the run (#344)."""
+        run_dir = self._run_path(run_id, create=True)
+        path = run_dir / "payload.json"
+        # Skip transient fields that would be wrong to re-apply on resume.
+        keep = {k: v for k, v in payload.items() if not k.startswith("_resume")}
+        self._write_json_atomic(path, keep)
+        return path
+
+    def _read_resume_payload(self, run_id: str) -> dict[str, Any]:
+        path = self._run_path(run_id) / "payload.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+
     def _start_detached(self, payload: dict[str, Any]) -> dict[str, Any]:
         run_id = _safe_state_key(str(payload.get("run_id") or _new_run_id()))
         if run_id in self.detached_threads and self.detached_threads[run_id].is_alive():
@@ -379,6 +414,11 @@ class BasetenCUARuntime:
         run_payload.pop("detached", None)
         run_payload["_detached_run_id"] = run_id
         run_payload["_detached_started_at"] = _utc_now()
+        # Snapshot the payload so a later action=resume can rebuild the run
+        # (#344). Skipped for resume continuations (the original payload is
+        # already on disk).
+        if not run_payload.get("_resume_pause_state"):
+            self._save_resume_payload(run_id, run_payload)
 
         status = self._write_detached_status(
             run_id,
@@ -424,6 +464,27 @@ class BasetenCUARuntime:
                         result = self._run_micro(task_suite, payload, run_id=run_id)
                     else:
                         result = self._run_tasks(task_suite, payload, run_id=run_id)
+                # #344: paused branch — runner raised PauseRequested through
+                # the default request_user_input tool. Stash the PauseState
+                # snapshot so action=resume can rebuild the runner, and
+                # surface prompt / reason on status.json. The poller hits
+                # this exact shape on the next ``action=status`` round-trip.
+                if result.get("_paused"):
+                    pause_payload = result.pop("pause_state", None) or {}
+                    self._save_pause_state(run_id, pause_payload)
+                    self._save_detached_result(run_id, result)
+                    self._write_detached_status(
+                        run_id,
+                        {
+                            "status": "paused",
+                            "paused_at": _utc_now(),
+                            "prompt": str(result.get("prompt", "")),
+                            "reason": str(result.get("reason", "user_input")),
+                            "summary": self._result_summary(result),
+                        },
+                    )
+                    self._append_detached_event(run_id, "paused")
+                    return
                 self._save_detached_result(run_id, result)
                 self._write_detached_status(
                     run_id,
@@ -475,6 +536,10 @@ class BasetenCUARuntime:
             thread = self.detached_threads.get(run_id)
             if thread and thread.is_alive() and status.get("status") not in {"running", "queued"}:
                 status["in_memory_thread_alive"] = True
+            # #344: inline the PauseState blob so the polling caller has
+            # everything they need to resume without a second round-trip.
+            if status.get("status") == "paused":
+                status["pause_state"] = self._read_pause_state(run_id)
             return status
 
         if action == "result":
@@ -483,6 +548,78 @@ class BasetenCUARuntime:
                 return self._read_json_file(result_path)
             status = self._read_json_file(run_dir / "status.json")
             return {"run_id": run_id, "status": status.get("status", "unknown"), "result_ready": False}
+
+        if action == "resume":
+            # #344: rehydrate a paused detached run.
+            status = self._read_json_file(run_dir / "status.json")
+            if status.get("status") != "paused":
+                raise ValueError(
+                    f"action='resume' requires a paused run; "
+                    f"run_id={run_id!r} is in status={status.get('status')!r}"
+                )
+            user_input = payload.get("user_input")
+            if user_input is None:
+                raise ValueError("action='resume' requires user_input")
+            pause_state = self._read_pause_state(run_id)
+            if not pause_state:
+                raise FileNotFoundError(
+                    f"pause_state.json missing for run {run_id!r}; cannot resume"
+                )
+            original_payload = self._read_resume_payload(run_id)
+            if not original_payload:
+                raise FileNotFoundError(
+                    f"payload.json missing for run {run_id!r}; cannot resume"
+                )
+            existing_thread = self.detached_threads.get(run_id)
+            if existing_thread and existing_thread.is_alive():
+                raise RuntimeError(
+                    f"resume in progress for {run_id!r}; poll status before retrying"
+                )
+            # Synchronous plan-signature guard so a stale pause_state
+            # surfaces as a 400 on this round-trip — not later via
+            # status polling on a doomed worker.
+            stored_sig = str(pause_state.get("plan_signature", ""))
+            current_sig = ""
+            try:
+                rebuilt_suite = self._task_suite_from_payload(dict(original_payload))
+                current_sig = str(rebuilt_suite.get("_plan_signature", ""))
+            except Exception:  # noqa: BLE001 — surface the mismatch, not the rebuild error
+                current_sig = ""
+            if stored_sig and current_sig and stored_sig != current_sig:
+                raise ValueError(
+                    "plan signature mismatch on resume: stored "
+                    f"{stored_sig[:12]!r} ≠ current {current_sig[:12]!r}. "
+                    "The plan referenced by this run_id has changed since it paused."
+                )
+            resume_payload = dict(original_payload)
+            resume_payload["_detached_run_id"] = run_id
+            resume_payload["_resume_pause_state"] = pause_state
+            resume_payload["_resume_user_input"] = user_input
+            now = _utc_now()
+            self._write_detached_status(
+                run_id,
+                {
+                    "status": "running",
+                    "resumed_at": now,
+                    # Wipe stale pause-surface fields so the next status
+                    # poll doesn't keep showing the old prompt.
+                    "prompt": "",
+                    "reason": "",
+                },
+            )
+            self._append_detached_event(run_id, "resuming")
+            thread = threading.Thread(
+                target=self._run_detached_worker,
+                args=(run_id, resume_payload),
+                daemon=True,
+            )
+            self.detached_threads[run_id] = thread
+            thread.start()
+            return {
+                "run_id": run_id,
+                "status": "running",
+                "resumed_at": now,
+            }
 
         tail = int(payload.get("tail", 200))
         events_path = run_dir / "events.log"
@@ -930,6 +1067,7 @@ class BasetenCUARuntime:
     ) -> dict[str, Any]:
         from mantis_agent.extraction import ClaudeExtractor
         from mantis_agent.grounding import ClaudeGrounding
+        from mantis_agent.gym.checkpoint import PauseRequested, PauseState
         from mantis_agent.gym.micro_runner import MicroPlanRunner
         from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
 
@@ -1051,7 +1189,49 @@ class BasetenCUARuntime:
                 extraction_cache=cache,
                 routing_policy=routing_policy,
             )
-            step_results = runner.run(micro_plan, resume=resume_state)
+            # #344: default ``request_user_input`` host tool. Brains that
+            # emit ``Action(TOOL_CALL, name="request_user_input")`` get a
+            # paused-run snapshot on the first call, and the staged
+            # ``user_input`` on the second (after action=resume rehydrates).
+            def _request_user_input(args: dict[str, Any]) -> Any:
+                staged = runner.consume_pause_input(default=None)
+                if staged is None:
+                    raise PauseRequested(
+                        reason="user_input",
+                        prompt=str(args.get("prompt", "")),
+                    )
+                return staged
+            runner.register_tool(
+                "request_user_input",
+                {
+                    "type": "object",
+                    "properties": {"prompt": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+                _request_user_input,
+            )
+
+            # #344: resume continuation. When the caller submits
+            # action=resume, the worker re-enters this method with the
+            # stored PauseState and the caller's user_input layered onto
+            # the payload. ``runner.resume(...)`` replays the recorded
+            # steps and continues from the paused step.
+            resume_blob = payload.get("_resume_pause_state")
+            if resume_blob is not None:
+                pause_state_obj = (
+                    PauseState.from_dict(resume_blob)
+                    if isinstance(resume_blob, dict) else resume_blob
+                )
+                runner_result = runner.resume(
+                    pause_state_obj,
+                    user_input=payload.get("_resume_user_input"),
+                    plan=micro_plan,
+                )
+            else:
+                runner_result = runner.run_with_status(
+                    micro_plan, resume=resume_state,
+                )
+            step_results = runner_result.steps
             if cache is not None:
                 try:
                     cache.save()
@@ -1073,6 +1253,14 @@ class BasetenCUARuntime:
                 resume_state=resume_state,
             )
             self._attach_recording_metadata(result, recorder, click_log=click_log)
+            # #344: surface the paused snapshot so the detached worker can
+            # write status=paused (rather than succeeded) and persist
+            # pause_state.json for the next action=resume.
+            if runner_result.paused and runner_result.pause_state is not None:
+                result["_paused"] = True
+                result["pause_state"] = runner_result.pause_state.to_dict()
+                result["prompt"] = runner_result.pause_state.prompt
+                result["reason"] = runner_result.pause_state.pending_reason
             self._save_result(result, prefix=self.model_kind.replace("-", "_"))
             return result
         finally:

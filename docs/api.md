@@ -384,9 +384,57 @@ For comparison, equivalent Claude-only CUA flow ~$0.50–$1.50 per listing.
 ## Limits / caveats
 
 - **Detached runs survive replica restart** (state on the data volume) but only on the same Baseten model. Cross-region failover not supported.
-- **Pause/resume for OTP** is not yet wired through `/v1/predict`. It works today in library-embedded integrations because the loop runs in the host's own process — see [Embedding MicroPlanRunner](integrations/embedding-microplanrunner.md).
 - **`/v1/chat/completions`** is unstreamed in v1. Streaming SSE is a Tier 2 follow-up.
 - **Single Anthropic-key per tenant** at request time (re-resolved on every call).
+
+## Pause / resume
+
+> OTP / 2FA / human-in-the-loop confirmation — [#344](https://github.com/mercurialsolo/mantis/issues/344).
+
+When a plan hits an auth wall the agent can't get past on its own — an OTP code, a 2FA push, an explicit "yes, refund this" confirmation — a registered host tool raises [`PauseRequested`](reference/glossary.md). The runner snapshots its state, writes `pause_state.json` to the run dir, and flips the run's status to `paused`. The caller polls status, surfaces the prompt to a human (or fetches the code from a side channel), then resumes with the answer.
+
+A default `request_user_input` host tool is registered on every detached `/v1/predict` run. Brains that emit `Action(TOOL_CALL, name="request_user_input", params={"prompt": "..."})` will pause the run on the first call and receive the caller's `user_input` on the second (after resume).
+
+### Status poll on a paused run
+
+```jsonc
+POST /v1/predict
+{"action": "status", "run_id": "20260513_180527_abc"}
+
+→ {
+  "status":       "paused",
+  "run_id":       "20260513_180527_abc",
+  "prompt":       "Enter the 6-digit code from your authenticator",
+  "reason":       "user_input",
+  "pause_state":  { /* opaque PauseState blob — hand back on resume */ }
+}
+```
+
+`pause_state` is opaque — the server is the only thing that interprets it. Treat it as a token: store it if you want, but you don't need to send it back yourself. The server already has the canonical copy on disk under the run_id; it round-trips automatically on resume.
+
+### Resume
+
+```jsonc
+POST /v1/predict
+{"action": "resume", "run_id": "20260513_180527_abc", "user_input": "123456"}
+
+→ {"status": "running", "run_id": "20260513_180527_abc", "resumed_at": "2026-05-13T18:09:12Z"}
+```
+
+The server rehydrates the stored `PauseState`, calls `runner.resume(state, user_input=...)` against the same `profile_id` / `workflow_id` the original run used, and continues from the paused step. Subsequent `action=status` polls return `running` until the run reaches a terminal status (`succeeded` / `failed` / `cancelled`) — or pauses again, in which case the cycle repeats with a fresh prompt.
+
+### Error cases
+
+| Status | Cause |
+|---|---|
+| `400 action='resume' requires user_input` | Missing the `user_input` field |
+| `400 action='resume' requires a paused run` | Run isn't currently in `paused` status (succeeded, running, cancelled, ...) |
+| `400 plan signature mismatch on resume` | Disk-stored `pause_state.plan_signature` doesn't match the current plan derived from the stored payload — usually means someone edited the on-disk state |
+| `404 unknown run_id` | No `status.json` for that `run_id` on this tenant |
+
+### Library-embedded integrations
+
+If you embed `MicroPlanRunner` / `GymRunner` directly (no HTTP), the same primitives are available in-process via `runner.run_with_status(plan)` returning `RunnerResult(paused=True, pause_state=...)`, plus `runner.resume(state, user_input=..., plan=plan)`. See [Embedding MicroPlanRunner](integrations/embedding-microplanrunner.md) for the canonical walkthrough — the HTTP surface is just a wrapper on top of the same library API.
 
 ## Screencast / video recording
 

@@ -42,7 +42,7 @@ Errors:
 | 400    | Bad request: missing plan shape, bad JSON, plan too large, missing intent/type |
 | 401    | Missing or invalid `X-Mantis-Token` |
 | 403    | Token valid but lacks `run` scope, OR plan references off-allowlist host |
-| 404    | Unknown `run_id` for `action=status\|result\|logs\|cancel` |
+| 404    | Unknown `run_id` for `action=status\|result\|logs\|cancel\|resume` |
 | 429    | Rate limit (token bucket) or concurrent-run cap exceeded; check `Retry-After` |
 | 500    | Unhandled exception — fetch `action=logs` for the traceback |
 | 502    | Upstream Holo3 / Anthropic API unreachable |
@@ -114,7 +114,23 @@ The `*_path` fields are server-internal — fetch them via the polling actions.
 { "action": "result", "run_id": "..." }
 { "action": "logs",   "run_id": "...", "tail": 200 }
 { "action": "cancel", "run_id": "..." }
+{ "action": "resume", "run_id": "...", "user_input": "123456" }   // #344
 ```
+
+`action=resume` (#344) rehydrates a paused run with the caller's
+``user_input`` (OTP code, 2FA token, confirmation, etc.). Requires the
+run to be in status `paused` and `user_input` to be non-null; returns
+`{status: "running", run_id, resumed_at}`. Subsequent `action=status`
+polls return `running` until terminal. Status table:
+
+| `status`   | Terminal? | Notes |
+|------------|-----------|-------|
+| `queued`   | No   | Worker thread pending |
+| `running`  | No   | Worker thread inside the runner |
+| `paused`   | **No** | A registered tool raised `PauseRequested`; `status.prompt` carries the human-facing question, `status.pause_state` is the opaque snapshot. Resume with `action=resume`. |
+| `succeeded` | Yes | `result.json` available via `action=result` |
+| `failed`   | Yes  | `status.error` populated; `action=logs` for the traceback |
+| `cancelled`| Yes  | Caller invoked `action=cancel` |
 
 `status` returns the current state plus a `summary` block when terminal:
 
