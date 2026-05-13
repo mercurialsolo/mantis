@@ -287,6 +287,84 @@ class XdotoolGymEnv(GymEnvironment):
             env=self._env, capture_output=True, timeout=5,
         )
 
+    def _cdp_call(
+        self, method: str, params: dict[str, Any] | None = None,
+        *, timeout: float = 3.0,
+    ) -> tuple[bool, Any]:
+        """One-shot CDP request against the active page.
+
+        Resolves the active page's WebSocket debugger URL via the
+        ``/json/list`` REST endpoint, opens a synchronous WebSocket
+        connection, sends a single ``{id, method, params}`` request, and
+        polls for the matching response.
+
+        Returns ``(ok, payload)`` where ``payload`` is the parsed
+        ``result`` dict on success and an empty dict on failure. Caller
+        sites decide how to interpret a missing key — :meth:`cdp_evaluate`
+        unwraps ``result.value``, :meth:`cdp_click_at_point` only cares
+        about ``ok``.
+
+        Failure paths (CDP unreachable, no eligible page, ws import
+        missing, timeout) all return ``(False, {})`` so callers fall
+        back to the legacy xdotool path. Errors are logged at WARNING
+        level so a flaky CDP doesn't silently mute the entire SoM
+        routing path.
+        """
+        try:
+            import json as _json
+            import urllib.request
+            try:
+                import websocket  # websocket-client package
+            except ImportError:
+                return False, {}
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self._cdp_port}/json/list",
+                timeout=2,
+            ) as resp:
+                tabs = _json.loads(resp.read().decode())
+            ws_url: str | None = None
+            for tab in tabs:
+                if tab.get("type") != "page":
+                    continue
+                url = str(tab.get("url") or "")
+                if not url or url.startswith("chrome://") or url.startswith("about:"):
+                    continue
+                ws_url = tab.get("webSocketDebuggerUrl")
+                if ws_url:
+                    break
+            if not ws_url:
+                return False, {}
+            ws = websocket.create_connection(ws_url, timeout=timeout)
+            try:
+                req_id = int(time.time() * 1000) % 1_000_000
+                ws.send(_json.dumps({
+                    "id": req_id,
+                    "method": method,
+                    "params": params or {},
+                }))
+                ws.settimeout(timeout)
+                for _ in range(16):
+                    raw = ws.recv()
+                    if not raw:
+                        continue
+                    decoded = _json.loads(raw)
+                    if decoded.get("id") != req_id:
+                        # Drop background CDP events while waiting for
+                        # our response id (eg lifecycle, frame nav).
+                        continue
+                    if decoded.get("error"):
+                        return False, decoded.get("error") or {}
+                    return True, decoded.get("result") or {}
+                return False, {}
+            finally:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.warning("CDP %s failed: %s", method, exc)
+            return False, {}
+
     def _cdp_insert_text(self, text: str) -> bool:
         """Type text via Chrome DevTools Protocol's Input.insertText.
 
@@ -301,58 +379,66 @@ class XdotoolGymEnv(GymEnvironment):
         (run 020-031, b3b4364 commit history). Click/scroll/screenshot
         stay xdotool; only the type-text execution moves to CDP.
         """
-        try:
-            import json as _json
-            import urllib.request
-            try:
-                import websocket  # websocket-client package
-            except ImportError:
-                return False
-            with urllib.request.urlopen(
-                f"http://127.0.0.1:{self._cdp_port}/json/list",
-                timeout=2,
-            ) as resp:
-                tabs = _json.loads(resp.read().decode())
-            ws_url = None
-            for tab in tabs:
-                if tab.get("type") != "page":
-                    continue
-                url = str(tab.get("url") or "")
-                if not url or url.startswith("chrome://") or url.startswith("about:"):
-                    continue
-                ws_url = tab.get("webSocketDebuggerUrl")
-                if ws_url:
-                    break
-            if not ws_url:
-                return False
-            ws = websocket.create_connection(ws_url, timeout=3)
-            try:
-                req_id = int(time.time() * 1000) % 1_000_000
-                ws.send(_json.dumps({
-                    "id": req_id,
-                    "method": "Input.insertText",
-                    "params": {"text": text},
-                }))
-                ws.settimeout(3)
-                for _ in range(8):
-                    raw = ws.recv()
-                    if not raw:
-                        continue
-                    resp = _json.loads(raw)
-                    if resp.get("id") != req_id:
-                        continue
-                    if resp.get("error"):
-                        return False
-                    return True
-                return False
-            finally:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
-        except Exception as exc:
-            logger.warning("CDP insertText failed: %s", exc)
-            return False
+        ok, _ = self._cdp_call("Input.insertText", {"text": text})
+        return ok
+
+    def cdp_evaluate(self, expression: str) -> Any:
+        """Run a JS expression via CDP ``Runtime.evaluate``.
+
+        Returns the unwrapped ``result.value`` (any JSON-serializable
+        type), or ``None`` on any failure (CDP unreachable, JS threw,
+        result not serializable). Used by :class:`PageDiscovery` to
+        scan the DOM and by :meth:`cdp_click_at_point` to dispatch a
+        synthetic click on the topmost element at a screen point —
+        both are #300 routing primitives that need to work in the
+        production xdotool path where there's no Playwright ``page``.
+        """
+        ok, payload = self._cdp_call(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": False,
+            },
+        )
+        if not ok:
+            return None
+        # ``Runtime.evaluate`` returns ``{result: {type, value}}``;
+        # ``value`` is missing for ``undefined`` results — treat that
+        # as None too rather than KeyError-ing on the caller.
+        return (payload.get("result") or {}).get("value")
+
+    def cdp_click_at_point(self, x: int, y: int) -> bool:
+        """SoM-anchored click: find the element at (x, y) and call
+        ``el.click()`` via Runtime.evaluate.
+
+        Why this isn't just xdotool: xdotool sends X-level mouse events
+        that Chrome maps to synthetic ``mousedown`` / ``mouseup`` /
+        ``click`` DOM events. On SPA rows whose handler is bound via
+        ``onPointerDown`` (or whose ``mousedown`` calls
+        ``stopPropagation``) the actual click handler never fires — the
+        well-known #88 row-click failure. Dispatching ``el.click()``
+        directly invokes the element's click listeners *and* the
+        framework's synthetic event chain (React onClick, etc.), so the
+        click reaches the handler.
+
+        Returns ``True`` iff an element was found at (x, y) and the JS
+        click was dispatched successfully. Returns ``False`` if CDP is
+        unreachable, no element exists at the point, or the JS threw.
+        Caller is expected to fall back to xdotool on ``False``.
+        """
+        # Use a self-executing function so the eval result is a clean
+        # boolean. ``elementFromPoint`` returns ``null`` for points
+        # outside the viewport — that surfaces as ``False`` here.
+        js = (
+            "(() => {"
+            f"const el = document.elementFromPoint({int(x)}, {int(y)});"
+            "if (!el) return false;"
+            "try { el.click(); return true; }"
+            "catch (e) { return false; }"
+            "})()"
+        )
+        return bool(self.cdp_evaluate(js))
 
     def _xdotool_type(self, text: str) -> None:
         """Type text via clipboard-paste (preferred) or xdotool fallback.

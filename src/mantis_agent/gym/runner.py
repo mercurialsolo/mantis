@@ -171,6 +171,117 @@ class TrajectoryStep:
     # surface on ``RunResult.loop_recoveries_by_reason``.
     loop_recovery_reason: str = ""
 
+    # ── #295 / #300 routing backend ─────────────────────────────────────
+    # Which dispatch path produced this trajectory step:
+    #   - "plan"   — :class:`PlanExecutor` executed a structured plan step
+    #                deterministically (no brain inference for the action).
+    #   - "som"    — :class:`PageDiscovery` scanned the DOM and the brain
+    #                picked an element by index; execution was DOM-driven
+    #                (Set-of-Mark routing).
+    #   - "vision" — the brain looked at the screenshot and emitted raw
+    #                coordinates / keystrokes; the env executed those.
+    #   - ""       — backend not classified (host-tool dispatch, paused
+    #                step, etc.).
+    # Aggregate counts surface on ``RunResult.executor_backend_counts``
+    # so a single ``/v1/cua`` run doubles as a routing telemetry point
+    # without dumping the full trajectory (mirrors the predicate /
+    # perceptual / loop-recovery aggregates).
+    executor_backend: str = ""
+
+
+# ── #295 / #300 routing policy ──────────────────────────────────────────
+#
+# Single knob bag controlling how each agent step's action is dispatched.
+# Defaults preserve current behavior: PlanExecutor runs when a
+# :class:`PlanExecutor` is wired and the current plan step is
+# deterministic; PageDiscovery / SoM runs when ``site_config`` opts in
+# OR (#300) when the routing policy explicitly promotes SoM. Vision
+# (brain-driven raw-coordinate dispatch) is always the final fallback.
+#
+# Why a dataclass and not env vars: the routing decision needs to be
+# observable in tests and serializable into the trajectory metadata.
+# Env vars stay supported as overrides in :meth:`RoutingPolicy.from_env`
+# so the ablation harness can A/B without redeploys.
+
+
+@dataclass
+class RoutingPolicy:
+    """Configurable dispatch policy for :class:`GymRunner`.
+
+    The policy is consulted at three boundaries per step:
+
+    1. **PlanExecutor** (``plan_executor_enabled``): a structured plan
+       step (action ∈ {navigate, click, type, key, scroll, wait,
+       verify} with a resolved ``target`` / ``url``) is sent through
+       :class:`PlanExecutor` deterministically. Falls through on
+       :class:`StepResult` ``success=False``.
+    2. **PageDiscovery / SoM** (``som_enabled``): when DOM access is
+       available (Playwright page on the env or CDP-backed evaluate),
+       run :class:`PageDiscovery`, ask the brain to pick ``[N]``,
+       execute via DOM. ``som_for_unstructured_clicks`` extends this
+       to brain-driven CLICK actions outside the plan-step branch
+       (#300).
+    3. **Vision** (always): if neither path produces an action,
+       :class:`Brain.think` returns a raw-coordinate action that the
+       env executes via xdotool / Playwright mouse events.
+
+    The policy never *forces* a path — it only opts a path in. Callers
+    can still wire ``plan_executor=None`` / ``page_discovery=None`` on
+    the runner to suppress a branch entirely.
+    """
+
+    # If True (default), the plan-step branch tries
+    # :class:`PlanExecutor.execute` before falling through to SoM /
+    # vision. Set to False to force vision-only dispatch (useful for
+    # ablating the plan-executor contribution on a benchmark).
+    plan_executor_enabled: bool = True
+
+    # If True (default), the plan-step branch tries
+    # :class:`PageDiscovery._try_discovery_execution` either before the
+    # direct executor (when ``site_config.prefer_som_grounding`` is set)
+    # or after a PlanExecutor failure. ``False`` disables every SoM
+    # branch, including the ``prefer_som_grounding`` short-circuit.
+    som_enabled: bool = True
+
+    # #300: when True, brain-driven CLICK actions that don't go through
+    # the plan-step branch consult :class:`PageDiscovery` if the env
+    # exposes DOM. Default False so the rollout to production is
+    # gated; existing ``site_config.prefer_som_grounding`` plan-step
+    # promotion is unaffected.
+    som_for_unstructured_clicks: bool = False
+
+    @classmethod
+    def from_env(cls) -> RoutingPolicy:
+        """Build a policy from the standard ``MANTIS_ROUTE_*`` env vars.
+
+        Toggles (each accepts ``enabled`` / ``disabled``; case-insensitive):
+
+        * ``MANTIS_ROUTE_PLAN_EXECUTOR`` — gates ``plan_executor_enabled``.
+        * ``MANTIS_ROUTE_SOM`` — gates ``som_enabled``.
+        * ``MANTIS_ROUTE_SOM_CLICKS`` — gates
+          ``som_for_unstructured_clicks`` (#300, default off).
+
+        Anything other than ``disabled`` keeps the dataclass default,
+        so unset / empty env vars never accidentally flip the policy.
+        """
+        def _on(name: str, default: bool) -> bool:
+            v = os.environ.get(name, "").strip().lower()
+            if not v:
+                return default
+            if v == "disabled":
+                return False
+            if v == "enabled":
+                return True
+            return default
+
+        return cls(
+            plan_executor_enabled=_on("MANTIS_ROUTE_PLAN_EXECUTOR", True),
+            som_enabled=_on("MANTIS_ROUTE_SOM", True),
+            som_for_unstructured_clicks=_on(
+                "MANTIS_ROUTE_SOM_CLICKS", False,
+            ),
+        )
+
 
 # Subset of ``gym_result.info`` that round-trips into TrajectoryStep
 # observed_state. Excludes high-cardinality / large-blob fields (raw DOM,
@@ -244,6 +355,15 @@ class RunResult:
     # the policy never fired (toggle off, no soft loops, or no rule
     # matched). Surfaces on /v1/cua.
     loop_recoveries_by_reason: dict[str, int] = field(default_factory=dict)
+    # #295 / #300: per-backend trajectory-step counts. Keys are the
+    # values of :attr:`TrajectoryStep.executor_backend` (``"plan"``,
+    # ``"som"``, ``"vision"``); the empty-string backend is dropped
+    # from the aggregate so consumers can read "how many steps came
+    # from which dispatch path?" without filtering. Empty dict when
+    # no classified backend ever fired (e.g. a paused-only trajectory).
+    # Surfaces on /v1/cua so callers can read the routing mix without
+    # parsing the trajectory.
+    executor_backend_counts: dict[str, int] = field(default_factory=dict)
 
 
 # ── Trajectory serialization for pause snapshots (#285) ────────────────────
@@ -279,6 +399,7 @@ def _trajectory_step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
         "done_rejected_reason": step.done_rejected_reason,
         "action_effect_observed": step.action_effect_observed,
         "loop_recovery_reason": step.loop_recovery_reason,
+        "executor_backend": step.executor_backend,
     }
 
 
@@ -307,6 +428,7 @@ def _trajectory_step_from_dict(payload: dict[str, Any]) -> TrajectoryStep:
         done_rejected_reason=str(payload.get("done_rejected_reason", "")),
         action_effect_observed=payload.get("action_effect_observed"),
         loop_recovery_reason=str(payload.get("loop_recovery_reason", "")),
+        executor_backend=str(payload.get("executor_backend", "")),
     )
 
 
@@ -336,6 +458,7 @@ class GymRunner:
         on_step: Any = None,
         site_config: Any = None,
         cancel_event: Any = None,
+        routing_policy: RoutingPolicy | None = None,
     ):
         self.brain = brain
         self.env = env
@@ -346,6 +469,12 @@ class GymRunner:
         self.hard_loop_window = hard_loop_window
         self.plan_executor = plan_executor
         self.page_discovery = page_discovery
+        # #295 / #300: dispatch policy. Default reads ``MANTIS_ROUTE_*``
+        # env toggles so a deploy can flip the routing mix per request
+        # without restarting; explicit callers (tests, host integrations
+        # that want a fixed policy) pass a :class:`RoutingPolicy`
+        # instance and bypass the env overrides.
+        self.routing_policy = routing_policy or RoutingPolicy.from_env()
         self.on_step = on_step  # Optional: fn(dict) -> None for live viewer
         # #117 step 1: when site_config.prefer_som_grounding is True, the
         # runner tries SoM (page_discovery + brain choice) BEFORE direct
@@ -777,11 +906,15 @@ class GymRunner:
                             thinking=f"SoM-promoted execution: {current_plan_step.action}",
                             reward=0.0, done=False, inference_time=0.0,
                             feedback=feedback,
+                            executor_backend="som",
                         ))
                         last_url = self.env.current_url if hasattr(self.env, 'current_url') else last_url
                         continue
 
-                if self.plan_executor.can_execute(current_plan_step):
+                if (
+                    self.routing_policy.plan_executor_enabled
+                    and self.plan_executor.can_execute(current_plan_step)
+                ):
                     step_result = self.plan_executor.execute(current_plan_step, plan_inputs)
                     print(f"  [executor] result: success={step_result.success} detail={step_result.detail}")
 
@@ -810,6 +943,7 @@ class GymRunner:
                             done=False,
                             inference_time=0.0,
                             feedback=feedback,
+                            executor_backend="plan",
                         ))
 
                         # Check if we completed all plan steps
@@ -823,16 +957,20 @@ class GymRunner:
                                     thinking="All plan steps completed and verified",
                                     reward=1.0, done=True, inference_time=0.0,
                                     feedback=feedback,
+                                    executor_backend="plan",
                                 )
                                 break
 
                         last_url = step_result.url_after or last_url
                         continue
                     else:
-                        # Direct execution failed — try DOM discovery + brain choice
+                        # Direct execution failed (PlanExecutor returned
+                        # success=False — treat that as the documented
+                        # "NotApplicable" fallthrough from issue #295) —
+                        # try DOM discovery + brain choice before vision.
                         print("  [executor] direct failed, trying discovery...")
 
-                        if self.page_discovery:
+                        if self.routing_policy.som_enabled and self.page_discovery:
                             discovery_result = self._try_discovery_execution(
                                 current_plan_step, plan_inputs, step_log, frame_history,
                             )
@@ -857,6 +995,7 @@ class GymRunner:
                                     thinking=f"Discovery execution: {current_plan_step.action}",
                                     reward=0.0, done=False, inference_time=0.0,
                                     feedback=feedback,
+                                    executor_backend="som",
                                 ))
                                 last_url = self.env.current_url if hasattr(self.env, 'current_url') else last_url
                                 continue
@@ -1114,6 +1253,7 @@ class GymRunner:
                             trajectory.append(TrajectoryStep(
                                 step=step_num, action=action, thinking=thinking,
                                 reward=0.0, done=True, inference_time=inference_time,
+                                executor_backend="vision",
                             ))
                             termination_reason = "done"
                             break
@@ -1121,6 +1261,7 @@ class GymRunner:
                         trajectory.append(TrajectoryStep(
                             step=step_num, action=action, thinking=thinking,
                             reward=0.0, done=True, inference_time=inference_time,
+                            executor_backend="vision",
                         ))
                         termination_reason = "done"
                         break
@@ -1420,6 +1561,58 @@ class GymRunner:
                     )
                     gym_result = self.env.step(pre_action)
                     action_history.append(pre_action)
+
+                # #300: SoM-anchored click. When the policy promotes SoM
+                # for unstructured clicks AND the env exposes a CDP
+                # ``cdp_click_at_point`` method, hand the click off to
+                # ``document.elementFromPoint(x,y).click()`` instead of
+                # the xdotool mouse pipeline. Fixes the #88 row-click
+                # failure (xdotool's synthetic ``mousedown`` doesn't
+                # route to React's onClick on some SPAs) without
+                # changing the brain's emitted coordinates.
+                #
+                # Only fires on a plain CLICK that wasn't already
+                # substituted by force-fill / force-submit / loop-recovery
+                # — those carry their own execution semantics.
+                #
+                # On success, the original CLICK is swapped for a brief
+                # WAIT so :meth:`env.step` still runs the settle / capture
+                # loop but doesn't *also* fire the xdotool click. On
+                # failure (no DOM element at (x,y), CDP unreachable, JS
+                # threw) the original action falls through untouched.
+                pending_executor_backend: str = "vision"
+                if (
+                    not substituted_action
+                    and action.action_type == ActionType.CLICK
+                    and getattr(self.routing_policy, "som_for_unstructured_clicks", False)
+                    and hasattr(self.env, "cdp_click_at_point")
+                ):
+                    raw_x = action.params.get("x")
+                    raw_y = action.params.get("y")
+                    if raw_x is not None and raw_y is not None:
+                        try:
+                            cdp_ok = bool(self.env.cdp_click_at_point(
+                                int(raw_x), int(raw_y),
+                            ))
+                        except Exception as exc:
+                            logger.warning("SoM CDP click raised: %s", exc)
+                            cdp_ok = False
+                        if cdp_ok:
+                            logger.info(
+                                "SoM: dispatched CDP click at (%s,%s); "
+                                "swapping xdotool click for no-op wait",
+                                raw_x, raw_y,
+                            )
+                            pending_executor_backend = "som"
+                            action = Action(
+                                ActionType.WAIT,
+                                {"seconds": 0.0},
+                                reasoning=(
+                                    f"SoM: CDP-dispatched click at "
+                                    f"({raw_x},{raw_y})"
+                                ),
+                            )
+
                 gym_result = self.env.step(action)
                 action_history.append(action)
                 for post_action in post_actions:
@@ -1586,6 +1779,7 @@ class GymRunner:
                     done_rejected_reason=pending_done_rejected_reason,
                     action_effect_observed=effect_check.effect_observed,
                     loop_recovery_reason=pending_loop_recovery_reason,
+                    executor_backend=pending_executor_backend,
                 ))
                 # One-shot: clear so the next step doesn't inherit it.
                 pending_done_rejected_reason = ""
@@ -1654,6 +1848,16 @@ class GymRunner:
                     loop_recoveries_by_reason.get(t.loop_recovery_reason, 0) + 1
                 )
 
+        # #295 / #300: per-backend trajectory-step counts. Empty-string
+        # backends (tool-call dispatch, pause/resume, etc.) are dropped
+        # so the aggregate reads as a clean routing-mix summary.
+        executor_backend_counts: dict[str, int] = {}
+        for t in trajectory:
+            if t.executor_backend:
+                executor_backend_counts[t.executor_backend] = (
+                    executor_backend_counts.get(t.executor_backend, 0) + 1
+                )
+
         result = RunResult(
             task=task, task_id=task_id, success=success,
             total_reward=total_reward, total_steps=len(trajectory),
@@ -1662,6 +1866,7 @@ class GymRunner:
             done_rejections_by_reason=dict(done_rejections_by_reason),
             perceptual_summary=perceptual_summary,
             loop_recoveries_by_reason=loop_recoveries_by_reason,
+            executor_backend_counts=executor_backend_counts,
         )
 
         # Terminal reward — applied last so episode() can read the full
@@ -1958,10 +2163,26 @@ class GymRunner:
     def _should_prefer_som(self) -> bool:
         """Return True when the site config opts into SoM-first dispatch.
 
-        SoM-first only fires when both ``site_config.prefer_som_grounding``
-        is True AND a ``page_discovery`` instance is available — without
-        DOM access there's no SoM candidate set to choose from.
+        SoM-first only fires when:
+
+        * The routing policy hasn't disabled the SoM branch
+          (:attr:`RoutingPolicy.som_enabled`, default True).
+        * ``site_config.prefer_som_grounding`` is True.
+        * The caller wired ``page_discovery`` on the runner (without
+          DOM access there's no SoM candidate set to choose from).
+
+        The ``page_discovery`` check stays at the call site so existing
+        callers that only set ``site_config.prefer_som_grounding``
+        without wiring discovery don't get an unexpected behavior
+        change.
         """
+        # ``routing_policy`` may be absent on instances built via
+        # ``GymRunner.__new__`` (legacy ``test_som_promotion`` pattern);
+        # treat the missing attr as "default policy" so existing tests
+        # don't need to know about it.
+        policy = getattr(self, "routing_policy", None)
+        if policy is not None and not policy.som_enabled:
+            return False
         cfg = self.site_config
         return bool(cfg is not None and getattr(cfg, "prefer_som_grounding", False))
 
