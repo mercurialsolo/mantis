@@ -887,6 +887,7 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
         session_name=session_name,
         max_cost=float(args.max_cost),
         max_time_minutes=int(args.max_time_minutes),
+        seed=int(args.seed),
     )
 
     print(
@@ -1137,6 +1138,7 @@ def cmd_plan_run_modal(args: argparse.Namespace) -> int:
             use_proxy=bool(args.use_proxy),
             proxy_session=args.proxy_session,
             session_name=session_name,
+            seed=int(args.seed),
         )
     except Exception as exc:  # noqa: BLE001 — modal invocation errors
         print(f"error: Modal run_plan raised: {exc}", file=sys.stderr)
@@ -1502,8 +1504,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--seed",
         type=int,
         default=42,
-        help="Deterministic env seed passed via SEED= (default: 42). "
-             "Only consulted when --env is set.",
+        help="Deterministic seed for the runner (default: 42). Seeds "
+             "Python's random module so human_speed action delays are "
+             "reproducible across reruns of the same plan. Also passed "
+             "via SEED= to the sim-env when --env is set.",
     )
     run.add_argument(
         "--now",
@@ -1609,6 +1613,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Where to write plan.json / plan.txt + result.json. "
              "Defaults to outputs/run-modal-<unix-timestamp>.",
+    )
+    run_modal.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Deterministic seed for the runner (default: 42). Forwarded "
+             "to MicroPlanRunner inside Modal so human_speed delays are "
+             "reproducible across reruns of the same plan.",
     )
     run_modal.set_defaults(func=cmd_plan_run_modal)
 

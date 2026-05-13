@@ -385,6 +385,67 @@ def _ensure_tinyproxy_running(session: str = "mantis") -> str | None:
     return None
 
 
+def _wait_for_cf_challenge_clear(
+    env,
+    *,
+    max_seconds: float | None = None,
+    poll_interval: float = 1.0,
+    min_seconds: float = 2.0,
+) -> float:
+    """Poll until the Cloudflare interstitial is gone, capped at
+    ``max_seconds`` (default 45s, override via
+    ``MANTIS_CF_PREWARM_MAX_SECONDS``).
+
+    Returns seconds actually waited. Uses ``env.cdp_evaluate`` to read
+    ``document.title`` + a slice of ``document.body.innerText`` and
+    look for known CF/anti-bot markers. ``None`` from CDP means the
+    page isn't queryable yet — treated as "keep polling", never as
+    "cleared". An always-on ``min_seconds`` floor gives the browser a
+    beat to start rendering before we declare success on an empty
+    page.
+    """
+    if max_seconds is None:
+        try:
+            max_seconds = float(
+                os.environ.get("MANTIS_CF_PREWARM_MAX_SECONDS", "45")
+            )
+        except ValueError:
+            max_seconds = 45.0
+
+    js = (
+        "(() => {"
+        "const t = (document.title || '').toLowerCase();"
+        "const body = (document.body && document.body.innerText || '')"
+        ".slice(0, 4000).toLowerCase();"
+        "const blob = t + ' ' + body;"
+        "const markers = ["
+        "  'just a moment',"
+        "  'performing security verification',"
+        "  'checking your browser',"
+        "  'verifying you are human',"
+        "  'verify you are human',"
+        "  'enable javascript and cookies to continue'"
+        "];"
+        "return markers.some(m => blob.includes(m));"
+        "})()"
+    )
+
+    start = time.monotonic()
+    deadline = start + max_seconds
+    if min_seconds > 0:
+        time.sleep(min(min_seconds, max_seconds))
+
+    while time.monotonic() < deadline:
+        try:
+            challenge_present = env.cdp_evaluate(js)
+        except Exception:
+            challenge_present = None
+        if challenge_present is False:
+            return time.monotonic() - start
+        time.sleep(poll_interval)
+    return time.monotonic() - start
+
+
 # ── The function ─────────────────────────────────────────────────────
 
 
@@ -409,6 +470,7 @@ def run_plan(
     use_proxy: bool = False,
     proxy_session: str = "mantis",
     session_name: str = "mantis_run",
+    seed: int | None = 42,
 ) -> dict:
     """Run :class:`MicroPlanRunner` end-to-end inside this container.
 
@@ -482,13 +544,15 @@ def run_plan(
     site_config = SiteConfig(detail_page_pattern=detail_page_pattern or "")
 
     # 5. Pre-warm env at start_url before runner.run, mirroring the
-    # local CLI's prewarm contract from PR #218. Then sleep 15s to
-    # let any Cloudflare JS challenge resolve before the first
-    # verifier hits the page — without this delay, CF-protected
-    # sites show "Performing security verification" on the first
-    # screenshot and the gate step rejects with ``gate:FAIL:Error 403``.
+    # local CLI's prewarm contract from PR #218. Then poll the page
+    # until any Cloudflare JS challenge resolves — replaces the old
+    # hardcoded 15s sleep, which was insufficient when CF takes
+    # 20-30s on residential proxies and wasteful when it clears in
+    # 2-3s. Without this, CF-protected sites show "Performing
+    # security verification" on the first screenshot and the gate
+    # step rejects with ``gate:FAIL:Error 403``.
     env.reset(task="modal_plan_run", start_url=start_url)
-    time.sleep(15)
+    _wait_for_cf_challenge_clear(env)
 
     # 6. Construct + run runner.
     runner = MicroPlanRunner(
@@ -501,6 +565,7 @@ def run_plan(
         session_name=session_name,
         max_cost=max_cost_usd,
         max_time_minutes=max_time_minutes,
+        seed=seed,
     )
     t0 = time.time()
     step_results = runner.run(plan, resume=False)

@@ -190,6 +190,7 @@ Key flags:
 | `--max-time-minutes` | `30` | Wall-clock cap. |
 | `--output-dir` | `outputs/run-<unix>` | Where to write `plan.json` + `result.json` + `checkpoint.json`. |
 | `--resume` | off | Resume from a previous checkpoint at `<output-dir>/checkpoint.json`. |
+| `--seed` | `42` | Deterministic seed for the runner. Seeds Python's `random` module so per-action `human_speed` delays (`random.uniform`/`random.randint` in `playwright_env` + `xdotool_env` + step handlers) are reproducible across reruns of the same plan. Also passed via `SEED=` to the sim-env when `--env` is set. |
 
 Exit code is 0 if every step succeeded, 1 if any failed or the runner
 raised. Useful as a CI gate against staging endpoints.
@@ -232,6 +233,7 @@ Same flags as `plan run` minus `--platform` / `--browser` / `--headless`
 | `--use-proxy` | off | Route the Modal-side browser through the configured upstream proxy (auth held by an in-container `tinyproxy`). |
 | `--proxy-session` | `mantis` | Session ID for sticky-IP behavior on providers that support it. |
 | `--start-url` | required for text plans | Text plans are decomposed inside Modal so the CLI can't introspect navigate steps; pass it explicitly. JSON plans infer it from the first navigate step. |
+| `--seed` | `42` | Deterministic seed forwarded to `MicroPlanRunner` inside Modal. Reseeds the global RNG so `human_speed` action delays are reproducible across reruns of the same plan. |
 
 Prerequisites:
 

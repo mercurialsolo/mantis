@@ -301,6 +301,37 @@ def test_run_modal_uses_explicit_start_url_over_plan(
     assert kwargs["start_url"] == "https://other.example.test/dashboard"
 
 
+def test_run_modal_defaults_seed_to_42(
+    tmp_path: Path, modal_stub,
+) -> None:
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    code = main([
+        "plan", "run-modal", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert code == EXIT_OK
+
+    kwargs = modal_stub["run_plan"].remote.call_args.kwargs
+    assert kwargs["seed"] == 42
+
+
+def test_run_modal_threads_explicit_seed(
+    tmp_path: Path, modal_stub,
+) -> None:
+    plan_path = _write_json_plan(tmp_path / "plan.json")
+    code = main([
+        "plan", "run-modal", str(plan_path),
+        "--endpoint", "https://example/v1",
+        "--seed", "1337",
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert code == EXIT_OK
+
+    kwargs = modal_stub["run_plan"].remote.call_args.kwargs
+    assert kwargs["seed"] == 1337
+
+
 def test_run_modal_uses_custom_app_name(
     tmp_path: Path, modal_stub,
 ) -> None:
