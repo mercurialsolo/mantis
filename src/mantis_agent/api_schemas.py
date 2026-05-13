@@ -114,6 +114,14 @@ class PredictRequest(BaseModel):
     video_format: Literal["mp4", "webm", "gif"] = "mp4"
     video_fps: int = Field(default=5, ge=1, le=30)
 
+    # #300 follow-up: per-request override for
+    # :attr:`RoutingPolicy.som_for_unstructured_clicks`. ``None`` defers
+    # to the deployment env (``MANTIS_ROUTE_SOM_CLICKS``). ``True`` /
+    # ``False`` forces the toggle on / off for this run, mirroring the
+    # ablation pattern documented in ``scripts/ablate_v1_cua.py`` (the
+    # ``perceptual_verify`` / ``loop_recovery`` / ``done_gate`` toggles).
+    route_som_clicks: Optional[bool] = None
+
     @model_validator(mode="after")
     def _clamp_caps_and_validate_action(self) -> "PredictRequest":
         # Hard caps — caller cannot exceed
@@ -189,6 +197,15 @@ class PureCUARequest(BaseModel):
     record_video: bool = False
     video_format: Literal["mp4", "webm", "gif"] = "mp4"
     video_fps: int = Field(default=5, ge=1, le=30)
+
+    # #300 follow-up: per-request override for
+    # :attr:`RoutingPolicy.som_for_unstructured_clicks`. ``None``
+    # defers to the deployment env (``MANTIS_ROUTE_SOM_CLICKS``).
+    # ``True`` / ``False`` forces the toggle on / off for this run,
+    # mirroring the per-request ablation pattern used for
+    # ``perceptual_verify`` / ``loop_recovery`` / ``done_gate`` so the
+    # ablation harness can A/B without redeploying.
+    route_som_clicks: Optional[bool] = None
 
     @model_validator(mode="after")
     def _clamp_caps(self) -> "PureCUARequest":

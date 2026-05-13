@@ -124,6 +124,12 @@ image = (
         "openai", "requests", "pillow", "mss", "huggingface-hub",
         "fastapi>=0.100", "uvicorn>=0.20", "pydantic>=2",
         "prometheus-client>=0.20",
+        # ``websocket-client`` is what :meth:`XdotoolGymEnv._cdp_call`
+        # imports to talk to Chrome DevTools Protocol. Without it the
+        # SoM-anchored CDP click path (#300) silently no-ops and every
+        # click falls through to xdotool — defeats the whole purpose
+        # of #300 / #327 on Modal.
+        "websocket-client>=1.6",
     )
     .run_commands(
         # Pin to the same llama.cpp SHA the Baseten Truss uses (b8948).

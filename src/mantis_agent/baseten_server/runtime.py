@@ -1014,6 +1014,22 @@ class BasetenCUARuntime:
             # previously-seen URLs (~$0.04/item per cache hit).
             cache = self._build_extraction_cache(task_suite, payload)
 
+            # #300 follow-up: per-request RoutingPolicy override.
+            # ``payload["route_som_clicks"]`` flips SoM-anchored
+            # CDP clicks on / off for the run; ``None`` defers to
+            # ``MANTIS_ROUTE_SOM_CLICKS``. Same override shape as
+            # /v1/cua so the ablation harness threads identically
+            # through both endpoints.
+            from ..gym.runner import RoutingPolicy
+            routing_policy = RoutingPolicy.from_env()
+            som_override = payload.get("route_som_clicks")
+            if som_override is not None:
+                routing_policy = RoutingPolicy(
+                    plan_executor_enabled=routing_policy.plan_executor_enabled,
+                    som_enabled=routing_policy.som_enabled,
+                    som_for_unstructured_clicks=bool(som_override),
+                )
+
             runner = MicroPlanRunner(
                 brain=self.brain,
                 env=env,
@@ -1027,6 +1043,7 @@ class BasetenCUARuntime:
                 max_cost=task_suite.get("_max_cost", 10.0),
                 max_time_minutes=task_suite.get("_max_time_minutes", 180),
                 extraction_cache=cache,
+                routing_policy=routing_policy,
             )
             step_results = runner.run(micro_plan, resume=resume_state)
             if cache is not None:
@@ -1298,6 +1315,18 @@ class BasetenCUARuntime:
             if hasattr(env, "cdp_evaluate"):
                 from ..gym.page_discovery import PageDiscovery
                 page_discovery = PageDiscovery(env=env)
+            # #300 follow-up: per-request RoutingPolicy override. The
+            # request can flip ``route_som_clicks`` on / off; ``None``
+            # defers to ``MANTIS_ROUTE_SOM_CLICKS``.
+            from ..gym.runner import RoutingPolicy
+            routing_policy = RoutingPolicy.from_env()
+            override = payload.get("route_som_clicks")
+            if override is not None:
+                routing_policy = RoutingPolicy(
+                    plan_executor_enabled=routing_policy.plan_executor_enabled,
+                    som_enabled=routing_policy.som_enabled,
+                    som_for_unstructured_clicks=bool(override),
+                )
             runner = GymRunner(
                 brain=brain_for_run,
                 env=env,
@@ -1305,6 +1334,7 @@ class BasetenCUARuntime:
                 frames_per_inference=frames,
                 grounding=None,  # pure CUA: no Claude grounding
                 page_discovery=page_discovery,
+                routing_policy=routing_policy,
             )
             gym_result = runner.run(
                 task=instruction,
