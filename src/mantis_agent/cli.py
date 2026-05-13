@@ -971,6 +971,7 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
     successes = sum(1 for r in step_results if r.success)
     failures = len(step_results) - successes
     final_url = getattr(runner, "_last_known_url", "")
+    from .gym.result_payload import pack_step
     result_payload = {
         "plan_signature": runner.plan_signature,
         "session": session_name,
@@ -982,17 +983,7 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
         "elapsed_seconds": round(elapsed, 2),
         "final_url": final_url,
         "costs": dict(getattr(runner, "costs", {})),
-        "steps": [
-            {
-                "index": r.step_index,
-                "intent": r.intent,
-                "success": r.success,
-                "data": getattr(r, "data", ""),
-                "duration": getattr(r, "duration", 0.0),
-                "steps_used": getattr(r, "steps_used", 0),
-            }
-            for r in step_results
-        ],
+        "steps": [pack_step(r) for r in step_results],
     }
     if grading_dict is not None:
         # Additive — RunReport surface in result.json gains the oracle

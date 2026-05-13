@@ -74,9 +74,21 @@ class StepResult:
     # navigate, etc.). Aggregate counts surface on the run result.
     executor_backend: str = ""
 
+    # Failure diagnostics — populated by the executor on ``success=False``.
+    # ``failure_class`` is one of the keys documented in
+    # :mod:`~.failure_class` (cf_challenge / nav_timeout / http_4xx /
+    # http_5xx / selector_miss / extractor_error / budget_exceeded /
+    # unknown). ``final_url`` and ``page_title`` snapshot the browser at
+    # the moment of failure so post-mortems land in result.json instead
+    # of Modal logs. All three are empty on success.
+    failure_class: str = ""
+    final_url: str = ""
+    page_title: str = ""
+
     _PERSISTED: ClassVar[tuple[str, ...]] = (
         "step_index", "intent", "success", "data", "steps_used", "duration", "reversed",
         "skip", "skip_reason", "executor_backend",
+        "failure_class", "final_url", "page_title",
     )
 
     def to_dict(self) -> dict[str, Any]:
