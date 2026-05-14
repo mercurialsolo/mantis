@@ -344,7 +344,19 @@ class DetachedRunHandle(BaseModel):
 
 
 class RunStatus(BaseModel):
-    """Detached-run status snapshot."""
+    """Detached-run status snapshot.
+
+    ``summary`` carries the result envelope from :func:`build_micro_result`
+    on terminal runs. Notable keys (epic #362 Phase B):
+
+    * ``wall_time_breakdown: {bucket: seconds}`` — aggregate per-bucket
+      wall time. Buckets are the 9-vocabulary from
+      :mod:`~mantis_agent.gym.time_meter` (perceive / think / act /
+      settle / claude_ground / claude_extract / claude_verify / load /
+      overhead). Sum approximates ``total_time_s`` within ±5%.
+    * ``step_details[i].time_breakdown`` — same shape, scoped to one
+      step. Use to find the step that dominates a given bucket.
+    """
 
     model_config = {"extra": "allow"}
 
@@ -364,3 +376,14 @@ class RunStatus(BaseModel):
     prompt: Optional[str] = None
     reason: Optional[str] = None
     pause_state: Optional[dict[str, Any]] = None
+
+    def wall_time_breakdown(self) -> dict[str, float]:
+        """Return the aggregate ``wall_time_breakdown`` dict from
+        ``summary`` if present, else an empty dict. Epic #362 Phase B.
+
+        Convenience accessor so client code doesn't have to defensively
+        index into ``summary`` (which is ``None`` on pre-terminal runs).
+        """
+        summary = self.summary or {}
+        bd = summary.get("wall_time_breakdown") or {}
+        return {str(k): float(v) for k, v in bd.items()} if isinstance(bd, dict) else {}

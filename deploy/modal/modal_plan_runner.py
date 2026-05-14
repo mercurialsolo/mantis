@@ -576,6 +576,11 @@ def run_plan(
     successes = sum(1 for r in step_results if r.success)
     failures = len(step_results) - successes
     final_url = getattr(runner, "_last_known_url", "")
+    time_meter = getattr(runner, "time_meter", None)
+    wall_time_breakdown = (
+        {k: round(v, 3) for k, v in time_meter.breakdown().items()}
+        if time_meter is not None else {}
+    )
 
     return {
         "plan_signature": runner.plan_signature,
@@ -584,9 +589,19 @@ def run_plan(
         "successes": successes,
         "failures": failures,
         "elapsed_seconds": round(elapsed, 2),
+        "wall_time_breakdown": wall_time_breakdown,
         "final_url": final_url,
         "costs": dict(getattr(runner, "costs", {})),
-        "steps": [_pack_step(r) for r in step_results],
+        "steps": [
+            _pack_step(
+                r,
+                time_breakdown=(
+                    time_meter.step_breakdown(r.step_index)
+                    if time_meter is not None else None
+                ),
+            )
+            for r in step_results
+        ],
     }
 
 

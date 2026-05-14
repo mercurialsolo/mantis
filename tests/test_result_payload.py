@@ -103,3 +103,29 @@ def test_success_payload_omits_screenshot_even_if_present() -> None:
     out = pack_step(_success(screenshot_png=b"big-success-png"))
     assert "screenshot_b64" not in out
     assert "failure_class" not in out
+
+
+# ── Epic #362 Phase B: per-step time_breakdown ──────────────────────────
+
+
+def test_time_breakdown_landed_when_provided() -> None:
+    """Successful step + a TimeMeter breakdown dict → the payload
+    surfaces ``time_breakdown`` rounded to 3dp."""
+    bd = {"act": 1.2345, "think": 2.5}
+    out = pack_step(_success(), time_breakdown=bd)
+    assert out["time_breakdown"] == {"act": 1.234, "think": 2.5}
+
+
+def test_time_breakdown_omitted_when_caller_passes_none() -> None:
+    """Legacy callers that don't have a TimeMeter must not see a
+    ``time_breakdown`` key — keeps pack_step backward-compatible."""
+    out = pack_step(_success())
+    assert "time_breakdown" not in out
+
+
+def test_time_breakdown_present_on_failed_payloads() -> None:
+    bd = {"act": 0.5, "settle": 1.0}
+    out = pack_step(_failure(), time_breakdown=bd)
+    assert out["time_breakdown"] == {"act": 0.5, "settle": 1.0}
+    # Failure diagnostics still land alongside.
+    assert out["failure_class"] == "selector_miss"
