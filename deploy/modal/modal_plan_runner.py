@@ -581,6 +581,9 @@ def run_plan(
         {k: round(v, 3) for k, v in time_meter.breakdown().items()}
         if time_meter is not None else {}
     )
+    # Epic #377 Phase C: self-healing audit log.
+    from mantis_agent.gym import healing_events as _healing
+    healing_log = _healing.snapshot(runner)
 
     return {
         "plan_signature": runner.plan_signature,
@@ -595,6 +598,7 @@ def run_plan(
         "total_time_s": round(elapsed),
         "elapsed_seconds": round(elapsed, 2),
         "wall_time_breakdown": wall_time_breakdown,
+        "healing_events": healing_log,
         "final_url": final_url,
         "costs": dict(getattr(runner, "costs", {})),
         "steps": [

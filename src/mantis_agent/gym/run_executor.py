@@ -184,12 +184,50 @@ class RunExecutor:
 
             if step_result.success:
                 self._handle_success(plan, state, step, step_result)
+                continued = True
             else:
-                if not self._handle_failure(plan, state, step, step_result):
+                continued = self._handle_failure(plan, state, step, step_result)
+                if not continued:
                     break
+
+            # Phase C of epic #377: critic observes the post-step state
+            # and can emit directives the runner applies. v1 covers
+            # navigate_back → InsertStep(navigate). Future capabilities
+            # plug in via the same hook.
+            self._consult_critic(plan, state, step, step_result, continued)
 
         self._finalize(plan, state)
         return state.results
+
+    def _consult_critic(
+        self,
+        plan: "MicroPlan",
+        state: RunState,
+        step: MicroIntent,
+        step_result: StepResult,
+        continued: bool,
+    ) -> None:
+        """Run the ExecutionCritic and apply any returned directive.
+
+        Wrapped in try/except — the critic is observability +
+        opportunistic correction; a critic exception must never
+        break a run that the recovery policy already decided to
+        continue.
+        """
+        runner = self.parent
+        critic = getattr(runner, "_critic", None)
+        if critic is None:
+            return
+        try:
+            from . import critic as _critic_mod
+            directive = critic.observe_step(
+                plan, state, step, step_result,
+                recovery_continued=continued,
+            )
+            if directive is not None:
+                _critic_mod.apply_directive(runner, plan, state, directive)
+        except Exception as exc:  # noqa: BLE001 — never break runs
+            logger.debug("critic raised: %s", exc)
 
     # ── Resume from checkpoint ──────────────────────────────────────────
 
@@ -453,6 +491,14 @@ class RunExecutor:
             step_result.success = False
             step_result.data = (step_result.data or "") + ":no_state_change"
             step_result.failure_class = "no_state_change"
+            from . import healing_events
+            healing_events.record_demotion(
+                runner,
+                step_index=state.step_index,
+                step_type=effective_step.type,
+                reason="snapshot diff and visual verifier both saw no UI change",
+                source="demote_form",
+            )
             # Record the failed click target into the per-step failure
             # history so the next retry's ``find_form_target`` call
             # avoids the same broken target. Without this, retries
@@ -594,6 +640,14 @@ class RunExecutor:
         step_result.success = False
         step_result.data = (step_result.data or "") + ":no_state_change"
         step_result.failure_class = "no_state_change"
+        from . import healing_events
+        healing_events.record_demotion(
+            runner,
+            step_index=state.step_index,
+            step_type=effective_step.type,
+            reason="env URL unchanged and no non-handler state changed",
+            source="demote_click",
+        )
         # Feed the failed click coordinates back into the retry history
         # so ``find_form_target`` / ``find_click_target`` on retry can
         # AVOID the same target. The click handler stashes its last
@@ -688,6 +742,14 @@ class RunExecutor:
         )
         if no_state_changes >= 2 and runner.brain is not None:
             runner._step_handler_override[step_index] = "holo3"
+            from . import healing_events
+            healing_events.record_handler_escalation(
+                runner,
+                step_index=step_index,
+                from_handler="default",
+                to_handler="holo3",
+                trigger=f"{no_state_changes}x_no_state_change",
+            )
             logger.warning(
                 "  [escalation] step %d: %d×no_state_change → next "
                 "retry will route through Holo3StepHandler (brain "
@@ -955,6 +1017,17 @@ class RunExecutor:
             runner._step_rewrite_attempts = {}
         runner._step_intent_overrides[step_index] = new_intent
         runner._step_rewrite_attempts[step_index] = attempts_used + 1
+        # Record so the operator can audit what the framework did
+        # (epic #377 Phase C accounting).
+        from . import healing_events
+        healing_events.record_rewrite(
+            runner,
+            step_index=step_index,
+            from_intent=step.intent,
+            to_intent=new_intent,
+            source="intent_rewriter",
+            failure_class=failure_class,
+        )
         logger.warning(
             "  [rewriter] step %d intent rewritten from %r → %r "
             "(failure_class=%s, attempts_used=%d)",

@@ -495,6 +495,13 @@ def build_micro_result(
                 executor_backend_counts.get(backend, 0) + 1
             )
 
+    # Epic #377 Phase C: surface the self-healing audit log on the
+    # result envelope so operators can see what the framework did
+    # (rewrites, demotions, handler escalations, critic insertions).
+    # Empty list when no healing fired.
+    from .gym import healing_events as _healing
+    healing_log = _healing.snapshot(runner)
+
     # Epic #362 Phase B: surface the TimeMeter's bucket breakdown
     # on the result envelope. ``wall_time_breakdown`` is the aggregate
     # 9-bucket dict; ``step_details[i].time_breakdown`` is the same
@@ -528,6 +535,7 @@ def build_micro_result(
         "plan_signature": plan_signature,
         "resume_state": resume_state,
         "costs": costs,
+        "healing_events": healing_log,
         "dynamic_verification": dynamic_verification,
         "dynamic_verification_summary": dynamic_verification_summary,
         "leads": leads,
