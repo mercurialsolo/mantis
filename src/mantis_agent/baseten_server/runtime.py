@@ -165,6 +165,8 @@ class BasetenCUARuntime:
             self.brain = self._load_holo3()
         elif self.model_kind == "gemma4-cua":
             self.brain = self._load_gemma4()
+        elif self.model_kind == "fara":
+            self.brain = self._load_fara()
         else:
             raise RuntimeError(f"unsupported MANTIS_MODEL={self.model_kind!r}")
 
@@ -239,6 +241,75 @@ class BasetenCUARuntime:
         brain = Holo3Brain(
             base_url=f"http://127.0.0.1:{self.port}/v1",
             model="holo3",
+            api_key="",
+            max_tokens=2048,
+            temperature=0.0,
+            screen_size=(1280, 720),
+            use_tool_calling=True,
+        )
+        brain.load()
+        return brain
+
+    def _start_vllm(self, model_path: Path, extra_args: list[str]) -> None:
+        """Start a vLLM OpenAI-compatible server in the pod.
+
+        Used by Fara (Qwen2.5-VL native) — no llama.cpp / GGUF needed.
+        Mirrors ``_start_llama``'s lifecycle: subprocess pinned to
+        ``self.llama_proc`` (the field is generically the inference
+        server handle; shutdown wires already terminate it).
+        """
+        import sys
+
+        cmd = [
+            sys.executable, "-m", "vllm.entrypoints.openai.api_server",
+            "--model", str(model_path),
+            "--served-model-name", "model",
+            "--host", "0.0.0.0",
+            "--port", str(self.port),
+            "--trust-remote-code",
+            "--gpu-memory-utilization",
+            os.environ.get("MANTIS_VLLM_GPU_UTIL", "0.90"),
+            "--max-model-len",
+            os.environ.get("MANTIS_CONTEXT_SIZE", "32768"),
+            "--dtype", os.environ.get("MANTIS_VLLM_DTYPE", "auto"),
+        ]
+        cmd.extend(extra_args)
+
+        logger.info("starting vllm: %s", " ".join(cmd))
+        self._llama_log_fh = open("/tmp/vllm.log", "w")
+        try:
+            self.llama_proc = subprocess.Popen(
+                cmd,
+                stdout=self._llama_log_fh,
+                stderr=subprocess.STDOUT,
+            )
+        except Exception:
+            self._llama_log_fh.close()
+            self._llama_log_fh = None
+            raise
+        _wait_for_openai_server(self.port, self.llama_proc, "vllm")
+
+    def _load_fara(self) -> Any:
+        """Load Microsoft Fara-7B via vLLM and return a ``FaraBrain``.
+
+        Expects weights pre-mounted at ``MANTIS_FARA_MODEL_DIR``
+        (default ``/models/fara``) by the Baseten ``weights:`` block;
+        falls back to the HF repo id ``microsoft/Fara-7B`` so a dev
+        deployment with HF auth can pull on demand.
+        """
+        from mantis_agent.brain_fara import FaraBrain
+
+        model_dir = Path(
+            os.environ.get("MANTIS_FARA_MODEL_DIR", "/models/fara")
+        )
+        model_ref: str | Path = model_dir if model_dir.exists() else (
+            os.environ.get("MANTIS_FARA_REPO", "microsoft/Fara-7B")
+        )
+        self._start_vllm(Path(str(model_ref)), extra_args=[])
+
+        brain = FaraBrain(
+            base_url=f"http://127.0.0.1:{self.port}/v1",
+            model="model",
             api_key="",
             max_tokens=2048,
             temperature=0.0,

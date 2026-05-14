@@ -4,6 +4,7 @@
 |---|---|
 | [HTTP API](../api.md) | Every endpoint, request body, response shape, error code |
 | [Architecture](../architecture.md) | Internal architecture: brains, runner, env, gym, verification |
+| [CUA models](cua-models.md) | Available `cua_model` backends (Holo3, Fara, EvoCUA, OpenCUA, Gemma4-CUA, Claude) with action-space caveats |
 | [Environment variables](env-vars.md) | Server-side env knobs (caps, paths, log format, model routing) |
 | [Glossary](glossary.md) | Quick definitions of project-specific terms |
 | [Predicate grammar](predicates.md) | World-model verification predicates emitted by brains and evaluated by the runner |

@@ -237,10 +237,13 @@ OpenAI-compatible model listing.
 {
   "object": "list",
   "data": [
-    { "id": "holo3", "object": "model", "owned_by": "mantis" }
+    { "id": "holo3", "object": "model", "owned_by": "mantis" },
+    { "id": "fara",  "object": "model", "owned_by": "mantis" }
   ]
 }
 ```
+
+See [CUA models](reference/cua-models.md) for the full list of `cua_model` values the dispatcher accepts and the action-space differences between brains.
 
 ---
 

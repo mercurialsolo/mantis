@@ -132,6 +132,7 @@ nav:
       - reference/index.md
       - HTTP API: api.md
       - Architecture: architecture.md
+      - CUA models: reference/cua-models.md
       - Environment variables: reference/env-vars.md
       - Glossary: reference/glossary.md
       - Coordinate spaces: reference/coordinate-spaces.md
