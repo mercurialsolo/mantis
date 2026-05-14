@@ -276,16 +276,33 @@ class RunExecutor:
     def _build_effective_step(
         self, step: MicroIntent, state: RunState,
     ) -> MicroIntent:
-        """Inject listing-position scroll directive on click steps.
+        """Inject listing-position scroll directive on click steps, or
+        the IntentRewriter's proposed mechanical intent (epic #377
+        Phase B) when the prior attempt's failure_class triggered a
+        rewrite.
 
-        EPIC #161 Phase 4: the directive string is now built by
-        :meth:`ListingsScanner.scroll_directive` so the listings-specific
-        wording lives where the scanner does. Called only for ``click``
-        steps; other types short-circuit and use ``step.intent`` as-is.
+        Override priority:
+
+        1. ``_step_intent_overrides[step_index]`` — set by the
+           IntentRewriter when the previous attempt's failure_class
+           was in ``REWRITE_TRIGGERING_CLASSES``. Wins over the
+           scanner directive because the rewrite was proposed in
+           light of a specific failure.
+        2. Scanner scroll directive — listings-specific positional
+           hint for click steps.
+        3. ``step.intent`` as-authored.
         """
         runner = self.parent
         dynamic_intent = step.intent
-        if step.type == "click":
+        # Defensive: tests that hand the executor a MagicMock runner
+        # see ``_step_intent_overrides`` auto-created as a Mock.
+        # Require a real dict + a non-empty string override before we
+        # swap the intent.
+        overrides = getattr(runner, "_step_intent_overrides", None)
+        override = overrides.get(state.step_index) if isinstance(overrides, dict) else None
+        if isinstance(override, str) and override:
+            dynamic_intent = override
+        elif step.type == "click":
             scanner_directive = (
                 runner.scanner.scroll_directive_for(state.listings_on_page)
             )
@@ -710,6 +727,14 @@ class RunExecutor:
             runner._recovery_hints.pop(state.step_index, None)
         if hasattr(runner, "_recovery_attempts_per_step"):
             runner._recovery_attempts_per_step.pop(state.step_index, None)
+        # Epic #377 Phase B: rewriter state is per-step. Clear on
+        # success so a loop iteration / resumed plan that re-enters
+        # the same step_index starts with the original intent and a
+        # fresh budget.
+        if hasattr(runner, "_step_intent_overrides"):
+            runner._step_intent_overrides.pop(state.step_index, None)
+        if hasattr(runner, "_step_rewrite_attempts"):
+            runner._step_rewrite_attempts.pop(state.step_index, None)
 
         if step.type == "paginate":
             # Phase 4: listings-scan reset is one method on the scanner now,
@@ -768,6 +793,11 @@ class RunExecutor:
     ) -> bool:
         """Delegate to StepRecoveryPolicy; returns False if the run should halt."""
         runner = self.parent
+        # Capture the failed step_index BEFORE recovery_policy mutates
+        # state.step_index — the rewriter keys overrides off the index
+        # of the step that just failed, not whatever the policy
+        # decides to advance to.
+        failed_step_index = state.step_index
         outcome = runner._recovery_policy.handle_failure(
             step=step,
             step_result=step_result,
@@ -803,8 +833,75 @@ class RunExecutor:
                 state.results[-1].skip_reason = "navigation_failed"
             self._persist(plan, state, status="halted", halt_reason=outcome.halt_reason)
             return False
+        # Epic #377 Phase B: when the policy decides retry AND the
+        # failure_class is in the rewrite-triggering set, ask Claude to
+        # propose a more mechanical / specific intent for the next
+        # attempt. Bounded by the per-step budget in
+        # ``_step_rewrite_attempts``.
+        self._maybe_rewrite_intent_for_retry(
+            step=step, step_result=step_result, step_index=failed_step_index,
+        )
         self._persist(plan, state, halt_reason=outcome.halt_reason)
         return True
+
+    def _maybe_rewrite_intent_for_retry(
+        self,
+        *,
+        step: MicroIntent,
+        step_result: StepResult,
+        step_index: int,
+    ) -> None:
+        """Phase B of epic #377 — Claude-backed intent rewriting.
+
+        Calls :func:`intent_rewriter.propose_rewrite` when the just-
+        failed step's ``failure_class`` is in
+        :data:`REWRITE_TRIGGERING_CLASSES` and the per-step budget
+        hasn't been spent. On a successful rewrite, stashes the new
+        intent in ``runner._step_intent_overrides[step_index]`` — the
+        next retry's ``_build_effective_step`` reads it.
+
+        Never breaks the run. Any exception from the Claude call (or
+        ``requests`` not installed, or no API key) just skips the
+        rewrite path; the recovery policy's retry proceeds with the
+        original intent.
+        """
+        runner = self.parent
+        failure_class = getattr(step_result, "failure_class", "") or ""
+        from . import intent_rewriter
+        attempts_used = (
+            runner._step_rewrite_attempts.get(step_index, 0)
+            if hasattr(runner, "_step_rewrite_attempts") else 0
+        )
+        if not intent_rewriter.should_attempt_rewrite(
+            failure_class, attempts_used=attempts_used,
+        ):
+            return
+        try:
+            failures = [intent_rewriter.FailureContext(
+                failure_class=failure_class,
+                data=getattr(step_result, "data", "") or "",
+                page_title=getattr(step_result, "page_title", "") or "",
+                final_url=getattr(step_result, "final_url", "") or "",
+                screenshot_png=getattr(step_result, "screenshot_png", None),
+            )]
+            new_intent = intent_rewriter.propose_rewrite(step.intent, failures)
+        except Exception as exc:  # noqa: BLE001 — never break runs on rewrite
+            logger.debug("intent rewriter raised: %s", exc)
+            return
+        if not new_intent or new_intent == step.intent:
+            return
+        if not hasattr(runner, "_step_intent_overrides"):
+            runner._step_intent_overrides = {}
+        if not hasattr(runner, "_step_rewrite_attempts"):
+            runner._step_rewrite_attempts = {}
+        runner._step_intent_overrides[step_index] = new_intent
+        runner._step_rewrite_attempts[step_index] = attempts_used + 1
+        logger.warning(
+            "  [rewriter] step %d intent rewritten from %r → %r "
+            "(failure_class=%s, attempts_used=%d)",
+            step_index, step.intent[:80], new_intent[:80],
+            failure_class, attempts_used + 1,
+        )
 
     # ── Finalize ────────────────────────────────────────────────────────
 

@@ -187,6 +187,16 @@ class MicroPlanRunner:
         # triggered purely by observed failure pattern, not plan
         # content. Cleared on step success.
         self._step_handler_override: dict[int, str] = {}
+        # Per-step intent override — set by the IntentRewriter when a
+        # step fails with a class that suggests the intent itself is
+        # the problem (epic #377 Phase B). Holds the rewritten intent
+        # string for the NEXT retry attempt; consumed by
+        # ``_build_effective_step``. Cleared on step success.
+        # ``_step_rewrite_attempts`` is the per-step budget tracker
+        # (default 1 rewrite per step per run); the rewriter consults
+        # it via ``intent_rewriter.should_attempt_rewrite``.
+        self._step_intent_overrides: dict[int, str] = {}
+        self._step_rewrite_attempts: dict[int, int] = {}
         # Agentic-recovery state (issue #224 follow-up). When the
         # recovery loop returns ``mode=add_hint``, the hint is
         # appended to ``_recovery_hints[step_index]`` and surfaced in
