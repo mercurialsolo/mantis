@@ -338,30 +338,24 @@ class RunExecutor:
         pre_snapshot = step_snapshot.capture(runner)
         runner._pre_step_snapshot = pre_snapshot
         meter = getattr(runner, "time_meter", None)
-        # Publish the dispatch context so deep helpers (adaptive_settle,
-        # navigate, the inner GymRunner used by Holo3StepHandler, ...)
-        # can record into the same TimeMeter without being passed it as
-        # a kwarg. Outer ``measure("act", ...)`` is the coarse dispatch
-        # bucket; sub-bucket records (``settle``, ``load``, ...) made
-        # via :func:`time_meter.record_to_current` from inside the
-        # dispatch land on the same per-step slot. Buckets can overlap
-        # — ``breakdown()`` floors the ``overhead`` residual at zero so
-        # consumers see useful per-bucket totals either way.
+        # Publish the dispatch context for the duration of this step.
+        # Deep helpers (adaptive_settle, navigate handler, env.step /
+        # env.screenshot inside the GymRunner, ClaudeExtractor /
+        # ClaudeGrounding) read this context and credit their own
+        # buckets — no outer ``measure`` is needed. Time spent in
+        # runner orchestration outside any helper falls into
+        # ``overhead`` automatically via :meth:`TimeMeter.breakdown`.
         from . import time_meter as _tm
         try:
             with _tm.publish_dispatch(meter, state.step_index):
-                if meter is not None:
-                    with meter.measure("act", step_idx=state.step_index):
-                        step_result = runner._execute_step(effective_step, state.step_index)
-                else:
-                    step_result = runner._execute_step(effective_step, state.step_index)
+                step_result = runner._execute_step(effective_step, state.step_index)
         finally:
             runner._active_checkpoint_context = None
         if step_result.screenshot_png is None:
-            if meter is not None:
-                with meter.measure("perceive", step_idx=state.step_index):
-                    step_result.screenshot_png = runner._capture_screenshot_bytes()
-            else:
+            # The screenshot helper itself credits ``perceive`` via the
+            # env-level wrapper; we still publish the dispatch context
+            # so the credit routes to this step.
+            with _tm.publish_dispatch(meter, state.step_index):
                 step_result.screenshot_png = runner._capture_screenshot_bytes()
         if not step_result.success:
             _stamp_failure_context(step_result, runner.env)

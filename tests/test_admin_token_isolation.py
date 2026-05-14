@@ -36,13 +36,18 @@ from mantis_agent.sim_envs.local import LocalBackend
 pytestmark = pytest.mark.xdist_group("sim_env_boot")
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def stub_env():
+    # Module-scoped: one subprocess boot for the whole file instead of
+    # one per parametrize (~12 boots on this file). Every test here
+    # checks auth gating (401/403 outcomes) and never mutates env
+    # state, so sharing a single stub between cases is safe — and on
+    # CI runners with 2 vCPUs, avoiding 10+ serial FastAPI imports
+    # is the difference between green and flaky. 90 s budget kept as
+    # belt-and-suspenders; the local happy path returns in ~1-2 s.
     backend = LocalBackend()
     handle = backend.start("stub-test", seed=42)
     try:
-        # 90 s — see ``LocalBackend.wait_healthy`` docstring for the
-        # CI-contention rationale. Local runs return in ~1-2 s.
         backend.wait_healthy(handle, timeout_s=90.0)
         yield handle
     finally:

@@ -45,6 +45,18 @@ from .spam import contains_dealer_text, parse_bool, seller_looks_like_dealer
 logger = logging.getLogger(__name__)
 
 
+def _credit_claude_time(bucket: str, t0: float) -> None:
+    """Credit elapsed Claude API time to the runner's TimeMeter
+    (epic #362). Best-effort — bookkeeping I/O must never break a
+    Claude call. Internal-only — invoked from ``_call*`` wrappers.
+    """
+    try:
+        from ..gym.time_meter import record_to_current
+        record_to_current(bucket, time.monotonic() - t0)
+    except Exception as exc:  # noqa: BLE001 — observability, never fatal
+        logger.debug("claude time_meter credit failed: %s", exc)
+
+
 def _coerce_coord(value: Any) -> int | None:
     """Best-effort int coercion for click coordinates returned by Claude.
 
@@ -287,7 +299,14 @@ class ClaudeExtractor:
                 continue
         return os.path.join("/tmp", f"{stem}_{int(time.time())}{suffix}")
 
-    def _call(self, screenshot: Image.Image, prompt: str, max_tokens: int = 500) -> str:
+    def _call(
+        self,
+        screenshot: Image.Image,
+        prompt: str,
+        max_tokens: int = 500,
+        *,
+        _bucket: str = "claude_extract",
+    ) -> str:
         """Call Claude API with screenshot + prompt."""
         import requests
 
@@ -299,6 +318,7 @@ class ClaudeExtractor:
         screenshot.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
 
+        t0 = time.monotonic()
         try:
             resp = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -332,6 +352,8 @@ class ClaudeExtractor:
                     return block["text"].strip()
         except Exception as e:
             logger.warning(f"ClaudeExtractor failed: {e}")
+        finally:
+            _credit_claude_time(_bucket, t0)
         return ""
 
     def _call_with_tool_schema(
@@ -343,6 +365,7 @@ class ClaudeExtractor:
         tool_description: str,
         input_schema: dict[str, Any],
         max_tokens: int = 500,
+        _bucket: str = "claude_extract",
     ) -> dict | None:
         """Call Claude API and force the response into a JSON-Schema-validated tool_use.
 
@@ -376,6 +399,7 @@ class ClaudeExtractor:
         screenshot.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
 
+        t0 = time.monotonic()
         try:
             resp = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -421,6 +445,8 @@ class ClaudeExtractor:
             )
         except Exception as e:
             logger.warning(f"ClaudeExtractor tool_use failed: {e}")
+        finally:
+            _credit_claude_time(_bucket, t0)
         return None
 
     def _call_with_tool_schema_multi(
@@ -433,6 +459,7 @@ class ClaudeExtractor:
         input_schema: dict[str, Any],
         labels: list[str] | None = None,
         max_tokens: int = 500,
+        _bucket: str = "claude_extract",
     ) -> dict | None:
         """Multi-screenshot variant of :meth:`_call_with_tool_schema`.
 
@@ -465,6 +492,7 @@ class ClaudeExtractor:
                 "source": {"type": "base64", "media_type": "image/png", "data": b64},
             })
 
+        t0 = time.monotonic()
         try:
             resp = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -504,6 +532,8 @@ class ClaudeExtractor:
             )
         except Exception as e:
             logger.warning(f"ClaudeExtractor multi tool_use failed: {e}")
+        finally:
+            _credit_claude_time(_bucket, t0)
         return None
 
     def _call_many(
@@ -512,6 +542,8 @@ class ClaudeExtractor:
         prompt: str,
         labels: list[str] | None = None,
         max_tokens: int = 350,
+        *,
+        _bucket: str = "claude_extract",
     ) -> str:
         """Call Claude API with multiple screenshots and one prompt."""
         import requests
@@ -537,6 +569,7 @@ class ClaudeExtractor:
                 },
             })
 
+        t0 = time.monotonic()
         try:
             resp = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -567,6 +600,8 @@ class ClaudeExtractor:
                     return block["text"].strip()
         except Exception as e:
             logger.warning(f"ClaudeExtractor multi failed: {e}")
+        finally:
+            _credit_claude_time(_bucket, t0)
         return ""
 
     @staticmethod
@@ -937,6 +972,7 @@ class ClaudeExtractor:
                 "required": ["navigated", "kind", "reason"],
             },
             labels=["BEFORE click", "AFTER click"],
+            _bucket="claude_verify",
         )
 
     def verify_gate(self, screenshot: Image.Image, expected: str) -> tuple[bool, str]:
@@ -976,6 +1012,7 @@ class ClaudeExtractor:
                 },
                 "required": ["passed", "reason"],
             },
+            _bucket="claude_verify",
         )
 
         if not parsed:

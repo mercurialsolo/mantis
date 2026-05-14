@@ -300,3 +300,189 @@ def test_adaptive_settle_is_silent_outside_dispatch() -> None:
     # No publish_dispatch wrapping → record_to_current is a no-op.
     elapsed = adaptive_settle.settle_after_action(_Env(), max_seconds=0.3)
     assert elapsed > 0.0  # The wait still happened, just unrecorded.
+
+
+# ── XdotoolGymEnv / PlaywrightGymEnv credit ``act`` + ``perceive`` ──────
+
+
+def test_xdotool_env_step_credits_act_via_dispatch() -> None:
+    """``XdotoolGymEnv.step`` wraps ``_execute_action`` in ``act``;
+    deeper helpers credit themselves. Verified end-to-end by patching
+    ``_execute_action`` + ``_capture`` to instant returns and watching
+    the totals."""
+    from unittest.mock import patch
+
+    from mantis_agent.actions import Action, ActionType
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+
+    env = object.__new__(XdotoolGymEnv)
+    env._human_speed = False
+    env._settle_time = 0.0
+    env._screenshot = lambda: None  # type: ignore[attr-defined]
+    env._capture = lambda: object()  # type: ignore[attr-defined]
+    env._execute_action = lambda _a: time.sleep(0.01)  # type: ignore[attr-defined]
+
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=0):
+        # Patch adaptive_settle to a no-op so this test only measures
+        # _execute_action time on the ``act`` bucket.
+        with patch(
+            "mantis_agent.gym.xdotool_env.adaptive_settle.is_enabled",
+            return_value=False,
+        ):
+            env.step(Action(action_type=ActionType.CLICK, params={"x": 1, "y": 1}))
+    assert meter.totals["act"] >= 0.01
+    assert meter.per_step[0]["act"] >= 0.01
+
+
+def test_xdotool_env_screenshot_credits_perceive_via_dispatch() -> None:
+    """``XdotoolGymEnv.screenshot()`` credits ``perceive`` —
+    ``_screenshot()`` (the private path used by adaptive_settle's frame
+    polling) deliberately does NOT, to avoid double-counting settle."""
+    from PIL import Image
+
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+
+    env = object.__new__(XdotoolGymEnv)
+    img = Image.new("RGB", (8, 8), "white")
+    env._screenshot = lambda: img  # type: ignore[attr-defined]
+
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=0):
+        env.screenshot()
+    assert meter.totals["perceive"] > 0.0
+    assert meter.per_step[0]["perceive"] > 0.0
+
+
+def test_xdotool_env_private_screenshot_does_not_credit_perceive() -> None:
+    """Regression guard: adaptive_settle uses ``_screenshot`` directly
+    inside its settle wait; that path must NOT credit ``perceive`` (it
+    already credits ``settle`` once at the loop's end). Otherwise the
+    two buckets compound for every settle call."""
+    from PIL import Image
+
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+
+    env = object.__new__(XdotoolGymEnv)
+    img = Image.new("RGB", (8, 8), "white")
+
+    # Override _screenshot to skip the OS calls but keep the method on
+    # the instance for the test.
+    def _take():
+        return img
+
+    env._screenshot = _take  # type: ignore[attr-defined]
+
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=0):
+        # Call ``_screenshot`` directly — must not credit any bucket.
+        env._screenshot()
+    assert meter.totals["perceive"] == 0.0
+
+
+# ── ClaudeExtractor / ClaudeGrounding credit Claude buckets ────────────
+
+
+def test_claude_extractor_call_credits_claude_extract_by_default() -> None:
+    """``ClaudeExtractor._call`` records elapsed time to
+    ``claude_extract`` via the dispatch context. Mocks out requests so
+    no actual HTTP happens — only the timer matters."""
+    from unittest.mock import MagicMock, patch
+
+    from PIL import Image
+
+    from mantis_agent.extraction import ClaudeExtractor
+
+    extractor = ClaudeExtractor(api_key="x")
+    img = Image.new("RGB", (8, 8), "white")
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {"content": [{"type": "text", "text": "ok"}]}
+
+    def _post(*_a, **_kw):
+        time.sleep(0.01)
+        return fake_resp
+
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=0):
+        with patch("requests.post", _post):
+            extractor._call(img, "prompt")
+    assert meter.totals["claude_extract"] >= 0.01
+    assert meter.per_step[0]["claude_extract"] >= 0.01
+
+
+def test_claude_extractor_verify_calls_credit_claude_verify() -> None:
+    """``ClaudeExtractor.verify_gate`` routes through ``_call_with_tool_schema``
+    with ``_bucket="claude_verify"``, so the elapsed time lands in the
+    verify bucket rather than ``claude_extract``."""
+    from unittest.mock import MagicMock, patch
+
+    from PIL import Image
+
+    from mantis_agent.extraction import ClaudeExtractor
+
+    extractor = ClaudeExtractor(api_key="x")
+    img = Image.new("RGB", (8, 8), "white")
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {
+        "content": [
+            {"type": "tool_use", "name": "report_gate_verification",
+             "input": {"passed": True, "reason": "ok"}},
+        ],
+    }
+
+    def _post(*_a, **_kw):
+        time.sleep(0.01)
+        return fake_resp
+
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=0):
+        with patch("requests.post", _post):
+            extractor.verify_gate(img, "filters visible")
+    assert meter.totals["claude_verify"] >= 0.01
+    assert meter.totals["claude_extract"] == 0.0
+
+
+def test_claude_grounding_credits_claude_ground() -> None:
+    """``ClaudeGrounding.ground`` wraps both cache hits and API calls in
+    ``claude_ground``."""
+    from unittest.mock import MagicMock, patch
+
+    from PIL import Image
+
+    from mantis_agent.grounding import ClaudeGrounding
+
+    grounding = ClaudeGrounding(api_key="x")
+    img = Image.new("RGB", (32, 32), "white")
+
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.json.return_value = {"content": [{"type": "text", "text": "10 12"}]}
+
+    def _post(*_a, **_kw):
+        time.sleep(0.01)
+        return fake_resp
+
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=0):
+        with patch("requests.post", _post):
+            grounding.ground(img, "click sign in", initial_x=5, initial_y=5)
+    assert meter.totals["claude_ground"] >= 0.01
+
+
+# ── think bucket ────────────────────────────────────────────────────────
+
+
+def test_record_to_current_credits_think_bucket() -> None:
+    """``GymRunner`` calls ``record_to_current("think", elapsed)``
+    around every ``brain.think`` call. This unit test exercises the
+    contract directly — the integration is verified via the wire-in
+    in ``gym/runner.py``."""
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=2):
+        record_to_current("think", 1.25)
+    assert meter.totals["think"] == 1.25
+    assert meter.per_step[2]["think"] == 1.25

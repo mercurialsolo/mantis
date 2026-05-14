@@ -181,13 +181,25 @@ Nothing else."""
         # fallback every time and pollute the cache).
         # #181: ``force_compute=True`` bypasses the cache so high-risk
         # clicks never inherit a stale coordinate.
-        if not force_compute and self.cache is not None and description and self.api_key:
-            return self.cache.lookup_or_compute(
-                screenshot, description,
-                lambda: self._ground_remote(screenshot, description, initial_x, initial_y),
-                initial_x=initial_x, initial_y=initial_y,
-            )
-        return self._ground_remote(screenshot, description, initial_x, initial_y)
+        # Epic #362: time the whole call (cache hit or API miss) under
+        # the ``claude_ground`` bucket. Cache hits are near-zero but
+        # still credited so per-step breakdowns sum cleanly.
+        import time as _time_mod
+        t0 = _time_mod.monotonic()
+        try:
+            if not force_compute and self.cache is not None and description and self.api_key:
+                return self.cache.lookup_or_compute(
+                    screenshot, description,
+                    lambda: self._ground_remote(screenshot, description, initial_x, initial_y),
+                    initial_x=initial_x, initial_y=initial_y,
+                )
+            return self._ground_remote(screenshot, description, initial_x, initial_y)
+        finally:
+            try:
+                from .gym.time_meter import record_to_current
+                record_to_current("claude_ground", _time_mod.monotonic() - t0)
+            except Exception as exc:  # noqa: BLE001 — observability, never fatal
+                logger.debug("claude_ground time_meter credit failed: %s", exc)
 
     def _ground_remote(self, screenshot, description, initial_x=None, initial_y=None):
         import base64

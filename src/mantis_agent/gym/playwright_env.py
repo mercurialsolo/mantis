@@ -217,7 +217,17 @@ class PlaywrightGymEnv(GymEnvironment):
             elif action.action_type == ActionType.SCROLL:
                 time.sleep(random.uniform(0.2, 0.6))  # Reading pace
 
-        self._execute_action(action)
+        # Epic #362: credit the actual action dispatch to ``act`` —
+        # exclusively the time inside _execute_action.
+        _act_t0 = time.monotonic()
+        try:
+            self._execute_action(action)
+        finally:
+            try:
+                from .time_meter import record_to_current
+                record_to_current("act", time.monotonic() - _act_t0)
+            except Exception:
+                pass
 
         # Post-action settle time (longer for human speed)
         if action.action_type not in (ActionType.WAIT, ActionType.DONE):
@@ -288,8 +298,17 @@ class PlaywrightGymEnv(GymEnvironment):
                 "PlaywrightGymEnv: screenshot() called before reset(). "
                 "Call env.reset(task=..., start_url=...) first."
             )
-        png_bytes = self._page.screenshot(type="png")
-        return Image.open(io.BytesIO(png_bytes))
+        # Epic #362: credit screenshot capture to ``perceive``.
+        _t0 = time.monotonic()
+        try:
+            png_bytes = self._page.screenshot(type="png")
+            return Image.open(io.BytesIO(png_bytes))
+        finally:
+            try:
+                from .time_meter import record_to_current
+                record_to_current("perceive", time.monotonic() - _t0)
+            except Exception:
+                pass
 
     @property
     def page(self):
@@ -465,6 +484,10 @@ class PlaywrightGymEnv(GymEnvironment):
         If annotate_som=True, overlays numbered red labels on all interactive
         elements (Set-of-Mark), and includes the element list in extras.
         """
+        # Epic #362: credit ``perceive`` for the screenshot. SoM
+        # annotation work below also lands here intentionally — it's
+        # frame-derived perception, not part of any other bucket.
+        _t0 = time.monotonic()
         png_bytes = self._page.screenshot(type="png")
 
         elements = []
@@ -476,6 +499,11 @@ class PlaywrightGymEnv(GymEnvironment):
                 element_text = self._format_element_list(elements)
 
         screenshot = Image.open(io.BytesIO(png_bytes))
+        try:
+            from .time_meter import record_to_current
+            record_to_current("perceive", time.monotonic() - _t0)
+        except Exception:
+            pass
 
         return GymObservation(
             screenshot=screenshot,
