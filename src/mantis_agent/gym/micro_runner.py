@@ -197,6 +197,13 @@ class MicroPlanRunner:
         # it via ``intent_rewriter.should_attempt_rewrite``.
         self._step_intent_overrides: dict[int, str] = {}
         self._step_rewrite_attempts: dict[int, int] = {}
+        # Per-run audit log of self-healing actions (epic #377 Phase C —
+        # ``healing_events.record_*`` helpers append here; surfaced in
+        # ``result.json`` via ``build_micro_result``). Each entry is a
+        # dict with ``kind`` / ``step_index`` / ``source`` / ``at`` plus
+        # kind-specific fields. Empty list on plans that didn't need
+        # any healing.
+        self._healing_events: list[dict] = []
         # Agentic-recovery state (issue #224 follow-up). When the
         # recovery loop returns ``mode=add_hint``, the hint is
         # appended to ``_recovery_hints[step_index]`` and surfaced in

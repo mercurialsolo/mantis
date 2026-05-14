@@ -658,6 +658,7 @@ class StepRecoveryPolicy:
                 return None
             # Mutate the step in place. Only the fields the LLM
             # supplied; missing fields preserve original values.
+            original_intent = step.intent
             if "intent" in edited and edited["intent"]:
                 step.intent = str(edited["intent"])
             if "type" in edited and edited["type"]:
@@ -668,6 +669,20 @@ class StepRecoveryPolicy:
                 merged.update(edited["params"])
                 step.params = merged
             step_retry_counts[step_index] = 0
+            # Record so the operator can audit what the framework did
+            # (epic #377 Phase C accounting). The older agentic_recovery
+            # path is a sibling to the Phase B intent_rewriter; both
+            # land here so result.json shows a unified rewrite log.
+            if step.intent != original_intent:
+                from . import healing_events
+                healing_events.record_rewrite(
+                    self.parent,
+                    step_index=step_index,
+                    from_intent=original_intent,
+                    to_intent=step.intent,
+                    source="agentic_recovery",
+                    failure_class=getattr(step_result, "failure_class", "") or "",
+                )
             return RecoveryOutcome(
                 halt=False, step_index=step_index,
                 halt_reason=f"recovery_edit:{step.type}",
