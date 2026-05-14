@@ -100,12 +100,15 @@ def test_prompt_calls_out_recipe_schema_rejection_failure_mode() -> None:
 
 def test_cache_version_bumped() -> None:
     """A prompt change requires a cache-version bump so previously-
-    decomposed plans get re-decomposed under the new rule."""
+    decomposed plans get re-decomposed under the new rule. The
+    durable assertion is "the superseded version must not reappear"
+    — pinning a specific current version forces a churn-edit on
+    every legitimate downstream bump (e.g. #373's v25_right_click)."""
     src = inspect.getsource(PlanDecomposer.decompose_text)
-    # The new version MUST differ from the previous one and reference
-    # this fix (issue #244 / verification gate).
     assert "v23_skip_runtime_hints" not in src
-    assert "v24" in src
+    # The verification-gate bump itself was v24; it must not silently
+    # reappear and resurrect pre-#373 cached plans.
+    assert "v24_verification_gate" not in src
 
 
 # ── Runtime safety net (PlanDecomposer._build_intent) ────────────

@@ -64,7 +64,10 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
     ``register_for_types``:
 
     - ``ClaudeGuidedFormHandler`` → ``fill_field`` / ``submit`` /
-      ``select_option`` (form-shaped dispatch)
+      ``select_option`` / ``right_click`` (form-shaped dispatch —
+      one labelled target per call to ``find_form_target``; the
+      handler picks the button=right path for ``right_click`` and
+      a left-click for the other three)
     - ``ClaudeStepHandler`` → ``extract_url`` / ``extract_data``
       (Claude-only steps)
     - ``Holo3StepHandler`` → ``scroll`` / ``navigate_back`` (the only
@@ -89,7 +92,7 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
     reg.register(ClaudeGuidedFilterHandler(runner))
     reg.register_for_types(
         ClaudeGuidedFormHandler(runner),
-        ("fill_field", "submit", "select_option"),
+        ("fill_field", "submit", "select_option", "right_click"),
     )
     reg.register_for_types(
         ClaudeStepHandler(runner),

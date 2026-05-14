@@ -129,10 +129,11 @@ def test_prompt_version_was_bumped() -> None:
     from mantis_agent.plan_decomposer import PlanDecomposer
 
     src = inspect.getsource(PlanDecomposer.decompose_text)
-    # Current version (route verification extract_data through gate).
-    assert "v24_verification_gate" in src
     # Superseded versions must NOT appear — would mean someone
-    # accidentally restored a stale cache key.
+    # accidentally restored a stale cache key. Each historical
+    # version gets its own no-reappearance guard so a future bump
+    # only needs to add one new line, not edit a "current" pin.
+    assert "v24_verification_gate" not in src
     assert "v23_skip_runtime_hints" not in src
     assert "v22_row_link" not in src
     assert "v21_submit_kind" not in src

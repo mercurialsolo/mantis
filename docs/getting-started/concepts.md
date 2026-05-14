@@ -53,6 +53,10 @@ Each step in a micro-plan is a JSON object with a `type` and an `intent`:
 | `paginate` | URL-based or grounded click on the Next button |
 | `loop` | Jumps back to step `loop_target` up to `loop_count` times |
 | `filter` | Claude finds the filter checkbox and clicks it |
+| `fill_field` | Claude finds the labelled input (`params.label`), clears it, types `params.value` |
+| `submit` | Claude finds the labelled button / nav-link / row-link (`params.label` + `params.kind`) and left-clicks it |
+| `select_option` | Opens a labelled dropdown then picks the named option (`params.dropdown_label` + `params.option_label`) |
+| `right_click` | Claude finds the labelled element (`params.label`) and right-clicks to open the native context menu — use for "Open Link in New Tab" / "Copy Link" / app-defined context menus on table rows or grid cells ([#373](https://github.com/mercurialsolo/mantis/issues/373)) |
 
 Useful per-step modifiers:
 

@@ -1414,7 +1414,7 @@ class ClaudeExtractor:
                     "y": {"type": "integer", "description": "Center Y in pixels"},
                     "action": {
                         "type": "string",
-                        "enum": ["click", "type", "select", "not_found"],
+                        "enum": ["click", "right_click", "type", "select", "not_found"],
                     },
                     "value": {"type": "string"},
                     "label": {"type": "string"},
@@ -1554,7 +1554,7 @@ class ClaudeExtractor:
                     "y": {"type": "integer", "description": "Center Y in pixels"},
                     "action": {
                         "type": "string",
-                        "enum": ["click", "type", "select", "not_found"],
+                        "enum": ["click", "right_click", "type", "select", "not_found"],
                     },
                     "value": {"type": "string"},
                     "label": {"type": "string"},
@@ -1821,14 +1821,17 @@ class ClaudeExtractor:
                     },
                     "action": {
                         "type": "string",
-                        "enum": ["click", "type", "select", "not_found"],
+                        "enum": ["click", "right_click", "type", "select", "not_found"],
                         "description": (
                             "What the runner should do at this element. "
                             "``click`` for buttons / links / row "
-                            "containers; ``type`` for text inputs the "
-                            "runner should fill; ``select`` for an "
-                            "option already visible in an open "
-                            "dropdown menu (click first if the "
+                            "containers; ``right_click`` only when the "
+                            "task explicitly needs the browser's native "
+                            "context menu on the element (e.g. \"Open "
+                            "Link in New Tab\", \"Copy Link\"); ``type`` "
+                            "for text inputs the runner should fill; "
+                            "``select`` for an option already visible in "
+                            "an open dropdown menu (click first if the "
                             "dropdown is closed). ``not_found`` if "
                             "the page has nothing matching the intent."
                         ),

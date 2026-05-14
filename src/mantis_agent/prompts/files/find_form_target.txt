@@ -36,12 +36,17 @@ scroll, or surface a planning error.
 
 Determine the interaction:
 - "click" for buttons, links, checkbox/radio/toggle, or to OPEN a dropdown.
+- "right_click" for opening a native context menu on the element (e.g. the
+  task explicitly asks to right-click, or the workflow needs the browser's
+  context menu — "Open Link in New Tab", "Copy Link", "Inspect"). Only pick
+  this when the task verb is right-click or when no other interaction can
+  reach the goal.
 - "type" for text inputs (the runner will click the field, clear, then type).
 - "select" for picking an option from a dropdown that is already open
   (if the dropdown is closed, return action=click on the dropdown control first).
 
 Return the CENTER coordinates of the target element. Output ONLY valid JSON:
-{"x": N, "y": N, "action": "click|type|select",
+{"x": N, "y": N, "action": "click|right_click|type|select",
  "value": "text to type or option to select or empty",
  "label": "what element you found"}
 If the target is not visible anywhere on the page:

@@ -39,6 +39,7 @@
             "fill_field",
             "submit",
             "select_option",
+            "right_click",
             "paginate",
             "filter",
             "done",
@@ -155,7 +156,7 @@
         },
         "params": {
           "type": "object",
-          "description": "Structured payload for form-shaped step types: fill_field {label, value, aliases?}, submit {label, aliases?}, select_option {dropdown_label, option_label}, navigate {wait_after_load_seconds?}."
+          "description": "Structured payload for form-shaped step types: fill_field {label, value, aliases?}, submit {label, aliases?}, select_option {dropdown_label, option_label}, right_click {label, aliases?}, navigate {wait_after_load_seconds?}."
         },
         "hints": {
           "type": "object",

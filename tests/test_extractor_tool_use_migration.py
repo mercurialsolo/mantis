@@ -121,7 +121,10 @@ def test_find_filter_target_schema_includes_full_action_enum() -> None:
 
     schema = tool.call_args.kwargs["input_schema"]
     enum = schema["properties"]["action"]["enum"]
-    assert set(enum) == {"click", "type", "select", "not_found"}
+    # ``right_click`` (#373) joined the enum so Claude can adaptively
+    # suggest a context-menu open when a filter chip is right-click-
+    # only (rare but observed on a few SaaS filter pickers).
+    assert set(enum) == {"click", "right_click", "type", "select", "not_found"}
     assert set(schema["required"]) == {"x", "y", "action", "value", "label"}
 
 

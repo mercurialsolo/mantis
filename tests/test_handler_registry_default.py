@@ -39,7 +39,7 @@ def test_registry_covers_every_step_type_phase2_lifted():
     reg = _registry()
     expected = {
         "navigate", "click", "paginate", "filter",
-        "fill_field", "submit", "select_option",
+        "fill_field", "submit", "select_option", "right_click",
         "extract_url", "extract_data",
         "scroll", "navigate_back",
     }
