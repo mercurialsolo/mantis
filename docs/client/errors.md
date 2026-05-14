@@ -105,6 +105,7 @@ When a step fails, `action=result` returns each failed step with structured diag
 | `http_5xx` | Target backend returned 5xx | Exponential backoff + retry. Usually transient. |
 | `nav_timeout` | Page load exceeded the navigate budget | Bump `wait_after_load_seconds` on the step, or `MANTIS_NAV_WAIT_SECONDS`. Repeated → check egress / proxy. |
 | `selector_miss` | Click / fill / submit couldn't locate the target | Inspect `screenshot_b64` — the page is often in a different state than the plan expects. Adjust the plan, or add a `wait` step before. |
+| `no_state_change` | Action handler reported success but the runner-state snapshot saw no URL / page / scroll change. Self-healing demotion ([epic #377](https://github.com/mercurialsolo/mantis/issues/377) Phase A). Fires on `click` / `submit` / `navigate_back`. | Usually transient — the runner already triggered a retry and (after 2× repeats on the same step) routed through `Holo3StepHandler`. If it persists into terminal failure, the click is hitting an element that doesn't actually navigate; inspect `screenshot_b64` + `last_action`. |
 | `extractor_error` | Claude extractor failed / returned empty | Schema mismatch with what's visible. Tighten the recipe or relax the schema. |
 | `budget_exceeded` | `max_cost` / `max_time` / per-URL context budget tripped | Raise the cap or shorten the plan. |
 | `unknown` | No rule matched | Pull `action=logs` (below) — the runner traceback usually identifies it. |

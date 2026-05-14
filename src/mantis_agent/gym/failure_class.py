@@ -16,6 +16,10 @@ Classes (stay small on purpose — anything not matched lands in
 * ``nav_timeout`` — page-load timeout from Playwright / CDP.
 * ``http_4xx`` / ``http_5xx`` — origin returned an error status.
 * ``selector_miss`` — click / fill / submit couldn't locate the target.
+* ``no_state_change`` — action reported success but the runner-state
+  snapshot saw no URL / page / scroll / focus change. Self-healing
+  demotion signal (epic #377 Phase A) for click / submit /
+  navigate_back where the handler over-reported success.
 * ``extractor_error`` — Claude extractor failed or returned empty.
 * ``budget_exceeded`` — cost / time / context budget tripped.
 * ``unknown`` — no rule matched (caller should still surface ``data``).
@@ -38,7 +42,13 @@ _CF_TITLE_MARKERS: tuple[str, ...] = (
 
 
 _DATA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    # Order matters: more specific rules first.
+    # Order matters: more specific rules first. The demotion suffix
+    # ``:no_state_change`` (epic #377) is appended to a step's existing
+    # ``data`` when the runner downgrades success → fail — keep this
+    # rule above ``selector_miss`` so its substring wins when the
+    # pre-demotion ``data`` happened to contain a generic handler
+    # marker.
+    ("no_state_change", ("no_state_change",)),
     ("cf_challenge", ("error 403", "403 forbidden", "cloudflare", "verify you are human")),
     ("http_4xx", ("error 404", "404", "error 401", "error 410", "error 4")),
     ("http_5xx", ("error 5", "502", "503", "504", "internal server error")),

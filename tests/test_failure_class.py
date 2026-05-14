@@ -51,6 +51,16 @@ def test_extractor_error() -> None:
     assert classify("extract_error: empty payload", "") == "extractor_error"
 
 
+def test_no_state_change_demotion_signal() -> None:
+    """Epic #377 Phase A: classifier picks up the ``:no_state_change``
+    suffix that ``_maybe_demote_*_no_change`` appends to ``data``.
+    Used as the fallback for legacy result.json without a stamped
+    ``failure_class``; the executor stamps the class directly on
+    fresh runs."""
+    assert classify("click_error:no_state_change", "") == "no_state_change"
+    assert classify("submit_ok:no_state_change", "") == "no_state_change"
+
+
 def test_budget_exceeded() -> None:
     assert classify("listing_budget_exceeded:bound=per_url", "") == "budget_exceeded"
     assert classify("max_cost reached", "") == "budget_exceeded"
@@ -143,7 +153,8 @@ def test_classifier_vocabulary_is_stable() -> None:
     breaks force a docs / dashboard update."""
     allowed = {
         "cf_challenge", "http_4xx", "http_5xx", "nav_timeout",
-        "selector_miss", "extractor_error", "budget_exceeded", "unknown",
+        "selector_miss", "no_state_change",
+        "extractor_error", "budget_exceeded", "unknown",
     }
     samples = [
         ("", ""),
