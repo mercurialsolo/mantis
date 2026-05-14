@@ -205,6 +205,12 @@ class MicroPlanRunner:
             self.cost_meter.cost_config, self.cost_meter.tenant_id
         )
         self.costs, self._run_start = self.cost_meter.costs, self.cost_meter.run_start
+        # Sibling to CostMeter: same lifecycle, surfaces wall-time
+        # accounting per bucket. Phase B (#365) will lift this onto
+        # the result envelope; Phase A wires it only at the executor's
+        # step dispatch so the foundation lands before the surface.
+        from .time_meter import TimeMeter
+        self.time_meter = TimeMeter(tenant_id=tenant_id)
         self.browser_state = BrowserState(self)
         self.checkpoint_manager = CheckpointManager(self)
         from .step_handlers import default_registry
