@@ -774,9 +774,9 @@ def wait_for_openai_server(
             log_text = ""
             log_file = Path(log_path)
             if log_file.exists():
-                log_text = log_file.read_text(errors="ignore")[-3000:]
-            raise RuntimeError(f"{label} crashed during startup:\n{log_text[-1000:]}")
+                log_text = log_file.read_text(errors="ignore")[-20000:]
+            raise RuntimeError(f"{label} crashed during startup:\n{log_text}")
         time.sleep(poll_interval)
 
-    log_text = Path(log_path).read_text(errors="ignore")[-2000:] if Path(log_path).exists() else ""
+    log_text = Path(log_path).read_text(errors="ignore")[-20000:] if Path(log_path).exists() else ""
     raise RuntimeError(f"{label} startup timeout:\n{log_text}")
