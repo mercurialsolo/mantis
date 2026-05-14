@@ -71,6 +71,15 @@ def test_brain_loop_exhausted_signal() -> None:
     assert classify("loop_terminated by detector", "") == "brain_loop_exhausted"
 
 
+def test_wrong_target_signal() -> None:
+    """Epic #377 follow-up: classifier picks up the click handler's
+    ``wrong_target`` data prose. The handler stamps the class
+    directly on fresh runs; this rule covers fallback / legacy
+    result.json that only carries the ``data`` blob."""
+    assert classify("click_no_nav:wrong_target:landed on category page", "") == "wrong_target"
+    assert classify("verify_kind=wrong_target", "") == "wrong_target"
+
+
 def test_budget_exceeded() -> None:
     assert classify("listing_budget_exceeded:bound=per_url", "") == "budget_exceeded"
     assert classify("max_cost reached", "") == "budget_exceeded"
@@ -164,6 +173,7 @@ def test_classifier_vocabulary_is_stable() -> None:
     allowed = {
         "cf_challenge", "http_4xx", "http_5xx", "nav_timeout",
         "selector_miss", "no_state_change", "brain_loop_exhausted",
+        "wrong_target",
         "extractor_error", "budget_exceeded", "unknown",
     }
     samples = [
