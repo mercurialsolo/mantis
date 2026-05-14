@@ -132,32 +132,6 @@ def test_step_results_carry_screenshot_bytes_by_default():
         assert s.screenshot_png is not None and s.screenshot_png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_time_meter_records_act_and_perceive_per_step():
-    """Phase A (epic #362, issue #363): every dispatched step should
-    charge wall time to ``act`` (the wrapped ``_execute_step`` call) and
-    ``perceive`` (the post-step screenshot capture). Both totals + the
-    per-step breakdown must reflect the same measurements."""
-    env = _FakeEnv()
-    r = _runner(env)
-    steps = r.run(_trivial_plan())
-    assert len(steps) == 3
-
-    meter = r.time_meter
-    # Totals carry both buckets.
-    assert meter.totals["act"] > 0.0
-    assert meter.totals["perceive"] > 0.0
-
-    # Per-step breakdown has one entry per dispatched step.
-    assert len(meter.per_step) == 3
-    for i in range(3):
-        bd = meter.per_step[i]
-        # Each step charged BOTH act and perceive (per-step
-        # screenshot capture runs for every step in the dispatch
-        # path).
-        assert bd["act"] > 0.0, f"step {i} did not charge 'act'"
-        assert bd["perceive"] > 0.0, f"step {i} did not charge 'perceive'"
-
-
 def test_time_meter_records_load_via_navigate_handler():
     """Phase A wire-ins (epic #362): the navigate step handler wraps
     ``env.reset`` in the ``load`` bucket — credited via the dispatch

@@ -254,7 +254,16 @@ class XdotoolGymEnv(GymEnvironment):
 
     def screenshot(self) -> Image.Image:
         """Public: capture current screenshot as PIL Image."""
-        return self._screenshot()
+        # Epic #362: credit screenshot capture to ``perceive``.
+        _t0 = time.monotonic()
+        try:
+            return self._screenshot()
+        finally:
+            try:
+                from .time_meter import record_to_current
+                record_to_current("perceive", time.monotonic() - _t0)
+            except Exception:
+                pass
 
     def _screenshot(self) -> Image.Image:
         """Capture screenshot via mss (fast) or scrot (fallback)."""
@@ -581,7 +590,18 @@ class XdotoolGymEnv(GymEnvironment):
             elif action.action_type == ActionType.TYPE:
                 time.sleep(random.uniform(0.5, 1.5))
 
-        self._execute_action(action)
+        # Epic #362: credit the actual action dispatch to ``act`` —
+        # exclusively the time inside _execute_action, not the
+        # human-speed pre-sleep above (which lands in ``overhead``).
+        _act_t0 = time.monotonic()
+        try:
+            self._execute_action(action)
+        finally:
+            try:
+                from .time_meter import record_to_current
+                record_to_current("act", time.monotonic() - _act_t0)
+            except Exception:
+                pass
 
         # Post-action settle (#294).
         #
@@ -693,14 +713,24 @@ class XdotoolGymEnv(GymEnvironment):
 
         If save_screenshots is set, saves each screenshot for replay testing.
         """
+        # Epic #362: credit screenshot capture to ``perceive``. Uses
+        # ``_screenshot`` directly so adaptive_settle's internal frame
+        # polling (which also calls ``_screenshot``) stays in the
+        # ``settle`` bucket — no double-counting.
+        _t0 = time.monotonic()
         screenshot = self._screenshot()
-
-        if self._save_screenshots:
-            from .replay_env import save_screenshot
-            save_screenshot(screenshot, self._save_screenshots, self._step_counter)
-            self._step_counter += 1
-
-        return GymObservation(screenshot=screenshot, extras={})
+        try:
+            if self._save_screenshots:
+                from .replay_env import save_screenshot
+                save_screenshot(screenshot, self._save_screenshots, self._step_counter)
+                self._step_counter += 1
+            return GymObservation(screenshot=screenshot, extras={})
+        finally:
+            try:
+                from .time_meter import record_to_current
+                record_to_current("perceive", time.monotonic() - _t0)
+            except Exception:
+                pass
 
     @staticmethod
     def _to_int(val) -> int:

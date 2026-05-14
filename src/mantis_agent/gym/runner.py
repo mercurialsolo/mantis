@@ -1039,6 +1039,16 @@ class GymRunner:
                     screen_size=self.env.screen_size,
                 )
                 inference_time = time.time() - t_infer
+                # Epic #362: credit brain inference to the ``think``
+                # bucket on the runner's TimeMeter. Reads the current
+                # dispatch context — no-op when GymRunner is invoked
+                # outside a MicroPlanRunner step (legacy /v1/cua path
+                # publishes nothing; that's fine).
+                try:
+                    from .time_meter import record_to_current
+                    record_to_current("think", inference_time)
+                except Exception:
+                    pass
 
                 action = result.action
                 thinking = getattr(result, "thinking", "")
@@ -2246,6 +2256,9 @@ class GymRunner:
         print(f"  [discovery] {len(elements)} elements found, asking brain...")
 
         recent_frames = frame_history[-self.frames_per_inference:]
+        # Epic #362: time brain.think under the ``think`` bucket; no-op
+        # when no dispatch context is published.
+        _think_t0 = time.time()
         try:
             result = self.brain.think(
                 frames=recent_frames,
@@ -2256,6 +2269,12 @@ class GymRunner:
         except Exception as e:
             print(f"  [discovery] brain error: {e}")
             return None
+        finally:
+            try:
+                from .time_meter import record_to_current
+                record_to_current("think", time.time() - _think_t0)
+            except Exception:
+                pass
 
         # Parse the brain's response — it might be in thinking or in action params
         response_text = getattr(result, "thinking", "") or ""
