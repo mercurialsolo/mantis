@@ -604,6 +604,67 @@ class ClaudeGuidedFormHandler:
                 logger.warning(f"  [claude-form] submit failed: {e}")
                 return StepResult(step_index=index, intent=step.intent, success=False, data=f"submit_error:{e}")
 
+        if step.type == "right_click":
+            # #373: open the browser's native context menu on a single
+            # labelled element. Uses find_form_target (Claude vision)
+            # to locate the target by label, then dispatches a
+            # button=right click. No URL-change verification — a
+            # right-click that succeeds opens a menu, it does not
+            # navigate. SoM dispatch is left-click-only (``el.click()``
+            # synthesises a left-button event chain), so this path
+            # goes straight through xdotool / Playwright button=3.
+            label = str(params.get("label") or "").strip()
+            aliases = params.get("aliases") or []
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            aliases = [str(a).strip() for a in aliases if str(a).strip()]
+            search_intent = (
+                f"Find the '{label}' element so we can right-click on it "
+                f"to open its native context menu"
+                if label else step.intent
+            )
+            target = extractor.find_form_target(
+                screenshot, search_intent,
+                target_label=label, target_aliases=aliases,
+            )
+            runner.costs["claude_extract"] += 1
+            if not target:
+                logger.warning(
+                    f"  [claude-form] right_click: target '{label}' not found"
+                )
+                return StepResult(
+                    step_index=index, intent=step.intent, success=False,
+                    data="form_target_not_found",
+                    failure_class="selector_miss",
+                )
+            x, y = int(target["x"]), int(target["y"])
+            try:
+                time.sleep(random.uniform(0.2, 0.5))
+                env.step(Action(
+                    action_type=ActionType.CLICK,
+                    params={"x": x, "y": y, "button": "right"},
+                ))
+                ctx.state["_executor_backend"] = "vision"
+                runner.costs["gpu_steps"] += 1
+                # Brief settle to let the context menu render — caller
+                # typically follows with a ``submit`` step keyed on a
+                # menu item ("Open Link in New Tab", "Copy Link", …).
+                time.sleep(0.6)
+                logger.info(
+                    f"  [claude-form] right_click '{label[:40]}' at ({x}, {y})"
+                )
+                return StepResult(
+                    step_index=index, intent=step.intent, success=True,
+                    steps_used=1, duration=1.0,
+                    data=f"right_click:{label[:40]}@({x},{y})",
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"  [claude-form] right_click failed: {e}")
+                return StepResult(
+                    step_index=index, intent=step.intent, success=False,
+                    data=f"right_click_error:{e}",
+                )
+
         if step.type == "select_option":
             dropdown = str(params.get("dropdown_label") or params.get("label") or "").strip()
             option = str(params.get("option_label") or params.get("value") or "").strip()

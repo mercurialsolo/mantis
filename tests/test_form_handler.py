@@ -382,3 +382,106 @@ def test_unknown_step_type_returns_failure(monkeypatch):
 def test_step_type_property():
     handler = ClaudeGuidedFormHandler(_FakeRunner())
     assert handler.step_type == "submit"
+
+
+# ── right_click (#373) ──────────────────────────────────────────────
+
+
+def test_right_click_dispatches_button_right_at_target(monkeypatch):
+    """right_click finds the labelled target via find_form_target,
+    then dispatches a single CLICK Action with ``button="right"``
+    at the target's center — no SoM dispatch, no URL-change check."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 320, "y": 480}
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Right-click on Open Link in New Tab",
+        type="right_click",
+        params={"label": "Listing card #2"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    assert result.data == "right_click:Listing card #2@(320,480)"
+    # Single env.step call: the right-mouse-button click.
+    click_calls = [
+        c for c in env.step.call_args_list
+        if c.args[0].action_type == ActionType.CLICK
+    ]
+    assert len(click_calls) == 1
+    params = click_calls[0].args[0].params
+    assert params == {"x": 320, "y": 480, "button": "right"}
+    # One find_form_target call billed; no Holo3 grounding.
+    assert runner.costs["claude_extract"] == 1
+    assert runner.costs["gpu_steps"] == 1
+
+
+def test_right_click_target_not_found_returns_form_target_not_found(monkeypatch):
+    """When find_form_target misses, right_click returns the same
+    ``form_target_not_found`` envelope as the other form variants
+    so the executor / recovery path can react uniformly."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = None
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Right-click on Save",
+        type="right_click",
+        params={"label": "Save"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is False
+    assert result.data == "form_target_not_found"
+    # ``selector_miss`` lets the recovery / rewrite path see the
+    # specific failure mode (same vocabulary as failure_class.py).
+    assert result.failure_class == "selector_miss"
+    # No click was dispatched.
+    click_calls = [
+        c for c in env.step.call_args_list
+        if c.args[0].action_type == ActionType.CLICK
+    ]
+    assert click_calls == []
+
+
+def test_right_click_uses_intent_string_when_no_label(monkeypatch):
+    """right_click without ``params.label`` falls back to the step
+    intent verbatim (same shape as the other form variants)."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 50, "y": 60}
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Right-click on the first table row to open its menu",
+        type="right_click",
+        params={},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    # find_form_target invoked with the raw intent (no label-templated
+    # framing). Inspect the search_intent positional argument.
+    call_args = extractor.find_form_target.call_args
+    search_intent = call_args.args[1]
+    assert "first table row" in search_intent

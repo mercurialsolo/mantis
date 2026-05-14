@@ -120,7 +120,7 @@ def _extract_json_payload(text: str) -> Any:
 class MicroIntent:
     """A single atomic instruction for the CUA executor."""
     intent: str             # 1 sentence for Holo3: "Click the blue title text below the photo"
-    type: str               # click, scroll, navigate, extract_url, extract_data, filter, paginate, loop, navigate_back, fill_field, submit, select_option
+    type: str               # click, scroll, navigate, extract_url, extract_data, filter, paginate, loop, navigate_back, fill_field, submit, select_option, right_click
     verify: str = ""        # Expected outcome: "URL contains boattrader.com/boat/"
     budget: int = 5         # Max Holo3 steps
     reverse: str = ""       # How to undo: "Press Alt+Left"
@@ -135,6 +135,7 @@ class MicroIntent:
     #   fill_field    : {"label": str, "value": str, "aliases"?: list[str]}
     #   submit        : {"label": str, "aliases"?: list[str]}
     #   select_option : {"dropdown_label": str, "option_label": str}
+    #   right_click   : {"label": str, "aliases"?: list[str]}  # opens native context menu
     #   navigate      : {"wait_after_load_seconds"?: int}
     # ``aliases`` (#89 §2) lets a plan list synonyms for a primary submit
     # button whose copy varies across products (e.g. "Update Lead" /
@@ -456,6 +457,18 @@ VERB → STEP-TYPE MAPPING (FORM FLOWS):
        → click (this IS a listings click — many similar items on one page,
        runner picks the next un-extracted one). DO NOT use click for nav
        links, buttons, or any single-element clickable.
+   "right-click on Y", "open the context menu on Y",
+   "press the right mouse button on Y", "secondary-click Y"
+       → right_click with params={"label": "Y"}.
+       Use ONLY when the workflow needs the browser's native context
+       menu on a specific labelled target — typically "Open Link in
+       New Tab", "Copy Link", "Inspect Element", or app-defined
+       context menus on table rows / grid cells. The runner finds the
+       element via find_form_target then dispatches a right mouse
+       button click at its center. Do NOT use right_click as a generic
+       "click harder" — a plain click step is correct unless the
+       source explicitly calls for a right-click verb or a context
+       menu is the only way to reach the next action.
 
 When the source text says "Click the {field-name} field and enter {value}", emit
 a SINGLE fill_field step (label={field-name}, value={value}) — NOT a click step.
@@ -652,7 +665,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v24_verification_gate"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v25_right_click"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -779,6 +792,15 @@ class PlanDecomposer:
     # Always claude-grounded; no listings find_all. See issue #80.
     FORM_STEP_TYPES = ("fill_field", "submit", "select_option")
 
+    # ``right_click`` (#373) shares the FormHandler dispatch shape —
+    # find_form_target finds one labelled element, the handler then
+    # dispatches an ``Action(CLICK, button="right")`` — but the
+    # FORM_STEP_TYPES defaults (section=setup, required=True) are
+    # wrong for right-click, which is typically an extraction-flow
+    # primitive (open a context menu mid-extract). The build path
+    # below treats it as its own group with extraction-friendly
+    # defaults.
+
     # Verification-language triggers (issue #244). When an
     # ``extract_data`` step's intent contains any of these substrings
     # (case-insensitive) and the source dict didn't set ``gate``
@@ -824,7 +846,7 @@ class PlanDecomposer:
                 section = "setup"
             elif step_type in ("paginate",):
                 section = "pagination"
-            elif step_type in ("click", "scroll", "extract_url", "extract_data", "navigate_back"):
+            elif step_type in ("click", "scroll", "extract_url", "extract_data", "navigate_back", "right_click"):
                 section = "extraction"
             elif step_type in PlanDecomposer.FORM_STEP_TYPES:
                 # Form steps default to "setup" — login + form-fill happens before extraction.
