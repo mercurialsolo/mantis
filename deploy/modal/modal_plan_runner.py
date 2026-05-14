@@ -588,6 +588,11 @@ def run_plan(
         "step_count": len(step_results),
         "successes": successes,
         "failures": failures,
+        # ``total_time_s`` matches ``build_micro_result``'s schema (used
+        # by the HTTP API). ``elapsed_seconds`` is the legacy float form
+        # this path has always returned — kept as an alias so existing
+        # consumers don't break. Both round-trip the same wall-clock.
+        "total_time_s": round(elapsed),
         "elapsed_seconds": round(elapsed, 2),
         "wall_time_breakdown": wall_time_breakdown,
         "final_url": final_url,
