@@ -486,30 +486,75 @@ class BasetenCUARuntime:
                     self._append_detached_event(run_id, "paused")
                     return
                 self._save_detached_result(run_id, result)
+                finished_at = _utc_now()
                 self._write_detached_status(
                     run_id,
                     {
                         "status": "succeeded",
-                        "finished_at": _utc_now(),
+                        "finished_at": finished_at,
                         "summary": self._result_summary(result),
                     },
                 )
                 self._append_detached_event(run_id, "succeeded")
+                self._append_runs_log(
+                    run_id, payload, result,
+                    status="succeeded", finished_at=finished_at,
+                )
         except Exception as exc:
             logger.exception("detached run %s failed", run_id)
+            finished_at = _utc_now()
             self._write_detached_status(
                 run_id,
                 {
                     "status": "failed",
-                    "finished_at": _utc_now(),
+                    "finished_at": finished_at,
                     "error": str(exc),
                     "traceback": traceback.format_exc()[-4000:],
                 },
             )
             self._append_detached_event(run_id, f"failed: {exc}")
+            self._append_runs_log(
+                run_id, payload, result=None,
+                status="failed", finished_at=finished_at, error=str(exc),
+            )
         finally:
             agent_logger.removeHandler(handler)
             handler.close()
+
+    def _append_runs_log(
+        self,
+        run_id: str,
+        payload: dict[str, Any],
+        result: dict[str, Any] | None,
+        *,
+        status: str,
+        finished_at: str,
+        error: str | None = None,
+    ) -> None:
+        """Append a JSONL row to ``$MANTIS_DATA_DIR/runs_log/<YYYY-MM>.jsonl``
+        on terminal status (epic #362 Phase C). Best-effort — bookkeeping
+        I/O must never break a finishing run.
+        """
+        try:
+            from ..runs_log import append_run, row_from_result
+
+            tenant_id = os.environ.get("MANTIS_TENANT_ID", "default")
+            row = row_from_result(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                profile_id=str(payload.get("profile_id") or ""),
+                workflow_id=str(payload.get("workflow_id") or ""),
+                plan_signature=str((result or {}).get("plan_signature") or ""),
+                model=str((result or {}).get("model") or ""),
+                status=status,
+                created_at=str(payload.get("_created_at") or ""),
+                finished_at=finished_at,
+                result=result,
+                error=error,
+            )
+            append_run(row)
+        except Exception as exc:  # noqa: BLE001 — observability, never fatal
+            logger.debug("runs_log: append failed for %s: %s", run_id, exc)
 
     def _save_detached_result(self, run_id: str, result: dict[str, Any]) -> None:
         run_dir = self._run_path(run_id, create=True)

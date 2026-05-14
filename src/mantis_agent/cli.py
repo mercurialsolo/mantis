@@ -1016,6 +1016,103 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
     return EXIT_OK if failures == 0 else EXIT_ERROR
 
 
+def cmd_runs_stats(args: argparse.Namespace) -> int:
+    """``mantis runs stats <workflow_id>`` — render p50/p95/p99 per
+    wall-time bucket across the last N completed runs of a workflow.
+
+    Reads the durable JSONL log written by the runtime on terminal
+    status (epic #362 Phase C). Pure local query — no network, no
+    server roundtrip. Renders a fixed-width table by default; pass
+    ``--json`` to feed downstream tooling.
+    """
+    from .runs_log import stats
+
+    since = _parse_since(args.since) if args.since else None
+    if args.since and since is None:
+        print(
+            f"error: --since {args.since!r} must look like '7d' / '24h' / '30m'",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    result = stats(
+        args.workflow_id,
+        last_n=int(args.last),
+        since=since,
+        buckets=list(args.bucket) if args.bucket else None,
+        status_filter=args.status,
+    )
+
+    if args.json:
+        payload = {
+            "workflow_id": result.workflow_id,
+            "run_count": result.run_count,
+            "percentiles": {
+                k: {"p50": p50, "p95": p95, "p99": p99}
+                for k, (p50, p95, p99) in result.percentiles.items()
+            },
+        }
+        print(json.dumps(payload, indent=2))
+        return EXIT_OK
+
+    if result.run_count == 0:
+        print(
+            f"No runs matched workflow_id={args.workflow_id!r} "
+            f"(status_filter={args.status!r}, last_n={args.last})."
+        )
+        return EXIT_OK
+
+    # Render the fixed-width table: bucket | p50 | p95 | p99.
+    header = (
+        f"\nAcross last {result.run_count} {args.status or 'terminal'} "
+        f"runs of {args.workflow_id}:\n"
+    )
+    print(header)
+    # Order buckets by p50 descending so the worst offender lands first.
+    rows = sorted(
+        ((k, v) for k, v in result.percentiles.items() if k != "total_time_s"),
+        key=lambda kv: kv[1][0],
+        reverse=True,
+    )
+    total = result.percentiles.get("total_time_s")
+    print(f"{'bucket':<16} {'p50':>10} {'p95':>10} {'p99':>10}")
+    print("─" * 50)
+    for k, (p50, p95, p99) in rows:
+        print(f"{k:<16} {p50:>9.1f}s {p95:>9.1f}s {p99:>9.1f}s")
+    print("─" * 50)
+    if total is not None:
+        p50, p95, p99 = total
+        print(f"{'total_time_s':<16} {p50:>9.1f}s {p95:>9.1f}s {p99:>9.1f}s")
+    return EXIT_OK
+
+
+def _parse_since(value: str):
+    """Parse a duration like '7d' / '24h' / '30m' into a ``timedelta``.
+
+    Returns ``None`` for unparseable inputs so the caller can surface a
+    friendly error message.
+    """
+    from datetime import timedelta
+
+    value = (value or "").strip().lower()
+    if not value or len(value) < 2:
+        return None
+    suffix = value[-1]
+    try:
+        n = int(value[:-1])
+    except ValueError:
+        return None
+    if n < 0:
+        return None
+    if suffix == "d":
+        return timedelta(days=n)
+    if suffix == "h":
+        return timedelta(hours=n)
+    if suffix == "m":
+        return timedelta(minutes=n)
+    return None
+
+
 def cmd_plan_run_modal(args: argparse.Namespace) -> int:
     """``mantis plan run-modal <plan>`` — execute a plan inside Modal.
 
@@ -1789,6 +1886,51 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Emit the labelled trace as JSON",
     )
     review.set_defaults(func=cmd_trace_review)
+
+    # ── runs: cross-run aggregation over the JSONL log (epic #362 C) ──
+    runs = sub.add_parser(
+        "runs",
+        help="Cross-run aggregation over the durable JSONL log written "
+             "on terminal status by the mantis-server runtime.",
+    )
+    runs_sub = runs.add_subparsers(dest="runs_command", required=True)
+
+    runs_stats = runs_sub.add_parser(
+        "stats",
+        help="Aggregate p50/p95/p99 per wall-time bucket across the "
+             "last N runs of a workflow.",
+    )
+    runs_stats.add_argument(
+        "workflow_id",
+        help="Workflow ID to aggregate over (matches summary.workflow_id "
+             "and the JSONL row's workflow_id field).",
+    )
+    runs_stats.add_argument(
+        "--last", type=int, default=100,
+        help="Newest-first cap on rows considered (default: 100).",
+    )
+    runs_stats.add_argument(
+        "--bucket", action="append", default=None,
+        metavar="NAME",
+        help="Restrict to one or more wall-time buckets (e.g. think, "
+             "claude_extract). Repeat to select multiple. Default: all.",
+    )
+    runs_stats.add_argument(
+        "--since",
+        default=None,
+        help="Restrict to rows finished within the last DURATION "
+             "(formats: '7d', '24h', '30m'). Default: no time bound.",
+    )
+    runs_stats.add_argument(
+        "--status", default="succeeded",
+        help="Filter rows by status (default: succeeded). Pass '' to "
+             "include every terminal status.",
+    )
+    runs_stats.add_argument(
+        "--json", action="store_true",
+        help="Emit results as JSON instead of a table.",
+    )
+    runs_stats.set_defaults(func=cmd_runs_stats)
 
     return parser
 
