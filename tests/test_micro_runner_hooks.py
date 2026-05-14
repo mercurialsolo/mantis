@@ -158,6 +158,28 @@ def test_time_meter_records_act_and_perceive_per_step():
         assert bd["perceive"] > 0.0, f"step {i} did not charge 'perceive'"
 
 
+def test_time_meter_records_load_via_navigate_handler():
+    """Phase A wire-ins (epic #362): the navigate step handler wraps
+    ``env.reset`` in the ``load`` bucket — credited via the dispatch
+    context published by the executor.
+
+    ``settle`` is intentionally NOT asserted here: the broad test suite
+    stubs ``adaptive_settle.*`` to instant-return via the autouse
+    fixture in ``conftest.py`` for speed. The settle → dispatch credit
+    path is verified directly in ``test_time_meter.py``."""
+    env = _FakeEnv()
+    r = _runner(env)
+    r.run(_trivial_plan())
+
+    meter = r.time_meter
+    assert meter.totals["load"] > 0.0, (
+        "navigate handler should record env.reset time to the load bucket"
+    )
+    # The dispatch publisher routes deep-helper records to the active
+    # step_idx — verify per-step rather than just the aggregate.
+    assert any(rec["load"] > 0.0 for rec in meter.per_step)
+
+
 def test_time_meter_breakdown_fills_overhead_residual():
     """``breakdown()`` should account for time not wrapped in any
     ``measure()`` block as ``overhead`` so the dict sums close to

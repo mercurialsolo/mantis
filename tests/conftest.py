@@ -26,6 +26,11 @@ _SETTLE_TEST_FILES: frozenset[str] = frozenset({
     "test_adaptive_settle.py",
     "test_adaptive_content_settle.py",
     "test_adaptive_settle_end_to_end_budget.py",
+    # Epic #362: TimeMeter tests need the real adaptive_settle to verify
+    # the dispatch-context credit path. None of the existing TimeMeter
+    # cases trigger a real wait (they call adaptive_settle directly
+    # with tiny budgets), so the suite stays fast.
+    "test_time_meter.py",
 })
 
 

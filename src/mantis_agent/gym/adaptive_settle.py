@@ -138,14 +138,19 @@ def settle_after_action(
     if not is_enabled() or max_seconds <= 0:
         if max_seconds > 0:
             time.sleep(max_seconds)
-        return max_seconds if max_seconds > 0 else 0.0
+        elapsed = max_seconds if max_seconds > 0 else 0.0
+        _credit_settle(elapsed)
+        return elapsed
     capture = getattr(env, "_screenshot", None) or getattr(env, "screenshot", None)
     if not callable(capture):
         time.sleep(max_seconds)
+        _credit_settle(max_seconds)
         return max_seconds
-    return wait_until_stable(
+    elapsed = wait_until_stable(
         capture, max_seconds=max_seconds, poll_interval=poll_interval,
     )
+    _credit_settle(elapsed)
+    return elapsed
 
 
 def wait_for_networkidle(
@@ -165,7 +170,9 @@ def wait_for_networkidle(
     start = time.monotonic()
     if page is None:
         time.sleep(max_seconds)
-        return time.monotonic() - start
+        elapsed = time.monotonic() - start
+        _credit_settle(elapsed)
+        return elapsed
     try:
         page.wait_for_load_state(
             "networkidle", timeout=int(max_seconds * 1000),
@@ -175,4 +182,20 @@ def wait_for_networkidle(
         remaining = max_seconds - (time.monotonic() - start)
         if remaining > 0:
             time.sleep(remaining)
-    return time.monotonic() - start
+    elapsed = time.monotonic() - start
+    _credit_settle(elapsed)
+    return elapsed
+
+
+def _credit_settle(elapsed: float) -> None:
+    """Best-effort: credit the ``settle`` bucket on the runner's
+    TimeMeter (epic #362). No-op when no dispatch context is published
+    or the import fails — bookkeeping must not break the runtime.
+    """
+    if elapsed <= 0:
+        return
+    try:
+        from . import time_meter as _tm
+        _tm.record_to_current("settle", elapsed)
+    except Exception as exc:  # noqa: BLE001 — observability, never fatal
+        logger.debug("adaptive-settle: time_meter credit failed: %s", exc)
