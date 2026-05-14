@@ -104,7 +104,19 @@ class NavigateHandler:
         runner = self.parent
 
         try:
-            env.reset(task="navigate", start_url=url)
+            # Epic #362: time the page-load (network + Cloudflare + first
+            # paint) under the ``load`` bucket. ``settle_after_action``
+            # below records its own ``settle`` time via the dispatch
+            # context — separated here so a slow proxy / CF stall is
+            # distinguishable from a slow JS framework warming up.
+            import time as _time_mod
+            _load_t0 = _time_mod.monotonic()
+            try:
+                env.reset(task="navigate", start_url=url)
+            finally:
+                _load_elapsed = _time_mod.monotonic() - _load_t0
+                from .. import time_meter as _tm
+                _tm.record_to_current("load", _load_elapsed)
             # Wait for Cloudflare challenge to auto-solve + page render.
             # #294: cap at the configured budget (default 18s); exit early
             # when the frame hash stabilises — most sites finish first

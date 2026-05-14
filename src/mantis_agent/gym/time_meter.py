@@ -29,6 +29,7 @@ series into the registry.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
 from contextlib import contextmanager
@@ -188,4 +189,67 @@ class TimeMeter:
             logger.debug("STEP_LATENCY_SECONDS emit failed (bucket=%s): %s", bucket, exc)
 
 
-__all__ = ["BUCKETS", "TimeMeter"]
+# ── Dispatch context (contextvars) ──────────────────────────────────────
+
+
+# Published by the executor for the duration of a step dispatch so deep
+# helpers (adaptive_settle, brain wrappers, Claude callers) can record
+# into the runner's TimeMeter without having to be passed it as an
+# argument. The contract is (meter, step_idx) — both required so the
+# helper can route to the right per-step bucket.
+#
+# PEP 567 contextvars make this scope-correct for asyncio + threaded
+# callers (each task / thread sees its own publication; reset() rolls
+# back deterministically on context exit). The previous PR threaded
+# the meter through call-site arguments; this is the equivalent
+# without touching every adaptive_settle.* invocation.
+_CURRENT_DISPATCH: contextvars.ContextVar[
+    "tuple[TimeMeter, int | None] | None"
+] = contextvars.ContextVar("mantis_time_meter_dispatch", default=None)
+
+
+def current_dispatch() -> "tuple[TimeMeter, int | None] | None":
+    """Return ``(meter, step_idx)`` if a runner has published a dispatch
+    context, else ``None``. Helpers that opportunistically time
+    themselves should bail out cleanly when this returns ``None``.
+    """
+    return _CURRENT_DISPATCH.get()
+
+
+@contextmanager
+def publish_dispatch(
+    meter: "TimeMeter | None", step_idx: int | None,
+) -> Iterator[None]:
+    """Publish ``(meter, step_idx)`` for the wrapped block.
+
+    ``meter=None`` clears the context — useful in tests that exercise
+    helpers in isolation. Always resets on exit, including on
+    exceptions, so a crashed dispatch can't leak context into the
+    next one.
+    """
+    token = _CURRENT_DISPATCH.set((meter, step_idx) if meter is not None else None)
+    try:
+        yield
+    finally:
+        _CURRENT_DISPATCH.reset(token)
+
+
+def record_to_current(bucket: str, seconds: float) -> None:
+    """Credit ``seconds`` to ``bucket`` on the currently-published meter.
+
+    No-op when no dispatch context is published (e.g., script runs,
+    standalone helper tests). Helpers call this instead of demanding
+    the meter as an arg — keeps their public signature free of
+    bookkeeping plumbing.
+    """
+    pub = _CURRENT_DISPATCH.get()
+    if pub is None:
+        return
+    meter, step_idx = pub
+    meter.record(bucket, seconds, step_idx=step_idx)
+
+
+__all__ = [
+    "BUCKETS", "TimeMeter",
+    "current_dispatch", "publish_dispatch", "record_to_current",
+]

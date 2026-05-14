@@ -11,7 +11,13 @@ from unittest.mock import patch
 
 import pytest
 
-from mantis_agent.gym.time_meter import BUCKETS, TimeMeter
+from mantis_agent.gym.time_meter import (
+    BUCKETS,
+    TimeMeter,
+    current_dispatch,
+    publish_dispatch,
+    record_to_current,
+)
 
 
 # ── BUCKETS vocabulary ──────────────────────────────────────────────────
@@ -193,3 +199,104 @@ def test_prometheus_emit_is_best_effort() -> None:
             time.sleep(0.001)
     # Despite the metric failure, totals still updated.
     assert meter.totals["act"] >= 0.001
+
+
+# ── Dispatch context (contextvars) ──────────────────────────────────────
+
+
+def test_current_dispatch_is_none_by_default() -> None:
+    assert current_dispatch() is None
+
+
+def test_publish_dispatch_routes_record_to_current_meter() -> None:
+    """Deep helpers call ``record_to_current(bucket, seconds)``; the
+    contextvar-published meter receives the credit on the right step."""
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=2):
+        record_to_current("settle", 1.5)
+        record_to_current("load", 0.5)
+    assert meter.totals["settle"] == 1.5
+    assert meter.totals["load"] == 0.5
+    assert meter.per_step[2]["settle"] == 1.5
+    assert meter.per_step[2]["load"] == 0.5
+
+
+def test_publish_dispatch_resets_on_exit() -> None:
+    """Context must clear after the ``with`` block — no leakage into
+    later helpers running outside any step."""
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=0):
+        assert current_dispatch() == (meter, 0)
+    assert current_dispatch() is None
+
+
+def test_publish_dispatch_resets_on_exception() -> None:
+    """A crashing step must NOT leave the contextvar pointing at a
+    stale meter — the next runner would silently inherit it."""
+    meter = TimeMeter()
+    with pytest.raises(RuntimeError):
+        with publish_dispatch(meter, step_idx=0):
+            raise RuntimeError("synthetic")
+    assert current_dispatch() is None
+
+
+def test_record_to_current_is_noop_outside_dispatch() -> None:
+    """Helpers invoked outside any dispatch (script mode, tests) must
+    not raise — they silently skip recording."""
+    # No exception, no state change.
+    record_to_current("settle", 2.0)
+
+
+def test_publish_dispatch_with_none_meter_clears_context() -> None:
+    """Tests sometimes want to verify a helper bails out cleanly when
+    no meter is published — ``publish_dispatch(None, ...)`` makes that
+    inline-testable."""
+    real_meter = TimeMeter()
+    with publish_dispatch(real_meter, 0):
+        with publish_dispatch(None, 0):
+            record_to_current("settle", 1.0)
+        # Outer context restored after inner exits.
+        assert current_dispatch() == (real_meter, 0)
+    # The recording inside the inner block (None meter) should have
+    # been a no-op.
+    assert real_meter.totals["settle"] == 0.0
+
+
+# ── adaptive_settle integration ─────────────────────────────────────────
+
+
+def test_adaptive_settle_credits_settle_bucket_via_dispatch() -> None:
+    """The real ``settle_after_action`` should record its elapsed wait
+    into the ``settle`` bucket on whichever meter the executor has
+    published — zero call-site changes in step handlers."""
+    from PIL import Image
+
+    from mantis_agent.gym import adaptive_settle
+
+    class _Env:
+        def screenshot(self) -> Image.Image:
+            return Image.new("RGB", (32, 32), "white")
+
+    meter = TimeMeter()
+    with publish_dispatch(meter, step_idx=4):
+        elapsed = adaptive_settle.settle_after_action(_Env(), max_seconds=0.5)
+
+    assert elapsed > 0.0
+    assert meter.totals["settle"] == pytest.approx(elapsed, rel=0.01)
+    assert meter.per_step[4]["settle"] == pytest.approx(elapsed, rel=0.01)
+
+
+def test_adaptive_settle_is_silent_outside_dispatch() -> None:
+    """Without a published dispatch, ``settle_after_action`` still
+    works — it just doesn't credit any meter."""
+    from PIL import Image
+
+    from mantis_agent.gym import adaptive_settle
+
+    class _Env:
+        def screenshot(self) -> Image.Image:
+            return Image.new("RGB", (32, 32), "white")
+
+    # No publish_dispatch wrapping → record_to_current is a no-op.
+    elapsed = adaptive_settle.settle_after_action(_Env(), max_seconds=0.3)
+    assert elapsed > 0.0  # The wait still happened, just unrecorded.
