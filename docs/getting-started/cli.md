@@ -204,7 +204,9 @@ raised. Useful as a CI gate against staging endpoints.
   "step_count": 14,
   "successes": 12,
   "failures": 2,
-  "elapsed_seconds": 732.4,
+  "total_time_s": 732,         // integer seconds, matches HTTP API shape
+  "elapsed_seconds": 732.4,    // float alias (legacy; same wall-clock)
+  "wall_time_breakdown": { ... see Wall-time breakdown below ... },
   "final_url": "https://crm.example.test/leads",
   "costs": { "claude_extract": 0.13, "gpu_steps": 47 },
   "steps": [

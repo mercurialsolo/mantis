@@ -985,6 +985,10 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
         "step_count": len(step_results),
         "successes": successes,
         "failures": failures,
+        # Schema-aligned with build_micro_result (HTTP API path).
+        # elapsed_seconds is the legacy float; total_time_s matches
+        # the HTTP API shape so consumers can use one parser.
+        "total_time_s": round(elapsed),
         "elapsed_seconds": round(elapsed, 2),
         "wall_time_breakdown": wall_time_breakdown,
         "final_url": final_url,
