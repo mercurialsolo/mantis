@@ -41,9 +41,18 @@ uvx truss push deploy/baseten/holo3 --no-cache \
   --include-git-info
 ```
 
+To deploy Fara-7B instead, point the push at `deploy/baseten/fara`:
+
+```bash
+uvx truss push deploy/baseten/fara --no-cache \
+  --promote --deployment-name "$DEPLOY_NAME" --include-git-info
+```
+
+Both directories ship the same FastAPI surface (`/v1/predict`, `/v1/cua`, `/v1/chat/completions`, etc.) — only the in-pod inference server differs (llama.cpp + GGUF for Holo3; vLLM + bf16 weights for Fara). Fara skips the llama.cpp compile step, so the first build is ~5 min instead of ~50.
+
 `--no-cache` is required on the **first push** after any change to `src/mantis_agent/` (the package code is shipped via `external_package_dirs` and isn't always part of the image hash — without `--no-cache` Baseten can serve stale code). Subsequent pushes that only change `build_commands` / `requirements` / `environment_variables` can omit the flag.
 
-The first build does the full llama.cpp + CUDA compile (~50 min). Subsequent builds are ~5 min if you don't change `build_commands`.
+The first Holo3 build does the full llama.cpp + CUDA compile (~50 min). Subsequent builds are ~5 min if you don't change `build_commands`. The Fara build skips llama.cpp entirely.
 
 ## 3. Wait for it to go ACTIVE
 

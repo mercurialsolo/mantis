@@ -20,7 +20,9 @@ You'll also need an `.env` file at the repo root with the same five secrets Base
 uv run modal deploy deploy/modal/modal_cua_server.py
 ```
 
-This creates the executor functions (`run_holo3`, `run_claude_cua`, `run_cua_*`, `run_gemma4_cua`) plus the web endpoint `api`. Each executor is its own image (Chrome + xdotool + the brain's runtime); the api image is lightweight (FastAPI + pydantic only). Modal scales each independently.
+This creates the executor functions (`run_holo3`, `run_fara`, `run_claude_cua`, `run_cua_*`, `run_gemma4_cua`) plus the web endpoint `api`. Each executor is its own image (Chrome + xdotool + the brain's runtime); the api image is lightweight (FastAPI + pydantic only). Modal scales each independently.
+
+`run_fara` serves Microsoft's Fara-7B (Qwen2.5-VL based, MIT-licensed) via vLLM on a single A100-40GB. Pick it with `cua_model="fara"` — the brain implements the same interface as Holo3, so Hybrid and passthrough flows both work without further wiring. See [CUA models](../reference/cua-models.md) for the action-space caveats (no `double_click` / `right_click` / `drag`).
 
 ### Warm-container caveat after a code change
 

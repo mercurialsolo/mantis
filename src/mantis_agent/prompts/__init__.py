@@ -41,6 +41,7 @@ _PROMPT_NAMES: tuple[str, ...] = (
     "system_v1",
     "gemma4_system",
     "holo3_system",
+    "fara_system",
     "claude_system",
     "opencua_system",
     "llamacpp_system",
@@ -173,6 +174,7 @@ def current_prompt_versions() -> dict[str, str]:
 SYSTEM_V1 = load_prompt("system_v1")
 GEMMA4_SYSTEM = load_prompt("gemma4_system")
 HOLO3_SYSTEM = load_prompt("holo3_system")
+FARA_SYSTEM = load_prompt("fara_system")
 CLAUDE_SYSTEM = load_prompt("claude_system")
 OPENCUA_SYSTEM = load_prompt("opencua_system")
 LLAMACPP_SYSTEM = load_prompt("llamacpp_system")
@@ -186,6 +188,7 @@ __all__ = [
     "SYSTEM_V1",
     "GEMMA4_SYSTEM",
     "HOLO3_SYSTEM",
+    "FARA_SYSTEM",
     "CLAUDE_SYSTEM",
     "OPENCUA_SYSTEM",
     "LLAMACPP_SYSTEM",

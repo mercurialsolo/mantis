@@ -88,6 +88,11 @@ CUA_MODELS = {
         "name": "Holo3-35B-A3B",
         "tp": 1,  # 1x A100 — Q8_0 is 34GB + mmproj 0.8GB = ~35GB
     },
+    "fara": {
+        "repo": "microsoft/Fara-7B",  # Qwen2.5-VL base, native vLLM, MIT-licensed
+        "name": "Fara-7B",
+        "tp": 1,  # 7B bf16 ≈ 14 GB; comfortable on single A100-40GB / L40S
+    },
     "claude": {
         "repo": "api",
         "name": "Claude (Anthropic API)",
@@ -413,6 +418,13 @@ def _run_executor(
             max_tokens=2048, temperature=0.0,
             screen_size=(1280, 720), use_tool_calling=True,
         )
+    elif cua_model == "fara":
+        from mantis_agent.brain_fara import FaraBrain
+        brain = FaraBrain(
+            base_url="http://localhost:8000/v1", model="model",
+            max_tokens=2048, temperature=0.0,
+            screen_size=(1280, 720), use_tool_calling=True,
+        )
     else:
         from mantis_agent.brain_opencua import OpenCUABrain
         brain = OpenCUABrain(
@@ -436,7 +448,7 @@ def _run_executor(
     config = TaskLoopConfig(
         run_id=run_id, session_name=session_name,
         model_name=cua_config["name"],
-        results_prefix="holo3" if cua_model == "holo3" else "cua",
+        results_prefix={"holo3": "holo3", "fara": "fara"}.get(cua_model, "cua"),
         brain=brain, env=env,
         max_steps=max_steps, frames_per_inference=frames_per_inference,
         viewer_event_bus=viewer_event_bus,
@@ -1270,6 +1282,7 @@ def _executor_for_model(model: str):
         "opencua-32b": run_cua_4gpu,
         "opencua-72b": run_cua_8gpu,
         "holo3": run_holo3,
+        "fara": run_fara,
         "gemma4-cua": run_gemma4_cua,
         "claude": run_claude_cua,
     }
@@ -1470,7 +1483,7 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
                 {"id": name, "object": "model", "owned_by": "mantis"}
                 for name in (
                     "evocua-8b", "evocua-32b", "opencua-32b", "opencua-72b",
-                    "holo3", "gemma4-cua", "claude",
+                    "holo3", "fara", "gemma4-cua", "claude",
                 )
             ],
         }
@@ -1803,6 +1816,26 @@ def run_holo3(task_file_contents: str, **kwargs) -> dict:
     return _run_holo3_executor(task_file_contents, **kwargs)
 
 
+@app.function(
+    gpu="A100-40GB",
+    image=executor_image,
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],
+    timeout=14400,  # 4 hours
+    memory=65536,
+    cpu=16,
+)
+def run_fara(task_file_contents: str, **kwargs) -> dict:
+    """Fara-7B executor (1x A100-40GB, native vLLM, OpenAI-compatible).
+
+    Microsoft's Qwen2.5-VL-based 7B CUA model. Routes through the shared
+    vLLM ``_run_executor`` path; the brain dispatch picks ``FaraBrain``
+    when ``cua_model="fara"``.
+    """
+    kwargs.pop("cua_model", None)
+    return _run_executor(task_file_contents, cua_model="fara", **kwargs)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # D) Local entrypoint — orchestrates planner + executor
 # ═══════════════════════════════════════════════════════════════════
@@ -1814,6 +1847,7 @@ EXECUTOR_MAP = {
     "opencua-32b": run_cua_4gpu,
     "opencua-72b": run_cua_8gpu,
     "holo3": run_holo3,
+    "fara": run_fara,
     "gemma4-cua": run_gemma4_cua,
     "claude": run_claude_cua,
 }
@@ -1976,7 +2010,7 @@ def main(
       --graph-learn --micro plan.txt                (probe site + generate dependency graph + execute)
       --graph-learn-only --micro plan.txt           (probe site + generate graph, no execution)
 
-    Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, holo3, gemma4-cua, claude
+    Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, holo3, fara, gemma4-cua, claude
     Parallel: --workers 5   (auto fan-out looped tasks across N GPUs)
     Claude options: --claude-model claude-sonnet-4-20250514 --thinking-budget 2048
     Viewer: --viewer   (live web viewer via modal.forward tunnel)
@@ -2268,6 +2302,7 @@ def main(
                 "evocua-32b": run_cua_2gpu,
                 "opencua-32b": run_cua_4gpu,
                 "holo3": run_holo3,
+                "fara": run_fara,
             }
             worker_fn = worker_fn_map.get(model, run_gemma4_cua_worker)
 
