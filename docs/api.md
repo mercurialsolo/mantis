@@ -138,6 +138,17 @@ Set `action` and `run_id` in the body:
       "gpu":    0.12,
       "claude": 0.12,
       "proxy":  0.18
+    },
+    "wall_time_breakdown": {
+      "perceive":       12.4,
+      "think":          88.1,
+      "act":             6.7,
+      "settle":         32.0,
+      "claude_ground":  18.9,
+      "claude_extract": 71.2,
+      "claude_verify":   4.3,
+      "load":           12.1,
+      "overhead":        1.3
     }
   }
 }
@@ -145,6 +156,36 @@ Set `action` and `run_id` in the body:
 
 `result` returns the full lead list and per-step trace. `logs` returns the
 last `tail` events written by the runner (default 200, max 10000).
+
+### Wall-time breakdown
+
+`summary.wall_time_breakdown` (epic [#362](https://github.com/mercurialsolo/mantis/issues/362)) reports where wall-clock seconds went, alongside the existing `cost_breakdown` for dollars. Both come from the runner — `cost_breakdown` is owned by `CostMeter`, `wall_time_breakdown` by `TimeMeter`.
+
+Each terminal `summary` carries the same nine buckets. `step_details[i].time_breakdown` (same shape, scoped to one step) lets you pinpoint *which* step dominated a bucket — e.g. one extract step consuming 65 s of `claude_extract`.
+
+| Bucket | What lands here |
+|---|---|
+| `perceive` | `env.screenshot()` capture, viewport sync. |
+| `think` | Brain inference — Holo3 / Gemma4 / Claude action emission. |
+| `act` | `env.step(action)` — xdotool keystroke / mouse / scroll, CDP click. |
+| `settle` | Post-action wait (fixed or adaptive); page-render quiescence. |
+| `claude_ground` | `ClaudeGrounding.refine_*` coordinate refinement on grounded steps. |
+| `claude_extract` | `ClaudeExtractor.find_*` extraction calls. |
+| `claude_verify` | Gate verification, `DynamicPlanVerifier` checks. |
+| `load` | `env.reset(url)` page-load + Cloudflare wait + proxy CONNECT. |
+| `overhead` | Residual — runner orchestration, retry loops, dispatch, anything not above. |
+
+Sum of the buckets tracks `total_time_s` within ±5 %; the residual lives in `overhead`. The mantis Python client exposes a typed accessor:
+
+```python
+status = client.status(run_id)
+bd = status.wall_time_breakdown()  # {} on pre-terminal runs
+if bd:
+    largest = max(bd, key=bd.get)
+    print(f"largest bucket: {largest} ({bd[largest]:.1f}s)")
+```
+
+Pre-Phase-B summaries omit the `wall_time_breakdown` key entirely; the accessor returns `{}` so existing client code keeps working.
 
 ### Errors
 

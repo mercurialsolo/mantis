@@ -495,6 +495,21 @@ def build_micro_result(
                 executor_backend_counts.get(backend, 0) + 1
             )
 
+    # Epic #362 Phase B: surface the TimeMeter's bucket breakdown
+    # on the result envelope. ``wall_time_breakdown`` is the aggregate
+    # 9-bucket dict; ``step_details[i].time_breakdown`` is the same
+    # shape scoped to one step. Both are always-present additive
+    # keys — runners without a TimeMeter (pre-Phase-A or test
+    # harnesses) yield all-zero dicts rather than missing keys, so
+    # consumers can branch on bucket presence rather than key
+    # existence.
+    time_meter = getattr(runner, "time_meter", None)
+    if time_meter is not None:
+        wall_time_breakdown = {k: round(v, 3) for k, v in time_meter.breakdown().items()}
+    else:
+        from .gym.time_meter import BUCKETS as _BUCKETS
+        wall_time_breakdown = {b: 0.0 for b in _BUCKETS}
+
     return {
         "run_id": run_id,
         "provider": provider,
@@ -502,6 +517,7 @@ def build_micro_result(
         "model": model_name,
         "mode": "micro_intent",
         "total_time_s": round(elapsed_seconds),
+        "wall_time_breakdown": wall_time_breakdown,
         "steps_executed": len(step_results),
         "viable": len(leads),
         "leads_with_phone": sum(1 for lead in leads if runner._lead_has_phone(lead)),
@@ -524,10 +540,24 @@ def build_micro_result(
                 "steps": r.steps_used,
                 "data": r.data[:300] if r.data else "",
                 "executor_backend": getattr(r, "executor_backend", "") or "",
+                "time_breakdown": _step_time_breakdown(time_meter, r.step_index),
             }
             for r in step_results
         ],
     }
+
+
+def _step_time_breakdown(time_meter: Any, step_index: int) -> dict[str, float]:
+    """Return the per-step bucket dict, rounded for JSON friendliness.
+
+    Falls back to an all-zeros bucket dict when ``time_meter`` is None
+    or the step was never measured — keeps the schema stable across
+    callers that haven't adopted the TimeMeter yet.
+    """
+    if time_meter is None:
+        from .gym.time_meter import BUCKETS as _BUCKETS
+        return {b: 0.0 for b in _BUCKETS}
+    return {k: round(v, 3) for k, v in time_meter.step_breakdown(step_index).items()}
 
 
 # Keys to include in a compact result summary (for detached run status etc.)

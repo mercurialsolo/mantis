@@ -324,6 +324,94 @@ def test_build_micro_result_same_output_for_both_providers():
     assert modal_result["dynamic_verification"] == baseten_result["dynamic_verification"]
 
 
+def test_build_micro_result_includes_wall_time_breakdown_when_meter_present():
+    """Epic #362 Phase B: a runner with a populated TimeMeter must
+    surface the aggregate breakdown + per-step breakdown on the
+    result envelope."""
+    from mantis_agent.gym.time_meter import BUCKETS, TimeMeter
+
+    meter = TimeMeter()
+    # Stage known timings: 2s think on step 0, 0.5s act on step 1.
+    meter.record("think", 2.0, step_idx=0)
+    meter.record("act", 0.5, step_idx=1)
+
+    runner = FakeMicroRunner()
+    runner.time_meter = meter
+    steps = [
+        FakeStepResult(0, "Decide what to do", True),
+        FakeStepResult(1, "Click submit", True),
+    ]
+    result = build_micro_result(
+        runner, steps,
+        run_id="run1", provider="modal", session_name="s", model_name="M",
+        elapsed_seconds=3.0,
+    )
+
+    # Aggregate dict carries every bucket from the vocabulary.
+    wt = result["wall_time_breakdown"]
+    assert set(wt) == set(BUCKETS)
+    assert wt["think"] == 2.0
+    assert wt["act"] == 0.5
+    # overhead is the residual against elapsed_seconds — non-negative,
+    # ≤ elapsed.
+    assert wt["overhead"] >= 0.0
+
+    # Per-step breakdowns route to the right step.
+    assert result["step_details"][0]["time_breakdown"]["think"] == 2.0
+    assert result["step_details"][0]["time_breakdown"]["act"] == 0.0
+    assert result["step_details"][1]["time_breakdown"]["act"] == 0.5
+    assert result["step_details"][1]["time_breakdown"]["think"] == 0.0
+
+
+def test_build_micro_result_falls_back_to_zeros_without_time_meter():
+    """Pre-Phase-A runners (or test harnesses) shouldn't break the
+    envelope shape — buckets land as zeros, every key still present."""
+    from mantis_agent.gym.time_meter import BUCKETS
+
+    runner = FakeMicroRunner()
+    # No `time_meter` attribute on this runner.
+    steps = [FakeStepResult(0, "nav", True)]
+    result = build_micro_result(
+        runner, steps,
+        run_id="run1", provider="modal", session_name="s", model_name="M",
+        elapsed_seconds=10.0,
+    )
+    assert "wall_time_breakdown" in result
+    assert set(result["wall_time_breakdown"]) == set(BUCKETS)
+    assert all(v == 0.0 for v in result["wall_time_breakdown"].values())
+    # Per-step zeros too.
+    assert result["step_details"][0]["time_breakdown"]["act"] == 0.0
+
+
+def test_build_micro_result_bucket_sum_approximates_total_time():
+    """Sum of bucket times should track total_time_s within ±5% on a
+    realistic run — captures regressions where overhead drifts wildly."""
+    from mantis_agent.gym.time_meter import TimeMeter
+
+    meter = TimeMeter()
+    # Allocate 100s split across plausible buckets.
+    meter.record("think", 40.0, step_idx=0)
+    meter.record("claude_extract", 30.0, step_idx=0)
+    meter.record("act", 5.0, step_idx=0)
+    meter.record("settle", 15.0, step_idx=0)
+    meter.record("perceive", 8.0, step_idx=0)
+    # ~2s residual lands in overhead via breakdown().
+
+    runner = FakeMicroRunner()
+    runner.time_meter = meter
+    steps = [FakeStepResult(0, "do work", True)]
+    result = build_micro_result(
+        runner, steps,
+        run_id="r", provider="modal", session_name="s", model_name="M",
+        elapsed_seconds=100.0,
+    )
+    bucket_sum = sum(result["wall_time_breakdown"].values())
+    # Both numbers are seconds; total_time_s is round(elapsed).
+    # On a synthetic run with no real wall-clock pressure, the
+    # sum + elapsed agree closely; ±5% gives generous slack.
+    assert abs(bucket_sum - result["total_time_s"]) <= max(0.05 * result["total_time_s"], 1.0)
+
+
 def test_plan_signature_deterministic():
     steps = [{"intent": "click button", "type": "click", "budget": 5}]
     sig1 = plan_signature_from_steps(steps)

@@ -40,7 +40,7 @@ def _as_str(value: Any, default: str = "") -> str:
     return value if isinstance(value, str) else default
 
 
-def pack_step(r: Any) -> dict:
+def pack_step(r: Any, *, time_breakdown: dict[str, float] | None = None) -> dict:
     payload = {
         "index": r.step_index,
         "intent": r.intent,
@@ -49,6 +49,13 @@ def pack_step(r: Any) -> dict:
         "duration": float(getattr(r, "duration", 0.0)),
         "steps_used": int(getattr(r, "steps_used", 0)),
     }
+
+    # Epic #362 Phase B: per-step wall-time bucket breakdown. Always
+    # present when provided so consumers can iterate buckets without
+    # branching on key existence; callers that don't have a TimeMeter
+    # (legacy hosts, tests) omit the arg and the key stays out.
+    if time_breakdown is not None:
+        payload["time_breakdown"] = {k: round(v, 3) for k, v in time_breakdown.items()}
 
     if payload["success"]:
         return payload
