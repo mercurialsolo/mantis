@@ -174,6 +174,7 @@ class RunExecutor:
             pre_snapshot = self._dispatch_step(plan, state, effective_step)
 
             self._maybe_demote_form_no_change(state, effective_step, pre_snapshot)
+            self._maybe_demote_click_no_change(state, effective_step, pre_snapshot)
 
             step_result = state.results[-1]
 
@@ -426,6 +427,7 @@ class RunExecutor:
             )
             step_result.success = False
             step_result.data = (step_result.data or "") + ":no_state_change"
+            step_result.failure_class = "no_state_change"
             # Record the failed click target into the per-step failure
             # history so the next retry's ``find_form_target`` call
             # avoids the same broken target. Without this, retries
@@ -455,6 +457,83 @@ class RunExecutor:
             runner._last_submit_pre_screenshot = None
         if hasattr(runner, "_last_submit_target"):
             runner._last_submit_target = None
+
+    # Step types that should produce some observable state change (URL,
+    # page, scroll, focus, …) when their action lands. A success on one
+    # of these with a zero-delta snapshot is a strong signal the action
+    # missed — even when the handler reported success. Excludes form-
+    # field types (fill_field / select_option) because their natural
+    # delta — the field value — isn't tracked by the snapshot, and
+    # excludes the existing submit path because that has its own
+    # SPA-aware visual escape hatch in :meth:`_maybe_demote_form_no_change`.
+    _CLICK_DEMOTE_STEP_TYPES: frozenset[str] = frozenset({
+        "click", "navigate_back",
+    })
+
+    def _maybe_demote_click_no_change(
+        self, state: RunState, effective_step: MicroIntent, pre_snapshot: Any,
+    ) -> None:
+        """Demote click / navigate_back success → fail when no observable
+        change. Self-healing primitive — epic #377 Phase A.
+
+        Generic by design: the trigger is the snapshot delta (URL,
+        page, scroll, focus, viewport, extraction), not a step
+        type / plan / domain pattern. Any step type whose action is
+        expected to change one of those dimensions can be added to
+        :attr:`_CLICK_DEMOTE_STEP_TYPES`. The submit case has its own
+        method because it needs an SPA-aware visual escape hatch
+        (same-URL form submits replace the form with a dashboard);
+        that complication doesn't apply here — a click that doesn't
+        change URL / scroll / page genuinely didn't accomplish anything
+        the runner can act on.
+
+        After demoting, records the failure into the per-step retry
+        history (so the next attempt can avoid the same target) and
+        consults the handler-escalation policy (so repeated misses
+        route through a different handler).
+        """
+        runner = self.parent
+        step_result = state.results[-1]
+        if not step_result.success:
+            return
+        if step_result.skip:
+            # Recipe-rejection / skip envelopes are an intentional
+            # halt path — not a missed action. Don't demote.
+            return
+        if effective_step.type not in self._CLICK_DEMOTE_STEP_TYPES:
+            return
+        try:
+            post_snapshot = step_snapshot.capture(runner)
+            delta = step_snapshot.diff(pre_snapshot, post_snapshot)
+        except Exception as exc:  # noqa: BLE001 — never break runs
+            logger.debug("post-click diff capture failed: %s", exc)
+            return
+        if delta is None or delta.has_changes:
+            return
+        logger.warning(
+            "  [%d] %s reported success but no observable state "
+            "change — demoting to failure (will retry)",
+            state.step_index, effective_step.type,
+        )
+        step_result.success = False
+        step_result.data = (step_result.data or "") + ":no_state_change"
+        step_result.failure_class = "no_state_change"
+        # Feed the failed click coordinates back into the retry history
+        # so ``find_form_target`` / ``find_click_target`` on retry can
+        # AVOID the same target. The click handler stashes its last
+        # target on the runner via the same protocol the submit handler
+        # uses (``_last_submit_target``); falling back to no coords is
+        # fine — the no-coordinate retry path just doesn't get the
+        # "avoid these" hint.
+        self._record_failure_for_retry(
+            runner=runner,
+            step_index=state.step_index,
+            kind="no_state_change",
+            reason="post-click snapshot saw no URL / page / scroll change",
+        )
+        self._maybe_set_handler_override(
+            runner=runner, step_index=state.step_index,
+        )
 
     @staticmethod
     def _record_failure_for_retry(

@@ -419,3 +419,98 @@ def test_no_state_change_skipped_for_non_form_steps(monkeypatch):
 
     assert state.results[0].success is True  # unchanged
     assert state.results[0].data == "ok"
+
+
+# ── Click-shape no-state-change demote (epic #377 Phase A) ────────
+
+
+def test_no_state_change_demotes_click_success_to_failure(monkeypatch):
+    """Click success with no observable URL / page / scroll change →
+    demoted to fail with ``failure_class=no_state_change``. Self-healing
+    primitive that mirrors the submit demotion for click steps."""
+    from mantis_agent.gym import step_snapshot as _snap
+
+    runner = _runner_stub()
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True, data="ok"))
+
+    monkeypatch.setattr(_snap, "capture", lambda r: MagicMock())
+    monkeypatch.setattr(_snap, "diff", lambda a, b: MagicMock(has_changes=False))
+
+    eff_step = MicroIntent(intent="x", type="click")
+    RunExecutor(runner)._maybe_demote_click_no_change(state, eff_step, MagicMock())
+
+    assert state.results[0].success is False
+    assert state.results[0].failure_class == "no_state_change"
+    assert ":no_state_change" in state.results[0].data
+
+
+def test_no_state_change_demotes_navigate_back_success_to_failure(monkeypatch):
+    """``navigate_back`` is the other action-causing step whose lack of
+    URL change cleanly signals a missed action — same demotion path."""
+    from mantis_agent.gym import step_snapshot as _snap
+
+    runner = _runner_stub()
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True))
+
+    monkeypatch.setattr(_snap, "capture", lambda r: MagicMock())
+    monkeypatch.setattr(_snap, "diff", lambda a, b: MagicMock(has_changes=False))
+
+    eff_step = MicroIntent(intent="x", type="navigate_back")
+    RunExecutor(runner)._maybe_demote_click_no_change(state, eff_step, MagicMock())
+
+    assert state.results[0].success is False
+    assert state.results[0].failure_class == "no_state_change"
+
+
+def test_click_demote_skipped_when_state_changed(monkeypatch):
+    """Click success with a real state change → NOT demoted."""
+    from mantis_agent.gym import step_snapshot as _snap
+
+    runner = _runner_stub()
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True, data="ok"))
+
+    monkeypatch.setattr(_snap, "capture", lambda r: MagicMock())
+    monkeypatch.setattr(_snap, "diff", lambda a, b: MagicMock(has_changes=True))
+
+    eff_step = MicroIntent(intent="x", type="click")
+    RunExecutor(runner)._maybe_demote_click_no_change(state, eff_step, MagicMock())
+
+    assert state.results[0].success is True
+    assert "no_state_change" not in (state.results[0].data or "")
+
+
+def test_click_demote_skipped_for_form_step_types():
+    """Form / extract / loop types are NOT in the click-demote allowlist
+    (the form demotion handles submit; extract has no action to demote)."""
+    runner = _runner_stub()
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True))
+
+    for step_type in ("submit", "fill_field", "select_option",
+                      "extract_data", "extract_url", "scroll", "loop"):
+        eff_step = MicroIntent(intent="x", type=step_type)
+        RunExecutor(runner)._maybe_demote_click_no_change(state, eff_step, MagicMock())
+        assert state.results[0].success is True, (
+            f"step type {step_type!r} should not be demoted by the click-demote helper"
+        )
+
+
+def test_click_demote_respects_skip_envelope():
+    """A step with ``skip=True`` (recipe rejection / advance signal)
+    must NOT be demoted — skip is an intentional halt path, not a
+    missed action."""
+    runner = _runner_stub()
+    state = _state()
+    state.results.append(StepResult(
+        step_index=0, intent="x", success=True,
+        skip=True, skip_reason="dealer",
+    ))
+
+    eff_step = MicroIntent(intent="x", type="click")
+    RunExecutor(runner)._maybe_demote_click_no_change(state, eff_step, MagicMock())
+
+    assert state.results[0].success is True  # unchanged
+    assert state.results[0].skip is True

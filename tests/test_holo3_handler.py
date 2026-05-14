@@ -173,3 +173,101 @@ def test_holo3_passes_grounding_only_when_step_grounding_true(mock_runner_cls):
 def test_step_type_property():
     handler = Holo3StepHandler(_FakeRunner())
     assert handler.step_type == "holo3"
+
+
+# ── Epic #377 Phase A.2: brain_loop_exhausted stamping ──────────────
+
+
+@patch("mantis_agent.gym.step_handlers.holo3.GymRunner")
+def test_brain_loop_exhausted_stamps_failure_class_on_max_steps(mock_runner_cls):
+    """When the inner GymRunner exits at the step budget without
+    success, the handler stamps ``failure_class=brain_loop_exhausted``
+    so the critic / dashboard can route on a stable signal rather than
+    parsing prose."""
+    mock_inner = MagicMock()
+    mock_inner.run.return_value = MagicMock(
+        success=False,
+        total_steps=10,
+        total_time=180.0,
+        termination_reason="max_steps",
+    )
+    mock_runner_cls.return_value = mock_inner
+
+    runner = _FakeRunner()
+    ctx = _ctx(runner, env=MagicMock(), extractor=MagicMock())
+
+    result = Holo3StepHandler(runner).execute(_step(), ctx)
+
+    assert result.success is False
+    assert result.failure_class == "brain_loop_exhausted"
+    assert result.steps_used == 10
+
+
+@patch("mantis_agent.gym.step_handlers.holo3.GymRunner")
+def test_brain_loop_exhausted_stamps_on_loop_detector_trip(mock_runner_cls):
+    """Same class for loop-detector trips — both signal the brain went
+    round-and-round without finishing. The critic treats them
+    identically (rewrite the intent rather than retry it)."""
+    mock_inner = MagicMock()
+    mock_inner.run.return_value = MagicMock(
+        success=False,
+        total_steps=6,
+        total_time=72.0,
+        termination_reason="loop",
+    )
+    mock_runner_cls.return_value = mock_inner
+
+    runner = _FakeRunner()
+    ctx = _ctx(runner, env=MagicMock())
+
+    result = Holo3StepHandler(runner).execute(_step(), ctx)
+
+    assert result.success is False
+    assert result.failure_class == "brain_loop_exhausted"
+
+
+@patch("mantis_agent.gym.step_handlers.holo3.GymRunner")
+def test_brain_loop_exhausted_not_stamped_when_success(mock_runner_cls):
+    """A successful inner run at the budget cap (rare but possible) is
+    NOT brain_loop_exhausted — the brain just used its full budget to
+    finish."""
+    mock_inner = MagicMock()
+    mock_inner.run.return_value = MagicMock(
+        success=True,
+        total_steps=8,
+        total_time=60.0,
+        termination_reason="done",
+    )
+    mock_runner_cls.return_value = mock_inner
+
+    runner = _FakeRunner()
+    ctx = _ctx(runner, env=MagicMock())
+
+    result = Holo3StepHandler(runner).execute(_step(), ctx)
+
+    assert result.success is True
+    assert result.failure_class == ""
+
+
+@patch("mantis_agent.gym.step_handlers.holo3.GymRunner")
+def test_brain_loop_exhausted_not_stamped_on_env_done_failure(mock_runner_cls):
+    """A failure terminated by ``env_done`` (env-side signal) or
+    ``done`` (model emitted DONE but with success=False) is NOT a
+    budget-burn — different bucket. The class stays empty so the
+    classifier's fallback rules (or unknown) pick it up."""
+    mock_inner = MagicMock()
+    mock_inner.run.return_value = MagicMock(
+        success=False,
+        total_steps=3,
+        total_time=10.0,
+        termination_reason="env_done",
+    )
+    mock_runner_cls.return_value = mock_inner
+
+    runner = _FakeRunner()
+    ctx = _ctx(runner, env=MagicMock())
+
+    result = Holo3StepHandler(runner).execute(_step(), ctx)
+
+    assert result.success is False
+    assert result.failure_class == ""
