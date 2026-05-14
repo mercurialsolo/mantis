@@ -184,12 +184,50 @@ class RunExecutor:
 
             if step_result.success:
                 self._handle_success(plan, state, step, step_result)
+                continued = True
             else:
-                if not self._handle_failure(plan, state, step, step_result):
+                continued = self._handle_failure(plan, state, step, step_result)
+                if not continued:
                     break
+
+            # Phase C of epic #377: critic observes the post-step state
+            # and can emit directives the runner applies. v1 covers
+            # navigate_back → InsertStep(navigate). Future capabilities
+            # plug in via the same hook.
+            self._consult_critic(plan, state, step, step_result, continued)
 
         self._finalize(plan, state)
         return state.results
+
+    def _consult_critic(
+        self,
+        plan: "MicroPlan",
+        state: RunState,
+        step: MicroIntent,
+        step_result: StepResult,
+        continued: bool,
+    ) -> None:
+        """Run the ExecutionCritic and apply any returned directive.
+
+        Wrapped in try/except — the critic is observability +
+        opportunistic correction; a critic exception must never
+        break a run that the recovery policy already decided to
+        continue.
+        """
+        runner = self.parent
+        critic = getattr(runner, "_critic", None)
+        if critic is None:
+            return
+        try:
+            from . import critic as _critic_mod
+            directive = critic.observe_step(
+                plan, state, step, step_result,
+                recovery_continued=continued,
+            )
+            if directive is not None:
+                _critic_mod.apply_directive(runner, plan, state, directive)
+        except Exception as exc:  # noqa: BLE001 — never break runs
+            logger.debug("critic raised: %s", exc)
 
     # ── Resume from checkpoint ──────────────────────────────────────────
 

@@ -233,9 +233,15 @@ class MicroPlanRunner:
         from .step_handlers import default_registry
         from .step_recovery import StepRecoveryPolicy
         from .run_executor import RunExecutor
+        from .critic import ExecutionCritic
         self._handler_registry = default_registry(self)
         self._recovery_policy = StepRecoveryPolicy(self)
         self._executor = RunExecutor(self)
+        # Phase C of epic #377: ExecutionCritic runs after every step
+        # and can emit directives (currently: InsertStep for
+        # navigate_back budget-burn recovery). The executor calls
+        # critic.observe_step() and applies any returned directive.
+        self._critic = ExecutionCritic(self)
 
     # ── Public API ────────────────────────────────────────────────────
 
