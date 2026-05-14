@@ -88,8 +88,18 @@ class Holo3StepHandler:
         # doesn't track this state today; the kwarg gives us a clean
         # plumbing point for when it does.
         outer_pending_labels = getattr(runner, "pending_form_labels", None)
+        # Epic #377 Phase A.3: surface accumulated per-step recovery
+        # hints into the inner GymRunner's task description so the
+        # brain has every hint from prior failed attempts. Same
+        # protocol the form handler uses for ``find_form_target``;
+        # generalizes consumption beyond form-only. When this handler
+        # is reached via the ``no_state_change``-driven escalation
+        # (Phase A.1), the hints written by the prior failed attempts
+        # are already in ``_recovery_hints[step_index]`` waiting.
+        from .. import recovery_hints as _hints
+        task = step.intent + _hints.get_hint_block(runner, index)
         result = gym_runner.run(
-            task=step.intent,
+            task=task,
             task_id=f"step_{index}_{step.type}",
             pending_form_labels=outer_pending_labels,
         )
