@@ -192,14 +192,39 @@ class _PauseRequested(Exception):
 PauseRequested = _PauseRequested
 
 
+@dataclass(frozen=True)
+class FormFieldValue:
+    """One captured form field — text input, select, checkbox, radio,
+    or contenteditable — keyed by a stable selector in
+    :attr:`BrowserState.form_state` (epic #358 Phase B).
+
+    Password fields are captured as ``masked=True`` with an empty
+    ``value``: the selector survives so the resume path knows
+    *which* field needs re-prompting, but the secret never lands in
+    the JSON. Opt out of masking via ``MANTIS_PAUSE_CAPTURE_PASSWORDS=1``
+    (test / debug only).
+    """
+
+    kind: str        # "text" | "select" | "checkbox" | "radio" | "contenteditable"
+    value: str = ""  # for text/select/contenteditable; "true"/"false" for checkbox/radio
+    masked: bool = False
+
+
 @dataclass
 class BrowserState:
-    """Browser-runtime snapshot captured at pause time (epic #358 Phase A).
+    """Browser-runtime snapshot captured at pause time (epic #358).
 
-    URL + scroll + viewport — the smallest unit of "where in the page
-    was the agent?" that lets a resumed run restore visual context
-    instead of starting from page-top. Captured via CDP just before
-    :class:`PauseRequested` raises; replayed during ``runner.resume``.
+    Phase A: URL + scroll + viewport — the smallest unit of "where
+    in the page was the agent?" that lets a resumed run restore
+    visual context instead of starting from page-top. Captured via
+    CDP just before :class:`PauseRequested` raises; replayed during
+    ``runner.resume``.
+
+    Phase B: ``form_state`` — unsubmitted form input (text inputs,
+    selects, checkboxes, radios, contenteditable elements) keyed by
+    a stable selector. Half-filled forms paused for OTP / 2FA /
+    manual review come back populated. Password fields are captured
+    as ``masked=True`` with empty values (caller re-prompts).
 
     Defaults to all-zero / empty so a snapshot from a runner that
     hasn't initialised the browser (or an env adapter that doesn't
@@ -213,6 +238,7 @@ class BrowserState:
     viewport_w: int = 0
     viewport_h: int = 0
     captured_at: float = 0.0
+    form_state: dict[str, FormFieldValue] = field(default_factory=dict)
 
 
 @dataclass
@@ -270,9 +296,20 @@ class PauseState:
         bs_raw = filtered.get("browser_state")
         if isinstance(bs_raw, dict):
             bs_allowed = {f.name for f in fields(BrowserState)}
-            filtered["browser_state"] = BrowserState(
-                **{k: v for k, v in bs_raw.items() if k in bs_allowed}
-            )
+            bs_kwargs = {k: v for k, v in bs_raw.items() if k in bs_allowed}
+            # Phase B: ``form_state`` is dict[selector, FormFieldValue].
+            # asdict turned each value into a dict; reverse here.
+            form_raw = bs_kwargs.get("form_state")
+            if isinstance(form_raw, dict):
+                ffv_allowed = {f.name for f in fields(FormFieldValue)}
+                bs_kwargs["form_state"] = {
+                    str(sel): FormFieldValue(
+                        **{k: v for k, v in entry.items() if k in ffv_allowed}
+                    )
+                    for sel, entry in form_raw.items()
+                    if isinstance(entry, dict)
+                }
+            filtered["browser_state"] = BrowserState(**bs_kwargs)
         elif bs_raw is None:
             filtered.pop("browser_state", None)
         return cls(**filtered)
@@ -303,5 +340,6 @@ __all__ = [
     "PauseRequested",
     "PauseState",
     "BrowserState",
+    "FormFieldValue",
     "RunnerResult",
 ]

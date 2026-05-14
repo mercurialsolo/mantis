@@ -462,7 +462,7 @@ POST /v1/predict
 | Pending tool call (`pending_tool` + `pending_arguments` + `prompt`) | ✓ — the resumed runner re-invokes the tool with `user_input` set | The mechanism that lets a paused tool finish its `call_tool` round-trip. |
 | **URL + scroll + viewport** (`browser_state`, [epic #358](https://github.com/mercurialsolo/mantis/issues/358) Phase A) | ✓ — agent re-lands on the exact pixel | CDP-captured (`location.href`, `window.scrollX/Y`, `window.innerWidth/Height`) just before pause raises. Empty when the env doesn't expose CDP (legacy adapters). |
 | Cookies / localStorage / IndexedDB | ✓ — but via the `profile_id` Chrome user-data-dir, not `pause_state` | Persists across runs on its own; `profile_id` is the identity that scopes the dir. |
-| Unsubmitted form input | ✗ — half-filled forms reset on resume | [Phase B (#360)](https://github.com/mercurialsolo/mantis/issues/360). |
+| **Unsubmitted form input** (`browser_state.form_state`, [Phase B (#360)](https://github.com/mercurialsolo/mantis/issues/360)) | ✓ — half-filled inputs / selects / checkboxes / radios / contenteditable repopulate on resume | Keyed by stable selector (`data-*` > `id` > short CSS path). Passwords masked: the selector is kept so the caller knows *which* field to re-prompt, but the value is dropped before serialization (opt in via `MANTIS_PAUSE_CAPTURE_PASSWORDS=1` for test/debug only). Missing selectors on the resumed page are silently skipped. |
 | In-memory JS state (React/Redux store, in-flight network) | ✗ — fresh page load | Container-level snapshots would be the right answer; out of scope. |
 
 ### Resume

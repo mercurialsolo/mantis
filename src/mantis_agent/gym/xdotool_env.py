@@ -701,16 +701,18 @@ class XdotoolGymEnv(GymEnvironment):
         return ""
 
     def capture_browser_state(self) -> "BrowserState":
-        """Snapshot URL + scroll + viewport for pause/resume (epic #358
-        Phase A). Single CDP ``Runtime.evaluate`` call reads everything
-        in one round-trip.
+        """Snapshot URL + scroll + viewport + form input for
+        pause/resume (epic #358 Phase A + B). Two CDP
+        ``Runtime.evaluate`` calls: one for the URL/scroll/viewport
+        primitives, one for the form-field walk.
 
         Returns an all-empty :class:`BrowserState` on any failure (CDP
         unreachable, page mid-navigation, JS exception). The caller
         branches on ``bool(state.url)`` to decide whether to apply a
         restore — empty url means "no browser state to restore".
         """
-        from .checkpoint import BrowserState
+        from . import form_capture_js
+        from .checkpoint import BrowserState, FormFieldValue
         result = self.cdp_evaluate(
             "({"
             "url: (location && location.href) || '',"
@@ -722,6 +724,27 @@ class XdotoolGymEnv(GymEnvironment):
         )
         if not isinstance(result, dict):
             return BrowserState(captured_at=time.time())
+        # Phase B: form-field walk. Separate eval call so a JS error
+        # in form_capture_js doesn't drop the URL/scroll capture too.
+        form_state: dict[str, FormFieldValue] = {}
+        try:
+            entries = self.cdp_evaluate(form_capture_js.capture_js())
+        except Exception as exc:  # noqa: BLE001 — observability
+            logger.debug("form_state capture: cdp_evaluate raised: %s", exc)
+            entries = None
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                selector = entry.get("selector")
+                kind = entry.get("kind")
+                if not isinstance(selector, str) or not isinstance(kind, str):
+                    continue
+                form_state[selector] = FormFieldValue(
+                    kind=kind,
+                    value=str(entry.get("value", "") or ""),
+                    masked=bool(entry.get("masked", False)),
+                )
         return BrowserState(
             url=str(result.get("url", "") or ""),
             scroll_x=int(result.get("scroll_x", 0) or 0),
@@ -729,6 +752,7 @@ class XdotoolGymEnv(GymEnvironment):
             viewport_w=int(result.get("viewport_w", 0) or 0),
             viewport_h=int(result.get("viewport_h", 0) or 0),
             captured_at=time.time(),
+            form_state=form_state,
         )
 
     def restore_browser_state(self, state: "BrowserState") -> None:
@@ -755,6 +779,43 @@ class XdotoolGymEnv(GymEnvironment):
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.debug("restore_browser_state: scroll restore failed: %s", exc)
+        # Phase B: replay captured form fields after URL + scroll
+        # restoration. Selectors that don't resolve on the resumed
+        # page (DOM shifted) are silently skipped by the JS shim
+        # itself — never fail a resume because the page changed.
+        if state.form_state:
+            try:
+                self._replay_form_state(state.form_state)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("restore_browser_state: form_state replay failed: %s", exc)
+
+    def _replay_form_state(self, form_state: dict) -> None:
+        """Re-apply captured form fields via a single CDP eval.
+
+        Skips ``masked`` entries (passwords) — the caller is expected
+        to re-prompt the user. Logs the JS shim's per-call outcome
+        ``{applied, skipped, missing}`` for audit.
+        """
+        from . import form_capture_js
+        entries = [
+            {
+                "selector": selector,
+                "kind": ffv.kind,
+                "value": ffv.value,
+                "masked": ffv.masked,
+            }
+            for selector, ffv in form_state.items()
+        ]
+        if not entries:
+            return
+        serialized = json.dumps(entries)
+        outcome = self.cdp_evaluate(form_capture_js.replay_js(serialized))
+        if isinstance(outcome, dict):
+            logger.info(
+                "form_state replay: applied=%s skipped=%s missing=%s",
+                outcome.get("applied"), outcome.get("skipped"),
+                outcome.get("missing"),
+            )
 
     def has_session(self, name: str) -> bool:
         return self._browser_proc is not None and self._browser_proc.poll() is None

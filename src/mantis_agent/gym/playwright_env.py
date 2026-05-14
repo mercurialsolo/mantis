@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .checkpoint import BrowserState
+    from .checkpoint import BrowserState, FormFieldValue
 
 from PIL import Image
 
@@ -326,16 +326,18 @@ class PlaywrightGymEnv(GymEnvironment):
         return ""
 
     def capture_browser_state(self) -> "BrowserState":
-        """Snapshot URL + scroll + viewport for pause/resume (epic #358
-        Phase A). Mirrors :meth:`XdotoolGymEnv.capture_browser_state`
-        — same return shape, Playwright path uses ``page.evaluate``.
+        """Snapshot URL + scroll + viewport + form-field values for
+        pause/resume (epic #358 Phase A + B). Mirrors
+        :meth:`XdotoolGymEnv.capture_browser_state` — same return
+        shape, Playwright path uses ``page.evaluate``.
 
         Returns an all-empty :class:`BrowserState` on any failure
         (no page, page mid-navigation, JS exception). The caller
         branches on ``bool(state.url)`` to decide whether to apply
         a restore.
         """
-        from .checkpoint import BrowserState
+        from . import form_capture_js
+        from .checkpoint import BrowserState, FormFieldValue
         if self._page is None:
             return BrowserState(captured_at=time.time())
         try:
@@ -353,6 +355,29 @@ class PlaywrightGymEnv(GymEnvironment):
             return BrowserState(captured_at=time.time())
         if not isinstance(result, dict):
             return BrowserState(captured_at=time.time())
+        form_state: dict[str, FormFieldValue] = {}
+        try:
+            entries = self._page.evaluate(form_capture_js.capture_js())
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("form_state capture: page.evaluate raised: %s", exc)
+            entries = None
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                selector = entry.get("selector")
+                if not isinstance(selector, str) or not selector:
+                    continue
+                kind = entry.get("kind", "text")
+                if not isinstance(kind, str) or not kind:
+                    kind = "text"
+                value = entry.get("value", "")
+                if not isinstance(value, str):
+                    value = str(value)
+                masked = bool(entry.get("masked", False))
+                form_state[selector] = FormFieldValue(
+                    kind=kind, value=value, masked=masked,
+                )
         return BrowserState(
             url=str(result.get("url", "") or ""),
             scroll_x=int(result.get("scroll_x", 0) or 0),
@@ -360,11 +385,13 @@ class PlaywrightGymEnv(GymEnvironment):
             viewport_w=int(result.get("viewport_w", 0) or 0),
             viewport_h=int(result.get("viewport_h", 0) or 0),
             captured_at=time.time(),
+            form_state=form_state,
         )
 
     def restore_browser_state(self, state: "BrowserState") -> None:
         """Replay the captured browser state — navigate to ``url``,
-        scroll to (x, y). No-op when ``state.url`` is empty.
+        scroll to (x, y), re-apply captured form-field values
+        (epic #358 Phase B). No-op when ``state.url`` is empty.
 
         Called from ``runner.resume``; best-effort throughout.
         """
@@ -383,6 +410,45 @@ class PlaywrightGymEnv(GymEnvironment):
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.debug("restore_browser_state: scroll restore failed: %s", exc)
+        if state.form_state and self._page is not None:
+            try:
+                self._replay_form_state(state.form_state)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("restore_browser_state: form_state replay failed: %s", exc)
+
+    def _replay_form_state(self, form_state: dict) -> None:
+        """Re-apply captured form values via a single ``page.evaluate``.
+        Mirrors :meth:`XdotoolGymEnv._replay_form_state`. Best-effort:
+        masked entries are skipped (caller re-prompts), missing
+        selectors are silently dropped.
+        """
+        from . import form_capture_js
+        if not form_state or self._page is None:
+            return
+        entries = [
+            {
+                "selector": selector,
+                "kind": ffv.kind,
+                "value": ffv.value,
+                "masked": ffv.masked,
+            }
+            for selector, ffv in form_state.items()
+        ]
+        if not entries:
+            return
+        serialized = json.dumps(entries)
+        try:
+            outcome = self._page.evaluate(form_capture_js.replay_js(serialized))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("_replay_form_state: page.evaluate raised: %s", exc)
+            return
+        if isinstance(outcome, dict):
+            logger.info(
+                "form_state replay: applied=%s skipped=%s missing=%s",
+                outcome.get("applied", 0),
+                outcome.get("skipped", 0),
+                outcome.get("missing", 0),
+            )
 
     # ── Session persistence ──────────────────────────────────────────────
 
