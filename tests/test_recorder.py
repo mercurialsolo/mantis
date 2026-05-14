@@ -19,7 +19,23 @@ from mantis_agent.recorder import (
     _build_ffmpeg_cmd,
     content_type_for,
     ffmpeg_available,
+    x_display_alive,
 )
+
+
+# The existing happy-path / lifecycle tests in this file pre-date the
+# X-display probe ``ScreenRecorder.start`` now does before spawning
+# ffmpeg. On Modal images (and most linux dev boxes) ``xdpyinfo`` IS on
+# PATH and the probe would correctly report "no display" — which would
+# fail the lifecycle tests for reasons unrelated to what they pin. Stub
+# the probe to "alive" by default so those tests keep covering ffmpeg
+# lifecycle; the new probe-failure path is exercised explicitly below
+# (the inner ``with patch(...)`` overrides this fixture for the
+# probe-failure case).
+@pytest.fixture(autouse=True)
+def _stub_x_display_alive():
+    with patch("mantis_agent.recorder.x_display_alive", return_value=True):
+        yield
 
 
 # ── Command construction ────────────────────────────────────────────────────
@@ -209,3 +225,67 @@ def test_recorder_context_manager(tmp_path: Path):
 def test_ffmpeg_available_real(monkeypatch):
     # Without monkeypatch, just verifies the helper returns a bool.
     assert isinstance(ffmpeg_available(), bool)
+
+
+# ── X-display probe (the new layer for the integrator error) ────────────────
+
+
+def test_x_display_alive_returns_true_when_xdpyinfo_missing():
+    """On hosts without ``xdpyinfo`` (most CI runners), the probe must
+    return True so we don't false-fail recorder.start()."""
+    with patch("mantis_agent.recorder.shutil.which", return_value=None):
+        assert x_display_alive(":99") is True
+
+
+def test_x_display_alive_returns_true_when_probe_succeeds(tmp_path: Path):
+    """``xdpyinfo`` exits 0 → display is alive."""
+    fake_proc = MagicMock()
+    fake_proc.returncode = 0
+    with patch("mantis_agent.recorder.shutil.which", return_value="/usr/bin/xdpyinfo"), \
+         patch("mantis_agent.recorder.subprocess.run", return_value=fake_proc):
+        assert x_display_alive(":99") is True
+
+
+def test_x_display_alive_returns_false_when_probe_fails():
+    """``xdpyinfo`` exits non-zero → display is not alive."""
+    fake_proc = MagicMock()
+    fake_proc.returncode = 1
+    with patch("mantis_agent.recorder.shutil.which", return_value="/usr/bin/xdpyinfo"), \
+         patch("mantis_agent.recorder.subprocess.run", return_value=fake_proc):
+        assert x_display_alive(":99") is False
+
+
+def test_x_display_alive_returns_false_on_exception():
+    """``xdpyinfo`` raises (timeout, missing display, …) → False."""
+    with patch("mantis_agent.recorder.shutil.which", return_value="/usr/bin/xdpyinfo"), \
+         patch(
+             "mantis_agent.recorder.subprocess.run",
+             side_effect=__import__("subprocess").TimeoutExpired("xdpyinfo", 3),
+         ):
+        assert x_display_alive(":99") is False
+
+
+def test_recorder_refuses_to_spawn_when_display_not_ready(tmp_path: Path):
+    """When the X display isn't alive, ``start()`` must fail with a
+    precise ``x-display-not-ready:<display>`` envelope BEFORE
+    spawning ffmpeg. This is the actionable replacement for the
+    cryptic ``Cannot open display :99, error 1`` integrators saw.
+
+    Patches the module-level ``x_display_alive`` to False (overriding
+    the autouse fixture). The subprocess.Popen patch is asserted
+    *not* to be called — proving we short-circuit before ffmpeg fires.
+    """
+    out = tmp_path / "vid.mp4"
+    popen_mock = MagicMock()
+    with patch("mantis_agent.recorder.ffmpeg_available", return_value=True), \
+         patch("mantis_agent.recorder.x_display_alive", return_value=False), \
+         patch("mantis_agent.recorder.subprocess.Popen", popen_mock):
+        rec = ScreenRecorder(out, display=":99")
+        ok = rec.start()
+
+    assert ok is False
+    assert rec.result is not None
+    assert rec.result.error == "x-display-not-ready::99"
+    assert not rec.result.succeeded
+    # Most important assertion: ffmpeg never got spawned.
+    popen_mock.assert_not_called()

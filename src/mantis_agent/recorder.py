@@ -54,6 +54,33 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
+def x_display_alive(display: str, *, timeout_s: float = 3.0) -> bool:
+    """Best-effort probe: is the X server on ``display`` accepting
+    connections? Uses ``xdpyinfo`` (already required by the Modal
+    image — same probe ``_ensure_xvfb_running`` uses) and returns
+    False if the binary is missing so we don't false-fail on hosts
+    that lack it.
+
+    Used by :meth:`ScreenRecorder.start` to surface a precise error
+    when ffmpeg would otherwise die with the cryptic ``Cannot open
+    display :99`` line — common when callers spawn the recorder
+    before bringing up Xvfb (issue: recurring integrator error on
+    /v1/predict with ``record_video=true``).
+    """
+    if not shutil.which("xdpyinfo"):
+        # Can't probe → don't block; let ffmpeg surface its own error.
+        return True
+    try:
+        proc = subprocess.run(
+            ["xdpyinfo", "-display", display],
+            capture_output=True,
+            timeout=timeout_s,
+        )
+        return proc.returncode == 0
+    except Exception:  # noqa: BLE001 — best-effort liveness probe
+        return False
+
+
 def _build_ffmpeg_cmd(
     display: str,
     output: Path,
@@ -158,6 +185,26 @@ class ScreenRecorder:
             self.result = RecorderResult(
                 output_path=None, duration_seconds=0.0, bytes_written=0,
                 error="ffmpeg-not-installed",
+            )
+            return False
+        # Probe the X server before spawning ffmpeg. Without this check
+        # ffmpeg dies with the cryptic line ``Cannot open display :99,
+        # error 1`` — common when the recorder is spawned before
+        # Xvfb is up (the runtime's ``_make_env`` no longer starts
+        # Xvfb eagerly; ``env.reset()`` does, but the recorder fires
+        # before ``reset()``). The runtime now calls
+        # ``env.ensure_display_ready()`` before constructing this
+        # recorder, but third-party callers (CLI embedders, tests)
+        # might not — this probe gives them a precise error envelope
+        # instead of a stderr blob.
+        if not x_display_alive(self._display):
+            logger.warning(
+                "recorder: X display %s is not alive — refusing to spawn ffmpeg",
+                self._display,
+            )
+            self.result = RecorderResult(
+                output_path=None, duration_seconds=0.0, bytes_written=0,
+                error=f"x-display-not-ready:{self._display}",
             )
             return False
         self._output.parent.mkdir(parents=True, exist_ok=True)
