@@ -287,7 +287,11 @@ class BasetenCUARuntime:
             self._llama_log_fh.close()
             self._llama_log_fh = None
             raise
-        _wait_for_openai_server(self.port, self.llama_proc, "vllm")
+        _wait_for_openai_server(
+            self.port, self.llama_proc, "vllm",
+            log_path="/tmp/vllm.log",
+            timeout_seconds=int(os.environ.get("MANTIS_VLLM_TIMEOUT_S", "900")),
+        )
 
     def _load_fara(self) -> Any:
         """Load Microsoft Fara-7B via vLLM and return a ``FaraBrain``.
