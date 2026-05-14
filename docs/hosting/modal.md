@@ -22,6 +22,19 @@ uv run modal deploy deploy/modal/modal_cua_server.py
 
 This creates the executor functions (`run_holo3`, `run_claude_cua`, `run_cua_*`, `run_gemma4_cua`) plus the web endpoint `api`. Each executor is its own image (Chrome + xdotool + the brain's runtime); the api image is lightweight (FastAPI + pydantic only). Modal scales each independently.
 
+### Warm-container caveat after a code change
+
+`modal deploy` registers a new revision (deploys take ~2-3 s when only Python source changed) but the previous container stays warm until `scaledown_window` elapses — 10 minutes by default. New requests can land on the old container, which is still serving from `sys.modules` baked at the previous import, so a freshly-deployed code change may not appear to take effect for up to 10 minutes.
+
+When verifying a fix end-to-end (e.g. redeploy + plan rerun), force a cold start so the new image is loaded immediately:
+
+```bash
+uv run modal app stop mantis-server --yes
+uv run modal deploy deploy/modal/modal_mantis_server.py
+```
+
+Then submit the verification request. Without this, you may see the **pre-fix** behaviour despite a green deploy — caught during the [#392](https://github.com/mercurialsolo/mantis/pull/392) recorder-race verification, where three back-to-back deploys appeared to do nothing until the warm container was killed.
+
 ## Submit a plan over HTTP (recommended)
 
 ```bash
