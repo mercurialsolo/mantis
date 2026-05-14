@@ -715,7 +715,10 @@ class ClaudeGuidedClickHandler:
             data = f"click_no_nav:wrong_target:{verify_reason}"
         elif verify_kind == "no_change":
             failure_class = "no_state_change"
-            data = f"click_no_nav:no_change:{verify_reason}"
+            # ``no_state_change`` substring also lets the classifier
+            # fallback (failure_class.py) map a legacy result.json
+            # to the same class even without the handler stamp.
+            data = f"click_no_nav:no_state_change:{verify_reason}"
         else:
             failure_class = ""
             data = "click_no_nav:detail_page_not_verified"
