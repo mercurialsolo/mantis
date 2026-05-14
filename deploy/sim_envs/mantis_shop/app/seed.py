@@ -164,6 +164,7 @@ def seed(conn: sqlite3.Connection, *, seed_val: int,
         "collection_members", "collections",
         "variant_region_locks", "inventory", "variants", "products",
         "customer_payment_methods", "customer_addresses", "customers",
+        "users",
     ):
         cur.execute(f"DELETE FROM {table}")
 
@@ -173,8 +174,51 @@ def seed(conn: sqlite3.Connection, *, seed_val: int,
     _seed_coupons(cur, rng, now_dt)
     _seed_orders(cur, rng, now_dt)
     _seed_saved_views(cur)
+    _seed_users(cur, fake_now=fake_now)
 
     conn.commit()
+
+
+# ── users (mock auth — #387) ──────────────────────────────────────────
+
+
+def _seed_users(cur: sqlite3.Cursor, *, fake_now: str) -> None:
+    """Two canonical creds.
+
+    * ``user_demo`` — buyer-role; links to ``customer_00001`` so T01
+      "buy a jacket as the logged-in customer" attributes correctly.
+    * ``user_admin`` — admin-role; gates ``/admin/*`` when
+      ``ENV_REQUIRE_AUTH=1``.
+
+    Both have an ``oauth_subject`` so the Google-style mock flow can
+    resolve them by IdP subject id too.
+    """
+    from . import auth  # local import — avoids circular at module load
+
+    cur.executemany(
+        "INSERT INTO users (id, email, password_hash, role, customer_id, "
+        "oauth_subject, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                "user_demo",
+                "demo@mantis.example",
+                auth.hash_password("hunter2"),
+                "customer",
+                "customer_00001",
+                "google-oauth2|demo-001",
+                fake_now,
+            ),
+            (
+                "user_admin",
+                "admin@mantis.example",
+                auth.hash_password("admin123"),
+                "admin",
+                None,
+                "google-oauth2|admin-001",
+                fake_now,
+            ),
+        ],
+    )
 
 
 # ── customers + addresses + payment methods ───────────────────────────

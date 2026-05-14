@@ -50,8 +50,13 @@ CREATE TABLE IF NOT EXISTS users (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
     email           TEXT NOT NULL,
-    is_active       INTEGER NOT NULL DEFAULT 1
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    -- Mock auth surface (#387). Plain sha256 hex — sim env, not prod.
+    password_hash   TEXT,
+    role            TEXT NOT NULL DEFAULT 'agent',  -- 'agent' | 'admin'
+    oauth_subject   TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 
 CREATE TABLE IF NOT EXISTS companies (
     id              TEXT PRIMARY KEY,

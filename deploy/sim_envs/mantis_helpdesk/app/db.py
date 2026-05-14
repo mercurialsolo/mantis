@@ -40,10 +40,15 @@ CREATE TABLE IF NOT EXISTS users (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
     email           TEXT NOT NULL,
-    role            TEXT NOT NULL DEFAULT 'requester',  -- requester | agent
+    role            TEXT NOT NULL DEFAULT 'requester',  -- requester | agent | admin
     group_id        TEXT,                                -- agents only
     locale          TEXT NOT NULL DEFAULT 'en',
-    is_active       INTEGER NOT NULL DEFAULT 1
+    is_active       INTEGER NOT NULL DEFAULT 1,
+    -- Mock auth surface (#387). Plain sha256 hex — sim env, not prod.
+    -- Only agents + admins have a password_hash; requesters are external
+    -- and never sign in to this env.
+    password_hash   TEXT,
+    oauth_subject   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_users_group ON users(group_id);

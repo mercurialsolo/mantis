@@ -305,3 +305,59 @@ pre { background: #f8fafc; padding: 10px; border-radius: 6px;
   padding: 14px; white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace;
   font-size: 12px; line-height: 1.6;
 }
+  align-items: start;
+}
+
+pre { background: #f8fafc; padding: 10px; border-radius: 6px;
+      border: 1px solid var(--border); overflow-x: auto; font-size: 12px; }
+code { font-size: 11px; font-family: ui-monospace, Menlo, monospace; color: var(--slate); }
+
+/* ── auth (login + OAuth consent) ─────────────────────────────────── */
+.login-card {
+  max-width: 380px; margin: 32px auto;
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 28px; box-shadow: var(--shadow-md);
+}
+.login-card h1 { margin: 0 0 14px; font-size: 20px; }
+.login-card .muted { color: var(--text-muted); margin-top: -8px; }
+.login-card .error {
+  background: var(--red-soft); color: var(--red);
+  padding: 8px 10px; border-radius: 6px; margin-bottom: 12px; font-size: 12px;
+}
+.login-card .notice {
+  background: var(--accent-soft); color: var(--accent);
+  padding: 8px 10px; border-radius: 6px; margin-bottom: 12px; font-size: 12px;
+}
+.login-form { display: flex; flex-direction: column; gap: 12px; }
+.login-form label { display: flex; flex-direction: column; gap: 4px;
+                    font-size: 12px; color: var(--text-muted); }
+.login-form input {
+  padding: 8px 10px; border: 1px solid var(--border-strong);
+  border-radius: 6px; font-size: 13px;
+}
+.login-form button {
+  background: var(--accent); color: white; border: 0;
+  padding: 10px; border-radius: 6px; font-weight: 600; cursor: pointer;
+}
+.login-form button:hover { background: var(--accent-hover); }
+.oauth-divider {
+  text-align: center; color: var(--text-faint); font-size: 11px;
+  margin: 16px 0; text-transform: uppercase; letter-spacing: 0.1em;
+}
+.btn-oauth {
+  display: block; text-align: center; padding: 10px;
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  color: var(--text); text-decoration: none; font-weight: 500;
+}
+.btn-oauth:hover { background: var(--bg-hover); }
+.oauth-account {
+  display: block; padding: 10px; border: 1px solid var(--border);
+  border-radius: 6px; margin: 6px 0; cursor: pointer;
+}
+.oauth-account input { margin-right: 8px; }
+.login-hint { margin-top: 18px; font-size: 11px; color: var(--text-muted); }
+.login-hint code { background: var(--bg-hover); padding: 1px 4px; border-radius: 3px; }
+.link-button {
+  background: none; border: 0; color: var(--link); cursor: pointer;
+  font: inherit; padding: 0; text-decoration: underline;
+}

@@ -17,7 +17,7 @@ import time
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import db, main as app_main
+from .. import auth, db, main as app_main
 from .cart import (
     _coupon_active,
     _coupon_row,
@@ -44,14 +44,16 @@ async def address_get(request: Request) -> HTMLResponse:
     conn = db.connect()
     cart = _get_or_create_cart(conn, sid)
 
-    # Show saved addresses for customer_00001 (canonical test customer)
-    # because we're auto-logged-in as them. Real shop would resolve
-    # customer from the session; we keep it simple.
+    # Resolve acting customer from session (#387). When auth is
+    # disabled, ``effective_customer_id`` falls back to
+    # ``customer_00001`` so T01–T05 oracles keep grading against the
+    # same shape.
+    acting_customer_id = auth.effective_customer_id(request)
     saved = [
         dict(r) for r in conn.execute(
             "SELECT * FROM customer_addresses WHERE customer_id = ? "
             "ORDER BY is_default DESC, id ASC",
-            ("customer_00001",),
+            (acting_customer_id,),
         ).fetchall()
     ]
     error = request.query_params.get("error") or ""
@@ -115,14 +117,15 @@ async def address_post(
                 f"/checkout/address?error=Invalid%20ZIP%20code:%20{zip.strip()}",
                 sid,
             )
-        # Persist as a new address on customer_00001 so checkout has a row.
+        # Persist as a new address on the acting customer.
+        acting_customer_id = auth.effective_customer_id(request)
         new_id = f"addr_adhoc_{int(time.time() * 1000)}"
         with db.transaction() as txn:
             txn.execute(
                 "INSERT INTO customer_addresses "
                 "(id, customer_id, line1, city, region, zip, is_default) "
                 "VALUES (?, ?, ?, ?, ?, ?, 0)",
-                (new_id, "customer_00001", line1.strip(), city.strip(),
+                (new_id, acting_customer_id, line1.strip(), city.strip(),
                  region.strip().upper(), zip.strip()),
             )
         chosen_addr_id = new_id
@@ -225,7 +228,7 @@ async def payment_get(request: Request) -> HTMLResponse:
     payment_methods = [
         dict(r) for r in conn.execute(
             "SELECT * FROM customer_payment_methods WHERE customer_id = ?",
-            ("customer_00001",),
+            (auth.effective_customer_id(request),),
         ).fetchall()
     ]
     resp = app_main.app.state.templates.TemplateResponse(
@@ -398,13 +401,14 @@ async def place_order(request: Request) -> RedirectResponse:
     number = f"#{next_num}"
     placed_at = app_main.now_value()
 
+    acting_customer_id = auth.effective_customer_id(request)
     with db.transaction() as txn:
         txn.execute(
             "INSERT INTO orders (id, number, customer_id, shipping_address_id, "
             "payment_method_id, status, subtotal, discount_total, "
             "shipping_total, total, coupon_codes, notify_customer, placed_at) "
             "VALUES (?, ?, ?, ?, ?, 'paid', ?, ?, ?, ?, ?, 0, ?)",
-            (order_id, number, "customer_00001",
+            (order_id, number, acting_customer_id,
              cart["shipping_address_id"], cart["payment_method_id"],
              totals["subtotal"], totals["discount"],
              round(shipping_total, 2), round(total_with_method, 2),
@@ -439,7 +443,7 @@ async def place_order(request: Request) -> RedirectResponse:
             )
         _log_audit(txn, operation="order_placed", target_type="order",
                    target_id=order_id,
-                   payload={"customer_id": "customer_00001",
+                   payload={"customer_id": acting_customer_id,
                             "total": round(total_with_method, 2),
                             "coupon_codes": coupon_codes,
                             "session_id": sid,

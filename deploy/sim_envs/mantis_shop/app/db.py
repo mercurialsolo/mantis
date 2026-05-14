@@ -218,6 +218,23 @@ CREATE TABLE IF NOT EXISTS saved_view_members (
     PRIMARY KEY (view_id, order_id)
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    -- Mock auth surface (#387). Plain sha256 password hash — sim env,
+    -- not prod. ``customer_id`` links a buyer-role user to their
+    -- existing customer row so checkout/order rows attribute correctly.
+    -- ``oauth_subject`` is the IdP-side stable id (Google-style
+    -- ``google-oauth2|<sub>``) used by the OAuth mock flow.
+    id              TEXT PRIMARY KEY,
+    email           TEXT NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
+    role            TEXT NOT NULL,        -- 'admin' | 'customer'
+    customer_id     TEXT REFERENCES customers(id),
+    oauth_subject   TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_oauth_subject ON users(oauth_subject);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     -- Append-only mutation record. The oracle reads this + the DB
     -- snapshot to grade runs. Mirrors mantis-crm's ``mutations`` table.

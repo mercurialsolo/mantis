@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db, seed
+from . import auth, db, seed
 
 APP_DIR = Path(__file__).parent
 ADMIN_TOKEN_ENV = "ENV_ADMIN_TOKEN"
@@ -68,6 +68,40 @@ def create_app() -> FastAPI:
     app.state.templates = templates
     app.state.admin_token = _admin_token()
 
+    # Resolve the session user once per request + gate protected paths
+    # when ``ENV_REQUIRE_AUTH=1``.
+    #
+    # ``request.state.current_user`` is exposed to every template
+    # (``base.html`` reads it for the topbar). When auth is required
+    # we 303 → ``/login`` for unauthed admin/checkout traffic. Admin
+    # paths additionally require ``role='admin'``.
+    @app.middleware("http")
+    async def _auth_gate(request: Request, call_next):  # noqa: ANN202
+        try:
+            request.state.current_user = auth.current_user(request)
+        except Exception:  # noqa: BLE001 — never block request on auth lookup
+            request.state.current_user = None
+
+        if auth.auth_required():
+            path = request.url.path
+            open_prefixes = (
+                "/login", "/logout", "/oauth/", "/__env__/",
+                "/static/", "/cart", "/catalog", "/products/",
+            )
+            if path == "/" or path.startswith(open_prefixes):
+                pass
+            elif path.startswith(("/admin/", "/checkout/", "/orders/")):
+                user = request.state.current_user
+                if user is None:
+                    return RedirectResponse(
+                        f"/login?next={path}", status_code=303,
+                    )
+                if path.startswith("/admin/") and user.get("role") != "admin":
+                    return RedirectResponse(
+                        "/login?error=admin+access+required", status_code=303,
+                    )
+        return await call_next(request)
+
     # Bootstrap the DB. Mirrors mantis-crm: re-seed only when empty so
     # dev iteration under uvicorn --reload preserves state.
     @app.on_event("startup")
@@ -88,12 +122,14 @@ def create_app() -> FastAPI:
     from .routes import admin_coupons as admin_coupons_router
     from .routes import admin_orders as admin_orders_router
     from .routes import admin_products as admin_products_router
+    from .routes import auth as auth_router
     from .routes import cart as cart_router
     from .routes import checkout as checkout_router
     from .routes import env_admin as env_admin_router
     from .routes import storefront as storefront_router
 
     app.include_router(env_admin_router.router)
+    app.include_router(auth_router.router)
     app.include_router(storefront_router.router)
     app.include_router(cart_router.router)
     app.include_router(checkout_router.router)

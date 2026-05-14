@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in - Google Accounts</title>
+  <link rel="stylesheet" href="/static/oauth.css" />
+</head>
+<body class="idp">
+<div class="idp-shell" data-testid="oauth-idp-shell">
+  <header class="idp-topbar">
+    <div class="g-logo">
+      <span class="g-blue">G</span><span class="g-red">o</span><span class="g-yellow">o</span><span class="g-blue">g</span><span class="g-green">l</span><span class="g-red">e</span>
+    </div>
+    <a class="idp-help" href="#">Help</a>
+  </header>
+
+  <main class="idp-card" data-testid="oauth-account-picker">
+    <h1>Choose an account</h1>
+    <p class="idp-sub">to continue to <span class="idp-app">{{ client_id }}</span></p>
+
+    {% if error %}
+      <div class="idp-error" data-testid="oauth-error">{{ error }}</div>
+    {% endif %}
+
+    {% if not error %}
+      <ul class="idp-account-list">
+        {% for account in accounts %}
+          <li>
+            <form method="post" action="/oauth/consent" data-testid="oauth-account-form-{{ loop.index }}">
+              <input type="hidden" name="oauth_subject" value="{{ account.sub }}"/>
+              <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
+              <input type="hidden" name="state" value="{{ state }}"/>
+              <button class="idp-account-row" type="submit"
+                      data-testid="oauth-account-{{ loop.index }}">
+                <span class="idp-avatar" aria-hidden="true">{{ account.label[0]|upper }}</span>
+                <span class="idp-account-meta">
+                  <span class="idp-account-name">{{ account.label.split('@')[0]|capitalize }}</span>
+                  <span class="idp-account-email">{{ account.label }}</span>
+                </span>
+                <span class="idp-chevron" aria-hidden="true">›</span>
+              </button>
+            </form>
+          </li>
+        {% endfor %}
+        <li>
+          <button class="idp-account-row idp-other" type="button" disabled
+                  data-testid="oauth-use-another">
+            <span class="idp-avatar idp-avatar-placeholder">+</span>
+            <span class="idp-account-meta">
+              <span class="idp-account-name">Use another account</span>
+            </span>
+          </button>
+        </li>
+      </ul>
+    {% endif %}
+
+    <p class="idp-fineprint">
+      Before using this app, you can review {{ client_id }}'s
+      <a href="#">privacy policy</a> and <a href="#">terms of service</a>.
+    </p>
+  </main>
+
+  <footer class="idp-footer">
+    <select disabled><option>English (United States)</option></select>
+    <div class="idp-footer-links">
+      <a href="#">Help</a>
+      <a href="#">Privacy</a>
+      <a href="#">Terms</a>
+    </div>
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Redirecting…</title>
+  <link rel="stylesheet" href="/static/oauth.css" />
+  <meta http-equiv="refresh" content="1;url={{ target }}" />
+</head>
+<body class="idp">
+<div class="idp-shell" data-testid="oauth-redirect-shell">
+  <header class="idp-topbar">
+    <div class="g-logo">
+      <span class="g-blue">G</span><span class="g-red">o</span><span class="g-yellow">o</span><span class="g-blue">g</span><span class="g-green">l</span><span class="g-red">e</span>
+    </div>
+  </header>
+  <main class="idp-card idp-redirect-card" data-testid="oauth-redirect-card">
+    <div class="idp-spinner" aria-hidden="true"></div>
+    <h1 style="font-size:18px">Redirecting back to {{ client_id }}…</h1>
+    <p class="idp-fineprint" style="margin-top:12px">
+      If you're not redirected automatically,
+      <a href="{{ target }}" data-testid="oauth-redirect-link">click here</a>.
+    </p>
+  </main>
+</div>
+</body>
+</html>
