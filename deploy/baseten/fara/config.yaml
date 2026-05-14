@@ -8,9 +8,9 @@ build_commands:
   - curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
   - echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list
   - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable
-  - pip install --no-cache-dir openai requests pillow mss huggingface-hub fastapi uvicorn pydantic websocket-client "vllm>=0.12.0" "transformers>=4.53.3"
+  - pip install --no-cache-dir openai requests pillow mss huggingface-hub fastapi uvicorn pydantic websocket-client "vllm>=0.10.0,<0.12.0" "transformers>=4.53.3"
 docker_server:
-  start_command: bash -lc "PYTHONPATH=/packages MANTIS_MODEL=fara MANTIS_LLAMA_PORT=18080 MANTIS_FARA_MODEL_DIR=/models/fara MANTIS_DATA_DIR=/workspace/mantis-data MANTIS_REPO_ROOT=/packages MANTIS_MAX_RUNTIME_MINUTES=240 MANTIS_MAX_COST_USD=75 MANTIS_MAX_STEPS_PER_PLAN=500 MANTIS_CONTEXT_SIZE=32768 uvicorn mantis_agent.baseten_server:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 300"
+  start_command: bash -lc "PYTHONPATH=/packages MANTIS_MODEL=fara MANTIS_LLAMA_PORT=18080 MANTIS_FARA_MODEL_DIR=/models/fara MANTIS_DATA_DIR=/workspace/mantis-data MANTIS_REPO_ROOT=/packages MANTIS_MAX_RUNTIME_MINUTES=240 MANTIS_MAX_COST_USD=75 MANTIS_MAX_STEPS_PER_PLAN=500 MANTIS_CONTEXT_SIZE=32768 VLLM_USE_DEEP_GEMM=0 uvicorn mantis_agent.baseten_server:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 300"
   server_port: 8000
   predict_endpoint: /predict
   readiness_endpoint: /health
