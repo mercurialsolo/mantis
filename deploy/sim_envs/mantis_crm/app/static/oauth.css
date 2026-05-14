@@ -1,0 +1,190 @@
+/* OAuth "IdP" surface (#387).
+ *
+ * Loaded ONLY by /oauth/authorize and /oauth/consent — deliberately
+ * does not pull in app.css so the page visually feels like a different
+ * origin (Google's accounts.google.com surface). No app sidebar / app
+ * topbar; centered card on a plain white background.
+ */
+:root {
+  --idp-bg: #fff;
+  --idp-text: #202124;
+  --idp-text-muted: #5f6368;
+  --idp-border: #dadce0;
+  --idp-blue: #1a73e8;
+  --idp-blue-hover: #1765c8;
+  --idp-row-hover: #f1f3f4;
+  --idp-shadow: 0 1px 3px rgba(60, 64, 67, 0.15);
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--idp-bg);
+  color: var(--idp-text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+}
+
+.idp-shell {
+  display: flex; flex-direction: column;
+  min-height: 100vh;
+  max-width: 100%;
+}
+
+/* Top "Google" wordmark, mimics the accounts.google.com chrome. */
+.idp-topbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 24px;
+}
+.g-logo {
+  font-family: "Product Sans", Roboto, Arial, sans-serif;
+  font-size: 22px; font-weight: 500; letter-spacing: 0.5px;
+}
+.g-blue { color: #4285f4; }
+.g-red { color: #ea4335; }
+.g-yellow { color: #fbbc05; }
+.g-green { color: #34a853; }
+.idp-help, .idp-account-chip {
+  color: var(--idp-text-muted); font-size: 13px;
+  text-decoration: none;
+}
+.idp-account-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  border: 1px solid var(--idp-border); padding: 4px 12px; border-radius: 99px;
+}
+
+/* The auth card — narrow, centered, soft shadow. */
+.idp-card {
+  margin: 16px auto 24px;
+  width: min(450px, 92vw);
+  background: #fff;
+  border: 1px solid var(--idp-border);
+  border-radius: 8px;
+  padding: 40px 40px 32px;
+  box-shadow: var(--idp-shadow);
+}
+.idp-card h1 {
+  font-size: 24px; font-weight: 400; letter-spacing: -0.2px;
+  margin: 0 0 8px;
+}
+.idp-sub {
+  margin: 0 0 24px; color: var(--idp-text);
+}
+.idp-app {
+  font-weight: 500;
+}
+.idp-error {
+  background: #fce8e6; color: #c5221f;
+  padding: 10px 12px; border-radius: 6px; margin-bottom: 16px;
+  font-size: 13px;
+}
+
+/* Account picker. */
+.idp-account-list {
+  list-style: none; padding: 0; margin: 0 -16px 16px;
+}
+.idp-account-list li { border-top: 1px solid var(--idp-border); }
+.idp-account-list li:last-child { border-bottom: 1px solid var(--idp-border); }
+.idp-account-row {
+  width: 100%; background: none; border: 0; cursor: pointer;
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px; text-align: left; font: inherit; color: inherit;
+}
+.idp-account-row:hover { background: var(--idp-row-hover); }
+.idp-account-row.idp-other { color: var(--idp-text-muted); cursor: default; }
+.idp-account-row.idp-other:hover { background: none; }
+.idp-avatar {
+  width: 32px; height: 32px; border-radius: 99px;
+  background: #1a73e8; color: white;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 500; font-size: 13px;
+}
+.idp-avatar-sm { width: 24px; height: 24px; font-size: 12px; }
+.idp-avatar-placeholder {
+  background: #f1f3f4; color: var(--idp-text-muted);
+  border: 1px dashed var(--idp-border);
+}
+.idp-account-meta {
+  display: flex; flex-direction: column; line-height: 1.3;
+  flex: 1; min-width: 0;
+}
+.idp-account-name { font-size: 14px; }
+.idp-account-email { font-size: 12px; color: var(--idp-text-muted); }
+.idp-chevron { color: var(--idp-text-muted); font-size: 18px; }
+
+/* Consent screen. */
+.idp-account-line {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--idp-row-hover);
+  padding: 6px 12px; border-radius: 99px;
+  margin: 0 0 24px; font-size: 13px;
+}
+.idp-permits { margin: 24px 0 8px; font-weight: 500; }
+.idp-scope-list {
+  list-style: none; padding: 0; margin: 0 0 24px;
+}
+.idp-scope-list li {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--idp-border);
+}
+.idp-scope-list li:last-child { border-bottom: 1px solid var(--idp-border); }
+.idp-scope-ico {
+  width: 28px; height: 28px; border-radius: 99px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--idp-row-hover); color: var(--idp-text-muted);
+  font-size: 14px; font-weight: 500;
+}
+
+.idp-fineprint {
+  font-size: 11px; color: var(--idp-text-muted);
+  line-height: 1.6;
+}
+.idp-fineprint a { color: var(--idp-blue); text-decoration: none; }
+.idp-fineprint a:hover { text-decoration: underline; }
+
+.idp-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: 24px;
+}
+.idp-btn {
+  border: 0; cursor: pointer; font: inherit; font-weight: 500;
+  padding: 10px 22px; border-radius: 4px;
+  font-size: 14px;
+}
+.idp-btn-primary {
+  background: var(--idp-blue); color: white;
+}
+.idp-btn-primary:hover { background: var(--idp-blue-hover); }
+.idp-btn-secondary {
+  background: transparent; color: var(--idp-blue);
+}
+.idp-btn-secondary:hover { background: rgba(26, 115, 232, 0.04); }
+
+.idp-footer {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 32px; border-top: 1px solid var(--idp-border);
+  font-size: 12px; color: var(--idp-text-muted);
+}
+.idp-footer select {
+  border: 0; background: none; color: var(--idp-text-muted);
+  font: inherit;
+}
+.idp-footer-links { display: flex; gap: 24px; }
+.idp-footer-links a { color: var(--idp-text-muted); text-decoration: none; }
+.idp-footer-links a:hover { color: var(--idp-text); }
+
+/* "Redirecting back to mantis-shop..." page between consent and callback,
+ * to make the redirect feel real (vs. the instant 303 the agent never
+ * "sees"). Auto-redirects after a beat via meta refresh.
+ */
+.idp-redirect-card {
+  margin: 80px auto; width: min(420px, 92vw); text-align: center;
+}
+.idp-redirect-card .idp-spinner {
+  display: inline-block; width: 36px; height: 36px;
+  border: 3px solid var(--idp-border); border-top-color: var(--idp-blue);
+  border-radius: 99px; animation: idp-spin 0.8s linear infinite;
+  margin-bottom: 16px;
+}
+@keyframes idp-spin { to { transform: rotate(360deg); } }

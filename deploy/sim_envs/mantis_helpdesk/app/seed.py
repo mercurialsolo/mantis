@@ -178,6 +178,15 @@ def _requester_id(idx: int) -> str:
 
 
 def _seed_users(cur: sqlite3.Cursor, rng: random.Random) -> None:
+    """Seed agents + requesters with mock-auth fields (#387).
+
+    agent_00001 → ``demo@mantis.example`` / ``hunter2`` / role=agent
+    agent_00002 → ``admin@mantis.example`` / ``admin123`` / role=admin
+    All other agents have NULL password_hash (can be queried but not
+    impersonated). Requesters never sign in.
+    """
+    from . import auth  # local import — avoids circular at module load
+
     rows: list[tuple[Any, ...]] = []
     # Agents — distribute across groups round-robin.
     group_ids = [g[0] for g in _GROUPS]
@@ -187,7 +196,22 @@ def _seed_users(cur: sqlite3.Cursor, rng: random.Random) -> None:
         name = f"{first} {last}"
         email = f"{first.lower()}.{last.lower()}@mantis-helpdesk.test"
         group_id = group_ids[(i - 1) % len(group_ids)]
-        rows.append((_agent_id(i), name, email, "agent", group_id, "en", 1))
+        role = "agent"
+        password_hash = None
+        oauth_subject = None
+        if i == 1:
+            email = "demo@mantis.example"
+            password_hash = auth.hash_password("hunter2")
+            oauth_subject = "google-oauth2|helpdesk-demo-001"
+        elif i == 2:
+            email = "admin@mantis.example"
+            password_hash = auth.hash_password("admin123")
+            role = "admin"
+            oauth_subject = "google-oauth2|helpdesk-admin-001"
+        rows.append((
+            _agent_id(i), name, email, role, group_id, "en", 1,
+            password_hash, oauth_subject,
+        ))
 
     # Requesters — pseudo-uniform locale distribution (mostly en).
     for i in range(1, N_REQUESTERS + 1):
@@ -205,11 +229,15 @@ def _seed_users(cur: sqlite3.Cursor, rng: random.Random) -> None:
             locale = "fr"
         else:
             locale = "de"
-        rows.append((_requester_id(i), name, email, "requester", None, locale, 1))
+        rows.append((
+            _requester_id(i), name, email, "requester", None, locale, 1,
+            None, None,
+        ))
 
     cur.executemany(
-        "INSERT INTO users (id, name, email, role, group_id, locale, is_active) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO users (id, name, email, role, group_id, locale, "
+        "is_active, password_hash, oauth_subject) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
 

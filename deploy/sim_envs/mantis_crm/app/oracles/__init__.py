@@ -34,6 +34,7 @@ from . import (
     t03_at_risk_deals,
     t04_add_meeting_note,
     t05_pipeline_review,
+    t06_login_then_tag_reengage,
 )
 
 GraderFn = Callable[..., dict[str, Any]]
@@ -45,6 +46,7 @@ GRADERS: dict[str, GraderFn] = {
     "T03_at_risk_deals": t03_at_risk_deals.grade,
     "T04_add_meeting_note": t04_add_meeting_note.grade,
     "T05_pipeline_review": t05_pipeline_review.grade,
+    "T06_login_then_tag_reengage": t06_login_then_tag_reengage.grade,
 }
 
 

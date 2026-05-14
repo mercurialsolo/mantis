@@ -23,6 +23,7 @@ from . import (
     t03_merge_outage_dupes,
     t04_sla_rescue,
     t05_redact_and_reply,
+    t06_login_then_triage_inbox,
 )
 
 GraderFn = Callable[..., dict[str, Any]]
@@ -34,6 +35,7 @@ GRADERS: dict[str, GraderFn] = {
     "T03_merge_outage_dupes": t03_merge_outage_dupes.grade,
     "T04_sla_rescue": t04_sla_rescue.grade,
     "T05_redact_and_reply": t05_redact_and_reply.grade,
+    "T06_login_then_triage_inbox": t06_login_then_triage_inbox.grade,
 }
 
 

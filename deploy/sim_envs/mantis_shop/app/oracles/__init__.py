@@ -15,6 +15,7 @@ from . import (
     t03_create_coupon,
     t04_export_bogo_orders,
     t05_inventory_adjust,
+    t06_login_then_buy_jacket,
 )
 
 GraderFn = Callable[..., dict[str, Any]]
@@ -26,6 +27,7 @@ GRADERS: dict[str, GraderFn] = {
     "T03_create_coupon": t03_create_coupon.grade,
     "T04_export_bogo_orders": t04_export_bogo_orders.grade,
     "T05_inventory_adjust": t05_inventory_adjust.grade,
+    "T06_login_then_buy_jacket": t06_login_then_buy_jacket.grade,
 }
 
 

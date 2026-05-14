@@ -22,11 +22,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db, seed
+from . import auth, db, seed
 
 APP_DIR = Path(__file__).parent
 ADMIN_TOKEN_ENV = "ENV_ADMIN_TOKEN"
@@ -81,6 +81,28 @@ def create_app() -> FastAPI:
     app.state.templates = templates
     app.state.admin_token = _admin_token()
 
+    # Resolve the session user once per request + gate everything except
+    # ``/``, ``/login``, ``/logout``, ``/oauth/*``, ``/__env__/*``,
+    # ``/static/*`` when ``ENV_REQUIRE_AUTH=1``. See #387.
+    @app.middleware("http")
+    async def _auth_gate(request: Request, call_next):  # noqa: ANN202
+        try:
+            request.state.current_user = auth.current_user(request)
+        except Exception:  # noqa: BLE001 — never block request on auth lookup
+            request.state.current_user = None
+
+        if auth.auth_required():
+            path = request.url.path
+            open_prefixes = (
+                "/login", "/logout", "/oauth/", "/__env__/", "/static/",
+            )
+            if path != "/" and not path.startswith(open_prefixes):
+                if request.state.current_user is None:
+                    return RedirectResponse(
+                        f"/login?next={path}", status_code=303,
+                    )
+        return await call_next(request)
+
     # Seed the DB at startup. If you mount a persistent volume, seed
     # only runs on first boot; otherwise it runs every container start.
     @app.on_event("startup")
@@ -101,6 +123,7 @@ def create_app() -> FastAPI:
     )
 
     # Router registration is split by surface for readability.
+    from .routes import auth as auth_router
     from .routes import companies as companies_router
     from .routes import contacts as contacts_router
     from .routes import deals as deals_router
@@ -113,6 +136,7 @@ def create_app() -> FastAPI:
     from .routes import templates as templates_router
 
     app.include_router(env_admin_router.router)
+    app.include_router(auth_router.router)
     app.include_router(contacts_router.router)
     app.include_router(companies_router.router)
     app.include_router(deals_router.router)

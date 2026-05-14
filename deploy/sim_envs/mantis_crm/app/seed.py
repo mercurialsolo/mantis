@@ -154,6 +154,16 @@ def _parse_iso(value: str) -> datetime:
 
 
 def _seed_users(cur: sqlite3.Cursor, rng: random.Random) -> None:
+    """Seed CRM users with mock-auth fields (#387).
+
+    user_00001 doubles as the canonical "demo agent" with password
+    ``hunter2``; user_00002 doubles as the admin with password
+    ``admin123``. Other users have NULL password_hash → they exist in
+    the data but can't sign in (mirrors real-world deactivated /
+    SAML-only accounts).
+    """
+    from . import auth  # local import — avoids circular at module load
+
     rows: list[tuple[Any, ...]] = []
     for i in range(1, N_USERS + 1):
         first = rng.choice(_FIRST_NAMES)
@@ -161,9 +171,27 @@ def _seed_users(cur: sqlite3.Cursor, rng: random.Random) -> None:
         name = f"{first} {last}"
         email = f"{first.lower()}.{last.lower()}@mantis-crm.test"
         is_active = 0 if i == N_USERS else 1  # one deactivated user, per spec
-        rows.append((_id("user", i), name, email, is_active))
+        if i == 1:
+            password_hash = auth.hash_password("hunter2")
+            email = "demo@mantis.example"
+            role = "agent"
+            oauth_subject = "google-oauth2|crm-demo-001"
+        elif i == 2:
+            password_hash = auth.hash_password("admin123")
+            email = "admin@mantis.example"
+            role = "admin"
+            oauth_subject = "google-oauth2|crm-admin-001"
+        else:
+            password_hash = None
+            role = "agent"
+            oauth_subject = None
+        rows.append((
+            _id("user", i), name, email, is_active,
+            password_hash, role, oauth_subject,
+        ))
     cur.executemany(
-        "INSERT INTO users (id, name, email, is_active) VALUES (?, ?, ?, ?)",
+        "INSERT INTO users (id, name, email, is_active, password_hash, "
+        "role, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
 

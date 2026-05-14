@@ -108,6 +108,7 @@ async def state(request: Request) -> JSONResponse:
         "now": app_main.now_value(),
         "counts": {
             "customers": count("customers"),
+            "users": count("users"),
             "products": count("products"),
             "variants": count("variants"),
             "collections": count("collections"),
