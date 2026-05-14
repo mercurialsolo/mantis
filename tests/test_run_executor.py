@@ -385,6 +385,56 @@ def test_handle_failure_continues_when_outcome_is_not_halt():
     assert persist.kwargs["halt_reason"] == "page_exhausted"
 
 
+# ── _stamp_failure_context: preserve handler-stamped class ─────────
+
+
+def test_stamp_failure_context_preserves_handler_stamped_class():
+    """Regression: ``_stamp_failure_context`` runs after every failed
+    step. Handlers (Holo3StepHandler for brain_loop_exhausted, click
+    handler for wrong_target / no_state_change, the demotion path
+    for no_state_change) stamp ``failure_class`` directly with the
+    canonical class. The classifier here is a FALLBACK only — it
+    must NOT clobber an already-stamped class. Otherwise the
+    self-healing wiring (epic #377) is neutered: the rewriter keys
+    off failure_class and the classifier's "unknown" overwrite
+    means the signal is lost."""
+    from mantis_agent.gym.run_executor import _stamp_failure_context
+
+    sr = StepResult(
+        step_index=0, intent="x", success=False,
+        data="click_no_nav:no_change:modal already open",
+        failure_class="no_state_change",  # handler-stamped
+    )
+    _stamp_failure_context(sr, env=MagicMock())
+    assert sr.failure_class == "no_state_change"  # NOT clobbered to "unknown"
+
+
+def test_stamp_failure_context_preserves_brain_loop_exhausted():
+    from mantis_agent.gym.run_executor import _stamp_failure_context
+
+    sr = StepResult(
+        step_index=0, intent="x", success=False,
+        data="",  # Holo3StepHandler doesn't write data on budget burn
+        failure_class="brain_loop_exhausted",
+    )
+    _stamp_failure_context(sr, env=MagicMock())
+    assert sr.failure_class == "brain_loop_exhausted"
+
+
+def test_stamp_failure_context_falls_through_when_no_class_stamped():
+    """When the handler didn't stamp anything, the classifier
+    fallback kicks in over ``data`` + ``page_title``."""
+    from mantis_agent.gym.run_executor import _stamp_failure_context
+
+    sr = StepResult(
+        step_index=0, intent="x", success=False,
+        data="gate:FAIL:Error 403 forbidden",
+    )
+    assert sr.failure_class == ""  # baseline
+    _stamp_failure_context(sr, env=MagicMock())
+    assert sr.failure_class == "cf_challenge"  # classifier fallback
+
+
 # ── Phase B: IntentRewriter wire-in ────────────────────────────────
 
 

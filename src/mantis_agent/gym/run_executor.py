@@ -983,6 +983,18 @@ def _stamp_failure_context(step_result: StepResult, env: Any) -> None:
     failure path must not raise — even if CDP is unreachable or the
     Playwright page is in a half-torn-down state, the StepResult still
     needs to land.
+
+    **Preserves any handler-stamped ``failure_class``.** Step handlers
+    (``Holo3StepHandler`` for ``brain_loop_exhausted``, click handler
+    for ``wrong_target`` / ``no_state_change``, executor demotions for
+    ``no_state_change``) write the canonical class directly on the
+    StepResult. The classifier here is the **fallback** for handlers
+    that haven't been wired yet — it reads ``data`` prose and produces
+    a best-guess. Clobbering an already-stamped class would neuter the
+    self-healing wiring (epic #377): the IntentRewriter / critic key
+    off ``failure_class``, and an "unknown" overwrite means the
+    rewriter never sees the signal the handler took the trouble to
+    surface.
     """
     try:
         url, title = failure_class_mod.read_failure_context(env)
@@ -991,6 +1003,10 @@ def _stamp_failure_context(step_result: StepResult, env: Any) -> None:
         url, title = "", ""
     step_result.final_url = url
     step_result.page_title = title
+    # Honor a handler-stamped class. Only fall through to the
+    # classifier when nothing was stamped.
+    if step_result.failure_class:
+        return
     try:
         step_result.failure_class = failure_class_mod.classify(
             step_result.data or "", title,
