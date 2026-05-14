@@ -26,7 +26,10 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .checkpoint import BrowserState
 
 from PIL import Image
 
@@ -321,6 +324,65 @@ class PlaywrightGymEnv(GymEnvironment):
         if self._page:
             return self._page.url
         return ""
+
+    def capture_browser_state(self) -> "BrowserState":
+        """Snapshot URL + scroll + viewport for pause/resume (epic #358
+        Phase A). Mirrors :meth:`XdotoolGymEnv.capture_browser_state`
+        — same return shape, Playwright path uses ``page.evaluate``.
+
+        Returns an all-empty :class:`BrowserState` on any failure
+        (no page, page mid-navigation, JS exception). The caller
+        branches on ``bool(state.url)`` to decide whether to apply
+        a restore.
+        """
+        from .checkpoint import BrowserState
+        if self._page is None:
+            return BrowserState(captured_at=time.time())
+        try:
+            result = self._page.evaluate(
+                "({"
+                "url: (location && location.href) || '',"
+                "scroll_x: Math.round(window.scrollX || 0),"
+                "scroll_y: Math.round(window.scrollY || 0),"
+                "viewport_w: window.innerWidth || 0,"
+                "viewport_h: window.innerHeight || 0"
+                "})"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("capture_browser_state: page.evaluate raised: %s", exc)
+            return BrowserState(captured_at=time.time())
+        if not isinstance(result, dict):
+            return BrowserState(captured_at=time.time())
+        return BrowserState(
+            url=str(result.get("url", "") or ""),
+            scroll_x=int(result.get("scroll_x", 0) or 0),
+            scroll_y=int(result.get("scroll_y", 0) or 0),
+            viewport_w=int(result.get("viewport_w", 0) or 0),
+            viewport_h=int(result.get("viewport_h", 0) or 0),
+            captured_at=time.time(),
+        )
+
+    def restore_browser_state(self, state: "BrowserState") -> None:
+        """Replay the captured browser state — navigate to ``url``,
+        scroll to (x, y). No-op when ``state.url`` is empty.
+
+        Called from ``runner.resume``; best-effort throughout.
+        """
+        from .checkpoint import BrowserState as _BrowserState
+        if not isinstance(state, _BrowserState) or not state.url:
+            return
+        try:
+            self.reset(task="resume", start_url=state.url)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("restore_browser_state: env.reset(%r) raised: %s", state.url, exc)
+            return
+        if (state.scroll_x or state.scroll_y) and self._page is not None:
+            try:
+                self._page.evaluate(
+                    f"window.scrollTo({int(state.scroll_x)}, {int(state.scroll_y)})"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("restore_browser_state: scroll restore failed: %s", exc)
 
     # ── Session persistence ──────────────────────────────────────────────
 

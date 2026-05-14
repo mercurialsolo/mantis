@@ -370,6 +370,24 @@ class RunResult:
 # ── Trajectory serialization for pause snapshots (#285) ────────────────────
 
 
+def _capture_browser_state_safe(env: Any):
+    """Best-effort browser-state capture for PauseState (epic #358
+    Phase A). Returns empty BrowserState when the env lacks the
+    capability or the capture raises. Mirrors the helper in
+    ``_runner_helpers.py`` so GymRunner doesn't have to import
+    runner-private helpers.
+    """
+    from .checkpoint import BrowserState
+    capture = getattr(env, "capture_browser_state", None)
+    if not callable(capture):
+        return BrowserState()
+    try:
+        return capture()
+    except Exception as exc:  # noqa: BLE001 — observability path
+        logger.debug("capture_browser_state raised: %s", exc)
+        return BrowserState()
+
+
 def _trajectory_step_to_dict(step: TrajectoryStep) -> dict[str, Any]:
     """JSON-friendly snapshot of a TrajectoryStep.
 
@@ -573,6 +591,15 @@ class GymRunner:
             pause_state = PauseState.from_dict(pause_state)
         self._resume_state = pause_state
         self._pause_input = user_input
+        # Epic #358 Phase A: replay URL + scroll + viewport before
+        # the inner run loop opens, so the agent sees the same
+        # browser state it paused at.
+        restore = getattr(self.env, "restore_browser_state", None)
+        if callable(restore):
+            try:
+                restore(pause_state.browser_state)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("resume: restore_browser_state raised: %s", exc)
         kwargs: dict[str, Any] = {
             "task": pause_state.task,
             "task_id": pause_state.task_id or "default",
@@ -851,6 +878,7 @@ class GymRunner:
                     task=task,
                     task_id=task_id,
                     timestamp=time.time(),
+                    browser_state=_capture_browser_state_safe(self.env),
                 )
                 return RunResult(
                     task=task, task_id=task_id, success=False,
@@ -1129,6 +1157,7 @@ class GymRunner:
                             task=task,
                             task_id=task_id,
                             timestamp=time.time(),
+                            browser_state=_capture_browser_state_safe(self.env),
                         )
                         return RunResult(
                             task=task, task_id=task_id, success=False,

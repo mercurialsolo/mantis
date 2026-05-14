@@ -453,6 +453,18 @@ POST /v1/predict
 
 `pause_state` is opaque — the server is the only thing that interprets it. Treat it as a token: store it if you want, but you don't need to send it back yourself. The server already has the canonical copy on disk under the run_id; it round-trips automatically on resume.
 
+#### What's captured at pause time
+
+| Captured | Restored on resume | Notes |
+|---|---|---|
+| Step index + plan signature | ✓ — runner picks up at the next un-run step | Round-trips via `pause_state.step_index` + `plan_signature`. |
+| Step results so far | ✓ — replayed into the runner state | Lets `_handle_success` / dedup logic see prior outputs. |
+| Pending tool call (`pending_tool` + `pending_arguments` + `prompt`) | ✓ — the resumed runner re-invokes the tool with `user_input` set | The mechanism that lets a paused tool finish its `call_tool` round-trip. |
+| **URL + scroll + viewport** (`browser_state`, [epic #358](https://github.com/mercurialsolo/mantis/issues/358) Phase A) | ✓ — agent re-lands on the exact pixel | CDP-captured (`location.href`, `window.scrollX/Y`, `window.innerWidth/Height`) just before pause raises. Empty when the env doesn't expose CDP (legacy adapters). |
+| Cookies / localStorage / IndexedDB | ✓ — but via the `profile_id` Chrome user-data-dir, not `pause_state` | Persists across runs on its own; `profile_id` is the identity that scopes the dir. |
+| Unsubmitted form input | ✗ — half-filled forms reset on resume | [Phase B (#360)](https://github.com/mercurialsolo/mantis/issues/360). |
+| In-memory JS state (React/Redux store, in-flight network) | ✗ — fresh page load | Container-level snapshots would be the right answer; out of scope. |
+
 ### Resume
 
 ```jsonc

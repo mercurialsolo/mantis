@@ -521,6 +521,17 @@ class MicroPlanRunner:
         self.session_name = state.session_name or self.session_name
         self.plan_signature, self.resume_state = signature, True
         self._pause_input = user_input
+        # Epic #358 Phase A: replay browser state (URL + scroll +
+        # viewport) before resuming the step loop, so the agent
+        # picks up at the exact pixel rather than a fresh page-top.
+        # Best-effort — any failure is logged at DEBUG; the resumed
+        # run continues from whatever URL the env actually has.
+        restore = getattr(self.env, "restore_browser_state", None)
+        if callable(restore):
+            try:
+                restore(state.browser_state)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("resume: restore_browser_state raised: %s", exc)
         try:
             steps_continued = self.run(plan, resume=True)
         finally:

@@ -1020,6 +1020,31 @@ def final_summary(runner: "MicroPlanRunner", results: list[StepResult]) -> None:
     )
 
 
+def _capture_browser_state_safe(runner: "MicroPlanRunner"):
+    """Best-effort browser-state capture for PauseState (epic #358
+    Phase A). Returns an empty :class:`BrowserState` when:
+
+    - The env doesn't expose ``capture_browser_state`` (legacy
+      adapters, host-integration mocks).
+    - Capture raises (CDP unreachable, page closed, JS exception).
+
+    Empty browser_state is the explicit "no capture available"
+    signal: ``restore_browser_state`` checks ``bool(url)`` and
+    no-ops when empty, so a pause-without-capture resumes from
+    whatever URL the env happens to have at restart time —
+    same behaviour as before the field existed.
+    """
+    from .checkpoint import BrowserState
+    capture = getattr(runner.env, "capture_browser_state", None)
+    if not callable(capture):
+        return BrowserState()
+    try:
+        return capture()
+    except Exception as exc:  # noqa: BLE001 — observability path
+        logger.debug("capture_browser_state raised: %s", exc)
+        return BrowserState()
+
+
 def build_runner_result(
     runner: "MicroPlanRunner", plan: "MicroPlan", steps: list[StepResult],
 ) -> RunnerResult:
@@ -1047,6 +1072,9 @@ def build_runner_result(
             listings_on_page=getattr(runner, "_last_listings_on_page", 0),
             checkpoint_path=runner.checkpoint_path,
             timestamp=time.time(),
+            # Epic #358 Phase A — snapshot URL + scroll + viewport so
+            # resume() restores the exact pixel state.
+            browser_state=_capture_browser_state_safe(runner),
         )
     return RunnerResult(
         steps=steps, status=status, cancelled=cancelled, paused=paused,
