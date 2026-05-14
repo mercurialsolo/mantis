@@ -875,7 +875,7 @@ class BasetenCUARuntime:
         )
 
     def _maybe_record(
-        self, payload: dict[str, Any], run_id: str
+        self, payload: dict[str, Any], run_id: str, env: Any = None,
     ) -> tuple[Any, Any]:
         """Spawn a ScreenRecorder if payload.record_video is set.
 
@@ -883,11 +883,33 @@ class BasetenCUARuntime:
         with a ``ClickRecordingEnv`` to capture click coordinates that
         feed the polished video's ripple animations. Either may be None
         when recording is disabled.
+
+        When ``env`` is provided and exposes ``ensure_display_ready``,
+        the X display is brought up *before* ffmpeg fires. Without this
+        the recorder races ``env.reset()``'s lazy Xvfb spawn and ffmpeg
+        fails with ``Cannot open display :99`` — the recurring error
+        integrators were reporting on /v1/predict runs with
+        ``record_video=true``.
         """
         if not payload.get("record_video"):
             return (None, None)
         from mantis_agent.presentation import ClickEventLog
         from mantis_agent.recorder import ScreenRecorder
+
+        # Bring up Xvfb before ffmpeg attaches — fixes the startup race
+        # where ``_make_env`` returns an env whose ``reset()`` hasn't
+        # run yet, so the X display ffmpeg targets doesn't exist.
+        # ``ensure_display_ready`` is idempotent: a no-op on warm
+        # containers where Xvfb is already alive.
+        display: str | None = None
+        if env is not None and hasattr(env, "ensure_display_ready"):
+            try:
+                display = env.ensure_display_ready()
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.warning(
+                    "ensure_display_ready failed before recorder spawn: %s",
+                    exc,
+                )
 
         tenant_id = safe_state_key(
             os.environ.get("MANTIS_TENANT_ID", DEFAULT_TENANT.tenant_id)
@@ -896,11 +918,14 @@ class BasetenCUARuntime:
         runs_dir.mkdir(parents=True, exist_ok=True)
         fmt = str(payload.get("video_format", "mp4"))
         output = runs_dir / f"recording.{fmt}"
-        rec = ScreenRecorder(
-            output=output,
-            fps=int(payload.get("video_fps", 5)),
-            fmt=fmt,  # type: ignore[arg-type]
-        )
+        rec_kwargs: dict[str, Any] = {
+            "output": output,
+            "fps": int(payload.get("video_fps", 5)),
+            "fmt": fmt,
+        }
+        if display:
+            rec_kwargs["display"] = display
+        rec = ScreenRecorder(**rec_kwargs)  # type: ignore[arg-type]
         click_log = ClickEventLog()
         if not rec.start():
             logger.warning(
@@ -1134,7 +1159,7 @@ class BasetenCUARuntime:
             run_id,
             settle_time=4.0 if self.model_kind == "holo3" else 2.0,
         )
-        recorder, click_log = self._maybe_record(payload, run_id)
+        recorder, click_log = self._maybe_record(payload, run_id, env=env)
         if click_log is not None:
             from mantis_agent.presentation import ClickRecordingEnv
             env = ClickRecordingEnv(env, click_log)
@@ -1344,7 +1369,7 @@ class BasetenCUARuntime:
             run_id,
             settle_time=4.0 if self.model_kind == "holo3" else 2.0,
         )
-        recorder, click_log = self._maybe_record(payload, run_id)
+        recorder, click_log = self._maybe_record(payload, run_id, env=env)
         if click_log is not None:
             from mantis_agent.presentation import ClickRecordingEnv
             env = ClickRecordingEnv(env, click_log)
@@ -1521,7 +1546,7 @@ class BasetenCUARuntime:
                 reuse_session=False,
             )
 
-        recorder, click_log = self._maybe_record(payload, run_id)
+        recorder, click_log = self._maybe_record(payload, run_id, env=env)
         if click_log is not None:
             from mantis_agent.presentation import ClickRecordingEnv
             env = ClickRecordingEnv(env, click_log)

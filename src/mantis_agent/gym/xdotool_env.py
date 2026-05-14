@@ -128,6 +128,64 @@ class XdotoolGymEnv(GymEnvironment):
 
     # ── Xvfb + Browser ──────────��───────────────────────────────────
 
+    def ensure_display_ready(self, *, timeout: float = 5.0) -> str:
+        """Bring up the X display and return its name (e.g. ``":99"``).
+
+        Idempotent: if Xvfb is already alive on the configured display
+        (either because a sibling process started it or because a prior
+        call wired it up), returns the display name immediately without
+        spawning a duplicate Xvfb. Used by callers that need the X
+        display *before* ``reset()`` runs — canonical case is
+        :class:`mantis_agent.recorder.ScreenRecorder`, which spawns
+        ``ffmpeg -f x11grab`` against the display before the agent loop
+        opens a browser. Without this hook the recorder would race
+        ``reset()``'s lazy Xvfb spawn and ffmpeg would fail with
+        ``Cannot open display :99`` (the recurring integrator error).
+
+        The browser is NOT launched — that stays in ``reset()``. This
+        method only guarantees the display + the ``DISPLAY`` env var.
+        """
+        # Determine the canonical display name (without spawning).
+        # ``:99`` matches ``_start_xvfb``'s default — staying in sync
+        # so the probe + spawn agree on the same target.
+        display = self._display or ":99"
+        if not self._xdpyinfo_alive(display):
+            # Display not up yet — let ``_start_xvfb`` boot it. The
+            # method already short-circuits when ``self._display`` was
+            # passed in at construction time, so this is safe even if
+            # the caller wired up a custom display.
+            display = self._start_xvfb()
+        # Propagate the display name onto self._env so subprocesses we
+        # spawn (Chrome, xdotool, ffmpeg-via-recorder) all agree on the
+        # same target. ``reset()`` does the same wire-up before starting
+        # the browser; doing it here too is safe and idempotent.
+        if not self._env:
+            self._env = {**os.environ, "DISPLAY": display}
+        else:
+            self._env["DISPLAY"] = display
+        # Bounded wait so a slow Xvfb boot doesn't leave the caller
+        # racing the same problem. ``xdpyinfo`` is the cheapest probe
+        # that confirms the X server is accepting connections.
+        deadline = time.time() + max(0.0, timeout)
+        while time.time() < deadline:
+            if self._xdpyinfo_alive(display):
+                return display
+            time.sleep(0.15)
+        # Don't raise — the recorder caller treats "no display" as a
+        # benign failure (record_video=False semantics on this run).
+        return display
+
+    @staticmethod
+    def _xdpyinfo_alive(display: str) -> bool:
+        try:
+            proc = subprocess.run(
+                ["xdpyinfo", "-display", display],
+                capture_output=True, timeout=3,
+            )
+            return proc.returncode == 0
+        except Exception:  # noqa: BLE001 — best-effort liveness probe
+            return False
+
     def _start_xvfb(self) -> str:
         """Start Xvfb virtual display if not already running."""
         if self._display:

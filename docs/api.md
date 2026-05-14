@@ -620,6 +620,12 @@ For long recordings or tight bandwidth, prefer `mp4` at 5 fps. The `gif` path us
 ### Operational caveats
 
 - The container image must have `ffmpeg` installed. Both `docker/server.Dockerfile` and `deploy/baseten/holo3/config.yaml` ship it; if you're rolling your own image, add `ffmpeg` to the apt deps. Without ffmpeg, `record_video: true` is a soft-fail — the run completes normally, and the response carries `video.error: "ffmpeg-not-installed"`.
+- `video.error` envelopes you may see (soft-fail in every case — the run itself never fails because recording couldn't start):
+  - `ffmpeg-not-installed` — ffmpeg isn't on PATH inside the container.
+  - `x-display-not-ready:<display>` — the Xvfb display ffmpeg targets wasn't up when the recorder fired. The runtime now calls `env.ensure_display_ready()` before spawning the recorder, so this error only appears when a custom image hasn't installed `xvfb` / `xdpyinfo` or when a third-party caller spawns `ScreenRecorder` directly outside the standard runtime. Fix: install `xvfb` + `xdpyinfo` (apt: `xvfb x11-utils`) in your image.
+  - `ffmpeg-startup-failed:<stderr>` — ffmpeg exited within ~300 ms of spawn. The trailing stderr blob is the actionable part; common cause was historically `Cannot open display :99, error 1` (fixed by the display-ready probe above).
+  - `empty-output` — ffmpeg started and stopped cleanly but wrote a zero-byte file. Usually means the run completed before any frames captured.
+  - `spawn-failed:<oserror>` — the Popen itself raised (e.g., process budget exhausted).
 - Recordings live at `$MANTIS_DATA_DIR/tenants/<tenant_id>/runs/<run_id>/recording.<fmt>` so tenants cannot read each other's files. The download endpoint uses the authenticated tenant's dir; even if you guess another tenant's `run_id`, the file lookup is scoped.
 - `video_fps` is clamped to `[1, 30]`. Higher fps doesn't help much (UI rarely changes faster than 5–10 fps) and bloats the file.
 - Each second of recording is ~50 KB at 5 fps mp4. Multiply by your target run duration + tenant count to size the EFS / Filestore.
