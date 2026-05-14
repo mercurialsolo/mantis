@@ -61,6 +61,16 @@ def test_no_state_change_demotion_signal() -> None:
     assert classify("submit_ok:no_state_change", "") == "no_state_change"
 
 
+def test_brain_loop_exhausted_signal() -> None:
+    """Epic #377 Phase A.2: classifier picks up GymRunner's
+    termination reasons that indicate budget burn without success.
+    Holo3StepHandler stamps the class directly on fresh runs; this
+    rule is the fallback path for legacy / external result.json."""
+    assert classify("brain_loop_exhausted", "") == "brain_loop_exhausted"
+    assert classify("max_steps reached after 10 attempts", "") == "brain_loop_exhausted"
+    assert classify("loop_terminated by detector", "") == "brain_loop_exhausted"
+
+
 def test_budget_exceeded() -> None:
     assert classify("listing_budget_exceeded:bound=per_url", "") == "budget_exceeded"
     assert classify("max_cost reached", "") == "budget_exceeded"
@@ -153,7 +163,7 @@ def test_classifier_vocabulary_is_stable() -> None:
     breaks force a docs / dashboard update."""
     allowed = {
         "cf_challenge", "http_4xx", "http_5xx", "nav_timeout",
-        "selector_miss", "no_state_change",
+        "selector_miss", "no_state_change", "brain_loop_exhausted",
         "extractor_error", "budget_exceeded", "unknown",
     }
     samples = [

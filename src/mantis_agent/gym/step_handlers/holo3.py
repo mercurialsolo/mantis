@@ -115,10 +115,24 @@ class Holo3StepHandler:
                 )
                 success = False
 
+        # Epic #377 Phase A.2: when the inner GymRunner exits because
+        # it hit the step budget OR the loop detector tripped — and
+        # without success — that's a structural signal. The intent is
+        # almost always goal-shaped instead of mechanical (e.g. lu.ma
+        # "Scroll down to reveal title, date, location, host details"
+        # which made the brain churn 10 steps trying to satisfy a
+        # multi-clause goal). Stamping ``brain_loop_exhausted``
+        # surfaces this cleanly so the executor / critic can route
+        # the next attempt differently (Phase B will rewrite the
+        # intent; Phase C will own the routing decision).
+        failure_class = ""
+        if not success and result.termination_reason in ("max_steps", "loop"):
+            failure_class = "brain_loop_exhausted"
         return StepResult(
             step_index=index,
             intent=step.intent,
             success=success,
             steps_used=result.total_steps,
             duration=result.total_time,
+            failure_class=failure_class,
         )
