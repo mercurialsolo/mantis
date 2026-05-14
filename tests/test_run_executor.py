@@ -385,6 +385,194 @@ def test_handle_failure_continues_when_outcome_is_not_halt():
     assert persist.kwargs["halt_reason"] == "page_exhausted"
 
 
+# ── Phase B: IntentRewriter wire-in ────────────────────────────────
+
+
+def test_handle_failure_calls_rewriter_for_brain_loop_exhausted(monkeypatch):
+    """When the just-failed step's class is in
+    ``REWRITE_TRIGGERING_CLASSES`` and the budget allows, the executor
+    calls ``intent_rewriter.propose_rewrite`` and stashes the returned
+    new intent on the runner."""
+    from unittest.mock import patch
+
+    from mantis_agent.gym.step_recovery import RecoveryOutcome
+
+    runner = _runner_stub()
+    runner._recovery_policy.handle_failure.return_value = RecoveryOutcome(
+        halt=False, step_index=0, halt_reason="",
+    )
+    # Real dicts so the rewriter wire-in mutates real state (rather
+    # than MagicMock auto-created attributes).
+    runner._step_intent_overrides = {}
+    runner._step_rewrite_attempts = {}
+
+    plan = _plan("scroll")
+    state = _state()
+    step = plan.steps[0]
+    step.intent = "Scroll to reveal title, date, location, host details"
+    result = StepResult(
+        step_index=0, intent=step.intent, success=False,
+        data="brain_loop_exhausted", failure_class="brain_loop_exhausted",
+    )
+
+    with patch(
+        "mantis_agent.gym.intent_rewriter.propose_rewrite",
+        return_value="Scroll down by one viewport",
+    ) as mock_rewrite:
+        cont = RunExecutor(runner)._handle_failure(plan, state, step, result)
+
+    assert cont is True
+    mock_rewrite.assert_called_once()
+    assert runner._step_intent_overrides[0] == "Scroll down by one viewport"
+    assert runner._step_rewrite_attempts[0] == 1
+
+
+def test_handle_failure_skips_rewriter_for_unsupported_class(monkeypatch):
+    """Failure classes outside the trigger set (selector_miss,
+    cf_challenge, …) must NOT invoke the rewriter."""
+    from unittest.mock import patch
+
+    from mantis_agent.gym.step_recovery import RecoveryOutcome
+
+    runner = _runner_stub()
+    runner._recovery_policy.handle_failure.return_value = RecoveryOutcome(
+        halt=False, step_index=0, halt_reason="",
+    )
+    runner._step_intent_overrides = {}
+    runner._step_rewrite_attempts = {}
+
+    plan = _plan("click")
+    state = _state()
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        data="cf_challenge:Error 403", failure_class="cf_challenge",
+    )
+
+    with patch("mantis_agent.gym.intent_rewriter.propose_rewrite") as mock_rewrite:
+        RunExecutor(runner)._handle_failure(plan, state, plan.steps[0], result)
+
+    mock_rewrite.assert_not_called()
+    assert runner._step_intent_overrides == {}
+
+
+def test_handle_failure_respects_per_step_rewrite_budget(monkeypatch):
+    """One rewrite per step per run by default. A second failure on
+    the same step does NOT invoke the rewriter again."""
+    from unittest.mock import patch
+
+    from mantis_agent.gym.step_recovery import RecoveryOutcome
+
+    runner = _runner_stub()
+    runner._recovery_policy.handle_failure.return_value = RecoveryOutcome(
+        halt=False, step_index=0, halt_reason="",
+    )
+    runner._step_intent_overrides = {0: "earlier rewrite"}
+    runner._step_rewrite_attempts = {0: 1}  # budget spent
+
+    plan = _plan("click")
+    state = _state()
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="brain_loop_exhausted",
+    )
+
+    with patch("mantis_agent.gym.intent_rewriter.propose_rewrite") as mock_rewrite:
+        RunExecutor(runner)._handle_failure(plan, state, plan.steps[0], result)
+
+    mock_rewrite.assert_not_called()
+
+
+def test_handle_failure_skips_rewriter_when_halting():
+    """If recovery_policy halts, the rewriter must NOT fire — there's
+    no retry coming."""
+    from unittest.mock import patch
+
+    from mantis_agent.gym.step_recovery import RecoveryOutcome
+
+    runner = _runner_stub()
+    runner._recovery_policy.handle_failure.return_value = RecoveryOutcome(
+        halt=True, step_index=0, halt_reason="required_failed",
+    )
+    runner._step_intent_overrides = {}
+    runner._step_rewrite_attempts = {}
+
+    plan = _plan("click")
+    state = _state()
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="brain_loop_exhausted",
+    )
+
+    with patch("mantis_agent.gym.intent_rewriter.propose_rewrite") as mock_rewrite:
+        cont = RunExecutor(runner)._handle_failure(plan, state, plan.steps[0], result)
+
+    assert cont is False
+    mock_rewrite.assert_not_called()
+
+
+def test_handle_failure_keeps_original_intent_when_rewriter_returns_none(monkeypatch):
+    """A None response from the rewriter (KEEP / API failure / empty)
+    must NOT leave a stale override in place."""
+    from unittest.mock import patch
+
+    from mantis_agent.gym.step_recovery import RecoveryOutcome
+
+    runner = _runner_stub()
+    runner._recovery_policy.handle_failure.return_value = RecoveryOutcome(
+        halt=False, step_index=0, halt_reason="",
+    )
+    runner._step_intent_overrides = {}
+    runner._step_rewrite_attempts = {}
+
+    plan = _plan("click")
+    state = _state()
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="wrong_target",
+    )
+
+    with patch(
+        "mantis_agent.gym.intent_rewriter.propose_rewrite", return_value=None,
+    ):
+        RunExecutor(runner)._handle_failure(plan, state, plan.steps[0], result)
+
+    # No override stashed; budget NOT consumed (a no-op rewrite
+    # shouldn't burn the per-step budget).
+    assert 0 not in runner._step_intent_overrides
+    assert runner._step_rewrite_attempts.get(0, 0) == 0
+
+
+def test_build_effective_step_applies_rewriter_override():
+    """When ``_step_intent_overrides[step_index]`` carries a string,
+    ``_build_effective_step`` uses it as the new intent."""
+    runner = _runner_stub()
+    runner._step_intent_overrides = {0: "Scroll down by one viewport"}
+
+    plan = _plan("scroll")
+    state = _state()
+    state.step_index = 0
+    plan.steps[0].intent = "Scroll to reveal title, date, location, host details"
+
+    effective = RunExecutor(runner)._build_effective_step(plan.steps[0], state)
+    assert effective.intent == "Scroll down by one viewport"
+
+
+def test_build_effective_step_override_wins_over_scanner_directive():
+    """Rewriter override beats the listings scanner's scroll directive
+    — the rewrite was proposed in light of a specific failure."""
+    runner = _runner_stub()
+    runner._step_intent_overrides = {0: "REWRITE WINS"}
+    runner.scanner.scroll_directive_for = MagicMock(return_value="SCANNER WOULD INJECT THIS")
+
+    plan = _plan("click")
+    state = _state()
+    state.step_index = 0
+    state.listings_on_page = 5
+
+    effective = RunExecutor(runner)._build_effective_step(plan.steps[0], state)
+    assert effective.intent == "REWRITE WINS"
+
+
 # ── Form-shape no-state-change demote ─────────────────────────────
 
 

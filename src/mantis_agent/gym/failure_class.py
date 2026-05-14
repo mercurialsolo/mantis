@@ -25,6 +25,12 @@ Classes (stay small on purpose — anything not matched lands in
   steps whose intent is goal-shaped instead of mechanical (epic
   #377 Phase A.2). The next attempt should route through an intent
   rewriter (Phase B) rather than retrying the same intent.
+* ``wrong_target`` — the SPA-aware ``verify_post_click_navigation``
+  decided the click landed on the wrong destination (category card
+  instead of an event detail, login wall, ad, …). Distinct from
+  ``no_state_change`` (the click had no effect at all) — here the
+  click DID navigate, but to the wrong page. Intent rewriting
+  (Phase B) is the right response.
 * ``extractor_error`` — Claude extractor failed or returned empty.
 * ``budget_exceeded`` — cost / time / context budget tripped.
 * ``unknown`` — no rule matched (caller should still surface ``data``).
@@ -61,6 +67,11 @@ _DATA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("brain_loop_exhausted", (
         "brain_loop_exhausted", "max_steps", "loop_terminated",
     )),
+    # Click landed but on the wrong destination (epic #377 follow-up).
+    # Click handler stamps this directly when
+    # ``verify_post_click_navigation`` returns ``kind=wrong_target``;
+    # rule below catches the substring on legacy result.json.
+    ("wrong_target", ("wrong_target",)),
     ("cf_challenge", ("error 403", "403 forbidden", "cloudflare", "verify you are human")),
     ("http_4xx", ("error 404", "404", "error 401", "error 410", "error 4")),
     ("http_5xx", ("error 5", "502", "503", "504", "internal server error")),

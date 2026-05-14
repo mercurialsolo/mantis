@@ -425,6 +425,11 @@ class ClaudeGuidedClickHandler:
         # (URL change OR same-URL modal opened). Skipped when the
         # extractor or the pre-click frame is unavailable; falls
         # through to middle-click in that case.
+        # Track the most recent verify_post_click_navigation outcome
+        # so the terminal failure return can stamp ``failure_class``.
+        # Epic #377 follow-up: ``wrong_target`` was leaking out as
+        # ``unknown`` because the terminal failure carried no ``data``.
+        last_verify_outcome: dict | None = None
         if extractor is not None and pre_click_screenshot is not None:
             try:
                 post_click_screenshot = env.screenshot()
@@ -437,6 +442,8 @@ class ClaudeGuidedClickHandler:
                     step.intent,
                 )
                 runner.costs["claude_extract"] += 1
+                if nav is not None:
+                    last_verify_outcome = dict(nav)
                 if nav and nav.get("navigated") is True:
                     kind = str(nav.get("kind", "modal"))
                     reason = str(nav.get("reason", ""))[:120]
@@ -687,7 +694,35 @@ class ClaudeGuidedClickHandler:
         # Mark title as tried so we don't re-attempt the same card
         if hasattr(runner, '_last_click_title') and runner._last_click_title:
             runner._extracted_titles.append(runner._last_click_title)
-        return StepResult(step_index=index, intent=step.intent, success=False)
+        # Epic #377 follow-up: surface the SPA-aware verifier's
+        # ``kind`` on the terminal failure so the critic / dashboard
+        # can route on a stable signal. ``wrong_target`` (Claude saw
+        # the click hit a category card / login wall / ad — the wrong
+        # destination) maps to ``failure_class=wrong_target``.
+        # ``no_change`` maps to ``no_state_change`` (matches the
+        # demotion class from Phase A.1). Anything else falls through
+        # to ``unknown``.
+        verify_kind = (
+            str(last_verify_outcome.get("kind", ""))
+            if last_verify_outcome else ""
+        )
+        verify_reason = (
+            str(last_verify_outcome.get("reason", ""))[:120]
+            if last_verify_outcome else ""
+        )
+        if verify_kind == "wrong_target":
+            failure_class = "wrong_target"
+            data = f"click_no_nav:wrong_target:{verify_reason}"
+        elif verify_kind == "no_change":
+            failure_class = "no_state_change"
+            data = f"click_no_nav:no_change:{verify_reason}"
+        else:
+            failure_class = ""
+            data = "click_no_nav:detail_page_not_verified"
+        return StepResult(
+            step_index=index, intent=step.intent, success=False,
+            data=data, failure_class=failure_class,
+        )
 
 
 # ── click-failure URL predicates ──────────────────────────────────────
