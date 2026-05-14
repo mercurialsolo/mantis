@@ -736,6 +736,105 @@ def test_click_demote_skipped_for_form_step_types():
         )
 
 
+def test_click_demote_uses_env_url_when_available(monkeypatch):
+    """Issue #381: when the env exposes ``current_url`` directly, the
+    demotion uses the browser's ground-truth URL (not
+    ``runner._last_known_url`` which the handler can self-mutate).
+
+    Pre-URL was /discover, post-URL still /discover → demote even if
+    the snapshot delta shows handler-touched state changes (scroll,
+    listings count). The lu.ma cluster A symptom this fixes."""
+    from mantis_agent.gym import step_snapshot as _snap
+
+    runner = _runner_stub()
+    runner.env = MagicMock(current_url="https://luma.com/discover")
+    runner._pre_step_env_url = "https://luma.com/discover"
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True, data="ok"))
+
+    pre_snapshot = MagicMock(
+        viewport_stage=0, current_page=1, focused_input_signature="empty",
+    )
+    post_snapshot = MagicMock(
+        viewport_stage=0, current_page=1, focused_input_signature="empty",
+    )
+    monkeypatch.setattr(_snap, "capture", lambda r: post_snapshot)
+
+    eff_step = MicroIntent(intent="x", type="click")
+    RunExecutor(runner)._maybe_demote_click_no_change(state, eff_step, pre_snapshot)
+
+    assert state.results[0].success is False
+    assert state.results[0].failure_class == "no_state_change"
+
+
+def test_click_demote_skipped_when_env_url_actually_changed(monkeypatch):
+    """Real navigation → don't demote, regardless of what
+    ``runner._last_known_url`` says."""
+    from mantis_agent.gym import step_snapshot as _snap
+
+    runner = _runner_stub()
+    runner.env = MagicMock(current_url="https://luma.com/event/abc")
+    runner._pre_step_env_url = "https://luma.com/discover"
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True))
+
+    monkeypatch.setattr(_snap, "capture", lambda r: MagicMock())
+
+    eff_step = MicroIntent(intent="x", type="click")
+    RunExecutor(runner)._maybe_demote_click_no_change(state, eff_step, MagicMock())
+
+    assert state.results[0].success is True
+
+
+def test_click_demote_keeps_success_when_non_handler_state_changed(monkeypatch):
+    """SPA-modal escape hatch: URL didn't change BUT a non-handler-
+    touched snapshot field did (e.g. focused_input_signature). Treat
+    as a legitimate intra-page action and keep success."""
+    from mantis_agent.gym import step_snapshot as _snap
+
+    runner = _runner_stub()
+    runner.env = MagicMock(current_url="https://luma.com/discover")
+    runner._pre_step_env_url = "https://luma.com/discover"
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True))
+
+    pre_snapshot = MagicMock(
+        viewport_stage=0, current_page=1, focused_input_signature="empty",
+    )
+    post_snapshot = MagicMock(
+        viewport_stage=0, current_page=1,
+        focused_input_signature="search_input_focused",  # non-handler change
+    )
+    monkeypatch.setattr(_snap, "capture", lambda r: post_snapshot)
+
+    eff_step = MicroIntent(intent="x", type="click")
+    RunExecutor(runner)._maybe_demote_click_no_change(state, eff_step, pre_snapshot)
+
+    assert state.results[0].success is True  # NOT demoted
+
+
+def test_click_demote_falls_back_to_snapshot_when_env_url_unavailable(monkeypatch):
+    """Legacy adapters / test stubs that don't expose
+    ``env.current_url`` fall back to the original snapshot-diff
+    behavior — primitive doesn't lose coverage."""
+    from mantis_agent.gym import step_snapshot as _snap
+
+    runner = _runner_stub()
+    runner.env = MagicMock(spec=[])  # NO current_url
+    runner._pre_step_env_url = ""
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True))
+
+    monkeypatch.setattr(_snap, "capture", lambda r: MagicMock())
+    monkeypatch.setattr(_snap, "diff", lambda a, b: MagicMock(has_changes=False))
+
+    eff_step = MicroIntent(intent="x", type="click")
+    RunExecutor(runner)._maybe_demote_click_no_change(state, eff_step, MagicMock())
+
+    assert state.results[0].success is False
+    assert state.results[0].failure_class == "no_state_change"
+
+
 def test_click_demote_respects_skip_envelope():
     """A step with ``skip=True`` (recipe rejection / advance signal)
     must NOT be demoted — skip is an intentional halt path, not a
