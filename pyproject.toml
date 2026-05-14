@@ -146,7 +146,14 @@ pythonpath = ["."]
 # CPU cores and cuts the full-suite runtime from ~12.5 min to ~6 min on a
 # typical dev laptop. Override with ``pytest -n0`` or ``pytest -p no:xdist``
 # when serial debugging is needed (e.g. running with ``--pdb``).
-addopts = "-n auto"
+#
+# ``--dist loadgroup`` makes xdist honor ``@pytest.mark.xdist_group("X")``:
+# every test with the same group label lands on the same worker, where
+# they execute sequentially. Used by the sim-env subprocess-boot tests
+# (``test_env_up.py`` / ``test_admin_token_isolation.py``) so we don't
+# get 4+ uvicorn boots competing across workers on a contended runner.
+# Tests without an explicit group keep the default load-balancing.
+addopts = "-n auto --dist loadgroup"
 norecursedirs = [
     ".claude",
     "OSWorld",

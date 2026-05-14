@@ -28,13 +28,22 @@ import pytest
 
 from mantis_agent.sim_envs.local import LocalBackend
 
+# Pin sim-env subprocess-boot tests to the same xdist worker so we
+# don't end up spinning up 4+ FastAPI / uvicorn subprocesses across
+# parallel workers — that contention is what made these tests flake
+# repeatedly across PRs even with the 30 s and 60 s wait_healthy
+# budgets. See ``test_env_up.py`` for the matching mark.
+pytestmark = pytest.mark.xdist_group("sim_env_boot")
+
 
 @pytest.fixture
 def stub_env():
     backend = LocalBackend()
     handle = backend.start("stub-test", seed=42)
     try:
-        backend.wait_healthy(handle, timeout_s=30.0)
+        # 90 s — see ``LocalBackend.wait_healthy`` docstring for the
+        # CI-contention rationale. Local runs return in ~1-2 s.
+        backend.wait_healthy(handle, timeout_s=90.0)
         yield handle
     finally:
         backend.stop(handle)

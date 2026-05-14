@@ -223,13 +223,17 @@ class LocalBackend:
             extra={"mode": "subprocess", "proc": proc, "port": port},
         )
 
-    def wait_healthy(self, handle: RuntimeHandle, *, timeout_s: float = 60.0) -> None:
+    def wait_healthy(self, handle: RuntimeHandle, *, timeout_s: float = 90.0) -> None:
         """Poll ``/__env__/health`` until 200 or ``timeout_s`` elapses.
 
-        Default 60 s covers contended CI runners where a fresh Python
-        subprocess + FastAPI import + uvicorn bind can drift well past
-        the older 30 s ceiling. The poll loop exits as soon as the env
-        responds 200, so the higher cap costs nothing on the happy path.
+        Default 90 s covers heavily contended CI runners. The previous
+        60 s ceiling (#364) still flaked on different sub-tests of
+        ``test_admin_token_isolation`` and ``test_env_up`` across many
+        PRs, always on the same first-boot path (fresh Python subprocess
+        + FastAPI import + uvicorn bind). The poll loop exits as soon
+        as the env responds 200, so the higher cap costs nothing on the
+        happy path — it only changes whether we surface a noisy
+        TimeoutError on a slow boot.
         """
         deadline = time.time() + timeout_s
         last_err: Exception | None = None

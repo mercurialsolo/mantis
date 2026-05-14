@@ -26,6 +26,16 @@ import pytest
 
 from mantis_agent.sim_envs.local import LocalBackend, _pick_free_port
 
+# Pin every sim-env subprocess-boot test to the same xdist worker so
+# parallel pytest jobs don't end up spinning up 4+ FastAPI / uvicorn
+# subprocesses concurrently — that contention is what made
+# ``test_admin_token_isolation`` and this file's two-start case flake
+# repeatedly across recent PRs (#355 / #356 / #357 / #364 / #367 /
+# #370 / #371) even with the 30 s and 60 s wait_healthy budgets.
+# Tests within this group still run sequentially on their assigned
+# worker; other workers keep running other tests in parallel.
+pytestmark = pytest.mark.xdist_group("sim_env_boot")
+
 
 def _http_get(url: str, *, timeout: float = 2.0, headers: dict | None = None) -> tuple[int, str]:
     req = Request(url, headers=headers or {})
@@ -50,7 +60,7 @@ def test_local_backend_starts_and_stops_stub_env():
     backend = LocalBackend()
     handle = backend.start("stub-test", seed=7, now="2026-02-01T00:00:00Z")
     try:
-        backend.wait_healthy(handle, timeout_s=30.0)
+        backend.wait_healthy(handle, timeout_s=90.0)
         status, body = _http_get(f"{handle.url}/__env__/health")
         assert status == 200
         payload = json.loads(body)
@@ -74,16 +84,16 @@ def test_local_backend_starts_and_stops_stub_env():
 
 def test_local_backend_two_starts_get_distinct_urls():
     # Two subprocess stubs in parallel under a loaded CI runner can take
-    # noticeably longer than the single-start case. Use the production
-    # default (60 s) — the poll exits as soon as the env responds, so the
+    # noticeably longer than the single-start case. Match the production
+    # default (90 s) — the poll exits as soon as the env responds, so the
     # higher cap costs nothing on the happy path.
     backend = LocalBackend()
     h1 = backend.start("stub-test")
     h2 = backend.start("stub-test")
     try:
         assert h1.url != h2.url
-        backend.wait_healthy(h1, timeout_s=60.0)
-        backend.wait_healthy(h2, timeout_s=60.0)
+        backend.wait_healthy(h1, timeout_s=90.0)
+        backend.wait_healthy(h2, timeout_s=90.0)
     finally:
         backend.stop(h1)
         backend.stop(h2)
@@ -92,7 +102,7 @@ def test_local_backend_two_starts_get_distinct_urls():
 def test_stop_is_idempotent():
     backend = LocalBackend()
     handle = backend.start("stub-test")
-    backend.wait_healthy(handle, timeout_s=30.0)
+    backend.wait_healthy(handle, timeout_s=90.0)
     backend.stop(handle)
     backend.stop(handle)  # second call must not raise
 
