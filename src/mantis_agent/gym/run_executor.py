@@ -355,6 +355,14 @@ class RunExecutor:
         }
         pre_snapshot = step_snapshot.capture(runner)
         runner._pre_step_snapshot = pre_snapshot
+        # Epic #377 follow-up (#381): read the browser's URL directly
+        # from the env BEFORE the step executes. The snapshot's ``url``
+        # field reads ``runner._last_known_url``, which the click
+        # handler can self-mutate on its SPA-aware verify path —
+        # making the snapshot diff a misleading proxy for "did the
+        # world actually change?". The pre-URL stash here is the
+        # ground truth the click-demotion path consults instead.
+        runner._pre_step_env_url = _read_env_url(runner.env)
         meter = getattr(runner, "time_meter", None)
         # Publish the dispatch context for the duration of this step.
         # Deep helpers (adaptive_settle, navigate handler, env.step /
@@ -493,16 +501,22 @@ class RunExecutor:
         """Demote click / navigate_back success → fail when no observable
         change. Self-healing primitive — epic #377 Phase A.
 
-        Generic by design: the trigger is the snapshot delta (URL,
-        page, scroll, focus, viewport, extraction), not a step
-        type / plan / domain pattern. Any step type whose action is
-        expected to change one of those dimensions can be added to
-        :attr:`_CLICK_DEMOTE_STEP_TYPES`. The submit case has its own
-        method because it needs an SPA-aware visual escape hatch
-        (same-URL form submits replace the form with a dashboard);
-        that complication doesn't apply here — a click that doesn't
-        change URL / scroll / page genuinely didn't accomplish anything
-        the runner can act on.
+        **URL-first signal** (#381): reads ``env.current_url`` directly
+        for the pre-snapshot URL and the current URL. ``runner._last_known_url``
+        is unreliable because the click handler's SPA-aware verify path
+        writes it optimistically even when the browser's URL didn't
+        change. ``env.current_url`` (CDP / Playwright) is the actual
+        browser state — the handler can't lie about it without genuinely
+        navigating.
+
+        Falls through to the original snapshot-diff signal when the
+        env doesn't expose ``current_url`` (legacy adapters / test
+        stubs) so the primitive doesn't lose coverage where the
+        ground-truth URL isn't available.
+
+        Generic by design: triggers on ``step.type`` membership in
+        :attr:`_CLICK_DEMOTE_STEP_TYPES` (currently ``click`` /
+        ``navigate_back``). No plan, URL, or domain content reads in.
 
         After demoting, records the failure into the per-step retry
         history (so the next attempt can avoid the same target) and
@@ -519,19 +533,64 @@ class RunExecutor:
             return
         if effective_step.type not in self._CLICK_DEMOTE_STEP_TYPES:
             return
-        try:
-            post_snapshot = step_snapshot.capture(runner)
-            delta = step_snapshot.diff(pre_snapshot, post_snapshot)
-        except Exception as exc:  # noqa: BLE001 — never break runs
-            logger.debug("post-click diff capture failed: %s", exc)
-            return
-        if delta is None or delta.has_changes:
-            return
-        logger.warning(
-            "  [%d] %s reported success but no observable state "
-            "change — demoting to failure (will retry)",
-            state.step_index, effective_step.type,
-        )
+
+        pre_url = getattr(runner, "_pre_step_env_url", None)
+        post_url = _read_env_url(runner.env)
+
+        # Prefer the direct URL signal when we have both ends (#381).
+        # The handler can't self-mutate ``env.current_url``, so URL-
+        # unchanged here is a strong signal the click didn't actually
+        # accomplish anything.
+        if isinstance(pre_url, str) and isinstance(post_url, str) and pre_url and post_url:
+            if pre_url == post_url:
+                # URL is unchanged — but a true SPA-modal click would
+                # also have no URL change. Disambiguate via the
+                # runner-state snapshot's NON-handler-mutated fields:
+                # ``focused_input_signature``, ``viewport_stage``,
+                # ``current_page``. Excludes ``scroll_signature`` and
+                # ``last_extracted_url`` since those are exactly what
+                # the click handler optimistically mutates.
+                try:
+                    post_snapshot = step_snapshot.capture(runner)
+                    non_handler_changed = (
+                        pre_snapshot.viewport_stage != post_snapshot.viewport_stage
+                        or pre_snapshot.current_page != post_snapshot.current_page
+                        or pre_snapshot.focused_input_signature
+                            != post_snapshot.focused_input_signature
+                    )
+                except Exception as exc:  # noqa: BLE001 — never break runs
+                    logger.debug("post-click snapshot capture failed: %s", exc)
+                    non_handler_changed = False
+                if non_handler_changed:
+                    return
+                # URL same + nothing-the-handler-shouldn't-have-touched
+                # changed → demote.
+                logger.warning(
+                    "  [%d] %s reported success but URL stayed at %s "
+                    "and no non-handler state changed — demoting "
+                    "(handler self-mutation isn't real navigation)",
+                    state.step_index, effective_step.type, post_url[:80],
+                )
+                # Fall through to the demotion stamping below.
+            else:
+                # URL changed → real navigation. Don't demote.
+                return
+        else:
+            # Direct URL signal unavailable (legacy adapter / test
+            # stub). Fall back to the original snapshot-diff check.
+            try:
+                post_snapshot = step_snapshot.capture(runner)
+                delta = step_snapshot.diff(pre_snapshot, post_snapshot)
+            except Exception as exc:  # noqa: BLE001 — never break runs
+                logger.debug("post-click diff capture failed: %s", exc)
+                return
+            if delta is None or delta.has_changes:
+                return
+            logger.warning(
+                "  [%d] %s reported success but no observable state "
+                "change — demoting to failure (will retry)",
+                state.step_index, effective_step.type,
+            )
         step_result.success = False
         step_result.data = (step_result.data or "") + ":no_state_change"
         step_result.failure_class = "no_state_change"
@@ -974,6 +1033,31 @@ class RunExecutor:
 
 
 # ── Failure diagnostics ────────────────────────────────────────────────
+
+
+def _read_env_url(env: Any) -> str:
+    """Best-effort read of the browser's actual URL from the env.
+
+    Both ``XdotoolGymEnv`` and ``PlaywrightGymEnv`` expose ``current_url``
+    as a property. The xdotool path reads CDP's ``/json/list``; the
+    Playwright path reads ``self._page.url``. Both return ``""`` on
+    any failure (CDP unreachable, page not initialised).
+
+    Returns ``""`` when the env doesn't expose the attribute, the read
+    raises, or the returned value isn't a string. Lets callers
+    distinguish "ground-truth URL unavailable" (fall through to
+    snapshot-based logic) from "URL is known to be X" (use it).
+
+    Used by the click-demotion path (#381) because ``runner._last_known_url``
+    can be self-mutated by the click handler's SPA-aware verify and
+    isn't a reliable proxy for "did the browser actually navigate?".
+    """
+    try:
+        value = getattr(env, "current_url", None)
+    except Exception as exc:  # noqa: BLE001 — never break runs
+        logger.debug("env.current_url access raised: %s", exc)
+        return ""
+    return value if isinstance(value, str) else ""
 
 
 def _stamp_failure_context(step_result: StepResult, env: Any) -> None:
