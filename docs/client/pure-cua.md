@@ -1,9 +1,13 @@
 # Pure CUA mode (`/v1/cua`)
 
-Use this when you want Mantis to be a **thin pass-through for Holo3** —
+Use this when you want Mantis to be a **thin brain pass-through** —
 no plan decomposition, no Claude grounding, no Claude extraction. The
 instruction is handed verbatim to the brain, which drives the headed
 browser inside the deployment via xdotool.
+
+The brain in question is whichever one the pod was started with
+(`MANTIS_MODEL` env — `holo3`, `fara`, `gemma4-cua`, …). Baseten pods
+are single-brain by deployment; see [CUA models](../reference/cua-models.md#selecting-a-backend) for the selection model.
 
 If you've used `/v1/predict`, the mental model is: same auth, same
 tenant caps, same allowlist, same rate limit / concurrency / recording
@@ -21,10 +25,9 @@ plumbing — but the inside of the container is a single
 | You want zero Claude spend per run | You're OK with ~$0.005/click for grounding accuracy |
 
 The tradeoff: without `ClaudeGrounding`, click coordinates come straight
-from Holo3's smart-resize model space (converted to screen pixels in
-`brain_holo3._model_coords_to_screen`). On small targets accuracy drops
-versus the grounded path. That's the whole point of "pure CUA" — you're
-measuring what the brain can do unassisted.
+from the brain's model space (Holo3 / OpenCUA use Qwen smart-resize;
+Fara uses raw screen pixels at its training resolution — see
+[Coordinate spaces](../reference/coordinate-spaces.md)). On small targets accuracy drops versus the grounded path. That's the whole point of "pure CUA" — you're measuring what the brain can do unassisted.
 
 ## Action surface
 

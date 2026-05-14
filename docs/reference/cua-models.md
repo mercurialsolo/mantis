@@ -4,6 +4,77 @@ The brain is the vision-action policy that drives the perception-reasoning-actio
 
 All brains implement the same `think(frames, task, action_history, screen_size) -> InferenceResult` contract, so the Hybrid plan-executor + vision-fallback flow (`gym/runner.py`) works identically regardless of which one is wired in. "Passthrough" mode (every step routed straight to the brain) is just `cua_model=<name>` flowing through `_executor_for_model()`.
 
+## Selecting a backend
+
+How you select a backend depends on where Mantis is hosted. The selection model differs:
+
+| Surface | Selection | Notes |
+|---|---|---|
+| Modal `/v1/predict` | Per-request `cua_model` field | One deployment serves every backend; each request spawns the right GPU function. |
+| Modal CLI (`modal run`) | `--model <name>` | Same dispatch as the HTTP API. |
+| Baseten `/v1/predict` and `/v1/cua` | **Per-deployment** via `MANTIS_MODEL` env | Each pod loads one brain at startup. `cua_model` in the request body is **ignored**. To use Fara on Baseten you push `deploy/baseten/fara/` as its own model and hit that deployment's URL. |
+
+Default model is `holo3` on both surfaces — existing callers that don't pass `cua_model` keep getting Holo3.
+
+### Modal — HTTP API
+
+```bash
+curl -X POST https://workspace--mantis-cua-server-api.modal.run/v1/predict \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "detached":     true,
+    "micro":        "plans/example/extract_listings.json",
+    "profile_id":   "marketplace-prod",
+    "workflow_id":  "marketplace-listings-v1",
+    "cua_model":    "fara",
+    "max_cost":     2,
+    "max_time_minutes": 20
+  }'
+```
+
+`GET /v1/models` returns the list the dispatcher accepts:
+
+```jsonc
+{ "data": [
+  { "id": "holo3" }, { "id": "fara" }, { "id": "gemma4-cua" },
+  { "id": "evocua-8b" }, { "id": "evocua-32b" },
+  { "id": "opencua-32b" }, { "id": "opencua-72b" }, { "id": "claude" }
+]}
+```
+
+### Modal — CLI
+
+```bash
+uv run modal run --detach deploy/modal/modal_cua_server.py \
+  --micro plans/example/extract_listings.json \
+  --model fara \
+  --max-cost 2 --max-time-minutes 20 \
+  --profile-id marketplace-prod \
+  --workflow-id marketplace-listings-v1
+```
+
+### Baseten — separate deployment per model
+
+```bash
+# Push Fara as its own Baseten model
+uvx truss push deploy/baseten/fara --no-cache --promote \
+  --deployment-name "mantis-fara-$(date -u +%Y%m%d-%H%M)"
+
+# Call its endpoint
+curl -X POST "https://model-<FARA_MODEL_ID>.api.baseten.co/production/v1/predict" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $TOK" \
+  -H "Content-Type: application/json" \
+  -d '{ "detached": true, "micro": "plans/example/extract_listings.json",
+        "profile_id": "alice", "workflow_id": "v1",
+        "max_cost": 2, "max_time_minutes": 20 }'
+```
+
+Notice the request body has no `cua_model` field — the Fara deployment was started with `MANTIS_MODEL=fara` (see `deploy/baseten/fara/config.yaml`), and that's what determines the brain. Holo3 stays on its own deployment URL.
+
+
+
 | Name | Repo | Base | Serve | GPU | License |
 |---|---|---|---|---|---|
 | `holo3` | `Hcompany/Holo3-35B-A3B` (GGUF: `mradermacher/Holo3-35B-A3B-GGUF`) | Qwen3.5-VL MoE | llama.cpp + Q8_0 GGUF | 1× A100-80GB / H100 / L40S 48GB | Hcompany terms |
