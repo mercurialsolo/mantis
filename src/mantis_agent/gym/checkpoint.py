@@ -193,6 +193,29 @@ PauseRequested = _PauseRequested
 
 
 @dataclass
+class BrowserState:
+    """Browser-runtime snapshot captured at pause time (epic #358 Phase A).
+
+    URL + scroll + viewport — the smallest unit of "where in the page
+    was the agent?" that lets a resumed run restore visual context
+    instead of starting from page-top. Captured via CDP just before
+    :class:`PauseRequested` raises; replayed during ``runner.resume``.
+
+    Defaults to all-zero / empty so a snapshot from a runner that
+    hasn't initialised the browser (or an env adapter that doesn't
+    support CDP capture) still round-trips cleanly through JSON —
+    the resume code branches on ``bool(url)`` to decide whether to
+    apply any restoration at all.
+    """
+    url: str = ""
+    scroll_x: int = 0
+    scroll_y: int = 0
+    viewport_w: int = 0
+    viewport_h: int = 0
+    captured_at: float = 0.0
+
+
+@dataclass
 class PauseState:
     """Serializable snapshot of a paused MicroPlanRunner or GymRunner (#73, #285).
 
@@ -205,6 +228,10 @@ class PauseState:
     ``trajectory_steps`` + ``task`` + ``task_id`` instead — the other
     fields stay empty and the runner that wrote the snapshot is the
     runner that consumes it, so cross-pollution doesn't matter.
+
+    ``browser_state`` (epic #358 Phase A) captures URL + scroll +
+    viewport so resumed plans pick up at the exact pixel — see
+    :class:`BrowserState`.
     """
     version: int = 1
     run_key: str = ""
@@ -221,6 +248,9 @@ class PauseState:
     checkpoint_path: str = ""
     timestamp: float = 0.0
 
+    # Browser-runtime snapshot — epic #358 Phase A.
+    browser_state: BrowserState = field(default_factory=BrowserState)
+
     # GymRunner extensions (#285). Empty when the snapshot came from
     # MicroPlanRunner.
     trajectory_steps: list[dict[str, Any]] = field(default_factory=list)
@@ -233,7 +263,19 @@ class PauseState:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PauseState":
         allowed = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in payload.items() if k in allowed})
+        filtered = {k: v for k, v in payload.items() if k in allowed}
+        # Re-hydrate the nested BrowserState dataclass from its dict
+        # form. Tolerates legacy snapshots that don't carry the
+        # field — falls back to the default empty BrowserState.
+        bs_raw = filtered.get("browser_state")
+        if isinstance(bs_raw, dict):
+            bs_allowed = {f.name for f in fields(BrowserState)}
+            filtered["browser_state"] = BrowserState(
+                **{k: v for k, v in bs_raw.items() if k in bs_allowed}
+            )
+        elif bs_raw is None:
+            filtered.pop("browser_state", None)
+        return cls(**filtered)
 
 
 # ── Public runner result ─────────────────────────────────────────────────
@@ -260,5 +302,6 @@ __all__ = [
     "REVERSE_ACTIONS",
     "PauseRequested",
     "PauseState",
+    "BrowserState",
     "RunnerResult",
 ]

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from PIL import Image
@@ -398,3 +399,71 @@ def test_pause_state_is_json_serializable():
     encoded = json.dumps(state.to_dict())
     decoded = json.loads(encoded)
     assert PauseState.from_dict(decoded) == state
+
+
+# ── Epic #358 Phase A: browser-state restore on resume ─────────────────
+
+
+def test_resume_calls_restore_browser_state(monkeypatch):
+    """On resume(), the runner must invoke ``env.restore_browser_state``
+    with the captured BrowserState. Verifies the wire-in without
+    actually running a plan."""
+    from mantis_agent.gym.checkpoint import BrowserState
+
+    env = _FakeEnv()
+    env.restore_browser_state = MagicMock()  # type: ignore[attr-defined]
+    r = _runner(env)
+
+    plan = _trivial_plan()
+    sig = r._compute_plan_signature(plan)
+    state = PauseState(
+        plan_signature=sig,
+        browser_state=BrowserState(
+            url="https://example.test/2", scroll_x=0, scroll_y=1800,
+        ),
+    )
+
+    # Stub run() so we don't drive the whole step loop.
+    monkeypatch.setattr(r, "run", lambda *a, **kw: [])
+
+    r.resume(state, user_input=None, plan=plan)
+    env.restore_browser_state.assert_called_once()
+    bs = env.restore_browser_state.call_args.args[0]
+    assert bs.url == "https://example.test/2"
+    assert bs.scroll_y == 1800
+
+
+def test_resume_works_when_env_lacks_restore_method(monkeypatch):
+    """Legacy envs without ``restore_browser_state`` must not crash —
+    resume should proceed and run the step loop as before."""
+    env = _FakeEnv()  # no restore_browser_state method on _FakeEnv
+    r = _runner(env)
+    plan = _trivial_plan()
+    sig = r._compute_plan_signature(plan)
+    state = PauseState(plan_signature=sig)  # default empty browser_state
+
+    monkeypatch.setattr(r, "run", lambda *a, **kw: [])
+    # Should not raise.
+    r.resume(state, user_input=None, plan=plan)
+
+
+def test_resume_swallows_restore_exception(monkeypatch):
+    """A restore_browser_state that raises (CDP unreachable mid-restore)
+    must not break the resume — the run loop still starts."""
+    env = _FakeEnv()
+    env.restore_browser_state = MagicMock(  # type: ignore[attr-defined]
+        side_effect=RuntimeError("CDP unreachable"),
+    )
+    r = _runner(env)
+    plan = _trivial_plan()
+    sig = r._compute_plan_signature(plan)
+    state = PauseState(plan_signature=sig)
+
+    run_called = {"yes": False}
+    def _run_stub(*a, **kw):
+        run_called["yes"] = True
+        return []
+    monkeypatch.setattr(r, "run", _run_stub)
+
+    r.resume(state, user_input=None, plan=plan)
+    assert run_called["yes"]

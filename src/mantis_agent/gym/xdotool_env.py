@@ -27,7 +27,10 @@ import os
 import random
 import subprocess
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .checkpoint import BrowserState
 
 from PIL import Image
 
@@ -696,6 +699,62 @@ class XdotoolGymEnv(GymEnvironment):
                     continue
                 return url
         return ""
+
+    def capture_browser_state(self) -> "BrowserState":
+        """Snapshot URL + scroll + viewport for pause/resume (epic #358
+        Phase A). Single CDP ``Runtime.evaluate`` call reads everything
+        in one round-trip.
+
+        Returns an all-empty :class:`BrowserState` on any failure (CDP
+        unreachable, page mid-navigation, JS exception). The caller
+        branches on ``bool(state.url)`` to decide whether to apply a
+        restore — empty url means "no browser state to restore".
+        """
+        from .checkpoint import BrowserState
+        result = self.cdp_evaluate(
+            "({"
+            "url: (location && location.href) || '',"
+            "scroll_x: Math.round(window.scrollX || 0),"
+            "scroll_y: Math.round(window.scrollY || 0),"
+            "viewport_w: window.innerWidth || 0,"
+            "viewport_h: window.innerHeight || 0"
+            "})"
+        )
+        if not isinstance(result, dict):
+            return BrowserState(captured_at=time.time())
+        return BrowserState(
+            url=str(result.get("url", "") or ""),
+            scroll_x=int(result.get("scroll_x", 0) or 0),
+            scroll_y=int(result.get("scroll_y", 0) or 0),
+            viewport_w=int(result.get("viewport_w", 0) or 0),
+            viewport_h=int(result.get("viewport_h", 0) or 0),
+            captured_at=time.time(),
+        )
+
+    def restore_browser_state(self, state: "BrowserState") -> None:
+        """Replay the captured browser state — navigate to ``url``,
+        wait for load, scroll to (x, y). No-op when ``state.url`` is
+        empty.
+
+        Called from ``runner.resume`` after the runner-side state is
+        rehydrated. Best-effort: any failure is logged at DEBUG; the
+        resumed run continues at whatever URL the env actually has.
+        """
+        from .checkpoint import BrowserState as _BrowserState
+        if not isinstance(state, _BrowserState) or not state.url:
+            return
+        try:
+            self.reset(task="resume", start_url=state.url)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("restore_browser_state: env.reset(%r) raised: %s", state.url, exc)
+            return
+        if state.scroll_x or state.scroll_y:
+            try:
+                self.cdp_evaluate(
+                    f"window.scrollTo({int(state.scroll_x)}, {int(state.scroll_y)})"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("restore_browser_state: scroll restore failed: %s", exc)
 
     def has_session(self, name: str) -> bool:
         return self._browser_proc is not None and self._browser_proc.poll() is None
