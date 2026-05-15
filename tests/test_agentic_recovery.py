@@ -112,6 +112,43 @@ def test_analyse_returns_none_on_missing_tool_block() -> None:
     assert result is None
 
 
+def test_prompt_biases_against_halt_when_visible_form_could_be_validation_blocked() -> None:
+    """When a ``no_state_change`` submit failure has a visible form on
+    screen, the prompt must instruct Claude to scan every visible
+    input for invalid-value patterns BEFORE choosing halt — even when
+    prior retries didn't visibly progress. Otherwise the progress-
+    evidence branch dominates and Claude halts on what's actually a
+    pre-populated value the plan never touched triggering silent
+    client-side validation rejection. This was the staff-crm Update
+    Lead halt pattern: ``Estimated Deal Value=461927.81`` rejected
+    by the form's integer-only validation, no red error rendered.
+    """
+    from mantis_agent.prompts import load_prompt
+
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="x", step_type="submit", params="{}",
+        failure_data="no_state_change", attempts=2, plan_context="",
+    )
+    text = rendered.lower()
+    # Names the pre-populated-value-fails-validation scenario.
+    assert (
+        "pre-populated value" in text
+        or "pre populated" in text
+        or "never touched" in text
+    )
+    # Tells Claude to scan visible inputs before halting.
+    assert "scan" in text and "input" in text
+    # Names common invalid-value patterns the scan should catch.
+    assert (
+        "decimal" in text or "integer-only" in text or "integer only" in text
+    )
+    # Halt is now gated on "every visible field looks well-formed".
+    assert (
+        "every visible" in text or "every input" in text or "well-formed" in text
+    )
+
+
 def test_prompt_includes_progress_evidence_guidance_for_halt() -> None:
     """The prompt must teach Claude that lack of visible progress
     across multiple retries is evidence the target may not exist —
@@ -131,6 +168,103 @@ def test_prompt_includes_progress_evidence_guidance_for_halt() -> None:
     # Explicit guidance to prefer halt when retries didn't progress.
     assert "halt" in rendered.lower()
     assert "loop" in rendered.lower() or "didn't" in rendered.lower() or "did not" in rendered.lower()
+
+
+def test_call_recovery_tool_logs_warning_on_missing_tool_use_block(caplog) -> None:
+    """When the Anthropic 200 OK response has no ``record_recovery``
+    tool_use block, the silent ``return None`` used to leave operators
+    with zero signal that recovery was attempted. Issue #431: surface
+    this gate explicitly so a halt that skipped Claude-vision recovery
+    is debuggable from logs alone.
+    """
+    import logging
+
+    from mantis_agent.agentic_recovery import _call_recovery_tool
+
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"content": [{"type": "text", "text": "ok"}]}
+    step = MicroIntent(intent="Click Save", type="submit")
+    with caplog.at_level(logging.WARNING, logger="mantis_agent.agentic_recovery"):
+        with patch("requests.post", return_value=resp):
+            out = _call_recovery_tool(
+                step=step, failure_data="x", screenshot=None,
+                plan_context=[], attempts=1, api_key="k",
+                model="claude-haiku-4-5-20251001",
+            )
+    assert out is None
+    assert any(
+        "agentic_recovery_skipped" in rec.message for rec in caplog.records
+    ), f"expected a WARNING marker; got: {[r.message for r in caplog.records]}"
+
+
+def test_no_state_change_submit_uses_opus_model() -> None:
+    """#432: Haiku-tier vision was missing red field-level validation
+    errors on the staff-crm Update Lead halt, so ``agentic_recovery``
+    picked ``halt`` instead of ``insert_steps``. The recovery callsite
+    should select Opus when ``failure_class=no_state_change`` on a
+    submit step (the canonical form-validation-blocked shape) and
+    stay on Haiku for everything else.
+    """
+    from unittest.mock import MagicMock as _MM
+
+    from mantis_agent.gym.step_recovery import StepRecoveryPolicy
+
+    captured: dict = {}
+
+    def _capture(*, step, failure_data, screenshot, plan_context,
+                 attempts, model=None, api_key=""):
+        captured["model"] = model
+        return None  # short-circuit; we only care about the model arg.
+
+    runner = _MM()
+    runner._recovery_attempts_per_step = {}
+    runner._total_recovery_attempts = 0
+    runner._safe_screenshot = lambda: None
+    policy = StepRecoveryPolicy(runner)
+
+    plan = MicroPlan()
+    submit_step = MicroIntent(intent="Click Save", type="submit")
+    plan.steps.append(submit_step)
+    failed_result = StepResult(
+        step_index=0, intent="Click Save", success=False,
+        data="submit:Save@(100,200):no_state_change",
+        failure_class="no_state_change",
+    )
+
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        side_effect=_capture,
+    ):
+        policy._try_agentic_recovery(
+            step=submit_step, step_result=failed_result, step_index=0,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+    assert captured.get("model") == "claude-opus-4-7", (
+        f"no_state_change submit should escalate to Opus; got {captured!r}"
+    )
+
+    # Sibling case: a non-submit failure stays on Haiku.
+    captured.clear()
+    runner._recovery_attempts_per_step = {}
+    runner._total_recovery_attempts = 0
+    click_step = MicroIntent(intent="Click Next", type="click")
+    plan2 = MicroPlan()
+    plan2.steps.append(click_step)
+    failed_click = StepResult(
+        step_index=0, intent="Click Next", success=False,
+        data="click_no_nav", failure_class="wrong_target",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        side_effect=_capture,
+    ):
+        policy._try_agentic_recovery(
+            step=click_step, step_result=failed_click, step_index=0,
+            plan=plan2, step_retry_counts={}, attempts=2,
+        )
+    assert captured.get("model") == "claude-haiku-4-5-20251001", (
+        f"non-submit failures stay on Haiku; got {captured!r}"
+    )
 
 
 def test_prompt_distinguishes_validation_blocked_submit_for_no_state_change() -> None:

@@ -63,10 +63,29 @@ Rewrite the intent to be more MECHANICAL and SPECIFIC. Apply whichever of these 
 - If the action had no observable effect, rewrite to specify a different element or a verify-first approach.
 - Keep the same verb (click stays click, scroll stays scroll). Do NOT change the step type.
 
+PRE-STEP TERRITORY — RESPOND WITH KEEP:
+
+A separate recovery system (``agentic_recovery``) handles cases where the
+right fix is to DO SOMETHING ELSE BEFORE this step — fill an invalid
+field, dismiss a modal, expand a collapsed section, scroll to reveal a
+section that isn't in the viewport. Those fixes are pre-steps, not
+same-step rewrites; jamming them into this step's intent breaks the
+retry because the handler still looks for the SAME action verb. If you
+believe the only sensible recovery is a pre-step (typical phrasing
+would be "First fix X", "Before clicking, set Y to Z", "Dismiss the
+modal then click", "Scroll down then click") respond with exactly
+``KEEP`` and let the downstream system handle it.
+
+In particular: a ``no_state_change`` on a submit where the screenshot
+shows a visible field-validation error (red text, "value must be ≤ N",
+"required field") is ALWAYS pre-step territory — the form's submit
+handler is short-circuiting on the bad field. Respond KEEP.
+
 Constraints:
 - Output ONLY the rewritten intent string (or KEEP).
 - No JSON, no markdown, no prose preamble.
-- If you cannot meaningfully improve the intent, output exactly: KEEP
+- If you cannot meaningfully improve the intent, OR the only sensible
+  recovery is a pre-step (see above), output exactly: KEEP
 """
 
 
@@ -127,13 +146,20 @@ def propose_rewrite(
         return None
     key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
-        logger.debug("intent_rewriter: no ANTHROPIC_API_KEY; skipping rewrite")
+        # #431: WARNING not DEBUG. A rewriter that's silently dropping
+        # because of a missing env var looks identical to a rewriter
+        # that's wired off, and operators have no way to tell.
+        logger.warning(
+            "intent_rewriter: no ANTHROPIC_API_KEY; skipping rewrite"
+        )
         return None
 
     try:
         import requests
     except ImportError:
-        logger.debug("intent_rewriter: requests not installed; skipping rewrite")
+        logger.warning(
+            "intent_rewriter: ``requests`` not installed; skipping rewrite"
+        )
         return None
 
     failure_summary = _format_failures(failures)
@@ -174,11 +200,15 @@ def propose_rewrite(
             timeout=timeout,
         )
     except Exception as exc:  # noqa: BLE001 — never break runs
-        logger.debug("intent_rewriter: API call raised: %s", exc)
+        # #431: bump from debug→warning so the operator can tell that
+        # Claude was called but the call itself blew up (network,
+        # timeout, malformed body). Otherwise the rewriter looks like
+        # it was never wired through.
+        logger.warning("intent_rewriter: API call raised: %s", exc)
         return None
 
     if resp.status_code != 200:
-        logger.debug(
+        logger.warning(
             "intent_rewriter: API error %s: %s",
             resp.status_code, resp.text[:200],
         )
@@ -187,6 +217,7 @@ def propose_rewrite(
     try:
         body = resp.json()
     except (ValueError, json.JSONDecodeError):
+        logger.warning("intent_rewriter: response body was not valid JSON")
         return None
 
     for block in body.get("content", []):
@@ -200,6 +231,19 @@ def propose_rewrite(
             # Strip surrounding quotes if Claude wrapped the response.
             if len(text) >= 2 and text[0] == text[-1] and text[0] in ('"', "'"):
                 text = text[1:-1].strip()
+            # Belt-and-braces: the prompt forbids pre-step-shaped rewrites
+            # (those belong to agentic_recovery's insert_steps mode, not a
+            # same-step rewrite), but Claude occasionally ignores prompt
+            # constraints. Detect the canonical pre-step phrasings and
+            # drop the rewrite so the next retry uses the original intent
+            # — letting the failure escalate to agentic_recovery cleanly.
+            if _looks_like_pre_step_rewrite(text):
+                logger.info(
+                    "intent_rewriter: dropping pre-step-shaped rewrite %r — "
+                    "letting agentic_recovery handle as insert_steps",
+                    text[:120],
+                )
+                return None
             if text and text.upper() != "KEEP":
                 logger.info(
                     "intent_rewriter: rewrote intent (was %d chars, now %d chars)",
@@ -208,6 +252,44 @@ def propose_rewrite(
                 return text
             return None
     return None
+
+
+# Phrasings that signal Claude is proposing a different action BEFORE
+# this step (i.e. an ``insert_steps`` recovery), not a same-step
+# rewrite. Matched case-insensitively against the start of the
+# response. The set is intentionally small and conservative —
+# false-positives just mean one wasted Claude call, but false-
+# negatives keep the broken behaviour we are trying to fix.
+_PRE_STEP_PREFIXES: tuple[str, ...] = (
+    "first fix",
+    "first, fix",
+    "first set",
+    "first, set",
+    "first scroll",
+    "first, scroll",
+    "first dismiss",
+    "first, dismiss",
+    "before click",
+    "before, click",
+    "before submit",
+    "before, submit",
+    "before filling",
+    "dismiss the modal",
+)
+
+
+def _looks_like_pre_step_rewrite(text: str) -> bool:
+    """Heuristic: does ``text`` start with phrasing that describes a
+    pre-step rather than a rewrite of the failed step itself?
+
+    Conservative — matches only canonical openers. The principled fix
+    is structured tool_use output (epic #377 Phase B Stage 2); this
+    keeps the current free-form contract working in the common case
+    while routing the staff-crm-style validation-blocked-submit
+    findings to agentic_recovery instead of wasting a retry.
+    """
+    lowered = text.lstrip().lower()
+    return any(lowered.startswith(prefix) for prefix in _PRE_STEP_PREFIXES)
 
 
 def _format_failures(failures: list[FailureContext]) -> str:
@@ -227,6 +309,7 @@ def _format_failures(failures: list[FailureContext]) -> str:
 __all__ = [
     "REWRITE_TRIGGERING_CLASSES",
     "FailureContext",
+    "_looks_like_pre_step_rewrite",
     "propose_rewrite",
     "should_attempt_rewrite",
 ]

@@ -154,5 +154,22 @@ Decision priority when multiple modes plausibly fit:
   coordinates are off.
 - A precondition is needed AND prior attempts didn't already try
   this precondition → insert_steps
-- Prior attempts already tried scroll/dismiss/wait and the page
-  state hasn't visibly progressed → halt (don't loop)
+- ``failure_class=no_state_change`` on a ``submit`` step AND the
+  screenshot shows the form open (visible inputs / button row) →
+  **scan every visible input for invalid-value patterns BEFORE
+  considering halt**. Specifically: decimals in fields that
+  visually appear integer-only (money / count / id), values outside
+  visible min-max constraint hints, empty fields with an asterisk
+  or "required" affordance, dates in the wrong format. A
+  pre-populated value the plan never touched can still fail
+  client-side validation and short-circuit the submit handler
+  silently — no red error needs to be rendered for this to
+  happen. If you find such a value, choose ``insert_steps`` with a
+  ``fill_field`` (or ``select_option``) pre-step that normalizes
+  the offending field, then the original submit re-runs against a
+  valid form. Only fall through to halt when every visible field
+  looks well-formed AND prior attempts already tried
+  scroll/dismiss/wait without visible progress.
+- Prior attempts already tried scroll/dismiss/wait, the page state
+  hasn't visibly progressed, AND every visible input value already
+  looks well-formed → halt (don't loop)

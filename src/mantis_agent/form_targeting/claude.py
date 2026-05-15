@@ -87,9 +87,12 @@ class ClaudeFormTargetProvider(FormTargetProvider):
         """Construct a provider sharing the extractor's Anthropic client.
 
         ``ClaudeExtractor`` exposes ``self._client`` (an
-        :class:`AnthropicToolUseClient`) since #406 Part 1; reusing it
-        keeps a single retry-policy + TimeMeter accounting per runner
-        and avoids creating two clients pointed at the same API.
+        :class:`AnthropicToolUseClient`) since #406 Part 1; reusing
+        the api_key + retry policy keeps a single accounting per
+        runner. The model is overridden to the cheaper
+        ``form_target_model`` (default Haiku, see #434) when the
+        extractor exposes it — grounding is a single visual lookup
+        which doesn't need Opus / Sonnet quality.
         """
         client = getattr(extractor, "_client", None)
         if not isinstance(client, AnthropicToolUseClient):
@@ -97,13 +100,13 @@ class ClaudeFormTargetProvider(FormTargetProvider):
                 "from_extractor: extractor must expose a "
                 "_client: AnthropicToolUseClient (got %r)" % type(client).__name__
             )
-        # Re-prefix logs so transient-error lines surface as
-        # ``ClaudeFormTarget transient HTTP 529 …`` instead of the
-        # extractor's prefix — disambiguates the failure source when
-        # an operator is grepping Modal logs.
+        # #434: prefer the extractor's ``form_target_model`` when set,
+        # falling back to the extractor's main model for back-compat
+        # with callers that haven't migrated to the split.
+        form_target_model = getattr(extractor, "form_target_model", "") or client.model
         new_client = AnthropicToolUseClient(
             api_key=client.api_key,
-            model=client.model,
+            model=form_target_model,
             log_prefix="ClaudeFormTarget",
         )
         return cls(new_client)
