@@ -309,7 +309,21 @@ class BasetenCUARuntime:
         model_ref: str | Path = model_dir if model_dir.exists() else (
             os.environ.get("MANTIS_FARA_REPO", "microsoft/Fara-7B")
         )
-        self._start_vllm(Path(str(model_ref)), extra_args=[])
+        # vLLM 0.11+ requires both flags to honour ``tool_choice="auto"``.
+        # Without them, every FaraBrain.think() request 400s with
+        # `"auto" tool choice requires --enable-auto-tool-choice and
+        # --tool-call-parser to be set`. ``hermes`` is the Qwen-family
+        # parser that matches Fara's Qwen2.5-VL base and OpenAI-format
+        # tool_calls. Override via MANTIS_FARA_TOOL_PARSER for fine-tunes
+        # that emit a different schema.
+        tool_parser = os.environ.get("MANTIS_FARA_TOOL_PARSER", "hermes")
+        self._start_vllm(
+            Path(str(model_ref)),
+            extra_args=[
+                "--enable-auto-tool-choice",
+                "--tool-call-parser", tool_parser,
+            ],
+        )
 
         brain = FaraBrain(
             base_url=f"http://127.0.0.1:{self.port}/v1",
