@@ -173,6 +173,99 @@ def test_prompt_attaches_latest_screenshot_when_present() -> None:
     assert image_blocks[0]["source"]["media_type"] == "image/png"
 
 
+# ── propose_rewrite — pre-step rewrite handoff (issue #428 Part B) ─────
+
+
+def test_drops_pre_step_rewrite_first_fix() -> None:
+    """When Claude's rewrite describes a different verb to be executed
+    BEFORE this step (e.g. "First fix the X field" for a submit step
+    that's actually being blocked by client-side form validation),
+    ``propose_rewrite`` returns None so the next retry uses the
+    original intent. The downstream ``agentic_recovery`` loop then
+    picks ``insert_steps`` with a normalize-field pre-step (issue #428).
+    Without this, the next retry would try to submit a button labelled
+    "First fix the …" — nonsensical, wastes a retry, then halts.
+    """
+    failures = [FailureContext("no_state_change", "submit_no_state_change")]
+    with patch(
+        "requests.post",
+        return_value=_stub_claude_response(
+            "First fix the invalid Estimated Deal Value field (currently 461927.81)"
+        ),
+    ):
+        out = propose_rewrite("Click Update Lead", failures, api_key="k")
+    assert out is None
+
+
+def test_drops_pre_step_rewrite_before_clicking() -> None:
+    failures = [FailureContext("no_state_change", "submit")]
+    with patch(
+        "requests.post",
+        return_value=_stub_claude_response(
+            "Before clicking, set Estimated Deal Value to a whole number"
+        ),
+    ):
+        out = propose_rewrite("Click Update Lead", failures, api_key="k")
+    assert out is None
+
+
+def test_drops_pre_step_rewrite_dismiss_modal() -> None:
+    failures = [FailureContext("wrong_target", "blocked_by_modal")]
+    with patch(
+        "requests.post",
+        return_value=_stub_claude_response("Dismiss the modal then click Save"),
+    ):
+        out = propose_rewrite("Click Save", failures, api_key="k")
+    assert out is None
+
+
+def test_same_step_rewrite_not_dropped_by_pre_step_filter() -> None:
+    """Regression guard: the pre-step filter must NOT match well-formed
+    same-step rewrites that happen to start with a common word.
+    """
+    failures = [FailureContext("brain_loop_exhausted", "loop")]
+    with patch(
+        "requests.post",
+        return_value=_stub_claude_response("Scroll down by one viewport"),
+    ):
+        out = propose_rewrite("Scroll to reveal X", failures, api_key="k")
+    assert out == "Scroll down by one viewport"
+
+
+def test_looks_like_pre_step_rewrite_unit() -> None:
+    """Direct unit check on the predicate — independent of the
+    Claude-call path so a regression in the filter is caught locally.
+    """
+    from mantis_agent.gym.intent_rewriter import _looks_like_pre_step_rewrite
+
+    # Pre-step shapes — all flagged.
+    assert _looks_like_pre_step_rewrite("First fix the X field")
+    assert _looks_like_pre_step_rewrite("First, fix the X field")
+    assert _looks_like_pre_step_rewrite("Before clicking, set Y to Z")
+    assert _looks_like_pre_step_rewrite("Dismiss the modal then click")
+    assert _looks_like_pre_step_rewrite("first scroll down then click")  # casing
+    # Same-step shapes — passed through.
+    assert not _looks_like_pre_step_rewrite("Click the first event card")
+    assert not _looks_like_pre_step_rewrite("Scroll down by one viewport")
+    assert not _looks_like_pre_step_rewrite("Pick Space Exploration from the dropdown")
+
+
+def test_prompt_documents_pre_step_keep_directive() -> None:
+    """The rewriter prompt must explicitly forbid pre-step-shaped
+    rewrites and instruct Claude to respond ``KEEP`` so agentic_recovery
+    can handle the precondition (issue #428 Part B).
+    """
+    from mantis_agent.gym import intent_rewriter
+
+    prompt = intent_rewriter._REWRITE_PROMPT
+    assert "PRE-STEP TERRITORY" in prompt or "pre-step" in prompt.lower()
+    assert "KEEP" in prompt
+    # The validation-blocked-submit case is named explicitly so Claude
+    # has language to pattern-match on.
+    assert "no_state_change" in prompt
+    assert "validation" in prompt.lower()
+
+
 def test_prompt_omits_image_when_no_screenshot() -> None:
     failures = [FailureContext("brain_loop_exhausted", "loop")]
     captured: dict = {}
