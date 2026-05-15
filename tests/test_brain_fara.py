@@ -211,10 +211,50 @@ def test_type_maps_to_type_action(brain: FaraBrain) -> None:
     assert action.params == {"text": "hello"}
 
 
+def test_type_text_alias_maps_to_type_action(brain: FaraBrain) -> None:
+    """Fara emits both ``type`` and ``type_text`` in practice (#405).
+
+    Before the alias was added, ``type_text`` fell through to the
+    unknown-action WAIT branch and any form-fill flow halted via the
+    loop detector after ~2 typed fields.
+    """
+    action = _parse_tool(brain, _fara_tool_call("type_text", text="alice"))
+    assert action.action_type == ActionType.TYPE
+    assert action.params == {"text": "alice"}
+
+
 def test_key_maps_to_key_press(brain: FaraBrain) -> None:
     action = _parse_tool(brain, _fara_tool_call("key", text="Return"))
     assert action.action_type == ActionType.KEY_PRESS
     assert action.params == {"keys": "Return"}
+
+
+def test_press_key_alias_maps_to_key_press(brain: FaraBrain) -> None:
+    action = _parse_tool(brain, _fara_tool_call("press_key", text="Tab"))
+    assert action.action_type == ActionType.KEY_PRESS
+    assert action.params == {"keys": "Tab"}
+
+
+def test_submit_action_maps_to_return_key_press(brain: FaraBrain) -> None:
+    """``submit`` is Fara's idiom for form-submit; emit Return."""
+    action = _parse_tool(brain, _fara_tool_call("submit"))
+    assert action.action_type == ActionType.KEY_PRESS
+    assert action.params == {"keys": "Return"}
+    assert "submit" in action.reasoning
+
+
+def test_enter_action_maps_to_return_key_press(brain: FaraBrain) -> None:
+    action = _parse_tool(brain, _fara_tool_call("enter"))
+    assert action.action_type == ActionType.KEY_PRESS
+    assert action.params == {"keys": "Return"}
+
+
+def test_submit_respects_explicit_key_override(brain: FaraBrain) -> None:
+    """A planner adapter that emits ``submit(text="Tab")`` should be
+    honoured rather than blindly forced to Return."""
+    action = _parse_tool(brain, _fara_tool_call("submit", text="Tab"))
+    assert action.action_type == ActionType.KEY_PRESS
+    assert action.params == {"keys": "Tab"}
 
 
 def test_key_list_is_joined(brain: FaraBrain) -> None:

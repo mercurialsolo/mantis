@@ -610,15 +610,29 @@ class FaraBrain:
                 {"x": sx, "y": sy, "button": "left"},
             )
 
-        if action == "type":
+        if action in ("type", "type_text"):
+            # Fara emits both verbs depending on training-data variance — the
+            # documented action is ``type`` but in practice many turns come
+            # through as ``type_text`` (see #405). Treat as aliases.
             text = str(args.get("text", ""))
             return Action(ActionType.TYPE, {"text": text})
 
-        if action == "key":
+        if action in ("key", "press_key"):
             keys = args.get("text") or args.get("key") or args.get("keys") or ""
             if isinstance(keys, list):
                 keys = "+".join(str(k) for k in keys)
             return Action(ActionType.KEY_PRESS, {"keys": str(keys)})
+
+        if action in ("submit", "enter"):
+            # Form submit / Enter — Fara variants emit either verb. Always
+            # map to a Return key press; works on focused inputs and on
+            # selected buttons. If args carry an explicit ``text`` (e.g.
+            # ``submit(text="Return")``), honour it.
+            keys = str(args.get("text") or args.get("key") or "Return")
+            return Action(
+                ActionType.KEY_PRESS, {"keys": keys},
+                reasoning=f"fara {action}",
+            )
 
         if action == "scroll":
             direction = str(
