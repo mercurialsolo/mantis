@@ -112,6 +112,43 @@ def test_analyse_returns_none_on_missing_tool_block() -> None:
     assert result is None
 
 
+def test_prompt_biases_against_halt_when_visible_form_could_be_validation_blocked() -> None:
+    """When a ``no_state_change`` submit failure has a visible form on
+    screen, the prompt must instruct Claude to scan every visible
+    input for invalid-value patterns BEFORE choosing halt — even when
+    prior retries didn't visibly progress. Otherwise the progress-
+    evidence branch dominates and Claude halts on what's actually a
+    pre-populated value the plan never touched triggering silent
+    client-side validation rejection. This was the staff-crm Update
+    Lead halt pattern: ``Estimated Deal Value=461927.81`` rejected
+    by the form's integer-only validation, no red error rendered.
+    """
+    from mantis_agent.prompts import load_prompt
+
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="x", step_type="submit", params="{}",
+        failure_data="no_state_change", attempts=2, plan_context="",
+    )
+    text = rendered.lower()
+    # Names the pre-populated-value-fails-validation scenario.
+    assert (
+        "pre-populated value" in text
+        or "pre populated" in text
+        or "never touched" in text
+    )
+    # Tells Claude to scan visible inputs before halting.
+    assert "scan" in text and "input" in text
+    # Names common invalid-value patterns the scan should catch.
+    assert (
+        "decimal" in text or "integer-only" in text or "integer only" in text
+    )
+    # Halt is now gated on "every visible field looks well-formed".
+    assert (
+        "every visible" in text or "every input" in text or "well-formed" in text
+    )
+
+
 def test_prompt_includes_progress_evidence_guidance_for_halt() -> None:
     """The prompt must teach Claude that lack of visible progress
     across multiple retries is evidence the target may not exist —
