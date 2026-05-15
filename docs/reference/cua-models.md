@@ -84,7 +84,7 @@ The Baseten gateway forwards **two** route families to every truss-server deploy
 
 For a non-promoted (canary) deployment, swap `production` for `deployment/<DEPLOYMENT_ID>` in either form.
 
-This is how StaffAI-style integrations point a remote `FaraBrain` at the Baseten deployment:
+This is how a remote-brain integration (caller runs the CUA loop locally, hits Mantis only for per-step inference) points a `FaraBrain` at the Baseten deployment:
 
 ```python
 endpoint = "https://model-<FARA_MODEL_ID>.api.baseten.co/production/sync"

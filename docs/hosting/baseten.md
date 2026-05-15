@@ -102,7 +102,7 @@ curl -fsS -X POST "$ENDPOINT/predict" \
 
 Expected: a `queued` response with a `run_id`. Then poll with `{"action":"status","run_id":"..."}` until terminal, then `{"action":"result","run_id":"..."}` for the leads.
 
-Raw-inference smoke (the StaffAI-shaped path — model returns OpenAI-format tool calls; the caller runs its own CUA loop):
+Raw-inference smoke (remote-brain shape — model returns OpenAI-format tool calls; the caller runs its own CUA loop against its own browser):
 
 ```bash
 curl -fsS -X POST "$ENDPOINT/sync/v1/chat/completions" \
