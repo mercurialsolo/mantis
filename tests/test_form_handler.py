@@ -316,6 +316,87 @@ def test_fill_field_tag_guard_allows_input_at_click_point(monkeypatch):
     assert result.data == "fill:Email"
 
 
+def test_fill_field_tag_guard_records_recovery_hint(monkeypatch):
+    """#411: when the tag-guard refuses a BUTTON pick, the bad coord +
+    tag must land on ``runner._recovery_hints[index]`` so the *next*
+    attempt's find_form_target prompt tells the LLM not to re-pick
+    the same wrong rectangle. Without this hint, Claude on lu.ma's
+    'Your Info' modal keeps returning (618, 587) for the Title field
+    on every retry and burns the step budget on identical refusals."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 618, "y": 587}
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(return_value={"tag": "BUTTON", "contentEditable": False})
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Fill title", type="fill_field",
+        params={"label": "What is your title?", "value": "AI Product Tester"},
+    )
+    handler = ClaudeGuidedFormHandler(runner)
+    result = handler.execute(step, ctx)
+
+    assert result.success is False
+    assert result.data == "form_target_not_input:BUTTON"
+    # The hint must be recorded on the runner — keyed by the step
+    # index supplied via ctx.state["index"] (= 5 in _ctx).
+    hints = getattr(runner, "_recovery_hints", {})
+    assert 5 in hints
+    body = "\n".join(hints[5])
+    # Hint mentions the rejected coord, the tag, and gives the LLM
+    # something specific to avoid + something specific to look for.
+    assert "(618, 587)" in body
+    assert "<BUTTON>" in body
+    assert "What is your title?" in body
+    # Bounding rectangle around the rejected coord is in the hint so
+    # the LLM has a concrete region to steer away from.
+    assert "(578, 567)" in body or "(578, 567)" in body  # x-40, y-20
+
+
+def test_fill_field_tag_guard_retry_picks_up_hint(monkeypatch):
+    """End-to-end: a prior tag-guard refusal stored a hint. On the
+    next call to ``execute`` for the same step (= same ctx index),
+    the search prompt passed to find_form_target carries the hint.
+    Locks the consumer side of the hint loop so a future refactor
+    doesn't silently drop the recovery feedback."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    # Seed the runner with a hint from a previous failed attempt.
+    runner._recovery_hints = {5: [
+        "Your previous coordinate pick for 'Title' was (618, 587), "
+        "which document.elementFromPoint resolves to a <BUTTON> "
+        "element. DO NOT return coordinates inside the box (578, 567) "
+        "to (658, 607). The input you want is almost certainly ABOVE …"
+    ]}
+    extractor = MagicMock()
+    # Second attempt now finds the *correct* coord above the button.
+    extractor.find_form_target.return_value = {"x": 400, "y": 480}
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(return_value={"tag": "INPUT", "contentEditable": False})
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Fill title", type="fill_field",
+        params={"label": "Title", "value": "AI Product Tester"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    # The hint flowed into find_form_target's search_intent — the
+    # extractor saw the augmented prompt, not the bare label.
+    sent_intent = extractor.find_form_target.call_args.args[1]
+    assert "RECOVERY HINTS" in sent_intent
+    assert "(618, 587)" in sent_intent
+
+
 def test_fill_field_tag_guard_allows_contenteditable_div(monkeypatch):
     """Rich text editors (Quill, ProseMirror, …) render as ``<div
     contenteditable="true">``. The tag-guard must accept them — the

@@ -28,6 +28,42 @@ from typing import Any
 _HINT_BLOCK_HEADER = "\n\nRECOVERY HINTS from previous failed attempts:\n"
 
 
+def add_hint(runner: Any, step_index: int, hint: str) -> None:
+    """Append ``hint`` to the recovery-hint list for ``step_index``.
+
+    Producer-side counterpart to :func:`get_hint_block`. Used by code
+    paths that detect a recoverable failure *without* going through the
+    agentic-recovery loop — the canonical case under #411 is the form
+    handler's tag-guard refusing a coord pick whose elementFromPoint is
+    a BUTTON/A/DIV rather than an input. The next attempt's search
+    prompt picks up the hint via :func:`get_hint_block`, so the LLM
+    stops re-picking the same wrong coordinate.
+
+    Defensive on storage state: tests / hosts that hand the runner a
+    ``MagicMock`` already auto-create attributes as Mocks rather than
+    real dicts. Reassigning the attribute when it's not a real dict
+    keeps the helper non-fatal on mocked runners — important because
+    this lives on a hot path inside the form handler.
+
+    Empty / falsy hints are dropped silently — callers can call
+    unconditionally without guarding.
+    """
+    if not hint:
+        return
+    hints_dict = getattr(runner, "_recovery_hints", None)
+    if not isinstance(hints_dict, dict):
+        try:
+            runner._recovery_hints = {}
+        except Exception:  # noqa: BLE001 — frozen test stubs
+            return
+        hints_dict = runner._recovery_hints
+    stored = hints_dict.get(step_index)
+    if not isinstance(stored, list):
+        stored = []
+        hints_dict[step_index] = stored
+    stored.append(str(hint))
+
+
 def get_hint_block(runner: Any, step_index: int) -> str:
     """Return a multi-line hint block to splice into a handler's
     prompt, or ``""`` if no hints are stored for this step.
@@ -71,4 +107,4 @@ def count(runner: Any, step_index: int) -> int:
     return sum(1 for h in stored if h)
 
 
-__all__ = ["get_hint_block", "has_hints", "count"]
+__all__ = ["add_hint", "get_hint_block", "has_hints", "count"]
