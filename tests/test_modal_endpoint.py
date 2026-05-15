@@ -121,6 +121,51 @@ def test_predict_returns_run_id(app_with_stub) -> None:
     assert parsed["tasks"] == [{"intent": "x"}]
 
 
+def test_spawn_forwards_per_profile_chrome_user_data_dir(app_with_stub) -> None:
+    """#341 follow-up: the spawn handler must pass a per-profile Chrome
+    user-data-dir to the executor. Without this, every Modal run reused
+    XdotoolGymEnv's default ``/data/chrome-profile`` and cookies leaked
+    across runs that used different ``profile_id``s.
+    """
+    client, executor, _call = app_with_stub
+
+    # Submit two runs with DIFFERENT profile_ids and capture the spawn kwargs
+    # each got. We assert both that the kwarg is present and that the two
+    # runs received DIFFERENT paths — i.e. the dir is actually keyed by
+    # profile_id, not a constant.
+    r1 = client.post(
+        "/v1/predict",
+        headers=_auth_headers(),
+        data=json.dumps({"task_suite": {"tasks": []}, "profile_id": "alice"}),
+    )
+    assert r1.status_code == 200
+    alice_profile_dir = executor.spawn_kwargs.get("profile_dir")
+    assert alice_profile_dir, "spawn must forward a profile_dir"
+    assert "alice" in alice_profile_dir
+    assert "chrome-profile" in alice_profile_dir
+
+    # Release alice's lock first so the second submit isn't a 409.
+    run_id_alice = r1.json()["run_id"]
+    client.post(
+        "/v1/predict",
+        headers=_auth_headers(),
+        data=json.dumps({"action": "cancel", "run_id": run_id_alice}),
+    )
+
+    r2 = client.post(
+        "/v1/predict",
+        headers=_auth_headers(),
+        data=json.dumps({"task_suite": {"tasks": []}, "profile_id": "bob"}),
+    )
+    assert r2.status_code == 200
+    bob_profile_dir = executor.spawn_kwargs.get("profile_dir")
+    assert bob_profile_dir
+    assert "bob" in bob_profile_dir
+    assert bob_profile_dir != alice_profile_dir, (
+        "different profile_ids must resolve to different Chrome user-data-dirs"
+    )
+
+
 def test_predict_rejects_missing_token(app_with_stub) -> None:
     client, _executor, _call = app_with_stub
     r = client.post(

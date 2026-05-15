@@ -379,6 +379,8 @@ def _run_executor(
     max_retries: int = 2,
     frames_per_inference: int = 5,
     viewer: bool = False,
+    profile_dir: str = "",
+    **_extra,
 ) -> dict:
     """Shared executor logic for all vLLM GPU tiers."""
     from datetime import datetime, timezone
@@ -448,6 +450,7 @@ def _run_executor(
         proxy_state=str(task_suite.get("_proxy_state") or ""),
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
+        profile_dir=profile_dir,
     )
     viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
 
@@ -543,6 +546,11 @@ def _run_holo3_executor(
     # the legacy CLI path which prints the URL to stdout instead.
     api_run_id: str | None = None,
     api_tenant_id: str | None = None,
+    # #341 follow-up: per-tenant, per-profile Chrome user-data-dir.
+    # The /v1/predict handler computes this from ``profile_id`` so
+    # cookies / localStorage / IndexedDB don't leak across runs that
+    # use different profiles on the same warm container.
+    profile_dir: str = "",
     **_extra,
 ) -> dict:
     """Execute tasks using Holo3-35B-A3B via llama.cpp (GGUF on 1x A100).
@@ -639,6 +647,7 @@ def _run_holo3_executor(
         proxy_state=str(task_suite.get("_proxy_state") or ""),
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
+        profile_dir=profile_dir,
     )
     from mantis_agent.extraction import ClaudeExtractor, ExtractionSchema
     schema = None
@@ -1077,6 +1086,8 @@ def _run_gemma4_cua_executor(
     max_steps: int = 30,
     max_retries: int = 2,
     viewer: bool = False,
+    profile_dir: str = "",
+    **_extra,
 ) -> dict:
     """Execute tasks using fine-tuned Gemma4-31B-CUA via llama.cpp."""
     from datetime import datetime, timezone
@@ -1133,6 +1144,7 @@ def _run_gemma4_cua_executor(
         proxy_state=str(task_suite.get("_proxy_state") or ""),
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
+        profile_dir=profile_dir,
     )
     viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
 
@@ -1206,6 +1218,7 @@ def _run_claude_executor(
     claude_model: str = "claude-sonnet-4-20250514",
     thinking_budget: int = 2048,
     viewer: bool = False,
+    profile_dir: str = "",
     **_extra,
 ) -> dict:
     """Execute tasks using Claude CUA via Anthropic API.
@@ -1262,6 +1275,7 @@ def _run_claude_executor(
         proxy_state=str(task_suite.get("_proxy_state") or ""),
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
+        profile_dir=profile_dir,
     )
     viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
 
@@ -1398,6 +1412,23 @@ def _run_dir(tenant_id: str, run_id: str):
     from mantis_agent.server_utils import safe_state_key as _safe
     root = _Path(os.environ.get("MANTIS_DATA_DIR", "/data"))
     return root / "tenants" / _safe(tenant_id) / "runs" / _safe(run_id)
+
+
+def _chrome_profile_dir(tenant_id: str, profile_id: str) -> str:
+    """Per-tenant, per-profile Chrome user-data-dir (#341).
+
+    Without this, every Modal run reused Chrome's default
+    ``/data/chrome-profile`` directory — so cookies, localStorage and
+    IndexedDB from one run leaked into the next regardless of the
+    API-side ``profile_id``. Returns a stringified path the executor
+    forwards to ``setup_env(profile_dir=...)``.
+    """
+    from pathlib import Path as _Path
+    from mantis_agent.server_utils import safe_state_key as _safe
+    root = _Path(os.environ.get("MANTIS_DATA_DIR", "/data"))
+    path = root / "tenants" / _safe(tenant_id) / "chrome-profile" / _safe(profile_id)
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def _commit_volume() -> None:
@@ -1600,6 +1631,13 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         # is positional; everything else is **kwargs.
         spawn_kwargs: dict = {
             "max_steps": int(payload.get("max_steps", 30)),
+            # Per-tenant, per-profile Chrome user-data-dir (#341).
+            # Until this was added, Modal executors fell back to
+            # XdotoolGymEnv's default ``/data/chrome-profile`` and
+            # every run on the same warm container shared one Chrome
+            # profile — so ``profile_id`` was only honoured by the
+            # API-side lock and not by Chrome itself.
+            "profile_dir": _chrome_profile_dir(tenant.tenant_id, profile_id),
         }
         if model != "claude":
             spawn_kwargs["cua_model"] = model
@@ -1748,6 +1786,7 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
             executor_fn = resolve_executor(model)
             spawn_kwargs: dict = {
                 "max_steps": int(status.get("max_steps", 30)),
+                "profile_dir": _chrome_profile_dir(tenant.tenant_id, profile_id),
             }
             if model != "claude":
                 spawn_kwargs["cua_model"] = model

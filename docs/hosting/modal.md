@@ -95,6 +95,13 @@ Per-run state for HTTP submissions lives at `/data/tenants/<tenant_id>/runs/<run
 - `viewer.json` — MJPEG tunnel URL when `live_viewer: true` was set; merged into `action=status` responses as `viewer_url` (kept as a side-channel file so the executor never races the API on `status.json`)
 - `events.log` — append-only event stream
 
+Chrome user-data-dirs are kept per tenant + profile at
+`/data/tenants/<tenant_id>/chrome-profile/<profile_id>/`. Cookies,
+localStorage and IndexedDB persist across runs that share a
+`profile_id` (this is what makes `profile_id` "sticky") and are
+fully isolated between different `profile_id`s — including across
+runs that happen to land on the same warm Modal container.
+
 ## Smoke test
 
 ```bash
