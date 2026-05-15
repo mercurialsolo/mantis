@@ -123,7 +123,20 @@ class ClaudeFormTargetProvider(FormTargetProvider):
         target_label: str = "",
         target_value: str = "",
         target_aliases: list[str] | None = None,
+        region: Any = None,
     ) -> FormTargetResult | None:
+        # #435 item 1: when the caller hints at a region (named string
+        # like ``"bottom"`` or an explicit ``{"x","y","w","h"}`` rect),
+        # crop before grounding and re-project coordinates after. The
+        # Claude vision call is then disambiguating a much smaller
+        # frame — collapses the staff-crm Update Lead case where a
+        # full 1280×800 screenshot has the button competing visually
+        # with header / sidebar / form body. The doc calls this the
+        # *"collapses most disambiguation pressure"* pattern (§6).
+        crop_offset: tuple[int, int] = (0, 0)
+        if region:
+            from .region import crop_to_region
+            screenshot, crop_offset = crop_to_region(screenshot, region)
         target_clause = (
             f"\nThe target element label/text is: \"{target_label}\""
             if target_label else ""
@@ -226,7 +239,21 @@ class ClaudeFormTargetProvider(FormTargetProvider):
             "value": str(parsed.get("value", target_value or "")),
             "label": str(parsed.get("label", target_label or "")),
         }
-        logger.info(f"  [claude-form] '{result['label'][:40]}' at ({x},{y}) action={result['action']}")
+        # #435 item 1: reproject coordinates back to full-screen space
+        # when the call was region-scoped. No-op when ``crop_offset``
+        # is the (0, 0) sentinel returned by ``crop_to_region`` for
+        # unknown regions or when no region was hinted.
+        if crop_offset != (0, 0):
+            result["x"] = int(result["x"]) + crop_offset[0]
+            result["y"] = int(result["y"]) + crop_offset[1]
+        logger.info(
+            f"  [claude-form] '{result['label'][:40]}' at "
+            f"({result['x']},{result['y']}) action={result['action']}"
+            + (
+                f" [region-cropped, offset=({crop_offset[0]},{crop_offset[1]})]"
+                if crop_offset != (0, 0) else ""
+            )
+        )
         return result
 
     def find_target_by_affordance(

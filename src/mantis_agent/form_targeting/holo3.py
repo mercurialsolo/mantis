@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from PIL import Image
 
@@ -169,7 +169,17 @@ class Holo3FormTargetProvider(FormTargetProvider):
         target_label: str = "",
         target_value: str = "",
         target_aliases: list[str] | None = None,
+        region: Any = None,
     ) -> FormTargetResult | None:
+        # #435 item 1: optional region cropping for the Holo3 brain
+        # too. Same protocol as ``ClaudeFormTargetProvider`` — crop
+        # before grounding and re-project on return. No-op when
+        # ``region`` is falsy. Falling back to the unchanged path
+        # keeps existing callers identical pre/post.
+        crop_offset: tuple[int, int] = (0, 0)
+        if region:
+            from .region import crop_to_region
+            screenshot, crop_offset = crop_to_region(screenshot, region)
         aliases = [a for a in (target_aliases or []) if a]
         prompt = _FORM_PROMPT_TEMPLATE.format(
             width=screenshot.width,
@@ -179,11 +189,17 @@ class Holo3FormTargetProvider(FormTargetProvider):
             aliases=", ".join(aliases) or "(none)",
         )
         text = self._brain.detect_with_image(prompt, screenshot, max_tokens=256)
-        return self._parse_form_response(
+        result = self._parse_form_response(
             text, screenshot.size,
             fallback_action="type" if target_value else "click",
             label=target_label, value=target_value,
         )
+        # #435 item 1: reproject coords back to full-screen space when
+        # the call was region-scoped. No-op for the (0, 0) sentinel.
+        if result is not None and crop_offset != (0, 0):
+            result["x"] = int(result["x"]) + crop_offset[0]
+            result["y"] = int(result["y"]) + crop_offset[1]
+        return result
 
     def find_target_by_affordance(
         self,
