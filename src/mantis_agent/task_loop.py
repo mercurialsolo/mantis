@@ -158,22 +158,29 @@ def setup_env(
     return env, proxy_proc
 
 
-def setup_viewer(enabled: bool) -> tuple[Any, Any]:
+def setup_viewer(enabled: bool) -> tuple[Any, Any, str | None]:
     """Set up the Modal viewer if enabled.
 
-    Returns (viewer_ctx, viewer_event_bus). Both None if disabled or failed.
+    Returns ``(viewer_ctx, viewer_event_bus, viewer_url)``. All three
+    are ``None`` when ``enabled`` is False or setup fails.
+
+    The third element (``viewer_url``) was added under #416 so the
+    detached ``/v1/predict`` worker can surface the live tunnel URL
+    via ``status.json``. Existing CLI callers — which previously
+    discarded the URL — should destructure all three values and can
+    ignore the third if they don't need it.
     """
     if not enabled:
-        return None, None
+        return None, None, None
     try:
         from .viewer_modal import modal_viewer
 
         viewer_ctx = modal_viewer()
-        viewer_event_bus, _viewer_url = viewer_ctx.__enter__()
-        return viewer_ctx, viewer_event_bus
+        viewer_event_bus, viewer_url = viewer_ctx.__enter__()
+        return viewer_ctx, viewer_event_bus, viewer_url
     except Exception as e:
         print(f"  Viewer failed to start: {e}")
-        return None, None
+        return None, None, None
 
 
 # ── Internal helpers ──────────────────────────────────────────────

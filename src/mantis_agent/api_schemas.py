@@ -129,6 +129,15 @@ class PredictRequest(BaseModel):
     video_format: Literal["mp4", "webm", "gif"] = "mp4"
     video_fps: int = Field(default=5, ge=1, le=30)
 
+    # #416: opt in to the existing MJPEG viewer for the detached run.
+    # When True, the runtime starts ``viewer_modal._start_background``
+    # alongside ``_make_env`` and surfaces the modal.forward tunnel
+    # URL (with auth token) into ``status.json`` so a caller polling
+    # ``action=status`` gets a hot-link to the live screen. The
+    # viewer stops automatically on run termination. Distinct from
+    # ``record_video`` (post-run MP4); both can be set independently.
+    live_viewer: bool = False
+
     # #300 follow-up: per-request override for
     # :attr:`RoutingPolicy.som_for_unstructured_clicks`. ``None`` defers
     # to the deployment env (``MANTIS_ROUTE_SOM_CLICKS``). ``True`` /
@@ -217,6 +226,15 @@ class PureCUARequest(BaseModel):
     record_video: bool = False
     video_format: Literal["mp4", "webm", "gif"] = "mp4"
     video_fps: int = Field(default=5, ge=1, le=30)
+
+    # #416: opt in to the existing MJPEG viewer for the detached run.
+    # When True, the runtime starts ``viewer_modal._start_background``
+    # alongside ``_make_env`` and surfaces the modal.forward tunnel
+    # URL (with auth token) into ``status.json`` so a caller polling
+    # ``action=status`` gets a hot-link to the live screen. The
+    # viewer stops automatically on run termination. Distinct from
+    # ``record_video`` (post-run MP4); both can be set independently.
+    live_viewer: bool = False
 
     # #300 follow-up: per-request override for
     # :attr:`RoutingPolicy.som_for_unstructured_clicks`. ``None``
