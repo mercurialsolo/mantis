@@ -243,6 +243,60 @@ class ClaudeGuidedFormHandler:
                 target_aliases=aliases,
             )
             runner.costs["claude_extract"] += 1
+            probe_attempts = ["initial"]
+
+            # Scroll-probe before falling back to affordance search —
+            # mirror of the ``submit`` handler's End/Home/Page_Down
+            # sweep (form.py:430). The lu.ma host-question modal is
+            # internally scrollable: after fill_field 1+2 succeed,
+            # the third question is below the visible fold and
+            # find_form_target returns None. Without this probe the
+            # visual-affordance fallback kicks in immediately and is
+            # liable to click the modal's submit button (it's the
+            # most prominent element left on screen), prematurely
+            # submitting a half-filled form. Probing via mouse-wheel
+            # scroll instead of KEY_PRESS Page_Down is intentional:
+            # after the previous fill_field, focus is on its input
+            # and Page_Down would move the cursor inside the input
+            # rather than scroll the page/modal. Mouse wheel events
+            # ignore input focus.
+            def _scroll_probe(direction: str, amount: int, log_tag: str) -> dict | None:
+                try:
+                    env.step(Action(
+                        action_type=ActionType.SCROLL,
+                        params={"direction": direction, "amount": amount},
+                    ))
+                except Exception:
+                    return None
+                time.sleep(0.5)
+                shot = _wait_for_rendered_screenshot(env)
+                t = extractor.find_form_target(
+                    shot,
+                    search_intent,
+                    target_label=label,
+                    target_value=value,
+                    target_aliases=aliases,
+                )
+                runner.costs["claude_extract"] += 1
+                probe_attempts.append(log_tag)
+                logger.info(
+                    "  [claude-form] fill_field '%s' probe %s: %s",
+                    label[:30], log_tag, "found" if t else "not found",
+                )
+                return t
+
+            if target is None:
+                # First jump to top of the form so progressive scrolls
+                # below cover the whole scroll range deterministically.
+                target = _scroll_probe("up", 10, "scroll-top")
+            scroll_steps = 0
+            max_scrolls = 5
+            while target is None and scroll_steps < max_scrolls:
+                target = _scroll_probe(
+                    "down", 3, f"scroll-down-{scroll_steps + 1}/{max_scrolls}",
+                )
+                scroll_steps += 1
+
             if not target:
                 # Visual-affordance fallback before failing — covers
                 # non-English / icon-only inputs whose labels don't
@@ -251,7 +305,8 @@ class ClaudeGuidedFormHandler:
                 # subsequent search's interactions.
                 logger.warning(
                     "  [claude-form] fill_field: label-match exhausted "
-                    "for '%s' — trying visual-affordance fallback", label,
+                    "for '%s' after probes %s — trying visual-affordance "
+                    "fallback", label, probe_attempts,
                 )
                 try:
                     env.step(Action(
@@ -261,12 +316,54 @@ class ClaudeGuidedFormHandler:
                 except Exception:
                     pass
                 shot = _wait_for_rendered_screenshot(env)
-                target = extractor.find_target_by_affordance(shot, search_intent)
+                affordance = extractor.find_target_by_affordance(shot, search_intent)
                 runner.costs["claude_extract"] += 1
+                # Refuse affordance results whose recommended action is
+                # not text-input shaped. A ``fill_field`` step that
+                # falls back to an affordance pass returning
+                # ``action=click`` / ``select`` / ``right_click`` means
+                # Claude could not find any visible input matching the
+                # intent and picked the next-most-prominent element
+                # instead — almost always the modal's submit button.
+                # Clicking it would submit a half-filled form rather
+                # than fill the missing field.
+                if affordance is not None:
+                    aff_action = str(affordance.get("action") or "").lower()
+                    if aff_action and aff_action != "type":
+                        logger.warning(
+                            "  [claude-form] fill_field: affordance "
+                            "returned action=%s for fill intent — "
+                            "refusing to click (would dismiss form / "
+                            "submit partial data)",
+                            aff_action,
+                        )
+                        affordance = None
+                target = affordance
             if not target:
                 logger.warning(f"  [claude-form] fill_field: target '{label}' not found")
                 return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
             x, y = target["x"], target["y"]
+            # Tag-guard: refuse a click whose elementFromPoint is not
+            # input-shaped. Without this, a stale or mis-grounded
+            # target whose coordinates fall on the modal backdrop /
+            # close-X / submit button dismisses the form on the
+            # subsequent SoM ``el.click()``. Returns None on envs
+            # without CDP (tests / Playwright path) so legacy
+            # behaviour is preserved where the guard can't run.
+            from ..som_dispatch import is_input_like, probe_element_tag_at
+            tag_info = probe_element_tag_at(env, x, y)
+            if not is_input_like(tag_info):
+                tag_name = (tag_info or {}).get("tag", "?")
+                logger.warning(
+                    "  [claude-form] fill_field: refusing click at "
+                    "(%d, %d) — elementFromPoint=%s is not "
+                    "input-shaped (would dismiss form / mis-submit)",
+                    x, y, tag_name,
+                )
+                return StepResult(
+                    step_index=index, intent=step.intent, success=False,
+                    data=f"form_target_not_input:{tag_name}",
+                )
             type_value = value or target.get("value") or ""
             try:
                 # Click the field, clear any pre-filled value, then type.

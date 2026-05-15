@@ -82,7 +82,8 @@ def test_fill_field_target_not_found_returns_form_target_not_found(monkeypatch):
     extractor.find_form_target.return_value = None
     # Vision-affordance fallback also misses → form_target_not_found.
     extractor.find_target_by_affordance.return_value = None
-    ctx = _ctx(runner, extractor=extractor)
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
 
     step = MicroIntent(
         intent="Fill in email", type="fill_field",
@@ -92,8 +93,24 @@ def test_fill_field_target_not_found_returns_form_target_not_found(monkeypatch):
 
     assert result.success is False
     assert result.data == "form_target_not_found"
-    # 1 label-match + 1 visual-affordance fallback = 2 Claude calls.
-    assert runner.costs["claude_extract"] == 2
+    # 1 initial label-match + scroll-top probe + 5 scroll-down sweeps +
+    # 1 visual-affordance fallback = 8 Claude calls. The scroll-probe
+    # path mirrors `submit`'s End/Home/Page_Down sweep so a fill_field
+    # whose target is below the visible fold doesn't go straight to
+    # the affordance fallback (which historically clicked the form's
+    # submit button by mistake on lu.ma-style host-question modals).
+    assert runner.costs["claude_extract"] == 8
+    # Verify the scroll-probe dispatched mouse-wheel SCROLL actions
+    # (not KEY_PRESS) so input focus from a prior fill_field doesn't
+    # absorb the page-scroll keystrokes.
+    scroll_calls = [
+        c for c in env.step.call_args_list
+        if c.args[0].action_type == ActionType.SCROLL
+    ]
+    assert len(scroll_calls) == 6  # 1 scroll-top + 5 scroll-down
+    assert scroll_calls[0].args[0].params == {"direction": "up", "amount": 10}
+    for c in scroll_calls[1:]:
+        assert c.args[0].params == {"direction": "down", "amount": 3}
 
 
 def test_fill_field_success_clicks_triple_clicks_clears_and_types(monkeypatch):
@@ -126,6 +143,203 @@ def test_fill_field_success_clicks_triple_clicks_clears_and_types(monkeypatch):
     assert types[3] == ActionType.KEY_PRESS  # ctrl+a
     assert types[4] == ActionType.KEY_PRESS  # Delete
     assert types[5] == ActionType.TYPE
+
+
+def test_fill_field_scroll_probe_finds_target_after_scroll_down(monkeypatch):
+    """When the labelled input isn't in the initial viewport but
+    becomes visible after a downward scroll, fill_field's scroll-probe
+    locates it and proceeds with the click+type — no affordance
+    fallback fires. Mirrors the lu.ma host-question modal where the
+    third question is below the visible fold."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    # Initial miss; scroll-top miss; first scroll-down hit.
+    extractor.find_form_target.side_effect = [
+        None,  # initial
+        None,  # scroll-top
+        {"x": 600, "y": 480},  # scroll-down-1 hit
+    ]
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Fill title", type="fill_field",
+        params={"label": "What is your title?", "value": "AI Product Tester"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    assert result.data == "fill:What is your title?"
+    # 3 find_form_target calls (initial + scroll-top + scroll-down-1).
+    # The affordance fallback must NOT fire when scroll-probe succeeds.
+    assert runner.costs["claude_extract"] == 3
+    extractor.find_target_by_affordance.assert_not_called()
+    # Two SCROLL actions dispatched: scroll-top then scroll-down-1.
+    scroll_calls = [
+        c for c in env.step.call_args_list
+        if c.args[0].action_type == ActionType.SCROLL
+    ]
+    assert len(scroll_calls) == 2
+    assert scroll_calls[0].args[0].params == {"direction": "up", "amount": 10}
+    assert scroll_calls[1].args[0].params == {"direction": "down", "amount": 3}
+
+
+def test_fill_field_affordance_refuses_button_action(monkeypatch):
+    """The affordance fallback returning ``action=click`` (button-
+    shaped) is the canonical lu.ma failure: with no visible input,
+    Claude returns the most prominent thing left — the form's submit
+    button. fill_field must refuse and report form_target_not_found
+    rather than dispatch a click that submits a half-filled form."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = None
+    extractor.find_target_by_affordance.return_value = {
+        "x": 635, "y": 570,
+        "action": "click",
+        "label": "Register",
+        "value": "",
+    }
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Fill title", type="fill_field",
+        params={"label": "What is your title?", "value": "AI Product Tester"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is False
+    assert result.data == "form_target_not_found"
+    # No CLICK action dispatched — the submit button was NOT clicked.
+    click_calls = [
+        c for c in env.step.call_args_list
+        if c.args[0].action_type == ActionType.CLICK
+    ]
+    assert click_calls == []
+
+
+def test_fill_field_affordance_accepts_type_action(monkeypatch):
+    """Counterpart to the refuse test: when the affordance pass
+    returns ``action=type`` (correctly identified as a text input by
+    visual shape rather than label), fill_field proceeds normally."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = None
+    extractor.find_target_by_affordance.return_value = {
+        "x": 400, "y": 250,
+        "action": "type",
+        "label": "Le titre",  # non-English label, affordance match
+        "value": "",
+    }
+    env = MagicMock()
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Fill title", type="fill_field",
+        params={"label": "Title", "value": "AI Product Tester"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    assert result.data == "fill:Title"
+
+
+def test_fill_field_tag_guard_refuses_button_at_click_point(monkeypatch):
+    """find_form_target returned coords that land on a BUTTON element
+    (most likely cause: stale grounding / a target whose center
+    overlaps the modal submit button). The tag-guard probes the
+    element at (x, y) via CDP and refuses the click rather than
+    dispatching a SoM ``el.click()`` that would submit the form."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 635, "y": 570}
+    env = MagicMock()
+    # Wire CDP eval to simulate "the element at this point is a BUTTON".
+    env.cdp_evaluate = MagicMock(return_value={"tag": "BUTTON", "contentEditable": False})
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Fill title", type="fill_field",
+        params={"label": "Title", "value": "AI Product Tester"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is False
+    assert result.data == "form_target_not_input:BUTTON"
+    # No CLICK / TYPE dispatched.
+    blocked_types = {ActionType.CLICK, ActionType.TYPE}
+    assert not any(
+        c.args[0].action_type in blocked_types
+        for c in env.step.call_args_list
+    )
+
+
+def test_fill_field_tag_guard_allows_input_at_click_point(monkeypatch):
+    """Counterpart: when the element at (x, y) IS an INPUT, the guard
+    passes through and the click+type sequence proceeds."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 200, "y": 300}
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(return_value={"tag": "INPUT", "contentEditable": False})
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Fill email", type="fill_field",
+        params={"label": "Email", "value": "u@e.com"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    assert result.data == "fill:Email"
+
+
+def test_fill_field_tag_guard_allows_contenteditable_div(monkeypatch):
+    """Rich text editors (Quill, ProseMirror, …) render as ``<div
+    contenteditable="true">``. The tag-guard must accept them — the
+    INPUT_LIKE_TAGS allow-list alone would reject DIV."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 200, "y": 300}
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(return_value={"tag": "DIV", "contentEditable": True})
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Fill bio", type="fill_field",
+        params={"label": "Bio", "value": "hello"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
 
 
 # ── submit ──────────────────────────────────────────────────────────
