@@ -85,6 +85,7 @@ Plus the run options:
 | `record_video` | `false` | If true, captures the Xvfb display while the run executes and saves a screencast under the per-tenant run dir. Fetch via `GET /v1/runs/{run_id}/video`. |
 | `video_format` | `"mp4"` | One of `mp4`, `webm`, `gif`. |
 | `video_fps` | `5` | Capture rate; clamped to `[1, 30]`. Higher fps = larger file + more CPU. |
+| `live_viewer` | `false` | ([#416](https://github.com/mercurialsolo/mantis/issues/416)) Stand up an MJPEG tunnel onto the Xvfb display and surface its URL as `viewer_url` on `action=status`. Open the URL in a browser to watch the run live. Currently only the `holo3` executor wires this through. |
 
 #### Detached response
 
@@ -125,6 +126,10 @@ Set `action` and `run_id` in the body:
   "run_id": "...",
   "started_at": "...",
   "finished_at": "...",
+  // Present only when the run was started with ``live_viewer: true``
+  // and the executor has stood up the MJPEG tunnel. Hot-link in any
+  // browser while the run is still running.
+  "viewer_url": "https://ta-...-7860-....w.modal.host?token=...",
   "summary": {
     "total_time_s": 569,
     "steps_executed": 17,

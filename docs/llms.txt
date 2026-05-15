@@ -83,6 +83,7 @@ Plus run options (all optional):
 | `record_video`    | `false` | Capture screencast; fetch via `GET /v1/runs/{run_id}/video`                   |
 | `video_format`    | `"mp4"` | One of `mp4`, `webm`, `gif`                                                   |
 | `video_fps`       | `5`     | Capture rate (clamped `[1, 30]`)                                              |
+| `live_viewer`     | `false` | Open an MJPEG tunnel; `action=status` returns `viewer_url`. Holo3 only        |
 | `callback_url`    | unset   | Per-request override of the tenant default webhook URL                        |
 | `cache_read`      | `false` | Skip the deep-extract Claude call (~$0.04/item) when the current URL is already cached fresh |
 | `cache_write`     | `false` | Persist every viable extraction so future runs (or loop iterations) hit the cache |

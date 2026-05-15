@@ -21,6 +21,7 @@ Once you have an authenticated session, every plan submission lands on `POST /v1
   "record_video":      false,                        // see Recordings page
   "video_format":      "mp4",
   "video_fps":         5,
+  "live_viewer":       false,                        // surfaces ``viewer_url`` on action=status (holo3 only)
   "callback_url":      "https://my-webhook"          // overrides tenant default
 }
 ```
