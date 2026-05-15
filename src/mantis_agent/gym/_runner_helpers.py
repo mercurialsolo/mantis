@@ -725,6 +725,12 @@ def build_step_context(runner: "MicroPlanRunner", index: int):
         routing_policy=getattr(runner, "routing_policy", None),
         tool_channel=runner.tool_channel,
         extraction_cache=runner.extraction_cache,
+        # #406: form_target_provider lifecycle lives on the runner so a
+        # single provider instance services every step (caches stay
+        # warm, factory cost is paid once per run). When the runner
+        # didn't wire one, ``None`` flows through and the form handler
+        # falls back to the extractor's compat shims.
+        form_target_provider=getattr(runner, "form_target_provider", None),
         state={"index": index},
     )
 

@@ -31,7 +31,6 @@ import base64
 import json
 import logging
 import os
-import random
 import re
 import time
 from io import BytesIO
@@ -39,6 +38,12 @@ from typing import Any, ClassVar
 
 from PIL import Image
 
+from .._anthropic.client import (
+    _TRANSIENT_STATUS_CODES,
+    AnthropicToolUseClient,
+    _credit_claude_time,
+    _retry_delay,
+)
 from .result import ExtractionResult
 from .schema import ExtractionSchema
 from .spam import contains_dealer_text, parse_bool, seller_looks_like_dealer
@@ -46,49 +51,16 @@ from .spam import contains_dealer_text, parse_bool, seller_looks_like_dealer
 logger = logging.getLogger(__name__)
 
 
-def _credit_claude_time(bucket: str, t0: float) -> None:
-    """Credit elapsed Claude API time to the runner's TimeMeter
-    (epic #362). Best-effort — bookkeeping I/O must never break a
-    Claude call. Internal-only — invoked from ``_call*`` wrappers.
-    """
-    try:
-        from ..gym.time_meter import record_to_current
-        record_to_current(bucket, time.monotonic() - t0)
-    except Exception as exc:  # noqa: BLE001 — observability, never fatal
-        logger.debug("claude time_meter credit failed: %s", exc)
-
-
-# HTTP status codes treated as transient (worth retrying with backoff).
-# - 429: rate limited
-# - 502/503/504: upstream proxy / gateway hiccups
-# - 529: Anthropic's "Overloaded" code — by far the most common cause
-#   of mid-run halt during peak hours; the failure mode that motivated
-#   adding this loop (issue #403).
-_TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 502, 503, 504, 529})
-
-
-def _retry_delay(attempt: int, retry_after_header: str | None) -> float:
-    """Compute the sleep before the next retry attempt.
-
-    - Honours ``Retry-After`` when it's a numeric seconds value
-      (RFC 7231 §7.1.3 — HTTP-date form not supported; Anthropic
-      uses seconds in practice).
-    - Otherwise exponential backoff with 25% jitter: 1s, 2s, 4s, 8s,
-      capped at 16s. Total worst-case wait across 4 attempts is
-      ~15s + jitter, which clears typical 1–2 minute overload spikes
-      without blowing the per-step budget.
-
-    Standalone function (not a method) so tests can monkeypatch it
-    directly without instantiating ClaudeExtractor.
-    """
-    if retry_after_header:
-        try:
-            return max(0.0, float(retry_after_header))
-        except (TypeError, ValueError):
-            pass
-    base = float(min(16, 2 ** attempt))
-    jitter = random.uniform(0.0, base * 0.25)
-    return base + jitter
+# Re-exports for backward compatibility — tests import these names from
+# ``mantis_agent.extraction.extractor``. The real definitions moved to
+# :mod:`mantis_agent._anthropic.client` under #406 so the same retry
+# policy backs both extraction and grounding callers.
+__all__ = [
+    "ClaudeExtractor",
+    "_TRANSIENT_STATUS_CODES",
+    "_retry_delay",
+    "_credit_claude_time",
+]
 
 
 def _coerce_coord(value: Any) -> int | None:
@@ -214,6 +186,15 @@ class ClaudeExtractor:
         self.model = model
         self.schema = schema
         self.debug_dir = os.environ.get("MANTIS_DEBUG_DIR", "/data/screenshots/claude_debug")
+        # Shared Anthropic client (#406). Both ClaudeExtractor (extraction
+        # methods) and ClaudeFormTargetProvider (grounding methods) hold
+        # an instance — same retry policy, same TimeMeter accounting,
+        # one place to evolve when Anthropic changes its API.
+        self._client = AnthropicToolUseClient(
+            api_key=self.api_key,
+            model=self.model,
+            log_prefix="ClaudeExtractor",
+        )
 
     # ── Dynamic prompt generation from schema ─────────────────────
 
@@ -397,71 +378,17 @@ class ClaudeExtractor:
         timeout: float,
         max_attempts: int = 4,
     ):
-        """POST ``payload`` to /v1/messages with retry on transient errors.
+        """Back-compat shim — see :class:`AnthropicToolUseClient`.
 
-        Retries on the status codes in :data:`_TRANSIENT_STATUS_CODES`
-        (429 / 502 / 503 / 504 / 529) and on network exceptions
-        (``requests.Timeout``, ``requests.ConnectionError``). Non-
-        transient HTTP errors (4xx other than 429) return the
-        Response object so the caller can log + parse the body.
-
-        Returns:
-            - The final ``requests.Response`` on success or on a
-              non-transient HTTP error.
-            - The final transient ``requests.Response`` after the
-              retry budget is exhausted (caller logs as a failure).
-            - ``None`` only when every attempt raised a network
-              exception (no Response to return).
-
-        Honours ``Retry-After`` header when present (via
-        :func:`_retry_delay`). Sleeps between attempts via
-        ``time.sleep`` — tests monkeypatch that for speed.
+        The implementation moved to
+        :meth:`AnthropicToolUseClient.post_messages_with_retry` under
+        #406. Kept here as a thin wrapper because
+        ``tests/test_extractor_retry.py`` exercises it via the
+        extractor surface.
         """
-        import requests
-
-        url = "https://api.anthropic.com/v1/messages"
-        headers = {
-            "x-api-key": self.api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-        last_response = None
-        for attempt in range(max_attempts):
-            try:
-                resp = requests.post(
-                    url, headers=headers, json=payload, timeout=timeout,
-                )
-            except (requests.Timeout, requests.ConnectionError) as exc:
-                if attempt == max_attempts - 1:
-                    logger.warning(
-                        "ClaudeExtractor network error after %d attempts: %s",
-                        max_attempts, exc,
-                    )
-                    return None
-                delay = _retry_delay(attempt, None)
-                logger.info(
-                    "ClaudeExtractor transient network error (%s) — "
-                    "retry %d/%d in %.1fs",
-                    type(exc).__name__, attempt + 1, max_attempts, delay,
-                )
-                time.sleep(delay)
-                continue
-            if resp.status_code not in _TRANSIENT_STATUS_CODES:
-                return resp
-            last_response = resp
-            if attempt == max_attempts - 1:
-                logger.warning(
-                    "ClaudeExtractor transient HTTP %s after %d attempts; "
-                    "giving up", resp.status_code, max_attempts,
-                )
-                return resp
-            delay = _retry_delay(attempt, resp.headers.get("Retry-After"))
-            logger.info(
-                "ClaudeExtractor transient HTTP %s — retry %d/%d in %.1fs",
-                resp.status_code, attempt + 1, max_attempts, delay,
-            )
-            time.sleep(delay)
-        return last_response
+        return self._client.post_messages_with_retry(
+            payload, timeout=timeout, max_attempts=max_attempts,
+        )
 
     def _call_with_tool_schema(
         self,
@@ -474,80 +401,22 @@ class ClaudeExtractor:
         max_tokens: int = 500,
         _bucket: str = "claude_extract",
     ) -> dict | None:
-        """Call Claude API and force the response into a JSON-Schema-validated tool_use.
+        """Back-compat shim — see :meth:`AnthropicToolUseClient.call_with_tool_schema`.
 
-        Anthropic's ``tool_use`` with ``tool_choice={\"type\": \"tool\", \"name\": ...}``
-        forces the model to emit a ``tool_use`` content block whose
-        ``input`` field is server-side-validated against ``input_schema``.
-        Replaces the previous prompt-only \"output ONLY valid JSON\"
-        approach which the model inconsistently honoured — empirical
-        failures from the boattrader smoke included prose-only responses
-        (no JSON at all), prose-then-truncated-JSON (max_tokens cliff),
-        and malformed JSON like ``{\"x\": 302, 43, \"y\": 43, ...}`` (extra
-        positional value before the next key). Schema enforcement makes
-        all three failure modes impossible.
-
-        Returns the validated input dict, or ``None`` on any API / network
-        / shape mismatch (caller logs and treats as not_found, same as
-        the legacy ``_parse_json`` failure path).
-
-        ``prompt`` is still passed for the screen-content guidance — only
-        the response shape is schema-locked. Generic primitive: every
-        extractor call site that wants structured output should use this
-        instead of ``_call`` + ``_parse_json``.
+        The implementation moved to the shared client under #406 so
+        extraction and grounding callers share one retry policy / one
+        TimeMeter bucket / one image-encoding path. This method's
+        signature is preserved because tests (and a few callers
+        outside this module) reach into the extractor for it.
         """
-        if not self.api_key:
-            logger.warning("ClaudeExtractor: no API key")
-            return None
-
-        buf = BytesIO()
-        screenshot.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
-
-        payload = {
-            "model": self.model,
-            "max_tokens": max_tokens,
-            "tools": [{
-                "name": tool_name,
-                "description": tool_description,
-                "input_schema": input_schema,
-            }],
-            "tool_choice": {"type": "tool", "name": tool_name},
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-        }
-
-        t0 = time.monotonic()
-        try:
-            resp = self._post_anthropic_with_retry(payload, timeout=30)
-            if resp is None:
-                return None
-            if resp.status_code != 200:
-                logger.warning(
-                    "ClaudeExtractor tool_use API error %s: %s",
-                    resp.status_code,
-                    resp.text[:500],
-                )
-                return None
-            for block in resp.json().get("content", []):
-                if block.get("type") == "tool_use" and block.get("name") == tool_name:
-                    tool_input = block.get("input")
-                    if isinstance(tool_input, dict):
-                        return tool_input
-            logger.warning(
-                "ClaudeExtractor tool_use returned no %s tool block in response",
-                tool_name,
-            )
-        except Exception as e:
-            logger.warning(f"ClaudeExtractor tool_use failed: {e}")
-        finally:
-            _credit_claude_time(_bucket, t0)
-        return None
+        return self._client.call_with_tool_schema(
+            screenshot, prompt,
+            tool_name=tool_name,
+            tool_description=tool_description,
+            input_schema=input_schema,
+            max_tokens=max_tokens,
+            time_bucket=_bucket,
+        )
 
     def _call_with_tool_schema_multi(
         self,
@@ -561,73 +430,16 @@ class ClaudeExtractor:
         max_tokens: int = 500,
         _bucket: str = "claude_extract",
     ) -> dict | None:
-        """Multi-screenshot variant of :meth:`_call_with_tool_schema`.
-
-        Same schema-validated tool_use enforcement, but bundles a list
-        of screenshots into a single messages payload. Used by paths
-        that need to compare images (e.g. post-click navigation
-        verification: before-click vs after-click). Each image is
-        prefixed with its label so the model can refer to them in
-        prose: "Screenshot 1: BEFORE click", "Screenshot 2: AFTER click".
-
-        Returns the validated input dict, or ``None`` on API / shape
-        mismatch — caller treats as fall-through (no answer).
-        """
-        if not self.api_key:
-            logger.warning("ClaudeExtractor: no API key")
-            return None
-
-        labels = labels or []
-        content: list[dict] = [{"type": "text", "text": prompt}]
-        for i, screenshot in enumerate(screenshots, 1):
-            label = labels[i - 1] if i - 1 < len(labels) else f"screenshot {i}"
-            buf = BytesIO()
-            screenshot.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode()
-            content.append({"type": "text", "text": f"Screenshot {i}: {label}"})
-            content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/png", "data": b64},
-            })
-
-        payload = {
-            "model": self.model,
-            "max_tokens": max_tokens,
-            "tools": [{
-                "name": tool_name,
-                "description": tool_description,
-                "input_schema": input_schema,
-            }],
-            "tool_choice": {"type": "tool", "name": tool_name},
-            "messages": [{"role": "user", "content": content}],
-        }
-
-        t0 = time.monotonic()
-        try:
-            resp = self._post_anthropic_with_retry(payload, timeout=45)
-            if resp is None:
-                return None
-            if resp.status_code != 200:
-                logger.warning(
-                    "ClaudeExtractor multi tool_use API error %s: %s",
-                    resp.status_code,
-                    resp.text[:500],
-                )
-                return None
-            for block in resp.json().get("content", []):
-                if block.get("type") == "tool_use" and block.get("name") == tool_name:
-                    tool_input = block.get("input")
-                    if isinstance(tool_input, dict):
-                        return tool_input
-            logger.warning(
-                "ClaudeExtractor multi tool_use returned no %s tool block",
-                tool_name,
-            )
-        except Exception as e:
-            logger.warning(f"ClaudeExtractor multi tool_use failed: {e}")
-        finally:
-            _credit_claude_time(_bucket, t0)
-        return None
+        """Back-compat shim — see :meth:`AnthropicToolUseClient.call_with_tool_schema_multi`."""
+        return self._client.call_with_tool_schema_multi(
+            screenshots, prompt,
+            tool_name=tool_name,
+            tool_description=tool_description,
+            input_schema=input_schema,
+            labels=labels,
+            max_tokens=max_tokens,
+            time_bucket=_bucket,
+        )
 
     def _call_many(
         self,
@@ -1549,6 +1361,23 @@ class ClaudeExtractor:
         logger.info(f"  [claude-filter] '{result['label'][:40]}' at ({x},{y}) action={result['action']}")
         return result
 
+    @property
+    def _form_target_provider(self):
+        """Lazily-constructed :class:`ClaudeFormTargetProvider` (#406).
+
+        The form-target grounding methods moved out of this class into
+        :mod:`mantis_agent.form_targeting.claude`. The methods below
+        are kept as back-compat shims so existing callers (tests,
+        ad-hoc scripts) still work; production code should use the
+        provider on :class:`StepContext` instead.
+        """
+        prov = getattr(self, "__form_target_provider_cached", None)
+        if prov is None:
+            from ..form_targeting.claude import ClaudeFormTargetProvider
+            prov = ClaudeFormTargetProvider(self._client)
+            self.__form_target_provider_cached = prov
+        return prov
+
     def find_form_target(
         self,
         screenshot: Image.Image,
@@ -1558,148 +1387,19 @@ class ClaudeExtractor:
         target_value: str = "",
         target_aliases: list[str] | None = None,
     ) -> dict | None:
-        """Find a labelled form element (input / button / dropdown / option) on any page.
+        """Back-compat shim — see :meth:`ClaudeFormTargetProvider.find_form_target`.
 
-        The non-listings counterpart to ``find_filter_target``. Used by the
-        runner's ``fill_field`` / ``submit`` / ``select_option`` step types
-        for login forms, edit forms, settings panels — anywhere the page has
-        named fields-and-buttons rather than a listings grid.
-
-        Args:
-            screenshot: Current page screenshot.
-            intent: Free-text description: "Click the user ID input field and
-                enter alice", "Click the Login button", "Click the
-                Industry Vertical dropdown".
-            target_label: Optional structured label from
-                ``MicroIntent.params["label"]`` (preferred — more reliable
-                than parsing free text).
-            target_value: Optional value to type / option to select. The
-                runner re-reads this from ``params`` for the actual typing,
-                but providing it here helps Claude disambiguate.
-            target_aliases: Optional alternate labels — e.g.
-                ``["Update", "Save", "Save Changes"]`` for an "Update Lead"
-                submit button. Claude treats any alias as an acceptable
-                visual match, so a plan written for one product can survive
-                a copy-tweak in another. Issue #89 §2.
-
-        Returns:
-            dict with keys: ``x``, ``y``, ``action`` ("click" | "type" |
-            "select"), ``value`` (text to type / option to pick), ``label``
-            (what was found). None on failure.
+        Implementation moved under #406; this method delegates so
+        existing callers keep working without touching every test
+        and step-handler call site at once. Callers should migrate
+        to use the provider on :class:`StepContext` directly.
         """
-        target_clause = (
-            f"\nThe target element label/text is: \"{target_label}\""
-            if target_label else ""
+        return self._form_target_provider.find_form_target(
+            screenshot, intent,
+            target_label=target_label,
+            target_value=target_value,
+            target_aliases=target_aliases,
         )
-        value_clause = (
-            f"\nThe value to type or option to select is: \"{target_value}\""
-            if target_value else ""
-        )
-        aliases = [a for a in (target_aliases or []) if a]
-        alias_clause = (
-            "\nAcceptable equivalent labels (any of these is a valid match): "
-            + ", ".join(f'"{a}"' for a in aliases)
-            if aliases else ""
-        )
-        # Prompt body lives at
-        # ``mantis_agent/prompts/files/find_form_target.txt`` so plan
-        # authors / operators can A/B-test wording without forking
-        # this module. Caller-supplied placeholders below.
-        from ..prompts import load_prompt
-
-        prompt = load_prompt(
-            "find_form_target",
-            screen_width=screenshot.width,
-            screen_height=screenshot.height,
-            intent=intent,
-            target_clause=target_clause,
-            value_clause=value_clause,
-            alias_clause=alias_clause,
-        )
-
-        debug_stem = "claude_form"
-        try:
-            screenshot.save(self._debug_path(debug_stem, ".png"))
-        except Exception:
-            pass
-        try:
-            with open(self._debug_path(debug_stem, "_prompt.txt"), "w") as f:
-                f.write(prompt)
-        except Exception:
-            pass
-
-        # tool_use schema enforcement — same shape as find_filter_target
-        # (the form / filter targets are both "find one labelled element
-        # and tell me how to interact with it").
-        parsed = self._call_with_tool_schema(
-            screenshot,
-            prompt,
-            tool_name="report_form_target",
-            tool_description=(
-                "Report the form element matching the task — coordinates "
-                "and interaction (click / type / select), or not_found "
-                "if no matching element is visible on screen."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "x": {"type": "integer", "description": "Center X in pixels"},
-                    "y": {"type": "integer", "description": "Center Y in pixels"},
-                    "action": {
-                        "type": "string",
-                        "enum": ["click", "right_click", "type", "select", "not_found"],
-                    },
-                    "value": {"type": "string"},
-                    "label": {"type": "string"},
-                },
-                "required": ["x", "y", "action", "value", "label"],
-            },
-        )
-
-        try:
-            with open(self._debug_path(debug_stem, "_response.txt"), "w") as f:
-                f.write(json.dumps(parsed) if parsed is not None else "<no tool_use>")
-        except Exception:
-            pass
-
-        if not parsed:
-            logger.warning("  [claude-form] tool_use returned no usable result")
-            return None
-
-        if parsed.get("action") == "not_found":
-            label = parsed.get("label", "unknown")
-            logger.info(f"  [claude-form] target not visible: {intent[:60]}")
-            logger.info(f"  [claude-form] What Claude sees: {label[:120]}")
-            return None
-
-        # Defensive int coercion — even with the tool_use schema enforcing
-        # ``"type": "integer"``, the model occasionally emits coordinates
-        # as strings with stray whitespace / trailing comma (e.g.
-        # ``"x": "296, "`` was observed on a long-prompt retry that fed
-        # failure-history into the search). Strip and parse rather than
-        # crash the entire run.
-        x = _coerce_coord(parsed.get("x"))
-        y = _coerce_coord(parsed.get("y"))
-        if x is None or y is None:
-            logger.warning(
-                "  [claude-form] non-integer coordinates returned: "
-                "x=%r y=%r — treating as not found",
-                parsed.get("x"), parsed.get("y"),
-            )
-            return None
-        if x == 0 and y == 0:
-            logger.warning("  [claude-form] zero coordinates")
-            return None
-
-        result = {
-            "x": x,
-            "y": y,
-            "action": str(parsed.get("action", "click")),
-            "value": str(parsed.get("value", target_value or "")),
-            "label": str(parsed.get("label", target_label or "")),
-        }
-        logger.info(f"  [claude-form] '{result['label'][:40]}' at ({x},{y}) action={result['action']}")
-        return result
 
     def verify_dropdown_value(
         self,
@@ -1746,232 +1446,26 @@ class ClaudeExtractor:
         "could not verify; trust the click happened" rather than
         forcing a retry on every API blip.
         """
-        prompt = (
-            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"A dropdown control labelled '{dropdown_label}' is visible on "
-            f"the page. Read its CURRENT VALUE — the text displayed inside "
-            f"the closed dropdown control, showing which option is currently "
-            f"selected. Most dropdowns render the selected text on the left "
-            f"of the control with a chevron/arrow on the right.\n\n"
-            f"Important: report only what is *literally rendered* inside "
-            f"the dropdown control right now — do not infer, normalise, or "
-            f"guess. If the dropdown is empty / no value is visible, return "
-            f"an empty string. If a menu is still open and partially "
-            f"covering the control, report what the control itself shows "
-            f"(not the highlighted menu item)."
+        return self._form_target_provider.verify_dropdown_value(
+            screenshot, dropdown_label, expected_value,
         )
-        parsed = self._call_with_tool_schema(
-            screenshot,
-            prompt,
-            tool_name="report_dropdown_value",
-            tool_description=(
-                "Report the literal text displayed inside a dropdown "
-                "control — the currently-selected value."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "observed": {
-                        "type": "string",
-                        "description": (
-                            "The literal text displayed inside the "
-                            "dropdown control right now. Empty string "
-                            "if no value is visible."
-                        ),
-                    },
-                },
-                "required": ["observed"],
-            },
-            max_tokens=200,
-        )
-        if not parsed:
-            return None
-        observed = str(parsed.get("observed") or "")
-        matches = self._semantic_dropdown_match(observed, expected_value)
-        return {"matches": matches, "observed": observed}
 
     @staticmethod
     def _semantic_dropdown_match(observed: str, expected: str) -> bool:
-        """Decide if a dropdown's observed value matches the expected
-        option. Case-insensitive, whitespace-tolerant, substring on
-        either side. ``"High"`` matches ``"High Priority"`` and vice
-        versa; ``"Critical"`` does *not* match ``"High"``. Empty
-        observed never matches a non-empty expected (post-click
-        verifier blanked its read → caller should treat as not-matched
-        rather than silently passing)."""
-        a = (observed or "").strip().casefold()
-        b = (expected or "").strip().casefold()
-        if not a or not b:
-            return False
-        return a == b or a in b or b in a
+        """Back-compat shim — see
+        :func:`mantis_agent.form_targeting.claude._semantic_dropdown_match`.
+        """
+        from ..form_targeting.claude import _semantic_dropdown_match
+        return _semantic_dropdown_match(observed, expected)
 
     def find_target_by_affordance(
         self,
         screenshot: Image.Image,
         intent: str,
     ) -> dict | None:
-        """Locate the right element for an intent by VISUAL AFFORDANCE
-        rather than any specific label or hardcoded action assumption.
-
-        The label-driven ``find_form_target`` requires the caller to
-        know the element's literal text (or one of its aliases). That
-        doesn't work for:
-
-        - non-English UIs (``Enregistrer`` / ``Speichern`` / ``保存``)
-        - icon-only controls (checkmark / floppy / paper-plane glyphs)
-        - product-specific labels the plan author couldn't predict
-        - elements whose visual position is recognisable but whose
-          label is partially obscured / abbreviated
-
-        This method is the visual-fallback partner. It DOES NOT assume
-        the target is a button / submit / action — it reads the
-        intent prose and asks Claude "what element on this page best
-        matches this intent, by visual affordance?". The intent
-        determines the element type:
-
-        - "Click Save" → primary action button
-        - "Enter password in Password field" → text input
-        - "Pick High from Priority dropdown" → dropdown control
-        - "Toggle the Enable Notifications switch" → toggle / checkbox
-
-        Claude reads the intent, identifies the affordance category,
-        and returns coordinates + the OBSERVED label / description so
-        the runner can log what it actually found (in any language /
-        for any icon).
-
-        Used as a fallback by the form handler when the cheaper
-        label-match search has exhausted. Returns the same result
-        shape as ``find_form_target`` — when ``action`` is
-        ``"not_found"`` the helper returns ``None`` so the caller
-        falls through to existing failure paths.
+        """Back-compat shim — see
+        :meth:`ClaudeFormTargetProvider.find_target_by_affordance`.
         """
-        prompt = (
-            f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
-            f"INTENT (read this carefully — it tells you what kind of "
-            f"element to find): {intent}\n\n"
-            f"The label-driven search for this intent already failed: no "
-            f"element matched the literal label / alias the plan "
-            f"specified. The intent prose ABOVE is the source of truth "
-            f"for what the runner is trying to do — read it, infer the "
-            f"element type that fits, and locate that element by VISUAL "
-            f"AFFORDANCE rather than text matching.\n\n"
-            f"Element-type heuristics (use the intent verbs to choose):\n"
-            f"- ``click`` / ``open`` / ``submit`` / ``save`` / ``confirm`` "
-            f"/ ``select [a row / lead / item]`` — find a button, link, "
-            f"or clickable card. Primary action buttons are typically "
-            f"coloured / filled, in form footers or sticky toolbars; "
-            f"secondary buttons (Cancel, Reset, Back) are typically "
-            f"grey / outline.\n"
-            f"- ``enter`` / ``type`` / ``fill`` / ``input`` — find a "
-            f"text input or textarea. Match the intent's field name to "
-            f"the visible label adjacent to (above / left of / "
-            f"placeholder inside) the input box.\n"
-            f"- ``pick`` / ``choose`` / ``select [option] from [dropdown]`` "
-            f"— find a dropdown / select control (visible chevron or "
-            f"current value).\n"
-            f"- ``toggle`` / ``check`` / ``enable`` / ``disable`` — "
-            f"find a checkbox / toggle / radio.\n\n"
-            f"LANGUAGE-AGNOSTIC: the element's visible label may be in "
-            f"any language (English, French, German, Japanese, etc) "
-            f"or icon-only. Match by AFFORDANCE — shape, position, "
-            f"styling — not by specific words. The intent's reference "
-            f"to a field or button name is a HINT (semantic match) "
-            f"rather than a literal text-match requirement.\n\n"
-            f"NO HARDCODED ACTION ASSUMPTIONS: don't assume the target "
-            f"is necessarily a submit button. If the intent is "
-            f"``Enter the password``, the target is the password "
-            f"input, NOT the Login button. The intent verb is the "
-            f"final word.\n\n"
-            f"If you see no element on screen that plausibly matches "
-            f"the intent, return action=not_found and describe in "
-            f"``label`` what is visible. The runner will route that "
-            f"to its existing failure / recovery path.\n\n"
-            f"Return CENTER coordinates of the chosen element along "
-            f"with the EXACT TEXT or icon description visible on it. "
-            f"Set ``action`` to one of ``click`` / ``type`` / "
-            f"``select`` based on what the runner should do next "
-            f"(matching the verb in the intent)."
+        return self._form_target_provider.find_target_by_affordance(
+            screenshot, intent,
         )
-        parsed = self._call_with_tool_schema(
-            screenshot,
-            prompt,
-            tool_name="report_target_by_affordance",
-            tool_description=(
-                "Report the location, observed label, and recommended "
-                "action for the element best matching the intent — "
-                "identified by visual affordance, not label match."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "x": {
-                        "type": "integer",
-                        "description": "Center x of the chosen element.",
-                    },
-                    "y": {
-                        "type": "integer",
-                        "description": "Center y of the chosen element.",
-                    },
-                    "action": {
-                        "type": "string",
-                        "enum": ["click", "right_click", "type", "select", "not_found"],
-                        "description": (
-                            "What the runner should do at this element. "
-                            "``click`` for buttons / links / row "
-                            "containers; ``right_click`` only when the "
-                            "task explicitly needs the browser's native "
-                            "context menu on the element (e.g. \"Open "
-                            "Link in New Tab\", \"Copy Link\"); ``type`` "
-                            "for text inputs the runner should fill; "
-                            "``select`` for an option already visible in "
-                            "an open dropdown menu (click first if the "
-                            "dropdown is closed). ``not_found`` if "
-                            "the page has nothing matching the intent."
-                        ),
-                    },
-                    "label": {
-                        "type": "string",
-                        "description": (
-                            "EXACT text observed on / near the element "
-                            "(any language) or an icon description for "
-                            "icon-only elements. When action=not_found, "
-                            "describe what IS visible instead."
-                        ),
-                    },
-                },
-                "required": ["action", "label"],
-            },
-            max_tokens=500,
-        )
-        if not parsed:
-            logger.warning(
-                "  [claude-form] affordance: tool_use returned no result"
-            )
-            return None
-        if parsed.get("action") == "not_found":
-            logger.info(
-                "  [claude-form] affordance: not found — observed: %s",
-                str(parsed.get("label", ""))[:120],
-            )
-            return None
-        x = _coerce_coord(parsed.get("x"))
-        y = _coerce_coord(parsed.get("y"))
-        if x is None or y is None or (x == 0 and y == 0):
-            logger.warning(
-                "  [claude-form] affordance: invalid coords x=%r y=%r",
-                parsed.get("x"), parsed.get("y"),
-            )
-            return None
-        result = {
-            "x": x,
-            "y": y,
-            "action": str(parsed.get("action", "click")),
-            "value": "",
-            "label": str(parsed.get("label", "")),
-        }
-        logger.info(
-            "  [claude-form] affordance: '%s' at (%d, %d) action=%s — "
-            "discovered via visual affordance (no alias match needed)",
-            result["label"][:60], x, y, result["action"],
-        )
-        return result

@@ -79,6 +79,16 @@ class StepContext:
     tool_channel: Any | None = None
     extraction_cache: Any | None = None
 
+    # #406: form-target grounding (find_form_target /
+    # find_target_by_affordance / verify_dropdown_value) is provider-
+    # backed so a runner can swap Claude for Holo3 (or anything else
+    # satisfying the :class:`FormTargetProvider` protocol) without
+    # touching the form handler. When left ``None`` the form handler
+    # lazily builds a :class:`ClaudeFormTargetProvider` from
+    # ``extractor`` — preserves legacy behaviour for any caller that
+    # constructs a :class:`StepContext` directly.
+    form_target_provider: Any | None = None
+
     # Free-form scratch the handler can use for private state across
     # phases of one execute() call (e.g., the deep-extract pattern keeps
     # screenshot lists here). Executor never reads this.

@@ -38,9 +38,16 @@ def _wired(extractor: ClaudeExtractor) -> tuple[MagicMock, MagicMock]:
     Tests assert the tool seam is called and ``_call`` is NOT — that's
     how we lock in the migration so a future refactor doesn't silently
     revert to the prompt-only path.
+
+    #406 moved the form-target methods (find_form_target /
+    find_target_by_affordance / verify_dropdown_value) out of
+    ClaudeExtractor into a dedicated provider that holds its own
+    AnthropicToolUseClient. The same mock is wired onto both seams so
+    tests written before that split keep working without case analysis.
     """
     tool = MagicMock()
     extractor._call_with_tool_schema = tool  # type: ignore[method-assign]
+    extractor._form_target_provider._client.call_with_tool_schema = tool  # type: ignore[method-assign]
     call = MagicMock(side_effect=AssertionError("legacy _call must not be used"))
     extractor._call = call  # type: ignore[method-assign]
     return tool, call

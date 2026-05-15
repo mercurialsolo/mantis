@@ -102,15 +102,22 @@ def test_decomposer_prompt_documents_right_click_verb_mapping() -> None:
 def test_find_form_target_schema_includes_right_click() -> None:
     """``find_form_target``'s tool schema must list ``right_click``
     so Claude can return the verb when the page genuinely needs the
-    native context menu — adaptive routing on plain ``click`` steps."""
-    src = inspect.getsource(
+    native context menu — adaptive routing on plain ``click`` steps.
+
+    Two source files since #406: ``extractor.py`` keeps the
+    ``find_filter_target`` (listings) copy; ``form_targeting/claude.py``
+    owns the moved ``find_form_target`` + ``find_target_by_affordance``
+    copies. Every occurrence must still carry ``right_click`` —
+    otherwise the gap re-opens on a partial fix.
+    """
+    src_extractor = inspect.getsource(
         __import__("mantis_agent.extraction.extractor", fromlist=["*"])
     )
-    # The action-enum line MUST list right_click. There are three
-    # copies of the same enum (find_filter_target, find_form_target,
-    # find_target_by_affordance); pin that every occurrence carries
-    # right_click — otherwise the gap re-opens on a partial fix.
-    enum_count = src.count('"click", "right_click", "type", "select", "not_found"')
+    src_form_target = inspect.getsource(
+        __import__("mantis_agent.form_targeting.claude", fromlist=["*"])
+    )
+    enum_line = '"click", "right_click", "type", "select", "not_found"'
+    enum_count = src_extractor.count(enum_line) + src_form_target.count(enum_line)
     assert enum_count == 3, (
         f"expected 3 schema copies to include right_click, found {enum_count}"
     )

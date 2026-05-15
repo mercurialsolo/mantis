@@ -208,6 +208,12 @@ class ClaudeGuidedFormHandler:
         runner = self.parent
         env = ctx.env
         extractor = ctx.extractor
+        # #406: prefer the explicit FormTargetProvider on the context.
+        # Fall back to the extractor (which exposes find_form_target /
+        # find_target_by_affordance / verify_dropdown_value as back-
+        # compat shims) so legacy callers that build a StepContext
+        # without a form_target_provider keep working.
+        target_provider = ctx.form_target_provider or extractor
         index = int(ctx.state.get("index", 0))
 
         params = dict(getattr(step, "params", {}) or {})
@@ -235,7 +241,7 @@ class ClaudeGuidedFormHandler:
                 if label
                 else step.intent
             )
-            target = extractor.find_form_target(
+            target = target_provider.find_form_target(
                 screenshot,
                 search_intent,
                 target_label=label,
@@ -270,7 +276,7 @@ class ClaudeGuidedFormHandler:
                     return None
                 time.sleep(0.5)
                 shot = _wait_for_rendered_screenshot(env)
-                t = extractor.find_form_target(
+                t = target_provider.find_form_target(
                     shot,
                     search_intent,
                     target_label=label,
@@ -316,7 +322,7 @@ class ClaudeGuidedFormHandler:
                 except Exception:
                     pass
                 shot = _wait_for_rendered_screenshot(env)
-                affordance = extractor.find_target_by_affordance(shot, search_intent)
+                affordance = target_provider.find_target_by_affordance(shot, search_intent)
                 runner.costs["claude_extract"] += 1
                 # Refuse affordance results whose recommended action is
                 # not text-input shaped. A ``fill_field`` step that
@@ -489,7 +495,7 @@ class ClaudeGuidedFormHandler:
             # Cost: each probe = 1 ``find_form_target`` call. Steps 0+1+2
             # cost ~3 calls in the worst case before the Page_Down loop
             # starts; with the loop the budget is ~3 + 6 = 9 calls.
-            target = extractor.find_form_target(
+            target = target_provider.find_form_target(
                 screenshot, search_intent,
                 target_label=label, target_aliases=aliases,
             )
@@ -511,7 +517,7 @@ class ClaudeGuidedFormHandler:
                 # debug-screenshot capture.
                 nonlocal screenshot
                 screenshot = shot
-                t = extractor.find_form_target(
+                t = target_provider.find_form_target(
                     shot, search_intent,
                     target_label=label, target_aliases=aliases,
                 )
@@ -573,7 +579,7 @@ class ClaudeGuidedFormHandler:
                 time.sleep(0.6)
                 shot = _wait_for_rendered_screenshot(env)
                 screenshot = shot
-                target = extractor.find_target_by_affordance(shot, search_intent)
+                target = target_provider.find_target_by_affordance(shot, search_intent)
                 runner.costs["claude_extract"] += 1
                 if target:
                     probe_attempts.append("vision-affordance")
@@ -720,7 +726,7 @@ class ClaudeGuidedFormHandler:
                 f"to open its native context menu"
                 if label else step.intent
             )
-            target = extractor.find_form_target(
+            target = target_provider.find_form_target(
                 screenshot, search_intent,
                 target_label=label, target_aliases=aliases,
             )
@@ -770,7 +776,7 @@ class ClaudeGuidedFormHandler:
                 f"Click the '{dropdown}' dropdown to open its option list"
                 if dropdown else step.intent
             )
-            target = extractor.find_form_target(
+            target = target_provider.find_form_target(
                 screenshot, open_intent, target_label=dropdown,
             )
             runner.costs["claude_extract"] += 1
@@ -801,7 +807,7 @@ class ClaudeGuidedFormHandler:
                 f"Click the '{option}' option in the open dropdown menu"
                 if option else step.intent
             )
-            option_target = extractor.find_form_target(
+            option_target = target_provider.find_form_target(
                 opened_shot, pick_intent, target_label=option,
             )
             runner.costs["claude_extract"] += 1
@@ -855,7 +861,7 @@ class ClaudeGuidedFormHandler:
                 verify: dict | None = None
                 try:
                     verify_shot = env.screenshot()
-                    verify = extractor.verify_dropdown_value(
+                    verify = target_provider.verify_dropdown_value(
                         verify_shot, dropdown_label=dropdown, expected_value=option,
                     )
                     runner.costs["claude_extract"] += 1
