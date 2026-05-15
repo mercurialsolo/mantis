@@ -536,6 +536,13 @@ def _run_holo3_executor(
     frames_per_inference: int = 1,
     viewer: bool = False,
     sub_plan: bool = True,
+    # #416: when set, the executor surfaces the live-viewer URL into
+    # the API-side ``status.json`` so a polling client gets a hot-
+    # link mid-run. Both values come from ``Function.spawn``'s
+    # kwargs at the /v1/predict handler; ``viewer`` flag alone is
+    # the legacy CLI path which prints the URL to stdout instead.
+    api_run_id: str | None = None,
+    api_tenant_id: str | None = None,
     **_extra,
 ) -> dict:
     """Execute tasks using Holo3-35B-A3B via llama.cpp (GGUF on 1x A100).
@@ -641,7 +648,38 @@ def _run_holo3_executor(
         objective = ObjectiveSpec.from_dict(objective_data)
         schema = ExtractionSchema.from_objective(objective)
     extractor = ClaudeExtractor(schema=schema)
-    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
+    # #416 follow-up: the live-viewer's screen-capture thread reads
+    # ``os.environ["DISPLAY"]`` (via mss) but ``setup_env`` doesn't
+    # propagate that into the executor process's environ — the env
+    # only stashes it on its own ``self._env`` for subprocess use.
+    # Bring up Xvfb explicitly and set the process-wide DISPLAY so
+    # the capture thread can attach. Skip when viewer isn't requested
+    # — Chrome's launch path (inside ``env.reset()``) handles its own
+    # subprocess env.
+    if viewer:
+        try:
+            display = env.ensure_display_ready()
+            if display:
+                os.environ["DISPLAY"] = display
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            print(f"  WARNING: ensure_display_ready before viewer failed: {exc}")
+    viewer_ctx, viewer_event_bus, viewer_url = setup_viewer(viewer)
+    # #416: surface the tunnel URL into the API-side status.json so a
+    # caller polling ``action=status`` gets a hot-link to the live
+    # screen. Only fires when the /v1/predict handler forwarded the
+    # API's run_id + tenant_id alongside ``viewer=True``. The legacy
+    # CLI path (no api_run_id) keeps the old behaviour — URL is
+    # printed to stdout by ``modal_viewer`` and we don't touch
+    # status.json.
+    if viewer_url and api_run_id and api_tenant_id:
+        try:
+            existing = _read_status(api_tenant_id, api_run_id) or {}
+            existing["viewer_url"] = viewer_url
+            existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _write_status(api_tenant_id, api_run_id, existing)
+            print(f"  live-viewer URL written to status.json: {viewer_url}")
+        except Exception as exc:  # noqa: BLE001 — viewer is best-effort
+            print(f"  WARNING: failed to surface live-viewer URL into status.json: {exc}")
 
     # ── Micro-intent mode: run MicroPlanRunner ──
     micro_plan_data = task_suite.get("_micro_plan")
@@ -1542,6 +1580,15 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         }
         if model != "claude":
             spawn_kwargs["cua_model"] = model
+        # #416: forward the live-viewer flag into the executor so it
+        # can call setup_viewer + write the tunnel URL into the API-
+        # side status.json. The executor needs the API's run_id +
+        # tenant_id to know which status file to update (the
+        # executor's internal run_id differs).
+        if payload.get("live_viewer"):
+            spawn_kwargs["viewer"] = True
+            spawn_kwargs["api_run_id"] = run_id
+            spawn_kwargs["api_tenant_id"] = tenant.tenant_id
         try:
             call_handle = executor_fn.spawn(
                 task_file_contents=task_file_contents,
@@ -1593,6 +1640,21 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         run_id = str(payload.get("run_id") or "")
         if not run_id:
             raise HTTPException(400, "action requires run_id")
+        # #416 follow-up: Modal Volume reads are cached per container.
+        # When an executor commits a status update from a different
+        # container (e.g. the live-viewer URL written from inside
+        # ``_run_holo3_executor``), the API container's mount keeps
+        # serving the old file content until ``vol.reload()`` invalidates
+        # the cache. Without this reload, ``status.json`` from the
+        # caller's perspective stays frozen at the initial ``queued``
+        # state for the whole run — and the executor-side
+        # ``viewer_url`` never surfaces. Best-effort: a reload failure
+        # is non-fatal; the caller just sees the stale view, same as
+        # before this fix.
+        try:
+            vol.reload()
+        except Exception as exc:  # noqa: BLE001 — volume reload is best-effort
+            print(f"  WARNING: vol.reload() failed in _do_action: {exc}")
         status = _read_status(tenant.tenant_id, run_id)
         if status is None:
             raise HTTPException(404, f"unknown run_id: {run_id}")
