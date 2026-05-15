@@ -181,15 +181,23 @@ class ClaudeExtractor:
         api_key: str = "",
         model: str = "claude-opus-4-7",
         schema: ExtractionSchema | None = None,
+        form_target_model: str = "claude-haiku-4-5-20251001",
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
+        # #434: form-target grounding (``find_form_target``) is a single
+        # visual lookup ("locate the button labelled X"), which Haiku
+        # handles well at ~5% the cost of Opus and ~25% of Sonnet. The
+        # multi-field extraction methods (``extract`` / ``extract_multi``)
+        # remain on the heavier ``model`` because misextractions cascade.
+        # Operators who want the legacy single-model behaviour can pass
+        # ``form_target_model=model``.
+        self.form_target_model = form_target_model
         self.schema = schema
         self.debug_dir = os.environ.get("MANTIS_DEBUG_DIR", "/data/screenshots/claude_debug")
-        # Shared Anthropic client (#406). Both ClaudeExtractor (extraction
-        # methods) and ClaudeFormTargetProvider (grounding methods) hold
-        # an instance — same retry policy, same TimeMeter accounting,
-        # one place to evolve when Anthropic changes its API.
+        # Extraction / dropdown-verify / find_listing_content client —
+        # uses the heavier ``model`` for tasks where misextraction is
+        # expensive.
         self._client = AnthropicToolUseClient(
             api_key=self.api_key,
             model=self.model,
@@ -1371,11 +1379,32 @@ class ClaudeExtractor:
         ad-hoc scripts) still work; production code should use the
         provider on :class:`StepContext` instead.
         """
-        prov = getattr(self, "__form_target_provider_cached", None)
+        # #434 follow-up: this property used double-underscore attribute
+        # name (``__form_target_provider_cached``) for the cache, which
+        # gets name-mangled to ``_ClassName__form_target_provider_cached``
+        # in attribute SET but is read back via ``getattr`` with the
+        # literal pre-mangled name — so the cache never hit and every
+        # access reconstructed the provider. Before #434 this was
+        # invisible because the new provider always shared the
+        # extractor's ``_client`` (which is what test mocks pinned), so
+        # the leak only matters now that the form-target client is a
+        # distinct instance.
+        prov = getattr(self, "_form_target_provider_cached", None)
         if prov is None:
             from ..form_targeting.claude import ClaudeFormTargetProvider
-            prov = ClaudeFormTargetProvider(self._client)
-            self.__form_target_provider_cached = prov
+
+            # #434: split the form-target client off the main extractor
+            # client so grounding can run on a cheaper model
+            # (``form_target_model``, default Haiku) while extraction
+            # stays on the heavier one. Same retry policy since both
+            # clients are :class:`AnthropicToolUseClient`.
+            form_target_client = AnthropicToolUseClient(
+                api_key=self.api_key,
+                model=self.form_target_model,
+                log_prefix="ClaudeFormTarget",
+            )
+            prov = ClaudeFormTargetProvider(form_target_client)
+            self._form_target_provider_cached = prov
         return prov
 
     def find_form_target(
