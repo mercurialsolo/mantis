@@ -405,7 +405,14 @@ def _run_executor(
         print(f"{cua_config['name']} cached at {model_dir}")
 
     tp = cua_config["tp"]
-    vllm_proc = _start_vllm(model_dir, port=8000, tp=tp)
+    # Fara emits OpenAI-format tool calls (computer_use). vLLM 0.11+ requires
+    # both flags to honour ``tool_choice="auto"``; without them every request
+    # 400s and the brain falls back to WAITs. ``hermes`` is the Qwen-family
+    # parser shipped in vLLM and matches Fara's Qwen2.5-VL base.
+    vllm_extra: list[str] = []
+    if cua_model == "fara":
+        vllm_extra = ["--enable-auto-tool-choice", "--tool-call-parser", "hermes"]
+    vllm_proc = _start_vllm(model_dir, port=8000, tp=tp, extra_args=vllm_extra)
 
     # ── Brain (model-dependent) ──
     task_suite = json.loads(task_file_contents)
