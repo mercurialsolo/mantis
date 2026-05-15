@@ -133,6 +133,69 @@ def test_prompt_includes_progress_evidence_guidance_for_halt() -> None:
     assert "loop" in rendered.lower() or "didn't" in rendered.lower() or "did not" in rendered.lower()
 
 
+def test_prompt_distinguishes_validation_blocked_submit_for_no_state_change() -> None:
+    """The ``no_state_change`` legend must enumerate the form-validation-
+    blocked-submit shape (red field error → ``insert_steps`` with a
+    normalize-field pre-step), not only the wrong-target shape. This
+    closes the gap surfaced by the staff-crm Update Lead halt
+    (issue #428): the runner kept retrying the submit while a field
+    validation error short-circuited the form handler. The prompt
+    previously only taught Claude the wrong-target shape, so recovery
+    biased toward ``edit_step`` / ``halt`` and never reached
+    ``insert_steps``.
+    """
+    from mantis_agent.prompts import load_prompt
+
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="x", step_type="submit", params="{}",
+        failure_data="no_state_change", attempts=2, plan_context="",
+    )
+    text = rendered.lower()
+    # Both shapes are explicitly enumerated under no_state_change.
+    assert "form-validation-blocked submit" in text or "validation-blocked submit" in text
+    # The validation case points at insert_steps with a normalize-field example.
+    assert "insert_steps" in rendered
+    assert "fill_field" in rendered
+    # And it explicitly names the validation-error signal Claude should look for.
+    assert "validation" in text
+
+
+def test_validation_blocked_submit_decodes_to_insert_steps() -> None:
+    """End-to-end: a stub Anthropic call that returns ``insert_steps``
+    with a normalize-field pre-step round-trips through
+    :func:`analyse_failure_and_recover` → :class:`RecoveryDecision`.
+    Confirms the schema (and the helper) carry the shape #428's Part A
+    fix needs.
+    """
+    fix_step = {
+        "intent": "Set Estimated Deal Value to a whole-number value",
+        "type": "fill_field",
+        "params": {"label": "Estimated Deal Value", "value": "461928"},
+    }
+    resp = _tool_response({
+        "mode": "insert_steps",
+        "reasoning": "Form shows 'value must be whole number' on Estimated Deal Value.",
+        "inserted_steps": [fix_step],
+    })
+    step = MicroIntent(
+        intent="Click the Update Lead button",
+        type="submit",
+        params={"label": "Update Lead"},
+    )
+    with patch("requests.post", return_value=resp):
+        decision = analyse_failure_and_recover(
+            step=step, failure_data="no_state_change",
+            screenshot=None, plan_context=[], attempts=2,
+            api_key="k",
+        )
+    assert decision is not None
+    assert decision.mode == "insert_steps"
+    assert len(decision.inserted_steps) == 1
+    assert decision.inserted_steps[0]["type"] == "fill_field"
+    assert decision.inserted_steps[0]["params"]["label"] == "Estimated Deal Value"
+
+
 def test_analyse_calls_with_correct_tool_schema() -> None:
     """The ``tool_choice`` must force the ``record_recovery`` tool and
     the input_schema must enumerate the four recovery modes."""
