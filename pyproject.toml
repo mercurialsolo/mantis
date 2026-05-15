@@ -57,6 +57,14 @@ metrics = [
 # Used by the Baseten / EKS / GKE deployments.
 server = [
     "fastapi>=0.100",
+    # Pin starlette below 1.0 — sim_envs/mantis_crm uses the legacy
+    # ``TemplateResponse(name, {"request": request})`` positional
+    # signature that Starlette 1.0 removed (it raises
+    # ``TypeError: unhashable type: 'dict'`` because the context dict
+    # is now interpreted as ``name``). Track the migration to
+    # ``TemplateResponse(request, name)`` separately so this pin can
+    # come off.
+    "starlette<1.0",
     "uvicorn>=0.20",
     "pydantic>=2",
     "requests>=2.28",
@@ -94,6 +102,8 @@ dev = [
     "ruff>=0.4",
     "httpx>=0.24",   # FastAPI TestClient
     "jsonschema>=4.0",  # tests/test_plan_schema.py validates plans against docs/reference/plan.schema.json
+    "python-multipart>=0.0.9",  # FastAPI Form() params — sim_envs/mantis_crm TestClient flows
+    "starlette<1.0",  # see note under [project.optional-dependencies].server
 ]
 # MkDocs site builder + plugins.
 docs = [
