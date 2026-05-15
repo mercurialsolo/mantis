@@ -122,6 +122,13 @@ class ClaudeBrain:
         screen_size: Display resolution for computer_use tool.
     """
 
+    # #435 item 5: keep at most this many frames as raw image bytes
+    # in the prompt — per cua_notes.md §1 *"Keep only the last 1-3
+    # screenshots."* Older frames become text placeholders.
+    # Settable per instance via the constructor for callers that
+    # want to bypass the prune (e.g. evals comparing pre/post).
+    _FRAMES_KEEP_AS_IMAGE: int = 2
+
     def __init__(
         self,
         api_key: str = "",
@@ -235,18 +242,42 @@ class ClaudeBrain:
         return self._parse_response(data)
 
     def _headers(self) -> dict:
-        """Build Anthropic API headers."""
+        """Build Anthropic API headers.
+
+        #435 item 6: betas bumped per ``docs/cua_notes.md`` §3.
+
+        * ``computer-use-2025-11-24`` — current computer-use beta with
+          the matching ``computer_20251124`` tool type (paired with
+          ``_build_tools`` below). Was ``computer-use-2025-01-24``,
+          which paired with ``computer_20250124``.
+        * ``context-management-2025-06-27`` — auto-clears old
+          ``tool_result`` blocks when token budget tightens; useful
+          for long-running agent loops on Claude Opus 4.7. Off in
+          January 2024 beta; on now via this header.
+
+        Multiple beta values are joined with comma per Anthropic
+        docs — order doesn't matter.
+        """
         return {
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "computer-use-2025-01-24",
+            "anthropic-beta": (
+                "computer-use-2025-11-24,context-management-2025-06-27"
+            ),
             "content-type": "application/json",
         }
 
     def _build_tools(self, screen_size: tuple[int, int]) -> list[dict]:
-        """Build tool list with correct screen dimensions."""
+        """Build tool list with correct screen dimensions.
+
+        #435 item 6: ``computer_20251124`` tool type pairs with the
+        ``computer-use-2025-11-24`` beta header above. The previous
+        pairing was ``computer_20250124`` / ``computer-use-2025-01-24``
+        — these MUST move together because Anthropic validates that
+        the tool type matches the beta version.
+        """
         computer_tool = {
-            "type": "computer_20250124",
+            "type": "computer_20251124",
             "name": "computer",
             "display_width_px": screen_size[0],
             "display_height_px": screen_size[1],
@@ -261,22 +292,45 @@ class ClaudeBrain:
         action_history: list[Action] | None,
         screen_size: tuple[int, int],
     ) -> list[dict]:
-        """Build Claude API messages with image content."""
+        """Build Claude API messages with image content.
+
+        #435 item 5: image stand-ins for older frames. Per
+        ``docs/cua_notes.md`` §3 *"Image pruning happens in your
+        code. Replace older tool_result images with text stand-ins
+        like [screenshot omitted] or a small placeholder."*
+
+        Only the most recent ``_FRAMES_KEEP_AS_IMAGE`` frames go in
+        as raw image bytes; older frames are emitted as
+        ``[screenshot omitted — frame t-N]`` text markers. Keeps
+        position markers and turn-ordering intact (which is what
+        preserves loop-avoidance signal) without paying the
+        ~1-2k tokens/frame image cost on every prior frame.
+        """
         content = []
 
-        # Add frames as images
+        # Add frames as images, but only keep the most recent N as
+        # raw bytes — older ones become text placeholders.
         n_frames = len(frames)
+        keep_as_image = self._FRAMES_KEEP_AS_IMAGE
         for i, frame in enumerate(frames):
             label = "CURRENT" if i == n_frames - 1 else f"t-{n_frames - 1 - i}"
             content.append({"type": "text", "text": f"[Frame {label}]"})
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": _image_to_base64(frame),
-                },
-            })
+            # Distance from the end: 0 = current, 1 = one back, …
+            distance_from_end = n_frames - 1 - i
+            if distance_from_end < keep_as_image:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": _image_to_base64(frame),
+                    },
+                })
+            else:
+                content.append({
+                    "type": "text",
+                    "text": "[screenshot omitted — text-only at this distance]",
+                })
 
         # Task context
         context_parts = [
