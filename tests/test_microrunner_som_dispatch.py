@@ -159,6 +159,51 @@ def test_probe_element_tag_at_normalises_tag_and_contenteditable() -> None:
     assert out2 == {"tag": "DIV", "contentEditable": True}
 
 
+def test_probe_element_tag_at_subtracts_chrome_offset_in_js(monkeypatch) -> None:
+    """#413: caller passes screen coordinates (matching what xdotool
+    will click), but ``document.elementFromPoint`` uses CSS-viewport
+    coordinates. The JS expression sent through CDP must subtract the
+    chrome offset (``outerHeight - innerHeight``) so the tag-guard
+    reads the same element xdotool will hit.
+
+    Lock the JS shape literally — a future refactor that drops the
+    offset would silently bring back the lu.ma tag-guard false-
+    positive (#413 reproducer)."""
+    env = _CdpEvalEnv(result={"tag": "INPUT", "contentEditable": False})
+    probe_element_tag_at(env, 618, 588)
+    assert len(env.calls) == 1
+    js = env.calls[0]
+    # Both the chrome-offset computation and the elementFromPoint
+    # call with the corrected viewport y must be in the script.
+    assert "window.outerHeight - window.innerHeight" in js
+    assert "document.elementFromPoint" in js
+    # Y is subtracted by chromeH (the variable name we used in
+    # the JS); literal subtraction would also be acceptable but
+    # using the variable keeps the math overflow-safe.
+    assert "- chromeH" in js
+
+
+def test_cdp_click_at_point_subtracts_chrome_offset_in_js() -> None:
+    """#413 sibling: the SoM ``el.click()`` dispatcher in
+    ``xdotool_env.cdp_click_at_point`` shares the same screen-vs-
+    viewport bug. Today SoM defaults to off so the bug hasn't bitten
+    production traffic, but enabling SoM with the old JS would have
+    clicked the wrong element (typically the button 85 px below the
+    intended target). Pin the offset in the JS literally."""
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+    instance = XdotoolGymEnv.__new__(XdotoolGymEnv)
+
+    captured: list[str] = []
+    instance.cdp_evaluate = lambda expr: captured.append(expr) or True  # type: ignore[assignment]
+    instance.cdp_click_at_point(618, 588)
+
+    assert len(captured) == 1
+    js = captured[0]
+    assert "window.outerHeight - window.innerHeight" in js
+    assert "document.elementFromPoint" in js
+    assert "- chromeH" in js
+
+
 def test_is_input_like_allows_unknown_when_cdp_unavailable() -> None:
     """``None`` tag_info means CDP couldn't probe — don't block on
     inconclusive evidence. Preserves legacy behaviour where the guard
