@@ -223,6 +223,75 @@ def test_type_text_alias_maps_to_type_action(brain: FaraBrain) -> None:
     assert action.params == {"text": "alice"}
 
 
+def test_type_with_delete_existing_text_sets_clear_first(brain: FaraBrain) -> None:
+    """Fara folds clear-then-type into one tool call via flag."""
+    action = _parse_tool(
+        brain,
+        _fara_tool_call("type", text="hello", delete_existing_text=True),
+    )
+    assert action.action_type == ActionType.TYPE
+    assert action.params["text"] == "hello"
+    assert action.params["clear_first"] is True
+
+
+def test_type_with_press_enter_sets_press_enter(brain: FaraBrain) -> None:
+    """Fara folds form-submit into the type call via flag."""
+    action = _parse_tool(
+        brain,
+        _fara_tool_call("type", text="hello", press_enter=True),
+    )
+    assert action.action_type == ActionType.TYPE
+    assert action.params["text"] == "hello"
+    assert action.params["press_enter"] is True
+
+
+def test_type_with_both_clear_and_enter_sets_both_flags(brain: FaraBrain) -> None:
+    """The CRM-login shape: clear field, type credential, submit form."""
+    action = _parse_tool(
+        brain,
+        _fara_tool_call(
+            "type", text="hello",
+            delete_existing_text=True, press_enter=True,
+        ),
+    )
+    assert action.params["clear_first"] is True
+    assert action.params["press_enter"] is True
+
+
+def test_type_without_flags_omits_them(brain: FaraBrain) -> None:
+    """Plain type calls should not carry the flags — keeps the action
+    minimal and avoids env executors doing surprise clears."""
+    action = _parse_tool(brain, _fara_tool_call("type", text="hello"))
+    assert "clear_first" not in action.params
+    assert "press_enter" not in action.params
+
+
+def test_type_with_falsy_flags_omits_them(brain: FaraBrain) -> None:
+    """Fara's smoke turn included delete_existing_text=true alongside
+    explicit press_enter=false. The falsy flag should not propagate as
+    a no-op param to keep the action representation tight."""
+    action = _parse_tool(
+        brain,
+        _fara_tool_call(
+            "type", text="hello",
+            delete_existing_text=False, press_enter=False,
+        ),
+    )
+    assert "clear_first" not in action.params
+    assert "press_enter" not in action.params
+
+
+def test_type_clear_first_alias_is_honoured(brain: FaraBrain) -> None:
+    """If a fine-tune emits the param name ``clear_first`` directly,
+    the brain accepts it too — saves a future patch when we observe a
+    different verb-args shape."""
+    action = _parse_tool(
+        brain,
+        _fara_tool_call("type", text="hello", clear_first=True),
+    )
+    assert action.params["clear_first"] is True
+
+
 def test_key_maps_to_key_press(brain: FaraBrain) -> None:
     action = _parse_tool(brain, _fara_tool_call("key", text="Return"))
     assert action.action_type == ActionType.KEY_PRESS

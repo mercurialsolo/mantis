@@ -818,20 +818,35 @@ class PlaywrightGymEnv(GymEnvironment):
 
             case ActionType.TYPE:
                 text = action.params["text"]
+                # #405 follow-up: Fara folds clear-then-type and submit into
+                # the same ``type`` tool call via boolean flags. Honour the
+                # flags here; URL-shaped text keeps its own auto-navigate
+                # path (goto() already replaces the page).
+                clear_first = bool(action.params.get("clear_first", False))
+                press_enter = bool(action.params.get("press_enter", False))
                 if text.startswith("http://") or text.startswith("https://"):
                     try:
                         self._page.goto(text, wait_until="domcontentloaded", timeout=15000)
                         logger.info(f"Navigated to {text}")
                     except Exception:
                         self._page.keyboard.type(text)
-                elif self._human_speed:
-                    # Type character by character with realistic delays
-                    import random
-                    for char in text:
-                        self._page.keyboard.type(char)
-                        time.sleep(random.uniform(0.03, 0.12))  # 30-120ms per keystroke
                 else:
-                    self._page.keyboard.type(text)
+                    if clear_first:
+                        self._page.keyboard.press("Control+a")
+                        time.sleep(0.05)
+                        self._page.keyboard.press("Delete")
+                        time.sleep(0.05)
+                    if self._human_speed:
+                        # Type character by character with realistic delays
+                        import random
+                        for char in text:
+                            self._page.keyboard.type(char)
+                            time.sleep(random.uniform(0.03, 0.12))  # 30-120ms per keystroke
+                    else:
+                        self._page.keyboard.type(text)
+                    if press_enter:
+                        time.sleep(0.05)
+                        self._page.keyboard.press("Enter")
 
             case ActionType.KEY_PRESS:
                 combo = action.params["keys"]
