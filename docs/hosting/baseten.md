@@ -72,10 +72,21 @@ done
 
 ## 4. Test the live endpoint
 
+The Baseten gateway exposes two route families against every truss-server deployment:
+
+| URL | What it serves |
+|---|---|
+| `https://model-${MODEL_ID}.api.baseten.co/production/predict` | The configured `predict_endpoint` (default `/predict`) — the orchestrated run/status/resume entry point |
+| `https://model-${MODEL_ID}.api.baseten.co/production/sync/<any-path>` | Pass-through to arbitrary FastAPI routes in the container — `/v1/chat/completions`, `/v1/models`, `/v1/health`, `/v1/cua` |
+
+For a canary (non-promoted) deployment, swap `production` for `deployment/<DEPLOY_ID>` in either form.
+
+Quick orchestrated-mode smoke:
+
 ```bash
 ENDPOINT="https://model-${MODEL_ID}.api.baseten.co/production"
 
-curl -fsS -X POST "$ENDPOINT/v1/predict" \
+curl -fsS -X POST "$ENDPOINT/predict" \
   -H "Authorization: Api-Key $BASETEN_API_KEY" \
   -H "X-Mantis-Token: $TOK" \
   -H "Content-Type: application/json" \
@@ -90,6 +101,20 @@ curl -fsS -X POST "$ENDPOINT/v1/predict" \
 ```
 
 Expected: a `queued` response with a `run_id`. Then poll with `{"action":"status","run_id":"..."}` until terminal, then `{"action":"result","run_id":"..."}` for the leads.
+
+Raw-inference smoke (the StaffAI-shaped path — model returns OpenAI-format tool calls; the caller runs its own CUA loop):
+
+```bash
+curl -fsS -X POST "$ENDPOINT/sync/v1/chat/completions" \
+  -H "Authorization: Api-Key $BASETEN_API_KEY" \
+  -H "X-Mantis-Token: $TOK" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "model",
+    "messages": [{"role": "user", "content": "Say hi."}],
+    "max_tokens": 32
+  }'
+```
 
 ## Auth model
 
