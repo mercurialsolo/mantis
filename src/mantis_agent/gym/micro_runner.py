@@ -41,6 +41,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _is_holo3_brain(brain: Any) -> bool:
+    """Duck-type check for a Holo3 brain.
+
+    Used by :meth:`MicroPlanRunner.__init__` to decide whether
+    ``MANTIS_FORM_TARGET_PROVIDER=holo3`` can be satisfied with the
+    brain instance the runner already holds. We don't ``isinstance``
+    against :class:`Holo3Brain` to avoid importing ``brain_holo3``
+    (and its torch / transformers transitive deps) at module load
+    time — the slim ``orchestrator`` extras don't ship those.
+    """
+    if brain is None:
+        return False
+    return type(brain).__name__ == "Holo3Brain"
+
 __all__ = [
     "MicroPlanRunner", "REVERSE_ACTIONS", "PauseRequested", "PauseState",
     "RunCheckpoint", "RunnerResult", "StepResult", "_PauseRequested",
@@ -95,6 +110,18 @@ class MicroPlanRunner:
         self.seed = seed
         self.brain, self.env, self.grounding, self.extractor = (
             brain, env, grounding, extractor
+        )
+        # #406: build the FormTargetProvider for this run. Reads the
+        # MANTIS_FORM_TARGET_PROVIDER env var (default ``claude``).
+        # ``None`` when no extractor is wired — the form handler then
+        # falls back to its legacy code path. Holo3 provider is built
+        # with a Claude fallback for ``verify_dropdown_value`` (Holo3
+        # isn't tuned for prose reads).
+        from ..form_targeting.factory import build_form_target_provider
+        anthropic_client = getattr(extractor, "_client", None) if extractor else None
+        self.form_target_provider = build_form_target_provider(
+            anthropic_client=anthropic_client,
+            holo3_brain=brain if _is_holo3_brain(brain) else None,
         )
         # Issue #250: opt-in set of step types whose terminal halt
         # should re-stamp the last StepResult with ``skip=True,
