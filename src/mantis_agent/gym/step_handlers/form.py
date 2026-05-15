@@ -170,6 +170,49 @@ _SUBMIT_KIND_INTENT_TEMPLATES: dict[str, str] = {
 _SUBMIT_KIND_DEFAULT = "button"
 
 
+# #435 follow-up: auto-region inference table. When a step's
+# (type, params.kind) lands here AND it has no explicit
+# ``hints.region``, the form handler scopes the screenshot to this
+# named region before grounding. The named regions are defined in
+# ``mantis_agent.form_targeting.region._NAMED_REGIONS``.
+#
+# Picks come from observed layout patterns on the staff-crm + lu.ma +
+# generic web-app plans:
+#
+# * ``submit`` / button — primary-action buttons live in the form's
+#   footer row (the (Cancel, Reset, Save / Update / Submit) row).
+#   The form-footer named region covers the bottom 40% of the
+#   screenshot, which holds both fixed-footer and natural-end-of-form
+#   layouts.
+# * ``submit`` / nav_link — sidebar / top-nav links. Don't auto-crop
+#   (no strong default — could be top or left depending on app).
+# * ``submit`` / row_link — table rows lay across the middle band
+#   in typical list-detail layouts. Use ``"full"`` (no crop) since
+#   the row could be anywhere on a paginated table.
+# * ``select_option`` — dropdown triggers live above the action-
+#   button row, in the form body. Use ``"full"`` because the open
+#   dropdown menu repositions absolutely and we can't anchor to a
+#   form region without breaking it.
+_AUTO_REGION_BY_KIND: dict[tuple[str, str], str] = {
+    ("submit", "button"): "form-footer",
+}
+
+
+def _auto_region_for_step(step: Any, params: dict[str, Any]) -> str:
+    """Default region hint for a step that didn't set ``hints.region``.
+
+    Returns empty string when no auto-default fits — caller treats
+    that as "no crop, same as pre-#435 behaviour". Operators who
+    want to force the unscoped path can set
+    ``hints.region: "full"`` (a no-op named region defined in
+    :mod:`..form_targeting.region`); both routes leave the
+    screenshot untouched but ``"full"`` is more explicit.
+    """
+    step_type = str(getattr(step, "type", "") or "")
+    kind = str(params.get("kind") or "").lower()
+    return _AUTO_REGION_BY_KIND.get((step_type, kind), "")
+
+
 def _build_submit_search_intent(label: str, kind: str, fallback: str) -> str:
     """Construct the find_form_target prompt for a submit step.
 
@@ -222,9 +265,19 @@ class ClaudeGuidedFormHandler:
         # makes (initial, scroll-probe sweep, retry-with-hint) passes
         # ``region`` through, so the executor sees a cropped frame on
         # each call — coordinates re-projected by the provider before
-        # they reach the runner. Empty / missing → no crop, identical
-        # to the pre-#435 path.
+        # they reach the runner.
+        #
+        # #435 follow-up: auto-region inference. For the canonical
+        # submit-on-button pattern (the staff-crm Update Lead case),
+        # plan authors shouldn't have to add ``hints.region: "bottom"``
+        # by hand — the action-button row almost always lives in the
+        # form footer. When the step's type+kind matches this shape
+        # AND no explicit region is set, default to ``"form-footer"``.
+        # Plan authors who want the unscoped path can opt out with
+        # ``hints.region: "full"`` (the no-op named region).
         step_region = (getattr(step, "hints", {}) or {}).get("region")
+        if not step_region:
+            step_region = _auto_region_for_step(step, params)
         # Combined settle — form pages frequently finish hydrating after the
         # navigate that brought us here. EPIC #161 cleanup merges the
         # pre-handler 2s sleep that used to live in MicroPlanRunner
