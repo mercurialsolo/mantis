@@ -996,6 +996,31 @@ class RunExecutor:
         if not intent_rewriter.should_attempt_rewrite(
             failure_class, attempts_used=attempts_used,
         ):
+            # #431: visibility on every skip path. The two reasons
+            # ``should_attempt_rewrite`` returns False — empty /
+            # untriggering failure_class, or per-step budget spent —
+            # are otherwise silent and look the same as "rewriter not
+            # wired up at all" in logs.
+            if not failure_class:
+                logger.warning(
+                    "  [%d] rewriter_skipped: failure_class is empty — "
+                    "set on step_result by the handler that produced "
+                    "the failure to enable rewrites on this path",
+                    step_index,
+                )
+            elif failure_class not in intent_rewriter.REWRITE_TRIGGERING_CLASSES:
+                logger.warning(
+                    "  [%d] rewriter_skipped: failure_class=%r not in "
+                    "REWRITE_TRIGGERING_CLASSES=%s",
+                    step_index, failure_class,
+                    sorted(intent_rewriter.REWRITE_TRIGGERING_CLASSES),
+                )
+            else:
+                logger.warning(
+                    "  [%d] rewriter_skipped: per-step budget exhausted "
+                    "(attempts_used=%d)",
+                    step_index, attempts_used,
+                )
             return
         try:
             failures = [intent_rewriter.FailureContext(
@@ -1007,9 +1032,23 @@ class RunExecutor:
             )]
             new_intent = intent_rewriter.propose_rewrite(step.intent, failures)
         except Exception as exc:  # noqa: BLE001 — never break runs on rewrite
-            logger.debug("intent rewriter raised: %s", exc)
+            logger.warning(
+                "  [%d] rewriter_skipped: propose_rewrite raised %s",
+                step_index, exc,
+            )
             return
         if not new_intent or new_intent == step.intent:
+            # The rewriter ran (Claude was called) but returned no
+            # actionable rewrite — KEEP, empty, or identical to the
+            # original intent. Surface so a halt with no rewrite is
+            # distinguishable from a halt where the rewriter was
+            # never even invoked.
+            logger.info(
+                "  [%d] rewriter_no_change: Claude returned no "
+                "actionable rewrite (failure_class=%r) — retry will "
+                "use the original intent",
+                step_index, failure_class,
+            )
             return
         if not hasattr(runner, "_step_intent_overrides"):
             runner._step_intent_overrides = {}

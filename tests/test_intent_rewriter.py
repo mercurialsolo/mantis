@@ -250,6 +250,37 @@ def test_looks_like_pre_step_rewrite_unit() -> None:
     assert not _looks_like_pre_step_rewrite("Pick Space Exploration from the dropdown")
 
 
+# ── propose_rewrite — visibility on silent skips (issue #431) ──────────
+
+
+def test_no_api_key_logs_warning(caplog, monkeypatch) -> None:
+    """A missing ANTHROPIC_API_KEY used to log at DEBUG, which gets
+    filtered on Modal's default logging config. Issue #431: bump to
+    WARNING so the silent skip is visible.
+    """
+    import logging
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    failures = [FailureContext("no_state_change", "submit")]
+    with caplog.at_level(logging.WARNING, logger="mantis_agent.gym.intent_rewriter"):
+        out = propose_rewrite("Click X", failures, api_key="")
+    assert out is None
+    assert any(
+        "no ANTHROPIC_API_KEY" in rec.message for rec in caplog.records
+    ), f"expected a WARNING about missing API key; got: {[r.message for r in caplog.records]}"
+
+
+def test_api_error_logs_warning(caplog) -> None:
+    """Non-200 from Anthropic used to log at DEBUG. Issue #431: WARNING."""
+    import logging
+    err = MagicMock(status_code=500, text="upstream")
+    failures = [FailureContext("no_state_change", "submit")]
+    with caplog.at_level(logging.WARNING, logger="mantis_agent.gym.intent_rewriter"):
+        with patch("requests.post", return_value=err):
+            out = propose_rewrite("Click X", failures, api_key="k")
+    assert out is None
+    assert any("API error 500" in rec.message for rec in caplog.records)
+
+
 def test_prompt_documents_pre_step_keep_directive() -> None:
     """The rewriter prompt must explicitly forbid pre-step-shaped
     rewrites and instruct Claude to respond ``KEEP`` so agentic_recovery

@@ -146,13 +146,20 @@ def propose_rewrite(
         return None
     key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
-        logger.debug("intent_rewriter: no ANTHROPIC_API_KEY; skipping rewrite")
+        # #431: WARNING not DEBUG. A rewriter that's silently dropping
+        # because of a missing env var looks identical to a rewriter
+        # that's wired off, and operators have no way to tell.
+        logger.warning(
+            "intent_rewriter: no ANTHROPIC_API_KEY; skipping rewrite"
+        )
         return None
 
     try:
         import requests
     except ImportError:
-        logger.debug("intent_rewriter: requests not installed; skipping rewrite")
+        logger.warning(
+            "intent_rewriter: ``requests`` not installed; skipping rewrite"
+        )
         return None
 
     failure_summary = _format_failures(failures)
@@ -193,11 +200,15 @@ def propose_rewrite(
             timeout=timeout,
         )
     except Exception as exc:  # noqa: BLE001 — never break runs
-        logger.debug("intent_rewriter: API call raised: %s", exc)
+        # #431: bump from debug→warning so the operator can tell that
+        # Claude was called but the call itself blew up (network,
+        # timeout, malformed body). Otherwise the rewriter looks like
+        # it was never wired through.
+        logger.warning("intent_rewriter: API call raised: %s", exc)
         return None
 
     if resp.status_code != 200:
-        logger.debug(
+        logger.warning(
             "intent_rewriter: API error %s: %s",
             resp.status_code, resp.text[:200],
         )
@@ -206,6 +217,7 @@ def propose_rewrite(
     try:
         body = resp.json()
     except (ValueError, json.JSONDecodeError):
+        logger.warning("intent_rewriter: response body was not valid JSON")
         return None
 
     for block in body.get("content", []):

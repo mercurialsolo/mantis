@@ -333,6 +333,15 @@ def _call_recovery_tool(
                 tool_input = block.get("input")
                 if isinstance(tool_input, dict):
                     return tool_input
+        # #431: surface the malformed-response path so a silent skip is
+        # debuggable. Anthropic occasionally emits a tool_use block with
+        # the wrong name, or a text-only block when the model decides
+        # not to call the forced tool — both look like "no recovery"
+        # from the caller's perspective without a log line.
+        logger.warning(
+            "agentic_recovery_skipped: 200 OK but no record_recovery "
+            "tool_use block in response (text only or wrong tool)"
+        )
         return None
     except Exception as exc:  # noqa: BLE001 — log + fall back
         logger.warning("agentic_recovery call failed: %s", exc)

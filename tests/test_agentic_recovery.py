@@ -133,6 +133,33 @@ def test_prompt_includes_progress_evidence_guidance_for_halt() -> None:
     assert "loop" in rendered.lower() or "didn't" in rendered.lower() or "did not" in rendered.lower()
 
 
+def test_call_recovery_tool_logs_warning_on_missing_tool_use_block(caplog) -> None:
+    """When the Anthropic 200 OK response has no ``record_recovery``
+    tool_use block, the silent ``return None`` used to leave operators
+    with zero signal that recovery was attempted. Issue #431: surface
+    this gate explicitly so a halt that skipped Claude-vision recovery
+    is debuggable from logs alone.
+    """
+    import logging
+
+    from mantis_agent.agentic_recovery import _call_recovery_tool
+
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"content": [{"type": "text", "text": "ok"}]}
+    step = MicroIntent(intent="Click Save", type="submit")
+    with caplog.at_level(logging.WARNING, logger="mantis_agent.agentic_recovery"):
+        with patch("requests.post", return_value=resp):
+            out = _call_recovery_tool(
+                step=step, failure_data="x", screenshot=None,
+                plan_context=[], attempts=1, api_key="k",
+                model="claude-haiku-4-5-20251001",
+            )
+    assert out is None
+    assert any(
+        "agentic_recovery_skipped" in rec.message for rec in caplog.records
+    ), f"expected a WARNING marker; got: {[r.message for r in caplog.records]}"
+
+
 def test_prompt_distinguishes_validation_blocked_submit_for_no_state_change() -> None:
     """The ``no_state_change`` legend must enumerate the form-validation-
     blocked-submit shape (red field error → ``insert_steps`` with a

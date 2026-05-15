@@ -569,6 +569,16 @@ class StepRecoveryPolicy:
         per_step_dict = getattr(runner, "_recovery_attempts_per_step", None)
         total_attempts = getattr(runner, "_total_recovery_attempts", None)
         if not isinstance(per_step_dict, dict) or not isinstance(total_attempts, int):
+            # Issue #431: surface every silent-skip path so a halt that
+            # bypassed Claude-backed recovery is debuggable from logs
+            # alone (this branch fires on legacy / non-MicroPlanRunner
+            # call sites that don't initialize the budget trackers).
+            logger.warning(
+                "  [%d] recovery_skipped: runner missing budget trackers "
+                "(per_step=%s, total=%s) — falling through to legacy halt",
+                step_index, type(per_step_dict).__name__,
+                type(total_attempts).__name__,
+            )
             return None
         from ..agentic_recovery import (
             DEFAULT_MAX_RECOVERIES_PER_RUN,
@@ -577,16 +587,14 @@ class StepRecoveryPolicy:
         per_step = per_step_dict.get(step_index, 0)
         per_run = total_attempts
         if per_step >= DEFAULT_MAX_RECOVERIES_PER_STEP:
-            logger.info(
-                "  [%d] agentic recovery skipped — per-step budget "
-                "exhausted (%d/%d)",
+            logger.warning(
+                "  [%d] recovery_skipped: per-step budget exhausted (%d/%d)",
                 step_index, per_step, DEFAULT_MAX_RECOVERIES_PER_STEP,
             )
             return None
         if per_run >= DEFAULT_MAX_RECOVERIES_PER_RUN:
-            logger.info(
-                "  [%d] agentic recovery skipped — per-run budget "
-                "exhausted (%d/%d)",
+            logger.warning(
+                "  [%d] recovery_skipped: per-run budget exhausted (%d/%d)",
                 step_index, per_run, DEFAULT_MAX_RECOVERIES_PER_RUN,
             )
             return None
@@ -620,6 +628,17 @@ class StepRecoveryPolicy:
             attempts=attempts,
         )
         if decision is None:
+            # #431: even though analyse_failure_and_recover already logs
+            # its own warnings for the api-key / api-error / no-tool-use
+            # paths, the caller has no signal that recovery was actually
+            # attempted vs short-circuited by a budget gate. Make the
+            # "attempted but returned no decision" outcome explicit.
+            logger.warning(
+                "  [%d] recovery_skipped: analyse_failure_and_recover "
+                "returned None (Anthropic call failed, malformed "
+                "response, or no api_key — see preceding log line)",
+                step_index,
+            )
             return None
 
         # Increment budgets *before* applying so a recovery that
