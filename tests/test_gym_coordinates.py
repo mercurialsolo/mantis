@@ -137,3 +137,62 @@ def test_xdotool_env_current_url_reads_active_tab(monkeypatch):
 
     # First non-internal tab wins; chrome:// URLs are filtered.
     assert env.current_url == "https://crm.example.com/leads/42"
+
+
+# ── TYPE flags: clear_first + press_enter (#405 follow-up) ─────────────────
+
+
+def test_xdotool_type_plain_does_not_clear_or_submit():
+    """Default TYPE behaviour stays minimal — no clear, no Enter — so an
+    incremental field-fill (e.g. autocomplete) isn't accidentally
+    submitted on every keystroke turn."""
+    env = _XdotoolRecorder(viewport=(1280, 720))
+    env.step(Action(ActionType.TYPE, {"text": "hello"}))
+
+    kinds = [c[0] for c in env.calls]
+    assert "type" in kinds
+    assert "key" not in kinds  # no ctrl+a, no Delete, no Return
+
+
+def test_xdotool_type_with_clear_first_emits_ctrl_a_delete():
+    """clear_first=True must wipe the field before typing — matches
+    Fara's ``delete_existing_text: true`` semantics."""
+    env = _XdotoolRecorder(viewport=(1280, 720))
+    env.step(Action(ActionType.TYPE, {"text": "hello", "clear_first": True}))
+
+    # Find the type and the preceding keys
+    type_idx = next(i for i, c in enumerate(env.calls) if c[0] == "type")
+    pre_type = env.calls[:type_idx]
+    pre_keys = [c[1] for c in pre_type if c[0] == "key"]
+    assert "ctrl+a" in pre_keys
+    assert "Delete" in pre_keys
+
+
+def test_xdotool_type_with_press_enter_emits_return_after_text():
+    """press_enter=True must submit after typing — matches Fara's
+    ``press_enter: true`` semantics. The Return must come after the
+    type call, not before."""
+    env = _XdotoolRecorder(viewport=(1280, 720))
+    env.step(Action(ActionType.TYPE, {"text": "hello", "press_enter": True}))
+
+    type_idx = next(i for i, c in enumerate(env.calls) if c[0] == "type")
+    post_type = env.calls[type_idx + 1:]
+    post_keys = [c[1] for c in post_type if c[0] == "key"]
+    assert "Return" in post_keys
+
+
+def test_xdotool_type_clear_first_then_text_then_enter_in_order():
+    """The full CRM-login shape: clear, type, submit — all three in
+    sequence, with type sandwiched between the clear and the Enter."""
+    env = _XdotoolRecorder(viewport=(1280, 720))
+    env.step(Action(ActionType.TYPE, {
+        "text": "secret", "clear_first": True, "press_enter": True,
+    }))
+
+    type_idx = next(i for i, c in enumerate(env.calls) if c[0] == "type")
+    pre_keys = [c[1] for c in env.calls[:type_idx] if c[0] == "key"]
+    post_keys = [c[1] for c in env.calls[type_idx + 1:] if c[0] == "key"]
+
+    assert "ctrl+a" in pre_keys
+    assert "Delete" in pre_keys
+    assert "Return" in post_keys

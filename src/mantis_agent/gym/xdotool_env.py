@@ -952,6 +952,14 @@ class XdotoolGymEnv(GymEnvironment):
                     logger.warning(f"type_text missing text: {action.params}")
                     return
                 text = str(text)
+                # #405 follow-up: Fara emits ``delete_existing_text`` and
+                # ``press_enter`` as flags on the same ``type`` call rather
+                # than as separate verbs. Both are translated to brain-side
+                # TYPE params (``clear_first``, ``press_enter``) and honoured
+                # here by the env. URL-shaped text keeps its own
+                # auto-navigate path (which already does its own clear+Enter).
+                clear_first = bool(action.params.get("clear_first", False))
+                press_enter = bool(action.params.get("press_enter", False))
                 if text.startswith("http://") or text.startswith("https://"):
                     self._xdotool("key", "ctrl+l")
                     time.sleep(0.5)
@@ -961,7 +969,15 @@ class XdotoolGymEnv(GymEnvironment):
                     time.sleep(0.3)
                     self._xdotool("key", "Return")
                 else:
+                    if clear_first:
+                        self._xdotool("key", "ctrl+a")
+                        time.sleep(0.1)
+                        self._xdotool("key", "Delete")
+                        time.sleep(0.1)
                     self._xdotool_type(text)
+                    if press_enter:
+                        time.sleep(0.1)
+                        self._xdotool("key", "Return")
 
             case ActionType.KEY_PRESS:
                 keys = action.params.get("keys") or action.params.get("key") or ""

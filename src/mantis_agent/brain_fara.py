@@ -614,8 +614,21 @@ class FaraBrain:
             # Fara emits both verbs depending on training-data variance — the
             # documented action is ``type`` but in practice many turns come
             # through as ``type_text`` (see #405). Treat as aliases.
+            #
+            # Fara also folds two semantics into the same call via flags
+            # rather than emitting separate verbs (#405 follow-up):
+            #   * ``delete_existing_text: true`` — clear field before typing
+            #   * ``press_enter: true``         — Return after typing
+            # Both are forwarded to env executors via TYPE params; xdotool
+            # and playwright envs honour them. URL-shaped text keeps its
+            # own auto-navigate path (which already clears + submits).
             text = str(args.get("text", ""))
-            return Action(ActionType.TYPE, {"text": text})
+            params: dict = {"text": text}
+            if args.get("delete_existing_text") or args.get("clear_first"):
+                params["clear_first"] = True
+            if args.get("press_enter"):
+                params["press_enter"] = True
+            return Action(ActionType.TYPE, params)
 
         if action in ("key", "press_key"):
             keys = args.get("text") or args.get("key") or args.get("keys") or ""
