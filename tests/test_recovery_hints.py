@@ -89,6 +89,62 @@ def test_count_zero_on_missing_attr() -> None:
     assert recovery_hints.count(SimpleNamespace(), 5) == 0
 
 
+# ── add_hint (producer-side, #411) ────────────────────────────────────────
+
+
+def test_add_hint_creates_dict_on_first_call() -> None:
+    """A runner that didn't have ``_recovery_hints`` before gets a
+    dict autopopulated. The next ``get_hint_block`` call sees the hint."""
+    runner = SimpleNamespace()
+    recovery_hints.add_hint(runner, 3, "avoid (618, 587)")
+    assert recovery_hints.has_hints(runner, 3) is True
+    assert "avoid (618, 587)" in recovery_hints.get_hint_block(runner, 3)
+
+
+def test_add_hint_appends_in_order() -> None:
+    """Multiple add_hint calls preserve insertion order so the model
+    sees the most recent failure last."""
+    runner = SimpleNamespace()
+    recovery_hints.add_hint(runner, 0, "first")
+    recovery_hints.add_hint(runner, 0, "second")
+    recovery_hints.add_hint(runner, 0, "third")
+    block = recovery_hints.get_hint_block(runner, 0)
+    assert block.index("first") < block.index("second") < block.index("third")
+
+
+def test_add_hint_empty_string_is_no_op() -> None:
+    """Empty / falsy hints are dropped silently — callers can call
+    ``add_hint(...)`` unconditionally without guarding for the empty
+    case."""
+    runner = SimpleNamespace()
+    recovery_hints.add_hint(runner, 0, "")
+    recovery_hints.add_hint(runner, 0, None)  # type: ignore[arg-type]
+    assert recovery_hints.has_hints(runner, 0) is False
+
+
+def test_add_hint_replaces_non_dict_state() -> None:
+    """If ``_recovery_hints`` is a MagicMock (test runner stub),
+    add_hint reassigns it to a real dict so subsequent calls work.
+    Without this the hint silently dropped on mocked runners."""
+    runner = MagicMock()
+    runner._recovery_hints = MagicMock()  # not a dict
+    recovery_hints.add_hint(runner, 1, "real hint")
+    # Reassignment happened — _recovery_hints is now a dict.
+    assert isinstance(runner._recovery_hints, dict)
+    assert "real hint" in recovery_hints.get_hint_block(runner, 1)
+
+
+def test_add_hint_replaces_non_list_step_slot() -> None:
+    """Pre-existing dict but the step's slot got some non-list
+    value — coerce to a fresh list rather than crash."""
+    runner = SimpleNamespace(_recovery_hints={0: "stale string"})  # type: ignore[arg-type]
+    recovery_hints.add_hint(runner, 0, "new hint")
+    block = recovery_hints.get_hint_block(runner, 0)
+    assert "new hint" in block
+    # The stale value is gone — only the new hint survives.
+    assert "stale string" not in block
+
+
 # ── Wire-in: Holo3StepHandler splices hints into the inner task ──────────
 
 

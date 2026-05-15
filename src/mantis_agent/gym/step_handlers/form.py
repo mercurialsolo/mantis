@@ -236,11 +236,28 @@ class ClaudeGuidedFormHandler:
             if isinstance(aliases, str):
                 aliases = [aliases]
             aliases = [str(a).strip() for a in aliases if str(a).strip()]
-            search_intent = (
+            base_intent = (
                 f"Click the input field labelled '{label}' so we can type into it"
                 if label
                 else step.intent
             )
+            # #411: splice any accumulated recovery hints into the
+            # search prompt — same protocol the submit handler uses
+            # (form.py:428). The producer is the tag-guard below: when
+            # a previous attempt's coord-pick landed on a BUTTON/A/DIV
+            # we record where, and the LLM is told to avoid that
+            # rectangle on the next try. Without this, Claude vision
+            # on lu.ma's "Your Info" modal keeps returning the same
+            # (618, 587) coord that overlaps the Register button.
+            from .. import recovery_hints as _hints
+            hint_block = _hints.get_hint_block(runner, index)
+            search_intent = base_intent + hint_block if hint_block else base_intent
+            if hint_block:
+                logger.warning(
+                    "  [claude-form] fill_field '%s' retry — applying %d "
+                    "recovery hint(s) from prior attempts",
+                    label[:30], _hints.count(runner, index),
+                )
             target = target_provider.find_form_target(
                 screenshot,
                 search_intent,
@@ -365,6 +382,28 @@ class ClaudeGuidedFormHandler:
                     "(%d, %d) — elementFromPoint=%s is not "
                     "input-shaped (would dismiss form / mis-submit)",
                     x, y, tag_name,
+                )
+                # #411: feed the exact failure back as a recovery hint
+                # so the next attempt's find_form_target doesn't re-pick
+                # the same wrong coordinate. The Lu.ma "Your Info" modal
+                # is the canonical reproducer: Claude vision keeps
+                # returning the Register button at (618, 587) for the
+                # Title field; without this hint, every retry returns
+                # the same coord and burns the step budget on identical
+                # tag-guard refusals.
+                avoid_label = label or step.intent[:40]
+                _hints.add_hint(
+                    runner, index,
+                    f"Your previous coordinate pick for "
+                    f"'{avoid_label}' was ({x}, {y}), which "
+                    f"document.elementFromPoint resolves to a "
+                    f"<{tag_name}> element (a button or container, "
+                    f"NOT an input). DO NOT return coordinates inside "
+                    f"the box ({max(0, x - 40)}, {max(0, y - 20)}) to "
+                    f"({x + 40}, {y + 20}). The input you want is "
+                    f"almost certainly ABOVE that point — find the "
+                    f"text-input rectangle adjacent to the label and "
+                    f"return its center."
                 )
                 return StepResult(
                     step_index=index, intent=step.intent, success=False,
