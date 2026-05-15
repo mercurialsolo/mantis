@@ -15,6 +15,39 @@ params: __PARAMS__
 FAILURE DATA: __FAILURE_DATA__
 RETRY ATTEMPTS: __ATTEMPTS__
 
+FAILURE DATA LEGEND (decode the failure string before choosing a mode):
+
+- ``form_target_not_input:<TAG>`` — the grounder returned coordinates
+  that ``document.elementFromPoint`` resolves to ``<TAG>`` (BUTTON,
+  A, DIV, …) rather than an input. **The input field still exists
+  on the page; only the coordinate pick is wrong.** The runner has
+  already appended an avoid-this-coordinate recovery hint with the
+  rejected (x, y) and the bounding box to steer clear of — that
+  hint is splice-loaded into the next retry's search prompt. Prefer
+  ``add_hint`` (refine the coordinate target by describing where
+  the input is relative to nearby anchors visible on screen). Use
+  ``edit_step`` only when the literal label visible on screen
+  differs from ``params.label`` — e.g. ``params.label="Title"`` but
+  the rendered label is the question ``"What is your title?"`` —
+  in which case set ``edited_step={"params": {"label": "What is
+  your title?", "aliases": ["Title", "Job title"]}}``. Do NOT
+  rewrite ``type`` for this failure: ``fill_field`` is still the
+  right type; ``submit`` would click the button and submit a
+  half-filled form.
+
+- ``form_target_not_found`` — no element on the page matched the
+  label / aliases. Likely needs ``edit_step`` with different labels,
+  or ``insert_steps`` to scroll / expand a collapsed section.
+
+- ``select_mismatch:got=<observed>_wanted=<expected>`` — the
+  dropdown committed a different option than requested. Prefer
+  ``edit_step`` with refined ``params.option_label`` matching the
+  text the dropdown is actually rendering.
+
+- ``no_state_change`` (or demoted submit) — the click landed but
+  produced no observable page change. Usually a wrong target; try
+  ``edit_step`` with a more specific label.
+
 PLAN CONTEXT (steps already completed successfully):
 __PLAN_CONTEXT__
 
@@ -24,18 +57,37 @@ RECOVERY MODES (pick ONE via the record_recovery tool):
    needs a clarifying instruction. The hint is appended to the
    prompt the next retry will pass to its grounder. Use this when
    you can see what the right element is and just need to tell
-   the searcher to pick it. Example: the failed step said
-   "Click 'Update Lead'" but the actual button reads "Save" — so
-   hint="The save button is labeled 'Save', not 'Update Lead'."
+   the searcher to pick it.
+
+   Example A (label mismatch): the failed step said "Click 'Update
+   Lead'" but the actual button reads "Save" — so hint="The save
+   button is labeled 'Save', not 'Update Lead'."
+
+   Example B (coord mis-grounding — the ``form_target_not_input``
+   case): the failed step asked to fill the "Title" input but the
+   grounder returned coordinates on a button below the form — so
+   hint="The Title input is the rectangle directly above the dark
+   Register button at the bottom of the form. Do NOT return
+   coordinates overlapping any button — return the centre of the
+   empty text input above the Register button."
 
 2. edit_step — the step's structure is wrong. Use when:
-   - the step type is wrong (submit when it should be select_option,
-     click when it should be fill_field, etc.)
    - the labels in params are wrong and the right ones are visible
-     on screen
-   - aliases are needed because the button label varies
+     on screen (most common; cheapest type of edit)
+   - aliases are needed because the button label varies across
+     similar pages
+   - the step type is wrong (submit when it should be select_option,
+     etc.) — LAST RESORT, because rewriting the type changes the
+     handler's whole control flow and is rarely the right fix for
+     grounding / target-pick failures
    Provide ONLY the fields to change in ``edited_step``. Existing
    fields are preserved.
+
+   IMPORTANT: For ``form_target_not_input:<TAG>`` failures, the
+   step type is NOT the problem — the grounder picked the wrong
+   coordinate, but the requested action (fill_field / submit / etc.)
+   is still correct. Edit ``params.label`` / ``params.aliases`` to
+   match the rendered text, or prefer ``add_hint``.
 
 3. insert_steps — a precondition is missing. Use when the step
    itself is correct but the page isn't ready: a modal is blocking,
@@ -66,9 +118,21 @@ already tried), prefer halt or edit_step over inserting MORE steps
 of the same kind.
 
 Decision priority when multiple modes plausibly fit:
+- FAILURE_DATA starts with ``form_target_not_input:`` → strongly
+  prefer ``add_hint``. The runner's tag-guard already recorded an
+  avoid-this-coord hint; one well-placed clarifying hint usually
+  unsticks the next retry without changing step structure. Only
+  reach for ``edit_step`` if the rendered label visibly differs
+  from ``params.label`` (rewrite ``params.label`` / ``params.aliases``,
+  NEVER ``type`` for this failure).
 - The screenshot clearly shows the right element with a different
   label → add_hint (cheapest, often sufficient)
-- The step type / labels are obviously off → edit_step
+- The labels in params are obviously off and the right ones are
+  visible on screen → edit_step (params edit, not type edit)
+- The step type is wrong (e.g. ``submit`` when the page actually
+  needs a ``select_option``) → edit_step with ``type`` change. Last
+  resort; only when the action verb itself is wrong, not when
+  coordinates are off.
 - A precondition is needed AND prior attempts didn't already try
   this precondition → insert_steps
 - Prior attempts already tried scroll/dismiss/wait and the page
