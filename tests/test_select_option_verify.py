@@ -272,11 +272,9 @@ def test_verify_dropdown_value_returns_match_dict_on_success(monkeypatch):
     public method computes the match locally and reports both."""
     from mantis_agent.extraction.extractor import ClaudeExtractor
 
-    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
-    monkeypatch.setattr(
-        ClaudeExtractor,
-        "_call_with_tool_schema",
-        lambda self, *a, **kw: {"observed": "High"},
+    extractor = ClaudeExtractor(api_key="dummy")
+    extractor._form_target_provider._client.call_with_tool_schema = (
+        lambda *a, **kw: {"observed": "High"}
     )
 
     out = extractor.verify_dropdown_value(
@@ -292,11 +290,9 @@ def test_verify_dropdown_value_returns_mismatch_dict(monkeypatch):
     decides matches=False against expected=High."""
     from mantis_agent.extraction.extractor import ClaudeExtractor
 
-    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
-    monkeypatch.setattr(
-        ClaudeExtractor,
-        "_call_with_tool_schema",
-        lambda self, *a, **kw: {"observed": "Critical"},
+    extractor = ClaudeExtractor(api_key="dummy")
+    extractor._form_target_provider._client.call_with_tool_schema = (
+        lambda *a, **kw: {"observed": "Critical"}
     )
 
     out = extractor.verify_dropdown_value(
@@ -314,11 +310,9 @@ def test_verify_dropdown_value_substring_match_on_either_side(monkeypatch):
     matcher does case-insensitive substring on either side."""
     from mantis_agent.extraction.extractor import ClaudeExtractor
 
-    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
-    monkeypatch.setattr(
-        ClaudeExtractor,
-        "_call_with_tool_schema",
-        lambda self, *a, **kw: {"observed": "High Priority"},
+    extractor = ClaudeExtractor(api_key="dummy")
+    extractor._form_target_provider._client.call_with_tool_schema = (
+        lambda *a, **kw: {"observed": "High Priority"}
     )
 
     out = extractor.verify_dropdown_value(
@@ -328,10 +322,8 @@ def test_verify_dropdown_value_substring_match_on_either_side(monkeypatch):
     )
     assert out["matches"] is True
 
-    monkeypatch.setattr(
-        ClaudeExtractor,
-        "_call_with_tool_schema",
-        lambda self, *a, **kw: {"observed": "Contacted"},
+    extractor._form_target_provider._client.call_with_tool_schema = (
+        lambda *a, **kw: {"observed": "Contacted"}
     )
     out = extractor.verify_dropdown_value(
         screenshot=MagicMock(width=1280, height=720),
@@ -346,11 +338,9 @@ def test_verify_dropdown_value_empty_observed_does_not_match(monkeypatch):
     not silently pass as a match — that would defeat the validator."""
     from mantis_agent.extraction.extractor import ClaudeExtractor
 
-    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
-    monkeypatch.setattr(
-        ClaudeExtractor,
-        "_call_with_tool_schema",
-        lambda self, *a, **kw: {"observed": ""},
+    extractor = ClaudeExtractor(api_key="dummy")
+    extractor._form_target_provider._client.call_with_tool_schema = (
+        lambda *a, **kw: {"observed": ""}
     )
 
     out = extractor.verify_dropdown_value(
@@ -370,13 +360,13 @@ def test_verify_dropdown_value_prompt_does_not_leak_expected_value(monkeypatch):
 
     captured: dict = {}
 
-    def fake_call(self, screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens):
+    def fake_call(screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens):
         captured["prompt"] = prompt
         return {"observed": "High"}
 
-    monkeypatch.setattr(ClaudeExtractor, "_call_with_tool_schema", fake_call)
+    extractor = ClaudeExtractor(api_key="dummy")
+    extractor._form_target_provider._client.call_with_tool_schema = fake_call
 
-    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
     extractor.verify_dropdown_value(
         screenshot=MagicMock(width=1280, height=720),
         dropdown_label="Priority",
@@ -395,11 +385,9 @@ def test_verify_dropdown_value_returns_none_on_api_failure(monkeypatch):
     the click'."""
     from mantis_agent.extraction.extractor import ClaudeExtractor
 
-    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
-    monkeypatch.setattr(
-        ClaudeExtractor,
-        "_call_with_tool_schema",
-        lambda self, *a, **kw: None,
+    extractor = ClaudeExtractor(api_key="dummy")
+    extractor._form_target_provider._client.call_with_tool_schema = (
+        lambda *a, **kw: None
     )
 
     out = extractor.verify_dropdown_value(
@@ -417,14 +405,14 @@ def test_verify_dropdown_value_passes_correct_tool_schema(monkeypatch):
 
     captured: dict = {}
 
-    def fake_call(self, screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens):
+    def fake_call(screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens):
         captured["tool_name"] = tool_name
         captured["input_schema"] = input_schema
         return {"observed": "High"}
 
-    monkeypatch.setattr(ClaudeExtractor, "_call_with_tool_schema", fake_call)
+    extractor = ClaudeExtractor(api_key="dummy")
+    extractor._form_target_provider._client.call_with_tool_schema = fake_call
 
-    extractor = ClaudeExtractor.__new__(ClaudeExtractor)
     extractor.verify_dropdown_value(
         screenshot=MagicMock(width=1920, height=1080),
         dropdown_label="Priority",
