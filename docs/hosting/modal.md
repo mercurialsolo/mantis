@@ -92,6 +92,7 @@ Per-run state for HTTP submissions lives at `/data/tenants/<tenant_id>/runs/<run
 - `result.json` — final result envelope
 - `pause_state.json` — opaque PauseState blob (when paused)
 - `task_suite.json` — snapshot of the dispatched task_suite (used on resume)
+- `viewer.json` — MJPEG tunnel URL when `live_viewer: true` was set; merged into `action=status` responses as `viewer_url` (kept as a side-channel file so the executor never races the API on `status.json`)
 - `events.log` — append-only event stream
 
 ## Smoke test

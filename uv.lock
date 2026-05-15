@@ -1454,7 +1454,9 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-xdist" },
+    { name = "python-multipart" },
     { name = "ruff" },
+    { name = "starlette" },
 ]
 docs = [
     { name = "mkdocs" },
@@ -1474,6 +1476,7 @@ full = [
     { name = "pyautogui" },
     { name = "pydantic" },
     { name = "requests" },
+    { name = "starlette" },
     { name = "torch" },
     { name = "transformers" },
     { name = "uvicorn" },
@@ -1505,6 +1508,7 @@ server = [
     { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "requests" },
+    { name = "starlette" },
     { name = "uvicorn" },
 ]
 viewer = [
@@ -1539,10 +1543,13 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8" },
+    { name = "python-multipart", marker = "extra == 'dev'", specifier = ">=0.0.9" },
     { name = "requests", marker = "extra == 'client'", specifier = ">=2.28" },
     { name = "requests", marker = "extra == 'orchestrator'", specifier = ">=2.28" },
     { name = "requests", marker = "extra == 'server'", specifier = ">=2.28" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "starlette", marker = "extra == 'dev'", specifier = "<1.0" },
+    { name = "starlette", marker = "extra == 'server'", specifier = "<1.0" },
     { name = "torch", marker = "extra == 'local-cua'", specifier = ">=2.1" },
     { name = "transformers", marker = "extra == 'local-cua'", specifier = ">=4.52" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.20" },
@@ -3476,15 +3483,15 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "1.0.0"
+version = "0.52.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/81/69/17425771797c36cded50b7fe44e850315d039f28b15901ab44839e70b593/starlette-1.0.0.tar.gz", hash = "sha256:6a4beaf1f81bb472fd19ea9b918b50dc3a77a6f2e190a12954b25e6ed5eea149", size = 2655289, upload-time = "2026-03-22T18:29:46.779Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/68/79977123bb7be889ad680d79a40f339082c1978b5cfcf62c2d8d196873ac/starlette-0.52.1.tar.gz", hash = "sha256:834edd1b0a23167694292e94f597773bc3f89f362be6effee198165a35d62933", size = 2653702, upload-time = "2026-01-18T13:34:11.062Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/c9/584bc9651441b4ba60cc4d557d8a547b5aff901af35bda3a4ee30c819b82/starlette-1.0.0-py3-none-any.whl", hash = "sha256:d3ec55e0bb321692d275455ddfd3df75fff145d009685eb40dc91fc66b03d38b", size = 72651, upload-time = "2026-03-22T18:29:45.111Z" },
+    { url = "https://files.pythonhosted.org/packages/81/0d/13d1d239a25cbfb19e740db83143e95c772a1fe10202dda4b76792b114dd/starlette-0.52.1-py3-none-any.whl", hash = "sha256:0029d43eb3d273bc4f83a08720b4912ea4b071087a3b48db01b7c839f7954d74", size = 74272, upload-time = "2026-01-18T13:34:09.188Z" },
 ]
 
 [[package]]

@@ -226,6 +226,43 @@ def test_result_action_returns_executor_result(app_with_stub) -> None:
     assert body["result"] == {"viable": 42, "leads": ["alice"]}
 
 
+def test_viewer_url_side_channel_merges_into_status(app_with_stub) -> None:
+    """#416 follow-up: the executor writes ``viewer.json`` (not status.json),
+    and ``action=status`` merges it in without dropping API-owned fields.
+    """
+    import modal_cua_server as mcs  # type: ignore[import-not-found]
+
+    client, _executor, _call = app_with_stub
+    r = client.post(
+        "/v1/predict",
+        headers=_auth_headers(),
+        data=json.dumps({
+            "task_suite": {"tasks": []},
+            "profile_id": "alice",
+            "live_viewer": True,
+        }),
+    )
+    run_id = r.json()["run_id"]
+
+    fake_url = "https://viewer.modal.host?token=abc"
+    mcs._write_viewer_url("default", run_id, fake_url)
+
+    poll = client.post(
+        "/v1/predict",
+        headers=_auth_headers(),
+        data=json.dumps({"action": "status", "run_id": run_id}),
+    )
+    assert poll.status_code == 200, poll.text
+    body = poll.json()
+    # Viewer URL surfaces …
+    assert body["viewer_url"] == fake_url
+    # … without clobbering the API-owned status fields.
+    assert body["run_id"] == run_id
+    assert body["modal_call_id"] == "fc-stub-123"
+    assert body["profile_id"].endswith("__alice")
+    assert body["status"] in {"queued", "running", "succeeded"}
+
+
 def test_status_unknown_run_returns_404(app_with_stub) -> None:
     client, _executor, _call = app_with_stub
     r = client.post(

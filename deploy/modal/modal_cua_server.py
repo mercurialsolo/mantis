@@ -664,22 +664,23 @@ def _run_holo3_executor(
         except Exception as exc:  # noqa: BLE001 — best-effort
             print(f"  WARNING: ensure_display_ready before viewer failed: {exc}")
     viewer_ctx, viewer_event_bus, viewer_url = setup_viewer(viewer)
-    # #416: surface the tunnel URL into the API-side status.json so a
-    # caller polling ``action=status`` gets a hot-link to the live
-    # screen. Only fires when the /v1/predict handler forwarded the
-    # API's run_id + tenant_id alongside ``viewer=True``. The legacy
-    # CLI path (no api_run_id) keeps the old behaviour — URL is
-    # printed to stdout by ``modal_viewer`` and we don't touch
-    # status.json.
+    # #416: persist the tunnel URL so a caller polling ``action=status``
+    # gets a hot-link to the live screen. We write to a side-channel
+    # ``viewer.json`` rather than merging into the API-owned
+    # ``status.json``: the executor races the API's initial
+    # ``_write_status`` (spawn returns before the queued-status commit
+    # lands) and ``vol.reload()`` from inside the executor doesn't
+    # reliably bridge that gap. ``_do_action`` reads both files and
+    # merges the URL onto the response. Only fires when the /v1/predict
+    # handler forwarded the API's run_id + tenant_id alongside
+    # ``viewer=True``; the legacy CLI path (no api_run_id) keeps the
+    # old behaviour — URL is printed to stdout by ``modal_viewer``.
     if viewer_url and api_run_id and api_tenant_id:
         try:
-            existing = _read_status(api_tenant_id, api_run_id) or {}
-            existing["viewer_url"] = viewer_url
-            existing["updated_at"] = datetime.now(timezone.utc).isoformat()
-            _write_status(api_tenant_id, api_run_id, existing)
-            print(f"  live-viewer URL written to status.json: {viewer_url}")
+            _write_viewer_url(api_tenant_id, api_run_id, viewer_url)
+            print(f"  live-viewer URL written to viewer.json: {viewer_url}")
         except Exception as exc:  # noqa: BLE001 — viewer is best-effort
-            print(f"  WARNING: failed to surface live-viewer URL into status.json: {exc}")
+            print(f"  WARNING: failed to surface live-viewer URL into viewer.json: {exc}")
 
     # ── Micro-intent mode: run MicroPlanRunner ──
     micro_plan_data = task_suite.get("_micro_plan")
@@ -1424,6 +1425,28 @@ def _read_status(tenant_id: str, run_id: str) -> dict | None:
         return None
 
 
+def _write_viewer_url(tenant_id: str, run_id: str, viewer_url: str) -> None:
+    """Persist the live-viewer URL in a side-channel file (#416).
+
+    Kept separate from ``status.json`` so the executor never has to
+    read-merge-write a file the API container also owns.
+    """
+    run_dir = _run_dir(tenant_id, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "viewer.json").write_text(json.dumps({"viewer_url": viewer_url}))
+    _commit_volume()
+
+
+def _read_viewer_url(tenant_id: str, run_id: str) -> str | None:
+    path = _run_dir(tenant_id, run_id) / "viewer.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text()).get("viewer_url")
+    except Exception:
+        return None
+
+
 def _write_result(tenant_id: str, run_id: str, result: dict) -> None:
     run_dir = _run_dir(tenant_id, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1658,6 +1681,10 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         status = _read_status(tenant.tenant_id, run_id)
         if status is None:
             raise HTTPException(404, f"unknown run_id: {run_id}")
+
+        viewer_url = _read_viewer_url(tenant.tenant_id, run_id)
+        if viewer_url:
+            status["viewer_url"] = viewer_url
 
         action = payload["action"]
         if action == "cancel":
