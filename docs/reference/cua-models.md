@@ -12,7 +12,7 @@ How you select a backend depends on where Mantis is hosted. The selection model 
 |---|---|---|
 | Modal `/v1/predict` | Per-request `cua_model` field | One deployment serves every backend; each request spawns the right GPU function. |
 | Modal CLI (`modal run`) | `--model <name>` | Same dispatch as the HTTP API. |
-| Baseten `/v1/predict` and `/v1/cua` | **Per-deployment** via `MANTIS_MODEL` env | Each pod loads one brain at startup. `cua_model` in the request body is **ignored**. To use Fara on Baseten you push `deploy/baseten/fara/` as its own model and hit that deployment's URL. |
+| Baseten `/production/predict` and `/production/sync/v1/cua` | **Per-deployment** via `MANTIS_MODEL` env | Each pod loads one brain at startup. `cua_model` in the request body is **ignored**. To use Fara on Baseten you push `deploy/baseten/fara/` as its own model and hit that deployment's URL. See [the URL contract below](#baseten-url-contract) for `/production/predict` vs `/production/sync/<path>`. |
 
 Default model is `holo3` on both surfaces — existing callers that don't pass `cua_model` keep getting Holo3.
 
@@ -61,8 +61,8 @@ uv run modal run --detach deploy/modal/modal_cua_server.py \
 uvx truss push deploy/baseten/fara --no-cache --promote \
   --deployment-name "mantis-fara-$(date -u +%Y%m%d-%H%M)"
 
-# Call its endpoint
-curl -X POST "https://model-<FARA_MODEL_ID>.api.baseten.co/production/v1/predict" \
+# Call the orchestrated /predict route
+curl -X POST "https://model-<FARA_MODEL_ID>.api.baseten.co/production/predict" \
   -H "Authorization: Api-Key $BASETEN_API_KEY" \
   -H "X-Mantis-Token: $TOK" \
   -H "Content-Type: application/json" \
@@ -72,6 +72,36 @@ curl -X POST "https://model-<FARA_MODEL_ID>.api.baseten.co/production/v1/predict
 ```
 
 Notice the request body has no `cua_model` field — the Fara deployment was started with `MANTIS_MODEL=fara` (see `deploy/baseten/fara/config.yaml`), and that's what determines the brain. Holo3 stays on its own deployment URL.
+
+#### Baseten URL contract
+
+The Baseten gateway forwards **two** route families to every truss-server deployment:
+
+| Public URL | Container path | What it serves |
+|---|---|---|
+| `/production/predict` | `predict_endpoint:` from `config.yaml` (default `/predict`) | Mantis orchestrated run / status / resume — the high-level entry point. |
+| `/production/sync/<any-path>` | `<any-path>` on the in-pod FastAPI / nginx (port `server_port`) | Pass-through for arbitrary FastAPI routes — `/v1/chat/completions`, `/v1/models`, `/v1/health`, `/v1/cua`. |
+
+For a non-promoted (canary) deployment, swap `production` for `deployment/<DEPLOYMENT_ID>` in either form.
+
+This is how a remote-brain integration (caller runs the CUA loop locally, hits Mantis only for per-step inference) points a `FaraBrain` at the Baseten deployment:
+
+```python
+endpoint = "https://model-<FARA_MODEL_ID>.api.baseten.co/production/sync"
+
+brain = FaraBrain(
+    base_url=f"{endpoint}/v1",                 # → /v1/chat/completions
+    extra_headers={
+        "Authorization": f"Api-Key {BASETEN_API_KEY}",
+        "X-Mantis-Token": MANTIS_API_TOKEN,
+    },
+    screen_size=(1280, 800),
+)
+```
+
+The brain only hits `/v1/chat/completions` (single-step inference). The CUA loop (screenshot → think → action → step) runs in the caller's container against the caller's `XdotoolGymEnv` — the Mantis Baseten pod is a thin model server in that mode.
+
+Use `/production/predict` instead when you want Mantis itself to run the CUA loop on its own headed Chrome inside Xvfb (the orchestrated path).
 
 
 
