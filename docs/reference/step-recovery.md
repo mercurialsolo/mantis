@@ -122,4 +122,4 @@ Each of these surfaces enough state to debug from Modal logs alone — issue #43
 * **Runtime sub-goal decomposition by the frontier model** (epic #435 item 8). Today the planner is plan-time only; mid-run replanning lives in `agentic_recovery.insert_steps` which only fires on failure. A continuous planner that observes step outcomes and emits directives mid-run would be a different layer.
 * **CDP-readonly probe** (option 3 in #432). Inspect `input.validity` / `aria-invalid` directly via DOM injection instead of relying on Claude vision. Deterministic, but breaks the zero-fingerprint architecture invariant — opt-in flag at minimum.
 
-See [`docs/cua_notes.md`](../cua_notes.md) for the design rationale behind the planner-executor split and the "history mostly text, not images" pattern that frames how this chain is built.
+The design rationale behind the planner-executor split and the "history mostly text, not images" pattern that frames how this chain is built lives in internal CUA agent design notes (epic #435 roadmap).

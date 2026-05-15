@@ -151,4 +151,3 @@ nav:
   - Appendix:
       - appendix/index.md
       - Learnings: learnings.md
-      - CUA agent design notes: cua_notes.md
