@@ -50,8 +50,8 @@ logger = logging.getLogger(__name__)
 
 
 def probe_element_tag_at(env: Any, x: int, y: int) -> dict | None:
-    """Best-effort: report the tag and contentEditable state of the
-    element at viewport (x, y) via CDP ``Runtime.evaluate``.
+    """Best-effort: report the tag + contentEditable of the element at
+    SCREEN (x, y) — the same coordinates xdotool would click.
 
     Returns ``None`` when:
 
@@ -67,10 +67,19 @@ def probe_element_tag_at(env: Any, x: int, y: int) -> dict | None:
     Used by :class:`~.step_handlers.form.ClaudeGuidedFormHandler` to
     refuse a ``fill_field`` click when the element at the chosen point
     is a button / backdrop / modal close-X — clicking those dismisses
-    the form instead of focusing an input (the lu.ma host-question
-    modal failure pattern: Claude returns coordinates near the title
-    label, ``elementFromPoint`` returns the dim overlay above it, the
-    SoM click hits the overlay's outside-to-close handler).
+    the form instead of focusing an input.
+
+    Coordinate system note (#413): caller passes screen-space (x, y) —
+    the same numbers xdotool will receive. But ``document.element
+    FromPoint`` takes CSS-viewport coords (origin = top-left of the
+    page area, BELOW the browser's tabs + URL bar). Without the
+    chrome-offset subtraction below, a tag-guard call for a Title
+    input visually at screen-y=588 would resolve to whatever element
+    sits at viewport-y=588 instead — which on Lu.ma's modal is the
+    Register button ~85 px below the input. The runner then refused
+    correct clicks as ``form_target_not_input:BUTTON``. Fix: subtract
+    ``window.outerHeight - window.innerHeight`` so screen-y is
+    translated into viewport-y before the elementFromPoint call.
 
     Tests that don't wire CDP get ``None`` and the caller falls through
     to legacy behaviour — no breakage on the existing form-handler
@@ -81,7 +90,17 @@ def probe_element_tag_at(env: Any, x: int, y: int) -> dict | None:
         return None
     js = (
         "(() => {"
-        f"const el = document.elementFromPoint({int(x)}, {int(y)});"
+        # screen-y → viewport-y by subtracting the chrome offset.
+        # ``outerHeight - innerHeight`` is the canonical browser
+        # measurement that covers tabs + URL bar (+ OS window
+        # decorations when present). On Xvfb without a WM this is
+        # just Chrome's tabs+URL bar (~85 px); on a desktop it
+        # additionally includes the OS title bar. ``Math.max(0, …)``
+        # guards against headless modes that report 0 chrome.
+        "const chromeH = Math.max(0, window.outerHeight - window.innerHeight);"
+        f"const vx = {int(x)};"
+        f"const vy = {int(y)} - chromeH;"
+        "const el = document.elementFromPoint(vx, vy);"
         "if (!el) return null;"
         "return {"
         "tag: (el.tagName || '').toUpperCase(),"

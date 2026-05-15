@@ -479,7 +479,7 @@ class XdotoolGymEnv(GymEnvironment):
         return (payload.get("result") or {}).get("value")
 
     def cdp_click_at_point(self, x: int, y: int) -> bool:
-        """SoM-anchored click: find the element at (x, y) and call
+        """SoM-anchored click: find the element at SCREEN (x, y) and call
         ``el.click()`` via Runtime.evaluate.
 
         Why this isn't just xdotool: xdotool sends X-level mouse events
@@ -496,13 +496,26 @@ class XdotoolGymEnv(GymEnvironment):
         click was dispatched successfully. Returns ``False`` if CDP is
         unreachable, no element exists at the point, or the JS threw.
         Caller is expected to fall back to xdotool on ``False``.
+
+        Coordinate system note (#413): caller passes screen-space
+        (x, y) — the same numbers xdotool would click. But
+        ``document.elementFromPoint`` uses CSS-viewport coords (origin
+        = top-left of the page area, BELOW the browser tabs + URL
+        bar). Subtract ``window.outerHeight - window.innerHeight``
+        so the screen-y is translated into viewport-y before the
+        elementFromPoint call. Without this, the SoM ``el.click()``
+        fires on whatever element sits ~85 px below the visual click
+        target — the symptom that motivated the tag-guard fix in #413.
         """
         # Use a self-executing function so the eval result is a clean
         # boolean. ``elementFromPoint`` returns ``null`` for points
         # outside the viewport — that surfaces as ``False`` here.
         js = (
             "(() => {"
-            f"const el = document.elementFromPoint({int(x)}, {int(y)});"
+            "const chromeH = Math.max(0, window.outerHeight - window.innerHeight);"
+            f"const vx = {int(x)};"
+            f"const vy = {int(y)} - chromeH;"
+            "const el = document.elementFromPoint(vx, vy);"
             "if (!el) return false;"
             "try { el.click(); return true; }"
             "catch (e) { return false; }"
