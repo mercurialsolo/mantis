@@ -45,8 +45,27 @@ FAILURE DATA LEGEND (decode the failure string before choosing a mode):
   text the dropdown is actually rendering.
 
 - ``no_state_change`` (or demoted submit) — the click landed but
-  produced no observable page change. Usually a wrong target; try
-  ``edit_step`` with a more specific label.
+  produced no observable page change. Two common shapes — disambiguate
+  using the screenshot:
+  * Wrong target — the click hit a non-action element (label, badge,
+    a div near a button). The form / page would have responded if the
+    click had reached the right pixel. Prefer ``edit_step`` /
+    ``add_hint`` to refine the label or coordinates.
+  * **Form-validation-blocked submit** — the click hit the right
+    submit button but the form has a visible field-level validation
+    error (red text under a field, an ``aria-invalid`` ring, a
+    "value must be ≤ N" / "invalid format" / "required" message
+    near an input). The form's submit handler short-circuits while
+    any field is invalid, so the page never transitions and the
+    runner sees ``no_state_change``. Prefer ``insert_steps`` —
+    splice a small sub-flow that normalizes the offending field
+    (``fill_field`` to a valid value, or ``select_option`` for a
+    bad enum) BEFORE the failed submit. The next attempt at the
+    submit will then succeed because the form is valid.
+    Example: a "Estimated Deal Value" field showing
+    "461927.81" with a red "value must be a whole number" error
+    → ``insert_steps=[{"type": "fill_field", "params": {"label":
+    "Estimated Deal Value", "value": "461928"}}]``.
 
 PLAN CONTEXT (steps already completed successfully):
 __PLAN_CONTEXT__
