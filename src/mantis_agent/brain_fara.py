@@ -422,6 +422,23 @@ class FaraBrain:
             recent = action_history[-5:]
             history = "\n".join(f"  {i + 1}. {a}" for i, a in enumerate(recent))
             parts.append(f"Recent actions:\n{history}")
+        # #435: re-feed the model's own ``pause_and_memorize_fact``
+        # entries from earlier turns. The Fara model card calls this
+        # out as an explicit scratchpad primitive; the doc's §4
+        # *"plumb it through"* note is satisfied by accumulating
+        # non-empty ``Action.memorize_fact`` strings off the action
+        # history and rendering them in their own block. Bounded to
+        # the last 10 facts so a chatty plan doesn't blow the prompt
+        # footprint.
+        if action_history:
+            facts = [
+                str(a.memorize_fact)
+                for a in action_history
+                if getattr(a, "memorize_fact", "")
+            ][-10:]
+            if facts:
+                fact_block = "\n".join(f"  - {f}" for f in facts)
+                parts.append(f"Memorized facts (your earlier notes):\n{fact_block}")
         content.append({"type": "text", "text": "\n".join(parts)})
 
         messages.append({"role": "user", "content": content})
@@ -710,10 +727,19 @@ class FaraBrain:
             )
 
         if action == "pause_and_memorize_fact":
+            # #435: surface the fact through the structured
+            # ``memorize_fact`` field instead of stuffing it in
+            # ``reasoning``. The runner pops it into its
+            # ``_memorized_facts`` list and the next turn's prompt
+            # re-feeds the list as a ``Memorized facts:`` block, which
+            # is what the doc means by *"essentially an explicit
+            # scratchpad primitive"* in §4. The action itself is still
+            # a no-op WAIT — the side-effect is the memo, not movement.
             note = str(args.get("text") or args.get("fact") or "")[:200]
             return Action(
                 ActionType.WAIT, {"seconds": 0.2},
                 reasoning=f"fara memo:{note}",
+                memorize_fact=note,
             )
 
         if action == "terminate":

@@ -377,12 +377,21 @@ def _run_executor(
     plan_inputs: dict[str, str] | None = None,
     max_steps: int = 30,
     max_retries: int = 2,
-    frames_per_inference: int = 5,
+    frames_per_inference: int = 2,
     viewer: bool = False,
     profile_dir: str = "",
     **_extra,
 ) -> dict:
-    """Shared executor logic for all vLLM GPU tiers."""
+    """Shared executor logic for all vLLM GPU tiers.
+
+    #435: ``frames_per_inference`` default lowered from 5 to 2 per the
+    cua_notes.md "Cost-accuracy sweet spot" guidance — keep the last
+    1-3 screenshots, images dominate token cost, older frames are
+    mostly redundant once you have the action log. Holo3 keeps its
+    own 1-frame default (see ``_run_holo3_executor``); the Claude
+    executor follows the same default. Operators can override via
+    the kwarg.
+    """
     from datetime import datetime, timezone
 
     from mantis_agent.task_loop import TaskLoopConfig, setup_env, setup_viewer, run_executor_lifecycle
@@ -1214,7 +1223,7 @@ def _run_claude_executor(
     plan_inputs: dict[str, str] | None = None,
     max_steps: int = 30,
     max_retries: int = 2,
-    frames_per_inference: int = 5,
+    frames_per_inference: int = 2,
     claude_model: str = "claude-sonnet-4-20250514",
     thinking_budget: int = 2048,
     viewer: bool = False,

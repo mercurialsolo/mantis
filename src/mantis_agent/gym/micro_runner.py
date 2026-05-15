@@ -240,6 +240,16 @@ class MicroPlanRunner:
         self._recovery_hints: dict[int, list[str]] = {}
         self._recovery_attempts_per_step: dict[int, int] = {}
         self._total_recovery_attempts: int = 0
+        # #435 task #1: cap inserted-step cascades. When recovery's
+        # ``insert_steps`` splices N new steps, their indices are
+        # recorded in ``_recovery_inserted_steps``. If one of those
+        # inserted steps fails and triggers ANOTHER recovery that
+        # also wants ``insert_steps``, ``_recovery_cascade_depth``
+        # tracks how many cascades deep we've gone. The policy halts
+        # cleanly at depth >= 2 instead of burning the per-run
+        # recovery budget on the same root cause.
+        self._recovery_inserted_steps: set[int] = set()
+        self._recovery_cascade_depth: dict[int, int] = {}
         self.max_cost, self.max_time = max_cost, max_time_minutes * 60
         self.step_callback, self.keep_screenshots = step_callback, keep_screenshots
         self.cancel_event = cancel_event

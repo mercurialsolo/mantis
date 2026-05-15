@@ -23,7 +23,7 @@ without forcing a migration of all read sites.
 
 from __future__ import annotations
 
-from typing import Protocol, TypedDict, runtime_checkable
+from typing import Any, Protocol, TypedDict, runtime_checkable
 
 from PIL import Image
 
@@ -84,6 +84,7 @@ class FormTargetProvider(Protocol):
         target_label: str = "",
         target_value: str = "",
         target_aliases: list[str] | None = None,
+        region: Any = None,
     ) -> FormTargetResult | None:
         """Locate a labelled form element.
 

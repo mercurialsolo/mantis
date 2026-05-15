@@ -508,6 +508,285 @@ def _make_plan() -> MicroPlan:
     ])
 
 
+def test_recovery_insert_steps_inherits_region_hint_from_parent() -> None:
+    """#435 task #2: when ``insert_steps`` splices a fill_field
+    before a failed submit, the inserted step inherits the parent's
+    ``hints.region`` so ``find_form_target`` benefits from the same
+    region cropping. Without this, the inserted normalize-step faces
+    the full screen and hits the same disambiguation pressure that
+    blocked the parent.
+    """
+    runner = _make_runner_with_recovery_state()
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    parent_step = plan.steps[2]
+    parent_step.hints = {"region": "bottom", "visual": "blue button"}
+    result = StepResult(
+        step_index=2, intent=parent_step.intent, success=False,
+        data="submit:Update Lead:no_state_change",
+        failure_class="no_state_change",
+    )
+    resp = _tool_response({
+        "mode": "insert_steps",
+        "reasoning": "Estimated Deal Value is decimal in integer field",
+        "inserted_steps": [{
+            "intent": "Normalize Estimated Deal Value to whole number",
+            "type": "fill_field",
+            "params": {"label": "Estimated Deal Value", "value": "461928"},
+        }],
+    })
+    with patch("requests.post", return_value=resp):
+        outcome = policy._try_agentic_recovery(
+            step=parent_step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+    assert outcome is not None
+    # The splice inserted the new step at index 2.
+    inserted = plan.steps[2]
+    assert inserted.type == "fill_field"
+    # Region hint inherited; submit-only hints (visual / position) NOT
+    # carried — they don't translate to a fill_field on a different
+    # element.
+    assert inserted.hints.get("region") == "bottom"
+    assert "visual" not in inserted.hints
+
+
+def test_recovery_insert_steps_cascade_caps_at_depth_2() -> None:
+    """#435 task #1: a recovery that inserts a step, the inserted
+    step then fails and triggers another recovery, that one ALSO
+    inserts → cascade. Cap at depth 2: the third cascade halts
+    cleanly instead of burning per-run recovery budget on the same
+    root cause.
+    """
+    runner = _make_runner_with_recovery_state()
+    runner._recovery_inserted_steps = {5, 6}  # both inserted by prior recovery
+    runner._recovery_cascade_depth = {5: 2}  # already at depth 2 for index 5
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    step = MicroIntent(intent="inserted fill", type="fill_field")
+    result = StepResult(
+        step_index=5, intent=step.intent, success=False,
+        data="form_target_not_found",
+        failure_class="no_state_change",
+    )
+    resp = _tool_response({
+        "mode": "insert_steps",
+        "reasoning": "try a different normalize",
+        "inserted_steps": [{
+            "intent": "still trying", "type": "fill_field", "params": {},
+        }],
+    })
+    with patch("requests.post", return_value=resp):
+        outcome = policy._try_agentic_recovery(
+            step=step, step_result=result, step_index=5,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+    # Recovery saw the cascade depth and halted instead of inserting
+    # again.
+    assert outcome is None
+
+
+def test_recovery_first_insert_steps_marks_indices_for_cascade_detection() -> None:
+    """Regression guard for #435 task #1's bookkeeping: the FIRST
+    insert_steps call (not yet a cascade) must populate
+    ``_recovery_inserted_steps`` so subsequent failures on those
+    indices can be detected as cascades.
+    """
+    runner = _make_runner_with_recovery_state()
+    runner._recovery_inserted_steps = set()
+    runner._recovery_cascade_depth = {}
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    parent_step = plan.steps[2]
+    result = StepResult(
+        step_index=2, intent=parent_step.intent, success=False,
+        data="submit:no_state_change",
+        failure_class="no_state_change",
+    )
+    resp = _tool_response({
+        "mode": "insert_steps",
+        "reasoning": "normalize field",
+        "inserted_steps": [{
+            "intent": "fix field", "type": "fill_field",
+            "params": {"label": "X", "value": "v"},
+        }],
+    })
+    with patch("requests.post", return_value=resp):
+        policy._try_agentic_recovery(
+            step=parent_step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+    # The inserted step at index 2 is now marked.
+    assert 2 in runner._recovery_inserted_steps
+
+
+def test_recovery_runs_tab_blur_traversal_on_no_state_change_submit() -> None:
+    """#435 follow-up: silent-validation handling.
+
+    When the recovery analyser would otherwise see a clean form
+    (submit failed, no rendered error), pressing Tab through every
+    input forces blur-driven validation rendering. The recovery
+    screenshot is then captured AFTER the traversal, so the
+    analyser sees what was hidden.
+
+    This test pins:
+    1. Tab traversal is called BEFORE ``_safe_screenshot``.
+    2. The default count is 12 (covers a typical edit form).
+    3. The screenshot returned by ``_safe_screenshot`` is what
+       reaches ``analyse_failure_and_recover``.
+    """
+    runner = _make_runner_with_recovery_state()
+    runner._safe_screenshot.return_value = "post-tab-screenshot"
+    call_order: list[str] = []
+    # Order tracker — both env.step (any KEY_PRESS) and the screenshot
+    # call get recorded so we can assert ordering.
+    def _env_step(action):
+        if action.params.get("keys") == "Tab":
+            call_order.append("tab")
+    runner.env.step.side_effect = _env_step
+    runner._safe_screenshot.side_effect = lambda: (
+        call_order.append("screenshot") or "post-tab-screenshot"
+    )
+
+    captured: dict = {}
+
+    def _capture(*, step, failure_data, screenshot, plan_context,
+                 attempts, model=None, api_key=""):
+        captured["screenshot"] = screenshot
+        return None  # short-circuit; we only care about the pre-call sequence.
+
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    step = plan.steps[2]
+    result = StepResult(
+        step_index=2, intent=step.intent, success=False,
+        data="submit:Update Lead@(100,200):no_state_change",
+        failure_class="no_state_change",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        side_effect=_capture,
+    ):
+        policy._try_agentic_recovery(
+            step=step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+
+    # 12 Tabs were pressed.
+    assert call_order.count("tab") == 12, (
+        f"expected 12 Tab presses; got {call_order.count('tab')}"
+    )
+    # Tabs all happened before the screenshot.
+    last_tab = max(
+        i for i, ev in enumerate(call_order) if ev == "tab"
+    )
+    first_screenshot = next(
+        i for i, ev in enumerate(call_order) if ev == "screenshot"
+    )
+    assert last_tab < first_screenshot, (
+        f"Tab traversal must complete before screenshot; "
+        f"got order {call_order}"
+    )
+    # The recovery's screenshot is the post-tab one.
+    assert captured["screenshot"] == "post-tab-screenshot"
+
+
+def test_recovery_skips_tab_blur_for_non_submit_failures() -> None:
+    """Tab traversal is scoped to ``no_state_change`` submit failures
+    — it doesn't fire on click-type failures, form_target_not_found,
+    or anything else. Avoids changing behaviour on unrelated paths.
+    """
+    runner = _make_runner_with_recovery_state()
+    tab_count = [0]
+    runner.env.step.side_effect = lambda action: (
+        tab_count.__setitem__(0, tab_count[0] + 1)
+        if action.params.get("keys") == "Tab" else None
+    )
+
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    click_step = MicroIntent(intent="Click", type="click")
+    plan.steps[2] = click_step
+    result = StepResult(
+        step_index=2, intent="Click", success=False,
+        data="click_no_nav", failure_class="no_state_change",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        return_value=None,
+    ):
+        policy._try_agentic_recovery(
+            step=click_step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+
+    assert tab_count[0] == 0, (
+        f"Tab traversal must NOT fire on click failures; got {tab_count[0]}"
+    )
+
+
+def test_recovery_tab_blur_disabled_by_env(monkeypatch) -> None:
+    """``MANTIS_RECOVERY_TAB_BLUR=disabled`` opts out — useful for
+    bisecting whether the traversal helps or harms on a given plan.
+    """
+    monkeypatch.setenv("MANTIS_RECOVERY_TAB_BLUR", "disabled")
+    runner = _make_runner_with_recovery_state()
+    tab_count = [0]
+    runner.env.step.side_effect = lambda action: (
+        tab_count.__setitem__(0, tab_count[0] + 1)
+        if action.params.get("keys") == "Tab" else None
+    )
+
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    step = plan.steps[2]
+    result = StepResult(
+        step_index=2, intent=step.intent, success=False,
+        data="submit:Update Lead@(100,200):no_state_change",
+        failure_class="no_state_change",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        return_value=None,
+    ):
+        policy._try_agentic_recovery(
+            step=step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+
+    assert tab_count[0] == 0
+
+
+def test_recovery_tab_blur_count_overridable_by_env(monkeypatch) -> None:
+    """Operators can tune the Tab count for unusually large forms."""
+    monkeypatch.setenv("MANTIS_RECOVERY_TAB_BLUR_COUNT", "4")
+    runner = _make_runner_with_recovery_state()
+    tab_count = [0]
+    runner.env.step.side_effect = lambda action: (
+        tab_count.__setitem__(0, tab_count[0] + 1)
+        if action.params.get("keys") == "Tab" else None
+    )
+
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    step = plan.steps[2]
+    result = StepResult(
+        step_index=2, intent=step.intent, success=False,
+        data="submit:Update Lead@(100,200):no_state_change",
+        failure_class="no_state_change",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        return_value=None,
+    ):
+        policy._try_agentic_recovery(
+            step=step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+
+    assert tab_count[0] == 4
+
+
 def test_recovery_returns_none_without_api_key(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     runner = _make_runner_with_recovery_state()

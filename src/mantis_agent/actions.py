@@ -37,6 +37,12 @@ class Action:
     action_type: ActionType
     params: dict[str, Any] = field(default_factory=dict)
     reasoning: str = ""
+    # #435: explicit-scratchpad primitive that some CUA models (Fara's
+    # ``pause_and_memorize_fact``) emit alongside a no-op action. The
+    # runner accumulates these into ``GymRunner._memorized_facts`` and
+    # re-feeds them to the brain on subsequent turns. Empty string =
+    # nothing to memorize on this step.
+    memorize_fact: str = ""
 
     def __str__(self) -> str:
         return f"{self.action_type.value}({self.params})" + (

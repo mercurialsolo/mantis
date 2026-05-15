@@ -217,6 +217,14 @@ class ClaudeGuidedFormHandler:
         index = int(ctx.state.get("index", 0))
 
         params = dict(getattr(step, "params", {}) or {})
+        # #435 item 1: extract the optional region hint once for the
+        # whole step. Every ``find_form_target`` call this handler
+        # makes (initial, scroll-probe sweep, retry-with-hint) passes
+        # ``region`` through, so the executor sees a cropped frame on
+        # each call — coordinates re-projected by the provider before
+        # they reach the runner. Empty / missing → no crop, identical
+        # to the pre-#435 path.
+        step_region = (getattr(step, "hints", {}) or {}).get("region")
         # Combined settle — form pages frequently finish hydrating after the
         # navigate that brought us here. EPIC #161 cleanup merges the
         # pre-handler 2s sleep that used to live in MicroPlanRunner
@@ -264,6 +272,7 @@ class ClaudeGuidedFormHandler:
                 target_label=label,
                 target_value=value,
                 target_aliases=aliases,
+                region=step_region,
             )
             runner.costs["claude_extract"] += 1
             probe_attempts = ["initial"]
@@ -299,6 +308,7 @@ class ClaudeGuidedFormHandler:
                     target_label=label,
                     target_value=value,
                     target_aliases=aliases,
+                    region=step_region,
                 )
                 runner.costs["claude_extract"] += 1
                 probe_attempts.append(log_tag)
@@ -537,6 +547,7 @@ class ClaudeGuidedFormHandler:
             target = target_provider.find_form_target(
                 screenshot, search_intent,
                 target_label=label, target_aliases=aliases,
+                region=step_region,
             )
             runner.costs["claude_extract"] += 1
             probe_attempts = ["initial"]
@@ -559,6 +570,7 @@ class ClaudeGuidedFormHandler:
                 t = target_provider.find_form_target(
                     shot, search_intent,
                     target_label=label, target_aliases=aliases,
+                    region=step_region,
                 )
                 runner.costs["claude_extract"] += 1
                 logger.info(
@@ -768,6 +780,7 @@ class ClaudeGuidedFormHandler:
             target = target_provider.find_form_target(
                 screenshot, search_intent,
                 target_label=label, target_aliases=aliases,
+                region=step_region,
             )
             runner.costs["claude_extract"] += 1
             if not target:
@@ -817,6 +830,7 @@ class ClaudeGuidedFormHandler:
             )
             target = target_provider.find_form_target(
                 screenshot, open_intent, target_label=dropdown,
+                region=step_region,
             )
             runner.costs["claude_extract"] += 1
             if not target:
@@ -848,7 +862,10 @@ class ClaudeGuidedFormHandler:
             )
             option_target = target_provider.find_form_target(
                 opened_shot, pick_intent, target_label=option,
-            )
+            )  # Note: no region= here — the opened dropdown menu lives at
+            # an unpredictable position relative to the trigger, so a
+            # step-level region hint (typed for the closed-form layout)
+            # doesn't apply.
             runner.costs["claude_extract"] += 1
             if not option_target:
                 # Close the dropdown to keep the page in a clean state.

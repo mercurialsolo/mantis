@@ -50,6 +50,7 @@ HALT              ``required`` retries exhausted, gate failure,
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -519,6 +520,70 @@ class StepRecoveryPolicy:
 
     # ── Agentic failure-recovery loop ───────────────────────────────────
 
+    # #435 follow-up: typical edit forms have 5-10 inputs. 12 Tabs
+    # covers all of them and a couple of "exit form" tabs into nav
+    # without dragging recovery latency past ~1.5s. Tunable via
+    # ``MANTIS_RECOVERY_TAB_BLUR_COUNT`` for forms with more inputs.
+    _TAB_BLUR_DEFAULT_COUNT: int = 12
+
+    def _tab_blur_traversal(self, runner: Any, step_index: int) -> None:
+        """Send Tab × N to trigger blur-driven validation rendering.
+
+        Why: a ``no_state_change`` failure on a submit step is often
+        a silent client-side validation rejection — the form's submit
+        handler short-circuits because some field is invalid, but no
+        red error is RENDERED until focus leaves the bad field. The
+        post-failure screenshot is visually clean, so the recovery
+        analyser (Claude) sees no validation indicators and picks
+        ``halt`` even when ``insert_steps`` is the right answer.
+
+        Walking Tab across the form forces every input through a blur
+        event, which is what triggers the ``:invalid`` /
+        ``aria-invalid`` styles in React / Vue / vanilla HTML forms.
+        The recovery screenshot is then captured AFTER traversal, so
+        whatever the form was hiding is now visible.
+
+        Best-effort: any exception inside the traversal is swallowed
+        and we fall through to the normal recovery path with whatever
+        screenshot the env can produce. Side-effect-free in the sense
+        that Tab key events don't mutate field values or submit the
+        form — worst case the cursor lands somewhere else, which
+        recovery would have to handle anyway.
+        """
+        try:
+            count = int(os.environ.get(
+                "MANTIS_RECOVERY_TAB_BLUR_COUNT",
+                self._TAB_BLUR_DEFAULT_COUNT,
+            ))
+        except (TypeError, ValueError):
+            count = self._TAB_BLUR_DEFAULT_COUNT
+        if count <= 0:
+            return
+        env = getattr(runner, "env", None)
+        if env is None:
+            return
+        logger.info(
+            "  [%d] recovery: tab-blur traversal × %d to force "
+            "validation rendering before screenshot",
+            step_index, count,
+        )
+        for _ in range(count):
+            try:
+                env.step(Action(
+                    action_type=ActionType.KEY_PRESS,
+                    params={"keys": "Tab"},
+                ))
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.debug("recovery: tab-blur step raised: %s", exc)
+                return
+            # Tiny settle so each blur event can fire its
+            # validation handler before the next Tab. 50ms × 12 =
+            # 0.6s total — acceptable recovery overhead.
+            time.sleep(0.05)
+        # One final settle so the LAST blur's validation render has
+        # time to paint before we screenshot.
+        time.sleep(0.3)
+
     def _try_agentic_recovery(
         self,
         *,
@@ -598,6 +663,28 @@ class StepRecoveryPolicy:
                 step_index, per_run, DEFAULT_MAX_RECOVERIES_PER_RUN,
             )
             return None
+
+        # #435 follow-up: before capturing the recovery screenshot on
+        # a ``no_state_change`` submit, walk Tab across the form to
+        # force blur-driven validation rendering. Most React forms
+        # render :invalid / aria-invalid styles only after focus
+        # leaves a bad field, so the post-submit-fail screenshot is
+        # often visually CLEAN even when the form's submit handler
+        # short-circuited on a validation error (canonical staff-crm
+        # pattern: ``Estimated Deal Value: 461927.81`` silently
+        # rejected by an integer-only rule). Tab traversal forces
+        # the rendering, so Claude actually sees what's invalid and
+        # picks ``insert_steps`` instead of ``halt``. Bounded to 12
+        # Tabs (covers most edit forms); opt-out via
+        # ``MANTIS_RECOVERY_TAB_BLUR=disabled``.
+        failure_class = str(getattr(step_result, "failure_class", "") or "")
+        step_type = str(getattr(step, "type", "") or "")
+        if (
+            failure_class == "no_state_change"
+            and step_type == "submit"
+            and os.environ.get("MANTIS_RECOVERY_TAB_BLUR", "") != "disabled"
+        ):
+            self._tab_blur_traversal(runner, step_index)
 
         # Capture screenshot for the analysis. Best-effort — Claude
         # can reason without it.
@@ -725,8 +812,49 @@ class StepRecoveryPolicy:
         if decision.mode == "insert_steps":
             if not decision.inserted_steps:
                 return None
+            # #435 cascade cap: if THIS step is itself an inserted-by-
+            # recovery step (its index is in ``runner._recovery_inserted_steps``),
+            # and we're about to insert MORE steps because the inserted
+            # one failed, that's a cascade. Allow ≤2 cascade depth
+            # before halting cleanly — otherwise insert_steps loops
+            # blow the per-run recovery budget on the same root cause.
+            # Observed on the tab-blur Modal run: 5/5 recoveries spent
+            # on sequential inserted fill_field failures, $0.92 burned.
+            recovery_inserted = getattr(runner, "_recovery_inserted_steps", None)
+            cascade_depth = getattr(runner, "_recovery_cascade_depth", None)
+            if (
+                isinstance(recovery_inserted, set)
+                and isinstance(cascade_depth, dict)
+                and step_index in recovery_inserted
+            ):
+                depth = cascade_depth.get(step_index, 0)
+                if depth >= 2:
+                    logger.warning(
+                        "  [%d] recovery_skipped: inserted-step cascade "
+                        "depth %d exceeded — halting cleanly instead of "
+                        "looping insert_steps on the same root cause",
+                        step_index, depth,
+                    )
+                    return None
+                cascade_depth[step_index] = depth + 1
             # Build MicroIntent objects from the dict-shaped specs.
+            # #435 task #2: the inserted helper steps inherit the
+            # parent step's ``hints`` (specifically ``region``) so
+            # ``find_form_target`` benefits from the same region
+            # cropping that the parent submit had. Without this, the
+            # inserted ``fill_field`` faces the full screen and hits
+            # the same disambiguation pressure the parent did.
             from ..plan_decomposer import MicroIntent
+            parent_hints = dict(getattr(step, "hints", {}) or {})
+            inherited_hints: dict = {}
+            # Only carry hints that are useful on the inserted step.
+            # ``region`` is the canonical one (scoping the grounding);
+            # ``visual`` and ``position`` are submit-step prose hints
+            # that don't translate. Operators can opt fields in/out
+            # by editing this set.
+            for k in ("region",):
+                if k in parent_hints:
+                    inherited_hints[k] = parent_hints[k]
             new_steps = [
                 MicroIntent(
                     intent=spec["intent"],
@@ -734,12 +862,26 @@ class StepRecoveryPolicy:
                     params=spec.get("params") or {},
                     section=getattr(step, "section", "") or "",
                     required=False,  # helper steps are best-effort
+                    hints=dict(inherited_hints),
                 )
                 for spec in decision.inserted_steps
             ]
             plan.steps = splice_inserted_steps(
                 plan.steps, step_index, new_steps,
             )
+            # #435 cascade cap: track the indices of inserted steps
+            # so a future failure on those steps can be detected as
+            # a cascade. The splice puts them at indices
+            # ``step_index .. step_index + len(new_steps) - 1``;
+            # the original failed step is now at
+            # ``step_index + len(new_steps)``. Don't rely on the
+            # attribute existing — initialize defensively.
+            if not hasattr(runner, "_recovery_inserted_steps"):
+                runner._recovery_inserted_steps = set()
+            if not hasattr(runner, "_recovery_cascade_depth"):
+                runner._recovery_cascade_depth = {}
+            for offset in range(len(new_steps)):
+                runner._recovery_inserted_steps.add(step_index + offset)
             # Reset retry count so the (now-deferred) failed step
             # gets fresh attempts after the helper sub-flow.
             step_retry_counts[step_index] = 0

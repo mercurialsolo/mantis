@@ -406,6 +406,73 @@ def test_pause_and_memorize_fact_collapses_with_note_in_reasoning(
     assert "phone=555" in action.reasoning
 
 
+def test_pause_and_memorize_fact_surfaces_via_memorize_fact_field(
+    brain: FaraBrain,
+) -> None:
+    """#435: the doc says "plumb it through" for ``pause_and_memorize_fact``.
+    The Action now carries the note on the structured ``memorize_fact``
+    field (not just ``reasoning``), so the next turn's prompt can re-feed it.
+    """
+    action = _parse_tool(
+        brain, _fara_tool_call("pause_and_memorize_fact", text="phone=555"),
+    )
+    assert action.memorize_fact == "phone=555"
+
+
+def test_build_messages_refeeds_memorized_facts_from_prior_actions(
+    brain: FaraBrain,
+) -> None:
+    """#435: when the action history contains ``Action.memorize_fact``
+    entries, the brain re-feeds them in a ``Memorized facts:`` block
+    on the next turn — that's what makes the scratchpad primitive
+    useful (otherwise it's a write-only signal).
+    """
+    from PIL import Image
+
+    from mantis_agent.actions import Action, ActionType
+
+    history = [
+        Action(ActionType.CLICK, {"x": 100, "y": 200}),
+        Action(
+            ActionType.WAIT, {"seconds": 0.2},
+            memorize_fact="customer=ACME, deal=$120k",
+        ),
+        Action(ActionType.CLICK, {"x": 300, "y": 400}),
+        Action(
+            ActionType.WAIT, {"seconds": 0.2},
+            memorize_fact="phone=555-0100",
+        ),
+    ]
+    img = Image.new("RGB", (100, 100), "white")
+    messages = brain._build_messages([img], "task", history)
+    # The final text block is the joined task+history+facts context.
+    text_blocks = [
+        b["text"] for b in messages[-1]["content"] if b.get("type") == "text"
+    ]
+    full_text = "\n".join(text_blocks)
+    assert "Memorized facts" in full_text
+    assert "customer=ACME, deal=$120k" in full_text
+    assert "phone=555-0100" in full_text
+
+
+def test_build_messages_omits_memorized_facts_block_when_none(
+    brain: FaraBrain,
+) -> None:
+    """No prior ``memorize_fact`` entries → no block in the prompt."""
+    from PIL import Image
+
+    from mantis_agent.actions import Action, ActionType
+
+    history = [Action(ActionType.CLICK, {"x": 100, "y": 200})]
+    img = Image.new("RGB", (100, 100), "white")
+    messages = brain._build_messages([img], "task", history)
+    text_blocks = [
+        b["text"] for b in messages[-1]["content"] if b.get("type") == "text"
+    ]
+    full_text = "\n".join(text_blocks)
+    assert "Memorized facts" not in full_text
+
+
 def test_terminate_success_maps_to_done(brain: FaraBrain) -> None:
     action = _parse_tool(
         brain,
