@@ -31,6 +31,7 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import time
 from io import BytesIO
@@ -55,6 +56,39 @@ def _credit_claude_time(bucket: str, t0: float) -> None:
         record_to_current(bucket, time.monotonic() - t0)
     except Exception as exc:  # noqa: BLE001 — observability, never fatal
         logger.debug("claude time_meter credit failed: %s", exc)
+
+
+# HTTP status codes treated as transient (worth retrying with backoff).
+# - 429: rate limited
+# - 502/503/504: upstream proxy / gateway hiccups
+# - 529: Anthropic's "Overloaded" code — by far the most common cause
+#   of mid-run halt during peak hours; the failure mode that motivated
+#   adding this loop (issue #403).
+_TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 502, 503, 504, 529})
+
+
+def _retry_delay(attempt: int, retry_after_header: str | None) -> float:
+    """Compute the sleep before the next retry attempt.
+
+    - Honours ``Retry-After`` when it's a numeric seconds value
+      (RFC 7231 §7.1.3 — HTTP-date form not supported; Anthropic
+      uses seconds in practice).
+    - Otherwise exponential backoff with 25% jitter: 1s, 2s, 4s, 8s,
+      capped at 16s. Total worst-case wait across 4 attempts is
+      ~15s + jitter, which clears typical 1–2 minute overload spikes
+      without blowing the per-step budget.
+
+    Standalone function (not a method) so tests can monkeypatch it
+    directly without instantiating ClaudeExtractor.
+    """
+    if retry_after_header:
+        try:
+            return max(0.0, float(retry_after_header))
+        except (TypeError, ValueError):
+            pass
+    base = float(min(16, 2 ** attempt))
+    jitter = random.uniform(0.0, base * 0.25)
+    return base + jitter
 
 
 def _coerce_coord(value: Any) -> int | None:
@@ -356,6 +390,79 @@ class ClaudeExtractor:
             _credit_claude_time(_bucket, t0)
         return ""
 
+    def _post_anthropic_with_retry(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout: float,
+        max_attempts: int = 4,
+    ):
+        """POST ``payload`` to /v1/messages with retry on transient errors.
+
+        Retries on the status codes in :data:`_TRANSIENT_STATUS_CODES`
+        (429 / 502 / 503 / 504 / 529) and on network exceptions
+        (``requests.Timeout``, ``requests.ConnectionError``). Non-
+        transient HTTP errors (4xx other than 429) return the
+        Response object so the caller can log + parse the body.
+
+        Returns:
+            - The final ``requests.Response`` on success or on a
+              non-transient HTTP error.
+            - The final transient ``requests.Response`` after the
+              retry budget is exhausted (caller logs as a failure).
+            - ``None`` only when every attempt raised a network
+              exception (no Response to return).
+
+        Honours ``Retry-After`` header when present (via
+        :func:`_retry_delay`). Sleeps between attempts via
+        ``time.sleep`` — tests monkeypatch that for speed.
+        """
+        import requests
+
+        url = "https://api.anthropic.com/v1/messages"
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        last_response = None
+        for attempt in range(max_attempts):
+            try:
+                resp = requests.post(
+                    url, headers=headers, json=payload, timeout=timeout,
+                )
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                if attempt == max_attempts - 1:
+                    logger.warning(
+                        "ClaudeExtractor network error after %d attempts: %s",
+                        max_attempts, exc,
+                    )
+                    return None
+                delay = _retry_delay(attempt, None)
+                logger.info(
+                    "ClaudeExtractor transient network error (%s) — "
+                    "retry %d/%d in %.1fs",
+                    type(exc).__name__, attempt + 1, max_attempts, delay,
+                )
+                time.sleep(delay)
+                continue
+            if resp.status_code not in _TRANSIENT_STATUS_CODES:
+                return resp
+            last_response = resp
+            if attempt == max_attempts - 1:
+                logger.warning(
+                    "ClaudeExtractor transient HTTP %s after %d attempts; "
+                    "giving up", resp.status_code, max_attempts,
+                )
+                return resp
+            delay = _retry_delay(attempt, resp.headers.get("Retry-After"))
+            logger.info(
+                "ClaudeExtractor transient HTTP %s — retry %d/%d in %.1fs",
+                resp.status_code, attempt + 1, max_attempts, delay,
+            )
+            time.sleep(delay)
+        return last_response
+
     def _call_with_tool_schema(
         self,
         screenshot: Image.Image,
@@ -389,8 +496,6 @@ class ClaudeExtractor:
         extractor call site that wants structured output should use this
         instead of ``_call`` + ``_parse_json``.
         """
-        import requests
-
         if not self.api_key:
             logger.warning("ClaudeExtractor: no API key")
             return None
@@ -399,34 +504,29 @@ class ClaudeExtractor:
         screenshot.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
 
+        payload = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "tools": [{
+                "name": tool_name,
+                "description": tool_description,
+                "input_schema": input_schema,
+            }],
+            "tool_choice": {"type": "tool", "name": tool_name},
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        }
+
         t0 = time.monotonic()
         try:
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "max_tokens": max_tokens,
-                    "tools": [{
-                        "name": tool_name,
-                        "description": tool_description,
-                        "input_schema": input_schema,
-                    }],
-                    "tool_choice": {"type": "tool", "name": tool_name},
-                    "messages": [{
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
-                            {"type": "text", "text": prompt},
-                        ],
-                    }],
-                },
-                timeout=30,
-            )
+            resp = self._post_anthropic_with_retry(payload, timeout=30)
+            if resp is None:
+                return None
             if resp.status_code != 200:
                 logger.warning(
                     "ClaudeExtractor tool_use API error %s: %s",
@@ -473,8 +573,6 @@ class ClaudeExtractor:
         Returns the validated input dict, or ``None`` on API / shape
         mismatch — caller treats as fall-through (no answer).
         """
-        import requests
-
         if not self.api_key:
             logger.warning("ClaudeExtractor: no API key")
             return None
@@ -492,28 +590,23 @@ class ClaudeExtractor:
                 "source": {"type": "base64", "media_type": "image/png", "data": b64},
             })
 
+        payload = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "tools": [{
+                "name": tool_name,
+                "description": tool_description,
+                "input_schema": input_schema,
+            }],
+            "tool_choice": {"type": "tool", "name": tool_name},
+            "messages": [{"role": "user", "content": content}],
+        }
+
         t0 = time.monotonic()
         try:
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "max_tokens": max_tokens,
-                    "tools": [{
-                        "name": tool_name,
-                        "description": tool_description,
-                        "input_schema": input_schema,
-                    }],
-                    "tool_choice": {"type": "tool", "name": tool_name},
-                    "messages": [{"role": "user", "content": content}],
-                },
-                timeout=45,
-            )
+            resp = self._post_anthropic_with_retry(payload, timeout=45)
+            if resp is None:
+                return None
             if resp.status_code != 200:
                 logger.warning(
                     "ClaudeExtractor multi tool_use API error %s: %s",
