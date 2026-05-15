@@ -812,8 +812,49 @@ class StepRecoveryPolicy:
         if decision.mode == "insert_steps":
             if not decision.inserted_steps:
                 return None
+            # #435 cascade cap: if THIS step is itself an inserted-by-
+            # recovery step (its index is in ``runner._recovery_inserted_steps``),
+            # and we're about to insert MORE steps because the inserted
+            # one failed, that's a cascade. Allow ≤2 cascade depth
+            # before halting cleanly — otherwise insert_steps loops
+            # blow the per-run recovery budget on the same root cause.
+            # Observed on the tab-blur Modal run: 5/5 recoveries spent
+            # on sequential inserted fill_field failures, $0.92 burned.
+            recovery_inserted = getattr(runner, "_recovery_inserted_steps", None)
+            cascade_depth = getattr(runner, "_recovery_cascade_depth", None)
+            if (
+                isinstance(recovery_inserted, set)
+                and isinstance(cascade_depth, dict)
+                and step_index in recovery_inserted
+            ):
+                depth = cascade_depth.get(step_index, 0)
+                if depth >= 2:
+                    logger.warning(
+                        "  [%d] recovery_skipped: inserted-step cascade "
+                        "depth %d exceeded — halting cleanly instead of "
+                        "looping insert_steps on the same root cause",
+                        step_index, depth,
+                    )
+                    return None
+                cascade_depth[step_index] = depth + 1
             # Build MicroIntent objects from the dict-shaped specs.
+            # #435 task #2: the inserted helper steps inherit the
+            # parent step's ``hints`` (specifically ``region``) so
+            # ``find_form_target`` benefits from the same region
+            # cropping that the parent submit had. Without this, the
+            # inserted ``fill_field`` faces the full screen and hits
+            # the same disambiguation pressure the parent did.
             from ..plan_decomposer import MicroIntent
+            parent_hints = dict(getattr(step, "hints", {}) or {})
+            inherited_hints: dict = {}
+            # Only carry hints that are useful on the inserted step.
+            # ``region`` is the canonical one (scoping the grounding);
+            # ``visual`` and ``position`` are submit-step prose hints
+            # that don't translate. Operators can opt fields in/out
+            # by editing this set.
+            for k in ("region",):
+                if k in parent_hints:
+                    inherited_hints[k] = parent_hints[k]
             new_steps = [
                 MicroIntent(
                     intent=spec["intent"],
@@ -821,12 +862,26 @@ class StepRecoveryPolicy:
                     params=spec.get("params") or {},
                     section=getattr(step, "section", "") or "",
                     required=False,  # helper steps are best-effort
+                    hints=dict(inherited_hints),
                 )
                 for spec in decision.inserted_steps
             ]
             plan.steps = splice_inserted_steps(
                 plan.steps, step_index, new_steps,
             )
+            # #435 cascade cap: track the indices of inserted steps
+            # so a future failure on those steps can be detected as
+            # a cascade. The splice puts them at indices
+            # ``step_index .. step_index + len(new_steps) - 1``;
+            # the original failed step is now at
+            # ``step_index + len(new_steps)``. Don't rely on the
+            # attribute existing — initialize defensively.
+            if not hasattr(runner, "_recovery_inserted_steps"):
+                runner._recovery_inserted_steps = set()
+            if not hasattr(runner, "_recovery_cascade_depth"):
+                runner._recovery_cascade_depth = {}
+            for offset in range(len(new_steps)):
+                runner._recovery_inserted_steps.add(step_index + offset)
             # Reset retry count so the (now-deferred) failed step
             # gets fresh attempts after the helper sub-flow.
             step_retry_counts[step_index] = 0
