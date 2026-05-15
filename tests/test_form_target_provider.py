@@ -163,17 +163,20 @@ def test_verify_dropdown_value_returns_none_on_api_failure() -> None:
 # ── from_extractor factory ─────────────────────────────────────────
 
 
-def test_from_extractor_shares_api_key_and_uses_form_target_model() -> None:
-    """The factory pulls the api_key off the extractor's client (so a
-    single runner has one Anthropic auth) but defaults the model to
-    the extractor's ``form_target_model`` (Haiku, per #434) — grounding
-    is a single visual lookup that doesn't need Opus / Sonnet accuracy.
+def test_from_extractor_shares_api_key_and_defaults_to_main_model() -> None:
+    """By default the form-target provider matches the extractor's main
+    model — the kwarg-driven split (introduced under #434) stays in
+    place but the Haiku-by-default experiment was reverted after a
+    Modal staff-crm comparison showed Haiku grounding produced MORE
+    retries / total cost than Opus grounding (lower per-call price
+    didn't overcome the retry amplification on low-accuracy
+    coordinate picks). See #434 for the data.
     """
     from mantis_agent.extraction.extractor import ClaudeExtractor
     extractor = ClaudeExtractor(api_key="my-key", model="claude-opus-4-7")
     provider = ClaudeFormTargetProvider.from_extractor(extractor)
     assert provider._client.api_key == "my-key"
-    assert provider._client.model == "claude-haiku-4-5-20251001"
+    assert provider._client.model == "claude-opus-4-7"
     # Different log prefix so transient-error log lines disambiguate
     # source (extraction vs grounding).
     assert provider._client._log_prefix == "ClaudeFormTarget"
@@ -182,29 +185,15 @@ def test_from_extractor_shares_api_key_and_uses_form_target_model() -> None:
 def test_from_extractor_honours_custom_form_target_model() -> None:
     """An operator can override the form-target model when constructing
     the extractor — useful for A/B-testing model quality vs cost on
-    grounding."""
+    grounding (#434 left this knob in place even after reverting the
+    Haiku default)."""
     from mantis_agent.extraction.extractor import ClaudeExtractor
     extractor = ClaudeExtractor(
         api_key="k", model="claude-opus-4-7",
-        form_target_model="claude-sonnet-4-6",
+        form_target_model="claude-haiku-4-5-20251001",
     )
     provider = ClaudeFormTargetProvider.from_extractor(extractor)
-    assert provider._client.model == "claude-sonnet-4-6"
-
-
-def test_extractor_form_target_split_uses_distinct_clients() -> None:
-    """The cached form-target provider on ``ClaudeExtractor`` must hold
-    a DIFFERENT ``AnthropicToolUseClient`` from the extractor's main
-    client — same api_key, different model. Regression guard for #434:
-    without the split, every ``find_form_target`` call routed through
-    Opus alongside the extractor.
-    """
-    from mantis_agent.extraction.extractor import ClaudeExtractor
-    extractor = ClaudeExtractor(api_key="k", model="claude-opus-4-7")
-    provider = extractor._form_target_provider
-    assert extractor._client.model == "claude-opus-4-7"
     assert provider._client.model == "claude-haiku-4-5-20251001"
-    assert provider._client is not extractor._client
 
 
 def test_from_extractor_rejects_object_without_client() -> None:

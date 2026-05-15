@@ -181,18 +181,20 @@ class ClaudeExtractor:
         api_key: str = "",
         model: str = "claude-opus-4-7",
         schema: ExtractionSchema | None = None,
-        form_target_model: str = "claude-haiku-4-5-20251001",
+        form_target_model: str = "",
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
-        # #434: form-target grounding (``find_form_target``) is a single
-        # visual lookup ("locate the button labelled X"), which Haiku
-        # handles well at ~5% the cost of Opus and ~25% of Sonnet. The
-        # multi-field extraction methods (``extract`` / ``extract_multi``)
-        # remain on the heavier ``model`` because misextractions cascade.
-        # Operators who want the legacy single-model behaviour can pass
-        # ``form_target_model=model``.
-        self.form_target_model = form_target_model
+        # #434 follow-up: the initial Haiku default was reverted after a
+        # Modal staff-crm comparison showed Haiku-grounding produced
+        # MORE total cost than Opus-grounding because lower-accuracy
+        # grounding triggers more retries (75→93 grounding calls
+        # observed on otherwise-identical halt runs). The kwarg-driven
+        # split mechanism stays so operators can A/B-test or override
+        # per-deployment; the default now matches the extractor's main
+        # model so existing callers see no behaviour change. See #434
+        # for the data + decision.
+        self.form_target_model = form_target_model or model
         self.schema = schema
         self.debug_dir = os.environ.get("MANTIS_DEBUG_DIR", "/data/screenshots/claude_debug")
         # Extraction / dropdown-verify / find_listing_content client —
