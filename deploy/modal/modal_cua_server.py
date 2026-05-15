@@ -449,7 +449,7 @@ def _run_executor(
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
-    viewer_ctx, viewer_event_bus = setup_viewer(viewer)
+    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
 
     # ── Delegate to shared lifecycle ──
     config = TaskLoopConfig(
@@ -641,7 +641,7 @@ def _run_holo3_executor(
         objective = ObjectiveSpec.from_dict(objective_data)
         schema = ExtractionSchema.from_objective(objective)
     extractor = ClaudeExtractor(schema=schema)
-    viewer_ctx, viewer_event_bus = setup_viewer(viewer)
+    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
 
     # ── Micro-intent mode: run MicroPlanRunner ──
     micro_plan_data = task_suite.get("_micro_plan")
@@ -1095,7 +1095,7 @@ def _run_gemma4_cua_executor(
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
-    viewer_ctx, viewer_event_bus = setup_viewer(viewer)
+    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
 
     # ── Delegate to shared lifecycle ──
     config = TaskLoopConfig(
@@ -1224,7 +1224,7 @@ def _run_claude_executor(
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
     )
-    viewer_ctx, viewer_event_bus = setup_viewer(viewer)
+    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
 
     # ── Delegate to shared lifecycle ──
     config = TaskLoopConfig(

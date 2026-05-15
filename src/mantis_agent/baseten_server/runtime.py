@@ -963,6 +963,66 @@ class BasetenCUARuntime:
             reuse_session=reuse_session,
         )
 
+    def _maybe_start_live_viewer(
+        self, payload: dict[str, Any], run_id: str, env: Any = None,
+    ) -> Any:
+        """Start the MJPEG live viewer if ``payload.live_viewer`` is set (#416).
+
+        Mirrors the structure of :meth:`_maybe_record`: a no-op when the
+        feature isn't requested, an idempotent ``ensure_display_ready``
+        call before the capture thread starts so it doesn't race the
+        env's lazy Xvfb spawn, and a defensive try/except so a viewer
+        failure never breaks the run.
+
+        Returns the viewer context object (from
+        :func:`task_loop.setup_viewer`) so the caller can call
+        ``viewer_ctx.__exit__(None, None, None)`` in its ``finally``.
+        ``None`` when the feature is off / setup failed — the caller
+        should treat that as the no-viewer case.
+
+        Surfaces the tunnel URL by merging ``{"viewer_url": url}`` into
+        ``status.json`` via :meth:`_write_detached_status`. Callers
+        polling ``action=status`` see the URL on the next round-trip
+        after this method has been called.
+        """
+        if not payload.get("live_viewer"):
+            return None
+        if env is not None and hasattr(env, "ensure_display_ready"):
+            try:
+                env.ensure_display_ready()
+            except Exception as exc:  # noqa: BLE001 — viewer is best-effort
+                logger.warning(
+                    "ensure_display_ready failed before live-viewer start: %s",
+                    exc,
+                )
+        try:
+            from ..task_loop import setup_viewer
+            viewer_ctx, _event_bus, viewer_url = setup_viewer(True)
+        except Exception as exc:  # noqa: BLE001 — never fatal
+            logger.warning("live-viewer setup failed: %s", exc)
+            return None
+        if viewer_ctx is None:
+            return None
+        if viewer_url:
+            self._write_detached_status(run_id, {"viewer_url": viewer_url})
+            logger.info("live viewer ready for run %s at %s", run_id, viewer_url)
+        return viewer_ctx
+
+    def _stop_live_viewer(self, viewer_ctx: Any) -> None:
+        """Idempotent cleanup for :meth:`_maybe_start_live_viewer`.
+
+        Wrapped because ``viewer_ctx.__exit__`` can raise (the FastAPI
+        server's shutdown can race the capture thread), and we don't
+        want a viewer-cleanup error to mask whatever failed during the
+        run itself.
+        """
+        if viewer_ctx is None:
+            return
+        try:
+            viewer_ctx.__exit__(None, None, None)
+        except Exception as exc:  # noqa: BLE001 — cleanup, never fatal
+            logger.warning("live-viewer cleanup raised: %s", exc)
+
     def _maybe_record(
         self, payload: dict[str, Any], run_id: str, env: Any = None,
     ) -> tuple[Any, Any]:
@@ -1252,6 +1312,10 @@ class BasetenCUARuntime:
         if click_log is not None:
             from mantis_agent.presentation import ClickRecordingEnv
             env = ClickRecordingEnv(env, click_log)
+        # #416: start live MJPEG viewer alongside the recorder when
+        # the caller requested it. URL surfaces into status.json so
+        # the polling client can hot-link it.
+        viewer_ctx = self._maybe_start_live_viewer(payload, run_id, env=env)
 
         try:
             micro_plan = MicroPlan(domain=session_name)
@@ -1432,6 +1496,9 @@ class BasetenCUARuntime:
                     recorder.stop()
                 except Exception:
                     logger.exception("recorder stop in finally failed")
+            # #416: stop the live viewer before env close so the FastAPI
+            # capture thread can shut down cleanly while Xvfb is still up.
+            self._stop_live_viewer(viewer_ctx)
             env.close()
             if proxy_proc:
                 proxy_proc.terminate()
@@ -1462,6 +1529,9 @@ class BasetenCUARuntime:
         if click_log is not None:
             from mantis_agent.presentation import ClickRecordingEnv
             env = ClickRecordingEnv(env, click_log)
+        # #416: live MJPEG viewer alongside the recorder; same lifetime
+        # contract as in :meth:`_run_micro`.
+        viewer_ctx = self._maybe_start_live_viewer(payload, run_id, env=env)
         grounding = ClaudeGrounding(cache=self.grounding_cache)
 
         try:
@@ -1493,6 +1563,8 @@ class BasetenCUARuntime:
                     recorder.stop()
                 except Exception:
                     logger.exception("recorder stop in finally failed")
+            # #416: stop live viewer (no-op if it wasn't started).
+            self._stop_live_viewer(viewer_ctx)
 
     def run_pure_cua(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Entrypoint for ``POST /v1/cua``.
