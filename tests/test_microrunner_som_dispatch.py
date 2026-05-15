@@ -31,7 +31,12 @@ import pytest
 from mantis_agent.gym._runner_helpers import _stamp_backend
 from mantis_agent.gym.checkpoint import StepResult
 from mantis_agent.gym.runner import RoutingPolicy
-from mantis_agent.gym.som_dispatch import try_som_click
+from mantis_agent.gym.som_dispatch import (
+    INPUT_LIKE_TAGS,
+    is_input_like,
+    probe_element_tag_at,
+    try_som_click,
+)
 
 
 # ── try_som_click ──────────────────────────────────────────────────────
@@ -99,6 +104,93 @@ def test_try_som_click_swallows_exceptions() -> None:
     env = _CdpEnv(raises=True)
     policy = RoutingPolicy(som_for_unstructured_clicks=True)
     assert try_som_click(env, 5, 5, policy) is False
+
+
+# ── probe_element_tag_at / is_input_like ───────────────────────────────
+
+
+class _CdpEvalEnv:
+    """Env exposing only ``cdp_evaluate``."""
+
+    def __init__(self, result: Any = None, raises: bool = False) -> None:
+        self.calls: list[str] = []
+        self._result = result
+        self._raises = raises
+
+    def cdp_evaluate(self, expression: str) -> Any:
+        self.calls.append(expression)
+        if self._raises:
+            raise RuntimeError("boom")
+        return self._result
+
+
+def test_probe_element_tag_at_returns_none_when_env_lacks_cdp() -> None:
+    """No ``cdp_evaluate`` attribute → can't probe; caller falls
+    through to legacy behaviour. Keeps the Playwright path and tests
+    that don't wire CDP from being blocked by the new guard."""
+    env = object()
+    assert probe_element_tag_at(env, 10, 20) is None
+
+
+def test_probe_element_tag_at_returns_none_on_cdp_exception() -> None:
+    """CDP raising must not propagate — guard returns None and the
+    caller proceeds as if CDP weren't available."""
+    env = _CdpEvalEnv(raises=True)
+    assert probe_element_tag_at(env, 10, 20) is None
+
+
+def test_probe_element_tag_at_returns_none_when_no_element_at_point() -> None:
+    """``elementFromPoint`` returns null for off-viewport points →
+    the JS expression returns None; guard surfaces that as None."""
+    env = _CdpEvalEnv(result=None)
+    assert probe_element_tag_at(env, 9999, 9999) is None
+
+
+def test_probe_element_tag_at_normalises_tag_and_contenteditable() -> None:
+    """Tag is upper-cased; contentEditable is coerced to bool. The
+    contract callers depend on: a stable dict shape regardless of
+    what Chrome's CDP returns under the hood."""
+    env = _CdpEvalEnv(result={"tag": "input", "contentEditable": 0})
+    out = probe_element_tag_at(env, 100, 200)
+    assert out == {"tag": "INPUT", "contentEditable": False}
+
+    env2 = _CdpEvalEnv(result={"tag": "div", "contentEditable": 1})
+    out2 = probe_element_tag_at(env2, 100, 200)
+    assert out2 == {"tag": "DIV", "contentEditable": True}
+
+
+def test_is_input_like_allows_unknown_when_cdp_unavailable() -> None:
+    """``None`` tag_info means CDP couldn't probe — don't block on
+    inconclusive evidence. Preserves legacy behaviour where the guard
+    can't run."""
+    assert is_input_like(None) is True
+
+
+def test_is_input_like_accepts_canonical_input_tags() -> None:
+    for tag in INPUT_LIKE_TAGS:
+        assert is_input_like({"tag": tag, "contentEditable": False}) is True
+
+
+def test_is_input_like_accepts_contenteditable_div() -> None:
+    """Rich-text editors (Quill, ProseMirror) are DIVs with
+    ``contentEditable=true`` — they accept typed input legitimately."""
+    assert is_input_like({"tag": "DIV", "contentEditable": True}) is True
+
+
+def test_is_input_like_rejects_button() -> None:
+    """The canonical lu.ma failure: the chosen point overlaps the
+    form's submit button. Refuse so the caller can report
+    ``form_target_not_input`` rather than dismissing the form."""
+    assert is_input_like({"tag": "BUTTON", "contentEditable": False}) is False
+
+
+def test_is_input_like_rejects_anchor_and_div() -> None:
+    """Anchor tags (Lu.ma's 'Sign In' link in the corner of the
+    registration modal) and plain DIVs (modal backdrop / overlay) both
+    fail the allow-list. Anything outside INPUT/TEXTAREA/LABEL/CE goes
+    through the form_target_not_input failure path."""
+    assert is_input_like({"tag": "A", "contentEditable": False}) is False
+    assert is_input_like({"tag": "DIV", "contentEditable": False}) is False
 
 
 # ── _stamp_backend dispatch boundary ───────────────────────────────────

@@ -49,6 +49,87 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def probe_element_tag_at(env: Any, x: int, y: int) -> dict | None:
+    """Best-effort: report the tag and contentEditable state of the
+    element at viewport (x, y) via CDP ``Runtime.evaluate``.
+
+    Returns ``None`` when:
+
+    - The env does not expose ``cdp_evaluate`` (Playwright path, tests).
+    - The CDP call fails or throws.
+    - ``document.elementFromPoint`` returns ``null`` (point off-screen).
+
+    On success returns ``{"tag": str, "contentEditable": bool}`` where
+    ``tag`` is the upper-case ``tagName`` of the element and
+    ``contentEditable`` reflects ``el.isContentEditable`` (covers rich
+    text editors that are technically ``<div>`` but accept typed input).
+
+    Used by :class:`~.step_handlers.form.ClaudeGuidedFormHandler` to
+    refuse a ``fill_field`` click when the element at the chosen point
+    is a button / backdrop / modal close-X — clicking those dismisses
+    the form instead of focusing an input (the lu.ma host-question
+    modal failure pattern: Claude returns coordinates near the title
+    label, ``elementFromPoint`` returns the dim overlay above it, the
+    SoM click hits the overlay's outside-to-close handler).
+
+    Tests that don't wire CDP get ``None`` and the caller falls through
+    to legacy behaviour — no breakage on the existing form-handler
+    suite. Real Modal/Baseten envs that DO wire CDP get the guard.
+    """
+    eval_fn = getattr(env, "cdp_evaluate", None)
+    if not callable(eval_fn):
+        return None
+    js = (
+        "(() => {"
+        f"const el = document.elementFromPoint({int(x)}, {int(y)});"
+        "if (!el) return null;"
+        "return {"
+        "tag: (el.tagName || '').toUpperCase(),"
+        "contentEditable: !!el.isContentEditable"
+        "};"
+        "})()"
+    )
+    try:
+        result = eval_fn(js)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("probe_element_tag_at CDP eval raised: %s", exc)
+        return None
+    if not isinstance(result, dict):
+        return None
+    # Normalise shape so callers don't have to defend against missing keys.
+    return {
+        "tag": str(result.get("tag") or "").upper(),
+        "contentEditable": bool(result.get("contentEditable")),
+    }
+
+
+# Tags whose clicked element legitimately receives keyboard input. The
+# allow-list is intentionally narrow: anything outside it (BUTTON, A,
+# DIV-as-backdrop, SVG icons) means the chosen coords are NOT on an
+# input, so a click there dismisses the form rather than focusing it.
+# ``LABEL`` stays in the list because clicking a ``<label for="x">``
+# focuses the bound input — a legitimate fill_field flow.
+INPUT_LIKE_TAGS: frozenset[str] = frozenset({"INPUT", "TEXTAREA", "LABEL"})
+
+
+def is_input_like(tag_info: dict | None) -> bool:
+    """True iff the probed element is something `fill_field` may type into.
+
+    Returns ``True`` when ``tag_info`` is ``None`` (CDP unavailable — we
+    can't refute, so don't block). Returns ``True`` for INPUT / TEXTAREA
+    / LABEL tags, and for any element with ``isContentEditable`` (rich
+    text editors). Everything else returns ``False`` and is the caller's
+    cue to refuse the click and report ``form_target_not_found`` / a
+    typed variant rather than dispatching a misdirected click that
+    would dismiss the form modal.
+    """
+    if tag_info is None:
+        return True
+    if tag_info.get("contentEditable"):
+        return True
+    return tag_info.get("tag", "") in INPUT_LIKE_TAGS
+
+
 def try_som_click(env: Any, x: int, y: int, policy: Any) -> bool:
     """Attempt a SoM-anchored click via CDP.
 
@@ -86,4 +167,9 @@ def try_som_click(env: Any, x: int, y: int, policy: Any) -> bool:
         return False
 
 
-__all__ = ["try_som_click"]
+__all__ = [
+    "try_som_click",
+    "probe_element_tag_at",
+    "is_input_like",
+    "INPUT_LIKE_TAGS",
+]
