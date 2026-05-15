@@ -15,6 +15,7 @@
 | [Speculative inference](speculative-inference.md) | Overlaps `brain.think()` with the post-action settle to remove the serial inference cost |
 | [Perceptual diff verifier](perceptual-diff.md) | Detects silent failures on high-risk actions by comparing pre/post frame hashes |
 | [Loop recovery policy](loop-recovery.md) | Forces action-class transitions (Tab / Return / Type) when the brain loops on a no-effect class |
+| [Step recovery](step-recovery.md) | Multi-layer recovery chain when a required step exhausts retries: handler escalation → intent_rewriter (Opus) → agentic_recovery (Haiku/Opus, four modes) |
 | [Adaptive loop windows](adaptive-loop-windows.md) | Per-call adjustment of the soft/hard loop-detection windows by recent action diversity + state progress |
 | [Adaptive click tolerance](adaptive-click-tol.md) | Drift-loop tolerance scaled by screen DPI and per-action element class (button / link / dropdown) |
 | [Ablation harness](ablation-harness.md) | Single-deploy paired ON/OFF A/B against `/v1/cua`; required for quality-touching PRs |

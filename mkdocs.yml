@@ -144,6 +144,7 @@ nav:
       - Speculative inference: reference/speculative-inference.md
       - Perceptual diff verifier: reference/perceptual-diff.md
       - Loop recovery policy: reference/loop-recovery.md
+      - Step recovery: reference/step-recovery.md
       - Adaptive loop windows: reference/adaptive-loop-windows.md
       - Adaptive click tolerance: reference/adaptive-click-tol.md
       - Ablation harness: reference/ablation-harness.md

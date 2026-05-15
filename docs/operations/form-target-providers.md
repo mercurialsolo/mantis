@@ -47,13 +47,24 @@ forms. Before changing the default away from `claude`:
 4. Flip the default only when Holo3 is within 5% success-rate parity
    and >30% faster or cheaper.
 
-| Plan | Provider | Runs | Success rate | Mean $ / step | Mean s / step |
-|------|----------|-----:|-------------:|--------------:|--------------:|
-| `plans/luma` | claude | 0/5 | — | — | — |
-| `plans/luma` | holo3 | 0/5 | — | — | — |
+| Plan | Provider model | Runs | Success rate | Mean grounding calls / run | Mean $ / run |
+|------|----------------|-----:|-------------:|---------------------------:|-------------:|
+| `plans/staff-crm` | Opus (default) | 4 | 2/4 (1 complete on best, 1 complete after recovery, 2 halts on form-validation) | 36 (good) / 75-90 (bad) | $0.21 (good) / $0.54-0.65 (bad) |
+| `plans/staff-crm` | Haiku (override) | 1 | 0/1 | 93 | $0.65 |
 
-(Table left empty intentionally — the gate is a follow-up after #406
-lands. Replace with real numbers before any default change.)
+The Haiku-on-grounding A/B (#434) ran a side-by-side comparison of
+the same plan with the same code. Haiku's per-call price is ~25%
+of Opus, but its lower accuracy increased the grounding-call count
+~24% (75 → 93 calls on the canonical staff-crm halt). The retry
+amplification more than ate the per-call savings — total cost was
+*higher* on Haiku. The default reverted to "match the extractor's
+main model" with `form_target_model` kept as an opt-in kwarg for
+future experiments.
+
+Recovery interventions that landed on top of this (#435 region
+cropping + tab-blur + cascade cap) brought the staff-crm happy
+path down to $0.19 / 14 grounding calls — these matter much more
+for cost than the per-call model price.
 
 ## Wiring summary
 
