@@ -160,6 +160,76 @@ def test_call_recovery_tool_logs_warning_on_missing_tool_use_block(caplog) -> No
     ), f"expected a WARNING marker; got: {[r.message for r in caplog.records]}"
 
 
+def test_no_state_change_submit_uses_opus_model() -> None:
+    """#432: Haiku-tier vision was missing red field-level validation
+    errors on the staff-crm Update Lead halt, so ``agentic_recovery``
+    picked ``halt`` instead of ``insert_steps``. The recovery callsite
+    should select Opus when ``failure_class=no_state_change`` on a
+    submit step (the canonical form-validation-blocked shape) and
+    stay on Haiku for everything else.
+    """
+    from unittest.mock import MagicMock as _MM
+
+    from mantis_agent.gym.step_recovery import StepRecoveryPolicy
+
+    captured: dict = {}
+
+    def _capture(*, step, failure_data, screenshot, plan_context,
+                 attempts, model=None, api_key=""):
+        captured["model"] = model
+        return None  # short-circuit; we only care about the model arg.
+
+    runner = _MM()
+    runner._recovery_attempts_per_step = {}
+    runner._total_recovery_attempts = 0
+    runner._safe_screenshot = lambda: None
+    policy = StepRecoveryPolicy(runner)
+
+    plan = MicroPlan()
+    submit_step = MicroIntent(intent="Click Save", type="submit")
+    plan.steps.append(submit_step)
+    failed_result = StepResult(
+        step_index=0, intent="Click Save", success=False,
+        data="submit:Save@(100,200):no_state_change",
+        failure_class="no_state_change",
+    )
+
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        side_effect=_capture,
+    ):
+        policy._try_agentic_recovery(
+            step=submit_step, step_result=failed_result, step_index=0,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+    assert captured.get("model") == "claude-opus-4-7", (
+        f"no_state_change submit should escalate to Opus; got {captured!r}"
+    )
+
+    # Sibling case: a non-submit failure stays on Haiku.
+    captured.clear()
+    runner._recovery_attempts_per_step = {}
+    runner._total_recovery_attempts = 0
+    click_step = MicroIntent(intent="Click Next", type="click")
+    plan2 = MicroPlan()
+    plan2.steps.append(click_step)
+    failed_click = StepResult(
+        step_index=0, intent="Click Next", success=False,
+        data="click_no_nav", failure_class="wrong_target",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        side_effect=_capture,
+    ):
+        policy._try_agentic_recovery(
+            step=click_step, step_result=failed_click, step_index=0,
+            plan=plan2, step_retry_counts={}, attempts=2,
+        )
+    assert captured.get("model") == "claude-haiku-4-5-20251001", (
+        f"non-submit failures stay on Haiku; got {captured!r}"
+    )
+
+
 def test_prompt_distinguishes_validation_blocked_submit_for_no_state_change() -> None:
     """The ``no_state_change`` legend must enumerate the form-validation-
     blocked-submit shape (red field error → ``insert_steps`` with a

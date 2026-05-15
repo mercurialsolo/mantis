@@ -620,12 +620,27 @@ class StepRecoveryPolicy:
             analyse_failure_and_recover,
             splice_inserted_steps,
         )
+        # #432: Haiku-level vision frequently misses field-level
+        # validation errors (red borders / aria-invalid rings), so on
+        # ``no_state_change`` submit failures — the canonical
+        # form-validation-blocked-submit shape — escalate to Opus.
+        # Other failure classes stay on Haiku (the cheap analysis
+        # task it was designed for). Per-step + per-run budgets still
+        # cap the spend regardless of model choice.
+        failure_class = str(getattr(step_result, "failure_class", "") or "")
+        recovery_model = (
+            "claude-opus-4-7"
+            if failure_class == "no_state_change"
+            and getattr(step, "type", "") == "submit"
+            else "claude-haiku-4-5-20251001"
+        )
         decision = analyse_failure_and_recover(
             step=step,
             failure_data=str(getattr(step_result, "data", "") or ""),
             screenshot=screenshot,
             plan_context=plan_context,
             attempts=attempts,
+            model=recovery_model,
         )
         if decision is None:
             # #431: even though analyse_failure_and_recover already logs

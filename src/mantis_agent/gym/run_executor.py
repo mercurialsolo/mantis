@@ -988,7 +988,27 @@ class RunExecutor:
         """
         runner = self.parent
         failure_class = getattr(step_result, "failure_class", "") or ""
-        from . import intent_rewriter
+        # #433: unconditional entry log so a step that halts without
+        # any rewriter signal can be definitively distinguished from
+        # one where this function was never reached. Logged at INFO
+        # so it doesn't drown normal runs but survives modal-server's
+        # default capture (which is also why we use the explicit
+        # ``mantis_agent.gym.micro_runner`` logger established at
+        # module top — same logger that successfully emits
+        # ``[rewriter] step N intent rewritten`` warnings).
+        logger.info(
+            "  [%d] _maybe_rewrite_intent_for_retry: entered "
+            "(failure_class=%r, runner=%s)",
+            step_index, failure_class, type(runner).__name__,
+        )
+        try:
+            from . import intent_rewriter
+        except ImportError as exc:  # noqa: BLE001 — never break runs
+            logger.warning(
+                "  [%d] rewriter_skipped: failed to import intent_rewriter (%s)",
+                step_index, exc,
+            )
+            return
         attempts_used = (
             runner._step_rewrite_attempts.get(step_index, 0)
             if hasattr(runner, "_step_rewrite_attempts") else 0
