@@ -508,6 +508,173 @@ def _make_plan() -> MicroPlan:
     ])
 
 
+def test_recovery_runs_tab_blur_traversal_on_no_state_change_submit() -> None:
+    """#435 follow-up: silent-validation handling.
+
+    When the recovery analyser would otherwise see a clean form
+    (submit failed, no rendered error), pressing Tab through every
+    input forces blur-driven validation rendering. The recovery
+    screenshot is then captured AFTER the traversal, so the
+    analyser sees what was hidden.
+
+    This test pins:
+    1. Tab traversal is called BEFORE ``_safe_screenshot``.
+    2. The default count is 12 (covers a typical edit form).
+    3. The screenshot returned by ``_safe_screenshot`` is what
+       reaches ``analyse_failure_and_recover``.
+    """
+    runner = _make_runner_with_recovery_state()
+    runner._safe_screenshot.return_value = "post-tab-screenshot"
+    call_order: list[str] = []
+    # Order tracker — both env.step (any KEY_PRESS) and the screenshot
+    # call get recorded so we can assert ordering.
+    def _env_step(action):
+        if action.params.get("keys") == "Tab":
+            call_order.append("tab")
+    runner.env.step.side_effect = _env_step
+    runner._safe_screenshot.side_effect = lambda: (
+        call_order.append("screenshot") or "post-tab-screenshot"
+    )
+
+    captured: dict = {}
+
+    def _capture(*, step, failure_data, screenshot, plan_context,
+                 attempts, model=None, api_key=""):
+        captured["screenshot"] = screenshot
+        return None  # short-circuit; we only care about the pre-call sequence.
+
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    step = plan.steps[2]
+    result = StepResult(
+        step_index=2, intent=step.intent, success=False,
+        data="submit:Update Lead@(100,200):no_state_change",
+        failure_class="no_state_change",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        side_effect=_capture,
+    ):
+        policy._try_agentic_recovery(
+            step=step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+
+    # 12 Tabs were pressed.
+    assert call_order.count("tab") == 12, (
+        f"expected 12 Tab presses; got {call_order.count('tab')}"
+    )
+    # Tabs all happened before the screenshot.
+    last_tab = max(
+        i for i, ev in enumerate(call_order) if ev == "tab"
+    )
+    first_screenshot = next(
+        i for i, ev in enumerate(call_order) if ev == "screenshot"
+    )
+    assert last_tab < first_screenshot, (
+        f"Tab traversal must complete before screenshot; "
+        f"got order {call_order}"
+    )
+    # The recovery's screenshot is the post-tab one.
+    assert captured["screenshot"] == "post-tab-screenshot"
+
+
+def test_recovery_skips_tab_blur_for_non_submit_failures() -> None:
+    """Tab traversal is scoped to ``no_state_change`` submit failures
+    — it doesn't fire on click-type failures, form_target_not_found,
+    or anything else. Avoids changing behaviour on unrelated paths.
+    """
+    runner = _make_runner_with_recovery_state()
+    tab_count = [0]
+    runner.env.step.side_effect = lambda action: (
+        tab_count.__setitem__(0, tab_count[0] + 1)
+        if action.params.get("keys") == "Tab" else None
+    )
+
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    click_step = MicroIntent(intent="Click", type="click")
+    plan.steps[2] = click_step
+    result = StepResult(
+        step_index=2, intent="Click", success=False,
+        data="click_no_nav", failure_class="no_state_change",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        return_value=None,
+    ):
+        policy._try_agentic_recovery(
+            step=click_step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+
+    assert tab_count[0] == 0, (
+        f"Tab traversal must NOT fire on click failures; got {tab_count[0]}"
+    )
+
+
+def test_recovery_tab_blur_disabled_by_env(monkeypatch) -> None:
+    """``MANTIS_RECOVERY_TAB_BLUR=disabled`` opts out — useful for
+    bisecting whether the traversal helps or harms on a given plan.
+    """
+    monkeypatch.setenv("MANTIS_RECOVERY_TAB_BLUR", "disabled")
+    runner = _make_runner_with_recovery_state()
+    tab_count = [0]
+    runner.env.step.side_effect = lambda action: (
+        tab_count.__setitem__(0, tab_count[0] + 1)
+        if action.params.get("keys") == "Tab" else None
+    )
+
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    step = plan.steps[2]
+    result = StepResult(
+        step_index=2, intent=step.intent, success=False,
+        data="submit:Update Lead@(100,200):no_state_change",
+        failure_class="no_state_change",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        return_value=None,
+    ):
+        policy._try_agentic_recovery(
+            step=step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+
+    assert tab_count[0] == 0
+
+
+def test_recovery_tab_blur_count_overridable_by_env(monkeypatch) -> None:
+    """Operators can tune the Tab count for unusually large forms."""
+    monkeypatch.setenv("MANTIS_RECOVERY_TAB_BLUR_COUNT", "4")
+    runner = _make_runner_with_recovery_state()
+    tab_count = [0]
+    runner.env.step.side_effect = lambda action: (
+        tab_count.__setitem__(0, tab_count[0] + 1)
+        if action.params.get("keys") == "Tab" else None
+    )
+
+    policy = StepRecoveryPolicy(parent=runner)
+    plan = _make_plan()
+    step = plan.steps[2]
+    result = StepResult(
+        step_index=2, intent=step.intent, success=False,
+        data="submit:Update Lead@(100,200):no_state_change",
+        failure_class="no_state_change",
+    )
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        return_value=None,
+    ):
+        policy._try_agentic_recovery(
+            step=step, step_result=result, step_index=2,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+
+    assert tab_count[0] == 4
+
+
 def test_recovery_returns_none_without_api_key(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     runner = _make_runner_with_recovery_state()

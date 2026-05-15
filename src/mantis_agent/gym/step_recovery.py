@@ -50,6 +50,7 @@ HALT              ``required`` retries exhausted, gate failure,
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -519,6 +520,70 @@ class StepRecoveryPolicy:
 
     # ── Agentic failure-recovery loop ───────────────────────────────────
 
+    # #435 follow-up: typical edit forms have 5-10 inputs. 12 Tabs
+    # covers all of them and a couple of "exit form" tabs into nav
+    # without dragging recovery latency past ~1.5s. Tunable via
+    # ``MANTIS_RECOVERY_TAB_BLUR_COUNT`` for forms with more inputs.
+    _TAB_BLUR_DEFAULT_COUNT: int = 12
+
+    def _tab_blur_traversal(self, runner: Any, step_index: int) -> None:
+        """Send Tab × N to trigger blur-driven validation rendering.
+
+        Why: a ``no_state_change`` failure on a submit step is often
+        a silent client-side validation rejection — the form's submit
+        handler short-circuits because some field is invalid, but no
+        red error is RENDERED until focus leaves the bad field. The
+        post-failure screenshot is visually clean, so the recovery
+        analyser (Claude) sees no validation indicators and picks
+        ``halt`` even when ``insert_steps`` is the right answer.
+
+        Walking Tab across the form forces every input through a blur
+        event, which is what triggers the ``:invalid`` /
+        ``aria-invalid`` styles in React / Vue / vanilla HTML forms.
+        The recovery screenshot is then captured AFTER traversal, so
+        whatever the form was hiding is now visible.
+
+        Best-effort: any exception inside the traversal is swallowed
+        and we fall through to the normal recovery path with whatever
+        screenshot the env can produce. Side-effect-free in the sense
+        that Tab key events don't mutate field values or submit the
+        form — worst case the cursor lands somewhere else, which
+        recovery would have to handle anyway.
+        """
+        try:
+            count = int(os.environ.get(
+                "MANTIS_RECOVERY_TAB_BLUR_COUNT",
+                self._TAB_BLUR_DEFAULT_COUNT,
+            ))
+        except (TypeError, ValueError):
+            count = self._TAB_BLUR_DEFAULT_COUNT
+        if count <= 0:
+            return
+        env = getattr(runner, "env", None)
+        if env is None:
+            return
+        logger.info(
+            "  [%d] recovery: tab-blur traversal × %d to force "
+            "validation rendering before screenshot",
+            step_index, count,
+        )
+        for _ in range(count):
+            try:
+                env.step(Action(
+                    action_type=ActionType.KEY_PRESS,
+                    params={"keys": "Tab"},
+                ))
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.debug("recovery: tab-blur step raised: %s", exc)
+                return
+            # Tiny settle so each blur event can fire its
+            # validation handler before the next Tab. 50ms × 12 =
+            # 0.6s total — acceptable recovery overhead.
+            time.sleep(0.05)
+        # One final settle so the LAST blur's validation render has
+        # time to paint before we screenshot.
+        time.sleep(0.3)
+
     def _try_agentic_recovery(
         self,
         *,
@@ -598,6 +663,28 @@ class StepRecoveryPolicy:
                 step_index, per_run, DEFAULT_MAX_RECOVERIES_PER_RUN,
             )
             return None
+
+        # #435 follow-up: before capturing the recovery screenshot on
+        # a ``no_state_change`` submit, walk Tab across the form to
+        # force blur-driven validation rendering. Most React forms
+        # render :invalid / aria-invalid styles only after focus
+        # leaves a bad field, so the post-submit-fail screenshot is
+        # often visually CLEAN even when the form's submit handler
+        # short-circuited on a validation error (canonical staff-crm
+        # pattern: ``Estimated Deal Value: 461927.81`` silently
+        # rejected by an integer-only rule). Tab traversal forces
+        # the rendering, so Claude actually sees what's invalid and
+        # picks ``insert_steps`` instead of ``halt``. Bounded to 12
+        # Tabs (covers most edit forms); opt-out via
+        # ``MANTIS_RECOVERY_TAB_BLUR=disabled``.
+        failure_class = str(getattr(step_result, "failure_class", "") or "")
+        step_type = str(getattr(step, "type", "") or "")
+        if (
+            failure_class == "no_state_change"
+            and step_type == "submit"
+            and os.environ.get("MANTIS_RECOVERY_TAB_BLUR", "") != "disabled"
+        ):
+            self._tab_blur_traversal(runner, step_index)
 
         # Capture screenshot for the analysis. Best-effort — Claude
         # can reason without it.
