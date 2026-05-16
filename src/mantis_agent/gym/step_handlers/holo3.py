@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from .. import retry_attempts as _retry
 from ..checkpoint import StepResult
 from ..runner import GymRunner
 from ..step_context import StepContext
@@ -48,36 +49,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Maximum number of prior-failure records to surface to Holo3 — older
-# attempts add noise without adding signal, and Holo3 context is the
-# scarcer resource here than runner memory.
-_PRIOR_ATTEMPTS_WINDOW: int = 3
-
-
-def _format_prior_attempt(record: dict) -> str:
-    """One human-readable line per prior failed attempt.
-
-    Format: ``clicked (x, y) targeting "<matched_label>" → <outcome>``
-
-    The outcome verb is keyed off ``record.kind`` (the failure class
-    the runner stamps when demoting a step). Falls back to a generic
-    "failed" when the kind is missing.
-    """
-    x = record.get("x", "?")
-    y = record.get("y", "?")
-    matched = str(record.get("matched_label") or record.get("label") or "").strip()
-    kind = str(record.get("kind") or "").strip()
-    reason = str(record.get("reason") or "").strip()
-    outcome_map = {
-        "no_state_change": "no observable state change (click registered but page didn't react)",
-        "wrong_target": "wrong target (click changed state but not toward the success criterion)",
-        "brain_loop_exhausted": "brain ran out of moves before reaching the goal",
-        "selector_miss": "the chosen coordinates didn't hit an interactive element",
-    }
-    outcome = outcome_map.get(kind, f"failed ({kind or 'unknown'})")
-    target_clause = f' targeting "{matched}"' if matched else ""
-    detail = f"; {reason[:120]}" if reason else ""
-    return f"clicked ({x}, {y}){target_clause} → {outcome}{detail}"
+# The shared retry-attempts module owns the window cap + line format
+# (#435 item 7: Claude / Fara prompt builders use the same shape).
+# Re-export the private helpers here for back-compat with existing
+# tests that import them from this module.
+_PRIOR_ATTEMPTS_WINDOW = _retry._PRIOR_ATTEMPTS_WINDOW
+_format_prior_attempt = _retry.format_prior_attempt
 
 
 def _build_scoped_task(step: "MicroIntent", runner: Any, step_index: int) -> str:
@@ -214,10 +191,27 @@ class Holo3StepHandler:
         # plus opaque click(x,y) history; with the new shape the brain
         # sees the same context the outer recovery loop already has.
         task = _build_scoped_task(step, runner, index)
+        # #435 item 7: also thread the structured failure records through
+        # to the inner GymRunner so EVERY brain.think() iteration sees
+        # the outcome-tagged ``Recent attempts on this sub-goal`` block
+        # — not just the first frame off the scoped task string. The
+        # task string still carries it for compat with prompts that
+        # didn't migrate; the kwarg is the structured form that the
+        # brain adapters render via the shared ``retry_attempts``
+        # module.
+        prior_attempts = (
+            runner._step_failure_history.get(index, [])
+            if hasattr(runner, "_step_failure_history") else []
+        )
+        retry_attempts_list = (
+            [r for r in prior_attempts if isinstance(r, dict)]
+            if isinstance(prior_attempts, list) else None
+        )
         result = gym_runner.run(
             task=task,
             task_id=f"step_{index}_{step.type}",
             pending_form_labels=outer_pending_labels,
+            retry_attempts=retry_attempts_list,
         )
 
         success = result.success

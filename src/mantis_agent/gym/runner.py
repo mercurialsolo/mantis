@@ -629,6 +629,7 @@ class GymRunner:
         capture_dir: Any = None,
         pause_input: Any = None,
         pending_form_labels: list[str] | None = None,
+        retry_attempts: list[dict] | None = None,
     ) -> RunResult:
         """Execute a task with plan persistence, feedback, and context.
 
@@ -663,6 +664,12 @@ class GymRunner:
                 inadvertently claims whole-task completion while outer
                 credentials remain pending. Default ``None`` preserves
                 current single-layer behaviour.
+            retry_attempts: Optional structured prior-failure records
+                from the outer ``MicroPlanRunner._step_failure_history``
+                (#435 item 7). When set, threaded into every
+                ``brain.think()`` invocation so the brain sees an
+                outcome-tagged ``Recent attempts on this sub-goal``
+                block. Default ``None`` preserves single-layer behaviour.
         """
         logger.info(f"Starting task: {task!r} (id={task_id})")
         t0 = time.time()
@@ -1060,12 +1067,21 @@ class GymRunner:
                 # The model works from screenshots only
 
                 t_infer = time.time()
-                result = self.brain.think(
-                    frames=recent_frames,
-                    task=effective_task,
-                    action_history=action_history,
-                    screen_size=self.env.screen_size,
-                )
+                think_kwargs: dict[str, Any] = {
+                    "frames": recent_frames,
+                    "task": effective_task,
+                    "action_history": action_history,
+                    "screen_size": self.env.screen_size,
+                }
+                # #435 item 7: only pass ``retry_attempts`` to brains
+                # that opted in. Test stubs / older adapters that
+                # don't accept the kwarg keep working — production
+                # adapters (brain_claude / brain_fara / brain_holo3)
+                # accept it and render the outcome-tagged block in
+                # their prompts.
+                if retry_attempts:
+                    think_kwargs["retry_attempts"] = retry_attempts
+                result = self.brain.think(**think_kwargs)
                 inference_time = time.time() - t_infer
                 # Epic #362: credit brain inference to the ``think``
                 # bucket on the runner's TimeMeter. Reads the current
