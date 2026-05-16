@@ -1758,11 +1758,35 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         # decision timeline (critic gates, Claude recovery results,
         # ReplaceStep / InsertStep directives) beside the MJPEG feed.
         # Cheap, file-backed read — no compute.
+        #
+        # Inlined rather than importing ``mantis_agent.gym.reasoning_trace``
+        # because the API container's tiny image (fastapi + pydantic +
+        # requests) doesn't have PIL — and importing ``mantis_agent.gym``
+        # transitively pulls in PlaywrightGymEnv → PIL. The JSONL read
+        # is trivial; duplicating those ~12 lines here keeps the import
+        # chain clean.
         if action == "reasoning_trace":
-            from mantis_agent.gym import reasoning_trace as _rt
             since_ts = str(payload.get("since") or "") or None
             jsonl_path = _run_dir(tenant.tenant_id, run_id) / "reasoning.jsonl"
-            events = _rt.read_jsonl(jsonl_path, since_ts=since_ts)
+            events: list[dict] = []
+            if jsonl_path.exists():
+                try:
+                    with jsonl_path.open("r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                ev = json.loads(line)
+                            except (json.JSONDecodeError, ValueError):
+                                continue
+                            if not isinstance(ev, dict):
+                                continue
+                            if since_ts and ev.get("ts", "") <= since_ts:
+                                continue
+                            events.append(ev)
+                except OSError:
+                    pass
             return {
                 **status,
                 "events": events,
