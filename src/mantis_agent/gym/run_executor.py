@@ -175,6 +175,7 @@ class RunExecutor:
 
             self._maybe_demote_form_no_change(state, effective_step, pre_snapshot)
             self._maybe_demote_click_no_change(state, effective_step, pre_snapshot)
+            self._maybe_demote_wrong_target(state, effective_step)
 
             step_result = state.results[-1]
 
@@ -663,6 +664,106 @@ class RunExecutor:
         )
         self._maybe_set_handler_override(
             runner=runner, step_index=state.step_index,
+        )
+
+    # Step types that own an action whose post-URL is meaningful for
+    # wrong-target detection. ``select_option`` is excluded — picking
+    # an option doesn't usually change the URL (the value lives in
+    # form state), and a strict URL check there would mis-demote
+    # valid edits. ``fill_field`` excluded for the same reason.
+    _WRONG_TARGET_STEP_TYPES: frozenset[str] = frozenset({
+        "submit", "click", "navigate", "navigate_back",
+    })
+
+    def _maybe_demote_wrong_target(
+        self, state: RunState, effective_step: MicroIntent,
+    ) -> None:
+        """Demote success → fail when the step succeeded (state DID
+        change) but the post-click URL doesn't match the plan-supplied
+        expectation (roadmap D).
+
+        Plan hints recognised:
+
+        * ``hints.expect_url_contains`` — str or list[str]. Every
+          listed substring must appear in ``env.current_url`` after
+          the action. The canonical staff-crm-long step-6 case: the
+          plan says "click Contacted → URL should include
+          ``status=Contacted``"; if the click landed on a status pill
+          instead of the sidebar link, the URL won't update and we
+          demote to ``wrong_target`` rather than reporting OK.
+        * ``hints.expect_url_excludes`` — str or list[str]. Listed
+          substrings must NOT appear in the post-URL. Covers the
+          "click drifted to a row-detail page" failure mode (step
+          6 must NOT land on ``/leads/<id>``).
+
+        Order matters: this runs AFTER ``_maybe_demote_form_no_change``
+        / ``_maybe_demote_click_no_change``. Those handle the
+        "nothing happened" failure mode; this one handles
+        "something happened but the wrong thing." When neither hint
+        is present on the step (decomposer didn't emit one — most
+        plans today), this is a no-op.
+
+        Failure class is ``wrong_target`` (already in the runner's
+        rewrite-triggering set) so the retry routes through the
+        intent rewriter / agentic recovery loop with full prior-
+        attempt context.
+        """
+        runner = self.parent
+        step_result = state.results[-1]
+        if not step_result.success:
+            return
+        if effective_step.type not in self._WRONG_TARGET_STEP_TYPES:
+            return
+        hints = dict(getattr(effective_step, "hints", {}) or {})
+        expect_contains_raw = hints.get("expect_url_contains") or []
+        expect_excludes_raw = hints.get("expect_url_excludes") or []
+        if isinstance(expect_contains_raw, str):
+            expect_contains: list[str] = [expect_contains_raw]
+        else:
+            expect_contains = [str(s) for s in expect_contains_raw if str(s).strip()]
+        if isinstance(expect_excludes_raw, str):
+            expect_excludes: list[str] = [expect_excludes_raw]
+        else:
+            expect_excludes = [str(s) for s in expect_excludes_raw if str(s).strip()]
+        if not expect_contains and not expect_excludes:
+            return
+        post_url = _read_env_url(runner.env) or ""
+        missing = [s for s in expect_contains if s not in post_url]
+        forbidden = [s for s in expect_excludes if s in post_url]
+        if not missing and not forbidden:
+            return
+        reason_parts: list[str] = []
+        if missing:
+            reason_parts.append(
+                f"URL missing expected substring(s): {missing}"
+            )
+        if forbidden:
+            reason_parts.append(
+                f"URL contains forbidden substring(s): {forbidden}"
+            )
+        url_clip = post_url[:120] + ("…" if len(post_url) > 120 else "")
+        reason = "; ".join(reason_parts) + f" (post-URL: {url_clip})"
+        logger.warning(
+            "  [%d] %s reported success but URL postcondition failed — "
+            "demoting wrong_target: %s",
+            state.step_index, effective_step.type, reason,
+        )
+        step_result.success = False
+        step_result.data = (step_result.data or "") + ":wrong_target"
+        step_result.failure_class = "wrong_target"
+        from . import healing_events
+        healing_events.record_demotion(
+            runner,
+            step_index=state.step_index,
+            step_type=effective_step.type,
+            reason=reason,
+            source="demote_wrong_target",
+        )
+        self._record_failure_for_retry(
+            runner=runner,
+            step_index=state.step_index,
+            kind="wrong_target",
+            reason=reason,
         )
 
     @staticmethod

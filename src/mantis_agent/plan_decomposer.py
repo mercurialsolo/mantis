@@ -512,6 +512,33 @@ RULES:
 - For fill_field / submit / select_option, ALWAYS populate `params`
   (label/value/dropdown_label/option_label) using the labels the source
   plan provides. The runner trusts `params` over the prose.
+- HINTS — emit `hints` whenever the source plan gives an explicit URL
+  expectation OR a strong spatial cue. Two structured fields are
+  recognised by the runner today:
+    • `hints.expect_url_contains` — list of substrings the post-click
+      URL MUST contain. Emit ONE entry per literal URL clue the source
+      plan names. Examples:
+        Source: "click Contacted ... the URL should now include
+                 status=Contacted"
+        → hints={"expect_url_contains": ["status=Contacted"]}
+        Source: "click Apply ... URL now also includes priority=Critical"
+        (already has status=Contacted from prior step — keep BOTH)
+        → hints={"expect_url_contains": ["status=Contacted",
+                                          "priority=Critical"]}
+        Source: "land on a Lead Detail page whose URL pattern /leads/<id>"
+        → hints={"expect_url_contains": ["/leads/"]}
+      Without this hint, a click that "changed state" but landed on the
+      wrong URL slides through as success — the canonical staff-crm
+      "Contacted status pill mismatch" failure mode.
+    • `hints.expect_url_excludes` — list of substrings the post-click
+      URL MUST NOT contain. Useful for the "shouldn't drift to a
+      detail page" cases:
+        Source: "click Contacted in the LEAD VIEWS sidebar — do NOT
+                 land on an individual lead"
+        → hints={"expect_url_contains": ["status=Contacted"],
+                 "expect_url_excludes": ["/leads/"]}
+      Only emit these for submit / click / navigate steps (URL is
+      meaningful). Skip on fill_field / select_option / extract_data.
 - The "reverse" field must be a CUA-executable instruction
 - Set section="setup", section="extraction", or section="pagination"
 - Set required=true for all setup/filter/form steps (this is the default)
@@ -665,7 +692,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v25_right_click"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v26_url_hints"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

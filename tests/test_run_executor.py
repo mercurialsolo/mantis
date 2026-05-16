@@ -623,6 +623,183 @@ def test_build_effective_step_override_wins_over_scanner_directive():
     assert effective.intent == "REWRITE WINS"
 
 
+# ── Wrong-target URL postcondition demote (roadmap D) ─────────────
+
+
+def _runner_stub_with_env(env_url: str) -> MagicMock:
+    """Same as ``_runner_stub`` but with ``runner.env.current_url``
+    wired to ``env_url`` for the wrong-target URL checks."""
+    runner = _runner_stub()
+    runner.env = MagicMock()
+    runner.env.current_url = env_url
+    runner._step_failure_history = {}
+    runner._last_submit_target = {
+        "x": 100, "y": 200, "label": "Contacted", "matched_label": "Contacted",
+    }
+    return runner
+
+
+def test_wrong_target_demotes_when_expect_url_contains_missing():
+    """The canonical staff-crm-long step-6 case: clicked Contacted in
+    the sidebar, the click registered (state changed somewhere), but
+    the URL doesn't include ``status=Contacted`` — meaning the click
+    landed on a status pill rather than the sidebar link.
+    """
+    runner = _runner_stub_with_env(
+        "https://staff-crm.example/leads?sort_by=created_at"
+    )
+    state = _state()
+    state.step_index = 6
+    state.results.append(StepResult(step_index=6, intent="Click Contacted", success=True, data="ok"))
+
+    eff_step = MicroIntent(
+        intent="Click Contacted in LEAD VIEWS sidebar",
+        type="submit",
+        hints={"expect_url_contains": ["status=Contacted"]},
+    )
+    RunExecutor(runner)._maybe_demote_wrong_target(state, eff_step)
+
+    assert state.results[0].success is False
+    assert state.results[0].failure_class == "wrong_target"
+    assert ":wrong_target" in state.results[0].data
+    # Failure recorded for the retry path.
+    assert 6 in runner._step_failure_history
+    assert runner._step_failure_history[6][0]["kind"] == "wrong_target"
+
+
+def test_wrong_target_demotes_when_expect_url_excludes_present():
+    """Catches the "drifted to detail page" failure mode: the plan
+    expects the post-click URL to STAY on the filter list, so
+    ``/leads/49`` (a lead detail page) is an explicit exclusion. The
+    click was technically a state change but landed in the wrong
+    place — demote.
+    """
+    runner = _runner_stub_with_env(
+        "https://staff-crm.example/leads/49"
+    )
+    state = _state()
+    state.step_index = 6
+    state.results.append(StepResult(step_index=6, intent="x", success=True, data="ok"))
+
+    eff_step = MicroIntent(
+        intent="Click Contacted", type="submit",
+        hints={"expect_url_excludes": ["/leads/"]},
+    )
+    RunExecutor(runner)._maybe_demote_wrong_target(state, eff_step)
+
+    assert state.results[0].success is False
+    assert state.results[0].failure_class == "wrong_target"
+
+
+def test_wrong_target_accepts_when_url_matches_expectation():
+    """Happy path: URL contains every expected substring and none of
+    the forbidden ones → step stays OK."""
+    runner = _runner_stub_with_env(
+        "https://staff-crm.example/leads?status=Contacted&priority=Critical"
+    )
+    state = _state()
+    state.step_index = 8
+    state.results.append(StepResult(step_index=8, intent="Apply filter", success=True, data="ok"))
+
+    eff_step = MicroIntent(
+        intent="Click Apply", type="submit",
+        hints={
+            "expect_url_contains": ["status=Contacted", "priority=Critical"],
+            "expect_url_excludes": ["/leads/"],
+        },
+    )
+    RunExecutor(runner)._maybe_demote_wrong_target(state, eff_step)
+
+    assert state.results[0].success is True
+    assert state.results[0].failure_class == ""
+
+
+def test_wrong_target_no_op_when_no_hints():
+    """A step without ``expect_url_contains`` / ``expect_url_excludes``
+    isn't subject to the predicate — the demote is a no-op. Keeps
+    every existing plan that doesn't carry hints unchanged.
+    """
+    runner = _runner_stub_with_env(
+        "https://staff-crm.example/leads"
+    )
+    state = _state()
+    state.step_index = 1
+    state.results.append(StepResult(step_index=1, intent="x", success=True, data="ok"))
+
+    eff_step = MicroIntent(intent="x", type="submit")
+    RunExecutor(runner)._maybe_demote_wrong_target(state, eff_step)
+
+    assert state.results[0].success is True
+
+
+def test_wrong_target_skipped_for_non_eligible_step_types():
+    """``fill_field`` and ``select_option`` are excluded — their
+    natural state delta is the field value, which doesn't reflect
+    in the URL. A strict URL check there would mis-demote valid
+    edits.
+    """
+    runner = _runner_stub_with_env("https://staff-crm.example/whatever")
+    state = _state()
+    state.step_index = 7
+    state.results.append(StepResult(step_index=7, intent="x", success=True, data="ok"))
+
+    for step_type in ("fill_field", "select_option", "extract_data"):
+        eff_step = MicroIntent(
+            intent="x", type=step_type,
+            hints={"expect_url_contains": ["this-should-be-ignored"]},
+        )
+        state.results[-1].success = True
+        state.results[-1].failure_class = ""
+        RunExecutor(runner)._maybe_demote_wrong_target(state, eff_step)
+        assert state.results[-1].success is True, (
+            f"step type {step_type} should be excluded from wrong_target check"
+        )
+
+
+def test_wrong_target_accepts_string_form_of_hint():
+    """A plan author may write ``expect_url_contains: "status=Contacted"``
+    (string) instead of a list. Coerce to a single-element list so
+    the predicate stays consistent.
+    """
+    runner = _runner_stub_with_env(
+        "https://staff-crm.example/leads?status=Contacted"
+    )
+    state = _state()
+    state.step_index = 6
+    state.results.append(StepResult(step_index=6, intent="x", success=True, data="ok"))
+
+    eff_step = MicroIntent(
+        intent="x", type="submit",
+        hints={"expect_url_contains": "status=Contacted"},  # string, not list
+    )
+    RunExecutor(runner)._maybe_demote_wrong_target(state, eff_step)
+
+    assert state.results[0].success is True  # match, no demote
+
+
+def test_wrong_target_skipped_when_step_already_failed():
+    """An already-failed step (e.g. demoted by ``no_state_change``
+    upstream) doesn't re-enter the wrong_target path. The two
+    primitives are layered, not racing — no_state_change wins
+    when both would fire.
+    """
+    runner = _runner_stub_with_env("https://staff-crm.example/leads")
+    state = _state()
+    state.step_index = 6
+    state.results.append(StepResult(step_index=6, intent="x", success=False,
+                                     data=":no_state_change",
+                                     failure_class="no_state_change"))
+
+    eff_step = MicroIntent(
+        intent="x", type="submit",
+        hints={"expect_url_contains": ["status=Contacted"]},
+    )
+    RunExecutor(runner)._maybe_demote_wrong_target(state, eff_step)
+
+    # failure_class stays no_state_change, not overridden.
+    assert state.results[0].failure_class == "no_state_change"
+
+
 # ── Form-shape no-state-change demote ─────────────────────────────
 
 
