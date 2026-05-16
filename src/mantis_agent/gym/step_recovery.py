@@ -314,13 +314,72 @@ class StepRecoveryPolicy:
             )
 
         if step.type == "scroll":
-            # Scroll "failure" usually means the model didn't call done()
-            # but the page DID scroll — treat as success.
-            logger_.info(
-                f"  [{step_index}] Scroll completed (no done() but page changed)"
+            # #audit item 3: don't blindly advance on every scroll
+            # failure. The old code assumed "scroll always moves the
+            # page so missing-done() is benign" — but that's false
+            # when the page is already at the bottom OR when the
+            # scroll never registered (e.g. scroll bubbled into an
+            # open dropdown that swallowed the wheel event).
+            #
+            # New behaviour:
+            #
+            # * ``failure_class == "brain_loop_exhausted"`` → keep
+            #   the same step so the rewriter / next retry can
+            #   actually affect it. Advancing past would discard the
+            #   rewrite opportunity.
+            # * Otherwise: compare pre/post snapshot ``viewport_stage``
+            #   + ``scroll_signature``. If something changed →
+            #   advance (legacy success path). If nothing changed
+            #   → keep the same step (true failure that needs retry
+            #   or different verb).
+            failure_class = str(
+                getattr(step_result, "failure_class", "") or ""
+            )
+            if failure_class == "brain_loop_exhausted":
+                logger_.warning(
+                    f"  [{step_index}] scroll brain_loop_exhausted — "
+                    f"keeping step for retry (was blindly advancing)"
+                )
+                return RecoveryOutcome(
+                    halt=False, step_index=step_index,
+                    halt_reason="scroll_brain_loop_keep_step",
+                )
+
+            from . import step_snapshot as _snap
+            pre_snap = getattr(runner, "_pre_step_snapshot", None)
+            scrolled = False
+            if pre_snap is not None:
+                try:
+                    post_snap = _snap.capture(runner)
+                    scrolled = (
+                        pre_snap.viewport_stage != post_snap.viewport_stage
+                        or pre_snap.scroll_signature != post_snap.scroll_signature
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger_.debug(
+                        "scroll-recovery snapshot capture failed: %s", exc,
+                    )
+                    # Fall through to legacy advance path when we
+                    # can't verify either way — safer than introducing
+                    # a new halt path on env-stub test stubs.
+                    scrolled = True
+
+            if scrolled:
+                logger_.info(
+                    f"  [{step_index}] scroll completed "
+                    f"(no done() but viewport advanced)"
+                )
+                return RecoveryOutcome(
+                    halt=False, step_index=step_index + 1,
+                    halt_reason="scroll_no_done",
+                )
+            logger_.warning(
+                f"  [{step_index}] scroll failed (no viewport delta) — "
+                f"keeping step for retry"
             )
             return RecoveryOutcome(
-                halt=False, step_index=step_index + 1, halt_reason="scroll_no_done",
+                halt=False, step_index=step_index,
+                halt_reason="scroll_no_delta",
             )
 
         if step.type == "navigate_back":
