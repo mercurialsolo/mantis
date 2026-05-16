@@ -300,9 +300,22 @@ class Holo3Brain:
         task: str,
         action_history: list[Action] | None = None,
         screen_size: tuple[int, int] = (1920, 1080),
+        *,
+        retry_attempts: list[dict] | None = None,
+        per_step_action_history: list[Action] | None = None,
     ) -> InferenceResult:
-        """Run perception-reasoning-action via Holo3 with tool calling."""
-        messages = self._build_messages(frames, task, action_history, screen_size)
+        """Run perception-reasoning-action via Holo3 with tool calling.
+
+        ``retry_attempts`` (#435 item 7) and ``per_step_action_history``
+        (#435 item 2) — same contract as ``brain_claude.think`` /
+        ``brain_fara.think``. Default ``None`` preserves pre-existing
+        global-history behaviour for callers that haven't migrated.
+        """
+        messages = self._build_messages(
+            frames, task, action_history, screen_size,
+            retry_attempts=retry_attempts,
+            per_step_action_history=per_step_action_history,
+        )
 
         payload: dict = {
             "model": self.model,
@@ -364,6 +377,9 @@ class Holo3Brain:
         task: str,
         action_history: list[Action] | None,
         screen_size: tuple[int, int],
+        *,
+        retry_attempts: list[dict] | None = None,
+        per_step_action_history: list[Action] | None = None,
     ) -> list[dict]:
         """Build OpenAI-format messages with image content."""
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -384,10 +400,23 @@ class Holo3Brain:
             f"\nTask: {task}",
             f"Screen size: {screen_size[0]}x{screen_size[1]} pixels",
         ]
-        if action_history:
-            recent = action_history[-5:]  # Keep short — Holo3 context is precious
-            history_str = "\n".join(f"  {i + 1}. {a}" for i, a in enumerate(recent))
+        # #435 item 2: prefer the sub-goal-scoped slice when set.
+        recent_actions: list[Action] | None = None
+        if per_step_action_history is not None:
+            recent_actions = list(per_step_action_history)
+        elif action_history:
+            # Keep short — Holo3 context is precious.
+            recent_actions = action_history[-5:]
+        if recent_actions:
+            history_str = "\n".join(f"  {i + 1}. {a}" for i, a in enumerate(recent_actions))
             context_parts.append(f"Recent actions:\n{history_str}")
+
+        # #435 item 7: outcome-tagged retry attempts.
+        if retry_attempts:
+            from .gym import retry_attempts as _retry
+            block = _retry.render_attempts_block(retry_attempts)
+            if block:
+                context_parts.append(block)
 
         content.append({"type": "text", "text": "\n".join(context_parts)})
         messages.append({"role": "user", "content": content})

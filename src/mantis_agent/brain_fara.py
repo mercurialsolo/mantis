@@ -327,9 +327,25 @@ class FaraBrain:
         task: str,
         action_history: list[Action] | None = None,
         screen_size: tuple[int, int] = (1920, 1080),
+        *,
+        retry_attempts: list[dict] | None = None,
+        per_step_action_history: list[Action] | None = None,
     ) -> InferenceResult:
-        """Single perception-reasoning-action cycle."""
-        messages = self._build_messages(frames, task, action_history)
+        """Single perception-reasoning-action cycle.
+
+        ``retry_attempts`` (#435 item 7) and ``per_step_action_history``
+        (#435 item 2) — same contract as ``brain_claude.think``. When
+        the caller (a per-plan-step handler in MicroPlanRunner) supplies
+        them, the prompt carries an outcome-tagged ``Recent attempts``
+        block plus a sub-goal-scoped action slice. Default ``None``
+        preserves the pre-existing global-history behaviour for
+        callers that haven't migrated.
+        """
+        messages = self._build_messages(
+            frames, task, action_history,
+            retry_attempts=retry_attempts,
+            per_step_action_history=per_step_action_history,
+        )
 
         payload: dict = {
             "model": self.model,
@@ -394,6 +410,9 @@ class FaraBrain:
         frames: list[Image.Image],
         task: str,
         action_history: list[Action] | None,
+        *,
+        retry_attempts: list[dict] | None = None,
+        per_step_action_history: list[Action] | None = None,
     ) -> list[dict]:
         """OpenAI-format messages with Fara's input-resolution screenshots."""
         messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -418,9 +437,15 @@ class FaraBrain:
                 " (coordinates are in this space)"
             ),
         ]
-        if action_history:
-            recent = action_history[-5:]
-            history = "\n".join(f"  {i + 1}. {a}" for i, a in enumerate(recent))
+        # #435 item 2: prefer the sub-goal-scoped slice when the caller
+        # supplied one. Otherwise fall back to the global last-5 slice.
+        recent_actions: list[Action] | None = None
+        if per_step_action_history is not None:
+            recent_actions = list(per_step_action_history)
+        elif action_history:
+            recent_actions = action_history[-5:]
+        if recent_actions:
+            history = "\n".join(f"  {i + 1}. {a}" for i, a in enumerate(recent_actions))
             parts.append(f"Recent actions:\n{history}")
         # #435: re-feed the model's own ``pause_and_memorize_fact``
         # entries from earlier turns. The Fara model card calls this
@@ -439,6 +464,17 @@ class FaraBrain:
             if facts:
                 fact_block = "\n".join(f"  - {f}" for f in facts)
                 parts.append(f"Memorized facts (your earlier notes):\n{fact_block}")
+
+        # #435 item 7: outcome-tagged retry attempts from the runner's
+        # cross-attempt failure history. Goes AFTER Recent actions /
+        # Memorized facts so a token budget cap truncates the older,
+        # less-specific action log first.
+        if retry_attempts:
+            from .gym import retry_attempts as _retry
+            block = _retry.render_attempts_block(retry_attempts)
+            if block:
+                parts.append(block)
+
         content.append({"type": "text", "text": "\n".join(parts)})
 
         messages.append({"role": "user", "content": content})

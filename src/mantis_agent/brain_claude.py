@@ -200,11 +200,32 @@ class ClaudeBrain:
         task: str,
         action_history: list[Action] | None = None,
         screen_size: tuple[int, int] = (1920, 1080),
+        *,
+        retry_attempts: list[dict] | None = None,
+        per_step_action_history: list[Action] | None = None,
     ) -> InferenceResult:
-        """Run perception-reasoning-action via Claude API with computer_use tool."""
+        """Run perception-reasoning-action via Claude API with computer_use tool.
+
+        ``retry_attempts`` (#435 item 7) — outcome-tagged failure records
+        from ``MicroPlanRunner._step_failure_history[step_index]``. When
+        present, rendered as a ``Recent attempts on this sub-goal:``
+        block. Lets Claude refute coordinates / patterns that already
+        failed without re-deriving the failure mode from prose.
+
+        ``per_step_action_history`` (#435 item 2) — sub-goal-scoped
+        action slice. When provided, overrides the global
+        ``action_history`` for the prompt's ``Recent actions:`` block.
+        The doc's *"Reset between sub-goals. Bounded length: 1–3
+        entries"* guidance — caller (per-step handler) supplies the
+        slice already trimmed.
+        """
         # Update computer_use tool dimensions to match actual screen
         tools = self._build_tools(screen_size)
-        messages = self._build_messages(frames, task, action_history, screen_size)
+        messages = self._build_messages(
+            frames, task, action_history, screen_size,
+            retry_attempts=retry_attempts,
+            per_step_action_history=per_step_action_history,
+        )
 
         payload = {
             "model": self.model,
@@ -291,6 +312,9 @@ class ClaudeBrain:
         task: str,
         action_history: list[Action] | None,
         screen_size: tuple[int, int],
+        *,
+        retry_attempts: list[dict] | None = None,
+        per_step_action_history: list[Action] | None = None,
     ) -> list[dict]:
         """Build Claude API messages with image content.
 
@@ -338,10 +362,28 @@ class ClaudeBrain:
             f"Screen size: {screen_size[0]}x{screen_size[1]} pixels",
         ]
 
-        if action_history:
-            recent = action_history[-10:]
-            history_str = "\n".join(f"  {i+1}. {a}" for i, a in enumerate(recent))
+        # #435 item 2: prefer the sub-goal-scoped action slice when the
+        # caller supplied one. Falls back to the global last-10 slice
+        # when not provided — preserves existing behaviour for callers
+        # that haven't migrated.
+        recent_actions: list[Action] | None = None
+        if per_step_action_history is not None:
+            recent_actions = list(per_step_action_history)
+        elif action_history:
+            recent_actions = action_history[-10:]
+        if recent_actions:
+            history_str = "\n".join(f"  {i+1}. {a}" for i, a in enumerate(recent_actions))
             context_parts.append(f"Recent actions:\n{history_str}")
+
+        # #435 item 7: outcome-tagged retry attempts from the runner's
+        # cross-attempt failure history. Goes AFTER the Recent actions
+        # block so a token budget cap truncates the older, less-specific
+        # action log first.
+        if retry_attempts:
+            from .gym import retry_attempts as _retry
+            block = _retry.render_attempts_block(retry_attempts)
+            if block:
+                context_parts.append(block)
 
         content.append({"type": "text", "text": "\n".join(context_parts)})
 
