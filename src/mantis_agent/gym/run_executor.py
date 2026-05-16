@@ -1244,6 +1244,12 @@ class RunExecutor:
         halt_reason: str = "",
     ) -> None:
         runner = self.parent
+        # #audit item 4: surface halt_reason on the runner so
+        # ``build_micro_result`` can include it in the result envelope
+        # (the detached-status writer needs it to distinguish
+        # ``budget_cap`` / ``time_cap`` / generic ``halted``).
+        if halt_reason:
+            runner._final_halt_reason = halt_reason
         runner._persist_checkpoint(
             checkpoint=state.checkpoint,
             plan=plan,
