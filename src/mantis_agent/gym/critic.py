@@ -276,11 +276,21 @@ class ExecutionCritic:
             return None
         from . import intent_rewriter
         failure_class = str(getattr(step_result, "failure_class", "") or "")
-        if failure_class not in intent_rewriter.REWRITE_TRIGGERING_CLASSES:
-            return None
-
         runner = self.runner
         step_index = int(state.step_index)
+
+        # Diagnostic: surface every gate decision at WARNING so the
+        # trace shows which guard closed the door. This makes the
+        # "critic never fired" failure mode visible from Modal logs
+        # alone (Modal suppresses INFO+DEBUG).
+        if failure_class not in intent_rewriter.REWRITE_TRIGGERING_CLASSES:
+            logger.warning(
+                "  [critic-frontier] step %d: skipped — failure_class=%r "
+                "not in REWRITE_TRIGGERING_CLASSES",
+                step_index, failure_class,
+            )
+            return None
+
         history = (
             runner._step_failure_history.get(step_index, [])
             if hasattr(runner, "_step_failure_history") else []
@@ -291,6 +301,11 @@ class ExecutionCritic:
             and str(r.get("kind") or "") in intent_rewriter.REWRITE_TRIGGERING_CLASSES
         )
         if failure_count < _FRONTIER_PERSISTENT_FAILURE_THRESHOLD:
+            logger.warning(
+                "  [critic-frontier] step %d: skipped — failure_count=%d "
+                "below threshold %d",
+                step_index, failure_count, _FRONTIER_PERSISTENT_FAILURE_THRESHOLD,
+            )
             return None
 
         # Already consulted Claude for this step? Don't double-spend.
@@ -299,6 +314,10 @@ class ExecutionCritic:
             fired = set()
             runner._critic_frontier_fired_steps = fired
         if step_index in fired:
+            logger.warning(
+                "  [critic-frontier] step %d: skipped — already fired this step",
+                step_index,
+            )
             return None
 
         # Reuse the existing recovery budget pool so the critic's
@@ -308,8 +327,10 @@ class ExecutionCritic:
         per_step_dict = getattr(runner, "_recovery_attempts_per_step", None)
         total_attempts = getattr(runner, "_total_recovery_attempts", None)
         if not isinstance(per_step_dict, dict) or not isinstance(total_attempts, int):
-            logger.debug(
-                "  [critic-frontier] runner missing budget trackers — skip"
+            logger.warning(
+                "  [critic-frontier] step %d: skipped — runner missing budget "
+                "trackers (per_step=%s, total=%s)",
+                step_index, type(per_step_dict).__name__, type(total_attempts).__name__,
             )
             return None
         try:
@@ -318,12 +339,32 @@ class ExecutionCritic:
                 DEFAULT_MAX_RECOVERIES_PER_STEP,
             )
         except Exception as exc:  # noqa: BLE001 — never break runs
-            logger.debug("  [critic-frontier] agentic_recovery import failed: %s", exc)
+            logger.warning(
+                "  [critic-frontier] step %d: skipped — agentic_recovery "
+                "import failed: %s", step_index, exc,
+            )
             return None
         if per_step_dict.get(step_index, 0) >= DEFAULT_MAX_RECOVERIES_PER_STEP:
+            logger.warning(
+                "  [critic-frontier] step %d: skipped — per-step budget "
+                "exhausted (%d/%d) before critic could fire",
+                step_index, per_step_dict.get(step_index, 0),
+                DEFAULT_MAX_RECOVERIES_PER_STEP,
+            )
             return None
         if total_attempts >= DEFAULT_MAX_RECOVERIES_PER_RUN:
+            logger.warning(
+                "  [critic-frontier] step %d: skipped — per-run budget "
+                "exhausted (%d/%d)",
+                step_index, total_attempts, DEFAULT_MAX_RECOVERIES_PER_RUN,
+            )
             return None
+        # All gates passed — Claude call below logs result.
+        logger.warning(
+            "  [critic-frontier] step %d: gate passed (failure_class=%s, "
+            "failures=%d) — calling analyse_failure_and_recover",
+            step_index, failure_class, failure_count,
+        )
 
         # Capture the post-failure screenshot for Claude's analysis.
         # Same shape ``step_recovery._try_agentic_recovery`` uses.
