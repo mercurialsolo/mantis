@@ -365,6 +365,13 @@ class ExecutionCritic:
             "failures=%d) — calling analyse_failure_and_recover",
             step_index, failure_class, failure_count,
         )
+        from . import reasoning_trace as _trace
+        _trace.record(
+            runner, layer="critic-frontier", kind="fire",
+            summary=f"gate passed on {failure_class} (×{failure_count})",
+            step_index=step_index,
+            failure_class=failure_class, failure_count=failure_count,
+        )
 
         # Capture the post-failure screenshot for Claude's analysis.
         # Same shape ``step_recovery._try_agentic_recovery`` uses.
@@ -426,6 +433,11 @@ class ExecutionCritic:
                 "for the terminal path",
                 step_index,
             )
+            _trace.record(
+                runner, layer="critic-frontier", kind="result",
+                summary="Claude returned no decision (API fallback)",
+                step_index=step_index, decision_mode="none",
+            )
             return None
 
         # Real decision received — count this as a recovery consultation
@@ -439,6 +451,12 @@ class ExecutionCritic:
                 "tweak helps (%s)",
                 step_index, decision.reasoning[:120],
             )
+            _trace.record(
+                runner, layer="critic-frontier", kind="result",
+                summary=f"halt: {decision.reasoning[:120]}",
+                step_index=step_index, decision_mode="halt",
+                reasoning=decision.reasoning[:300],
+            )
             return None
         if decision.mode == "add_hint" and decision.hint:
             from . import recovery_hints
@@ -446,6 +464,13 @@ class ExecutionCritic:
             logger.warning(
                 "  [critic-frontier] step %d: add_hint — %s",
                 step_index, decision.hint[:120],
+            )
+            _trace.record(
+                runner, layer="critic-frontier", kind="result",
+                summary=f"add_hint: {decision.hint[:120]}",
+                step_index=step_index, decision_mode="add_hint",
+                hint=decision.hint[:300],
+                reasoning=decision.reasoning[:300],
             )
             return None
         if decision.mode == "edit_step":
@@ -459,6 +484,13 @@ class ExecutionCritic:
                 "  [critic-frontier] step %d: edit_step → ReplaceStep "
                 "(type=%s, intent=%s)",
                 step_index, new_type, new_intent[:80],
+            )
+            _trace.record(
+                runner, layer="critic-frontier", kind="result",
+                summary=f"edit_step → ReplaceStep (type={new_type})",
+                step_index=step_index, decision_mode="edit_step",
+                new_intent=new_intent[:200], new_type=new_type,
+                reasoning=decision.reasoning[:300],
             )
             return ReplaceStep(
                 intent=new_intent,
@@ -484,6 +516,13 @@ class ExecutionCritic:
                 "  [critic-frontier] step %d: insert_steps[0] → InsertStep "
                 "(type=%s, intent=%s)",
                 step_index, step_type, intent[:80],
+            )
+            _trace.record(
+                runner, layer="critic-frontier", kind="result",
+                summary=f"insert_steps[0] → InsertStep (type={step_type})",
+                step_index=step_index, decision_mode="insert_steps",
+                inserted_intent=intent[:200], inserted_type=step_type,
+                reasoning=decision.reasoning[:300],
             )
             return InsertStep(
                 intent=intent,
