@@ -791,6 +791,41 @@ class ClaudeGuidedFormHandler:
                 )
                 runner.costs["gpu_steps"] += 1
 
+                # #audit batch follow-up: SoM ``el.click()`` returns
+                # ok=True but the page didn't navigate. The synthetic
+                # click event has ``isTrusted=false``; some SPA
+                # frameworks gate on trusted gestures and silently
+                # reject the synthetic chain. Retry once with CDP
+                # ``Input.dispatchMouseEvent`` which produces a
+                # protocol-level click that's indistinguishable from
+                # a real mouse click (isTrusted=true). Only fires
+                # when the SoM path was used (executor_backend ==
+                # "som") and the URL stayed stable — i.e. we're in
+                # the trust-gated case.
+                url_after_click = runner._best_effort_current_url()
+                if (
+                    url_before
+                    and url_after_click == url_before
+                    and ctx.state.get("_executor_backend") == "som"
+                    and hasattr(env, "cdp_click_via_pointer")
+                ):
+                    logger.info(
+                        "  [claude-form] SoM click ok=True but URL stable — "
+                        "retrying via CDP Input.dispatchMouseEvent "
+                        "(real pointer events, isTrusted=true)"
+                    )
+                    try:
+                        ok = env.cdp_click_via_pointer(x, y)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("pointer-retry dispatch raised: %s", exc)
+                        ok = False
+                    if ok:
+                        runner.costs["gpu_seconds"] += runner._adaptive_submit_settle(
+                            url_before=url_before,
+                        )
+                        runner.costs["gpu_steps"] += 1
+                        url_after_click = runner._best_effort_current_url()
+
                 # Enter-key fallback: HTML forms whose JS swallows the click
                 # event still submit on Return in a focused input (the
                 # browser's native form behaviour). When the click + adaptive
@@ -799,7 +834,6 @@ class ClaudeGuidedFormHandler:
                 # the click landed on the right pixel but the button's
                 # onclick handler is conditioned on something we can't see
                 # from the screenshot (CSRF token, validation state).
-                url_after_click = runner._best_effort_current_url()
                 if url_before and url_after_click == url_before:
                     logger.info(
                         "  [claude-form] click did not navigate — trying "

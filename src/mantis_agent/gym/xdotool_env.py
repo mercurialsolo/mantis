@@ -579,6 +579,68 @@ class XdotoolGymEnv(GymEnvironment):
         # :mod:`reasoning_trace` if/when callers wire it.
         return bool(result.get("ok"))
 
+    def cdp_click_via_pointer(self, x: int, y: int) -> bool:
+        """Dispatch a real-pointer mouse-event chain at SCREEN (x, y)
+        via CDP ``Input.dispatchMouseEvent`` — audit batch follow-up
+        to the ``el.click()`` ok-but-no-state-change case.
+
+        Why this exists: ``cdp_click_at_point`` dispatches a SYNTHETIC
+        click via ``Runtime.evaluate("el.click()")``. The DOM event
+        emitted has ``isTrusted=false``. Some SPA frameworks (most
+        notably React Router under certain navigation guards) gate
+        on ``isTrusted=true`` and silently reject untrusted clicks
+        without raising — exactly the ``ok=True, but page didn't
+        navigate`` pattern that surfaced on staff-crm's sidebar
+        anchors. ``Input.dispatchMouseEvent`` emits events at the
+        protocol layer; they're ``isTrusted=true`` from the page's
+        perspective, indistinguishable from a real OS mouse click.
+
+        Sequence: mouseMoved → mousePressed → mouseReleased at the
+        same viewport coords (chromeH-adjusted from screen coords,
+        same translation ``cdp_click_at_point`` uses).
+
+        Returns ``True`` when all three events dispatched without
+        protocol error. Returns ``False`` on CDP unreachable or any
+        dispatch failure; caller falls back to xdotool / demote.
+        """
+        chrome_h = self._chrome_offset_px()
+        vx = int(x)
+        vy = int(y) - chrome_h
+        for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
+            params: dict[str, Any] = {
+                "type": kind, "x": vx, "y": vy,
+                "button": "left",
+                "buttons": 1 if kind == "mousePressed" else 0,
+            }
+            if kind in ("mousePressed", "mouseReleased"):
+                params["clickCount"] = 1
+            ok, _ = self._cdp_call("Input.dispatchMouseEvent", params)
+            if not ok:
+                logger.debug(
+                    "cdp_click_via_pointer: %s dispatch failed", kind,
+                )
+                return False
+        return True
+
+    def _chrome_offset_px(self) -> int:
+        """JS-eval the chrome offset (``outerHeight - innerHeight``).
+
+        Used by ``cdp_click_via_pointer`` so screen-y → viewport-y for
+        ``Input.dispatchMouseEvent`` matches the translation
+        ``elementFromPoint`` uses in ``cdp_click_at_point``. Returns 0
+        when the eval can't run (no CDP, unusual headless mode).
+        """
+        try:
+            result = self.cdp_evaluate(
+                "Math.max(0, window.outerHeight - window.innerHeight)"
+            )
+        except Exception:  # noqa: BLE001
+            return 0
+        try:
+            return int(result) if result is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
     def _xdotool_type(self, text: str) -> None:
         """Type text via clipboard-paste (preferred) or xdotool fallback.
 
