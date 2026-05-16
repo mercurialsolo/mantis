@@ -191,6 +191,7 @@ def analyse_failure_and_recover(
     attempts: int,
     api_key: str = "",
     model: str = "claude-haiku-4-5-20251001",
+    prior_hints: list[str] | None = None,
 ) -> RecoveryDecision | None:
     """Ask Claude to analyse a step failure and pick a recovery mode.
 
@@ -243,6 +244,7 @@ def analyse_failure_and_recover(
         attempts=attempts,
         api_key=api_key,
         model=model,
+        prior_hints=prior_hints or [],
     )
     if parsed is None:
         return None
@@ -259,11 +261,20 @@ def _call_recovery_tool(
     attempts: int,
     api_key: str,
     model: str,
+    prior_hints: list[str] | None = None,
 ) -> dict | None:
     """Tool_use call. Returns the validated input dict or ``None``."""
     import requests
 
     from .prompts import load_prompt
+
+    hints = [h for h in (prior_hints or []) if str(h).strip()]
+    if hints:
+        hints_block = "PRIOR HINTS TEXT:\n" + "\n".join(
+            f"  - {str(h)[:200]}" for h in hints[-3:]
+        )
+    else:
+        hints_block = ""
 
     prompt = load_prompt(
         "recovery_analysis",
@@ -273,6 +284,8 @@ def _call_recovery_tool(
         failure_data=failure_data[:300],
         attempts=attempts,
         plan_context=_format_plan_context(plan_context),
+        prior_hint_count=len(hints),
+        prior_hints_block=hints_block,
     )
 
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]

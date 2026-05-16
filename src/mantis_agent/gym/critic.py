@@ -386,6 +386,16 @@ class ExecutionCritic:
             f"data={(step_result.data or '')[:160]}"
         )
 
+        # H8: surface accumulated hints so Claude sees when add_hint
+        # loops are already burning attempts. The runner stores hints
+        # in ``_recovery_hints[step_index]``; the prompt's HINT-LOOP
+        # DETECTION section reads from PRIOR HINTS TEXT directly.
+        prior_hints: list[str] = []
+        hint_map = getattr(runner, "_recovery_hints", None)
+        if isinstance(hint_map, dict):
+            stored = hint_map.get(step_index, [])
+            if isinstance(stored, list):
+                prior_hints = [str(h) for h in stored if str(h).strip()]
         try:
             from ..agentic_recovery import analyse_failure_and_recover
             decision = analyse_failure_and_recover(
@@ -394,6 +404,7 @@ class ExecutionCritic:
                 screenshot=screenshot,
                 plan_context=plan_context,
                 attempts=failure_count,
+                prior_hints=prior_hints,
             )
         except Exception as exc:  # noqa: BLE001 — never break runs
             logger.warning("  [critic-frontier] Claude call raised: %s", exc)
