@@ -65,17 +65,28 @@ class PredictRequest(BaseModel):
     micro_path: Optional[str] = None  # alias for micro
     plan_text: Optional[str] = None
 
-    # Action mode (status / result / logs / cancel / resume for an existing run).
-    # ``resume`` (#344) requires ``user_input`` and a paused run; the server
-    # rehydrates the stored PauseState and continues the runner from where
-    # the host tool raised PauseRequested.
-    action: Optional[Literal["status", "result", "logs", "cancel", "resume"]] = None
+    # Action mode (status / result / logs / cancel / resume / reasoning_trace
+    # for an existing run). ``resume`` (#344) requires ``user_input`` and a
+    # paused run; the server rehydrates the stored PauseState and continues
+    # the runner from where the host tool raised PauseRequested.
+    # ``reasoning_trace`` returns the structured event stream the runner
+    # writes to ``<run_dir>/reasoning.jsonl`` — critic gate decisions,
+    # Claude recovery results, ReplaceStep / InsertStep directives. Used
+    # by viewer overlays to render a timeline beside the MJPEG live feed.
+    # Supports a ``since`` ISO-8601 cursor for incremental polling.
+    action: Optional[Literal[
+        "status", "result", "logs", "cancel", "resume", "reasoning_trace",
+    ]] = None
     run_id: Optional[str] = None
     tail: Optional[int] = Field(default=None, ge=1, le=10000)
     # Caller-supplied value handed to ``runner.consume_pause_input(...)`` on
     # resume (OTP code, 2FA token, free-text confirmation, etc.). Opaque
     # to the server. Required on ``action="resume"``; ignored otherwise.
     user_input: Optional[Any] = None
+    # Caller-supplied ISO-8601 cursor for ``action=reasoning_trace`` —
+    # return only events strictly more recent than ``since``. Empty
+    # / missing returns the full stream.
+    since: Optional[str] = None
 
     # Run options
     detached: bool = True

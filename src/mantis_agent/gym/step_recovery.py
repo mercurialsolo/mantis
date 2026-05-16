@@ -721,6 +721,15 @@ class StepRecoveryPolicy:
             and getattr(step, "type", "") == "submit"
             else "claude-haiku-4-5-20251001"
         )
+        # H8: pass the accumulated hints on this step so Claude can
+        # detect the "same hint twice, still failing" pattern and bias
+        # toward structural recovery instead of yet another add_hint.
+        prior_hints = []
+        hint_map = getattr(runner, "_recovery_hints", None)
+        if isinstance(hint_map, dict):
+            stored = hint_map.get(step_index, [])
+            if isinstance(stored, list):
+                prior_hints = [str(h) for h in stored if str(h).strip()]
         decision = analyse_failure_and_recover(
             step=step,
             failure_data=str(getattr(step_result, "data", "") or ""),
@@ -728,6 +737,7 @@ class StepRecoveryPolicy:
             plan_context=plan_context,
             attempts=attempts,
             model=recovery_model,
+            prior_hints=prior_hints,
         )
         if decision is None:
             # #431: even though analyse_failure_and_recover already logs

@@ -170,6 +170,132 @@ def test_prompt_includes_progress_evidence_guidance_for_halt() -> None:
     assert "loop" in rendered.lower() or "didn't" in rendered.lower() or "did not" in rendered.lower()
 
 
+# ── H8: hint-loop detection in the recovery prompt ──────────────
+
+
+def test_prompt_renders_prior_hint_count_when_supplied() -> None:
+    """The prompt should surface ``PRIOR HINTS ON THIS STEP: N``
+    when callers pass ``prior_hints`` so Claude can detect the
+    "same hint twice, still failing" pattern and switch off
+    ``add_hint``."""
+    from mantis_agent.prompts import load_prompt
+
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="x", step_type="submit", params="{}",
+        failure_data="no_state_change", attempts=3, plan_context="",
+        prior_hint_count=2,
+        prior_hints_block=(
+            "PRIOR HINTS TEXT:\n"
+            "  - Click the Contacted text in the LEAD VIEWS sidebar\n"
+            "  - The Contacted link is the text 'Contacted' itself"
+        ),
+    )
+    assert "PRIOR HINTS ON THIS STEP: 2" in rendered
+    assert "Click the Contacted text" in rendered
+    # The HINT-LOOP DETECTION language must be present.
+    assert "HINT-LOOP DETECTION" in rendered
+    assert "AVOID ``add_hint``" in rendered
+
+
+def test_prompt_renders_zero_hint_count_by_default() -> None:
+    """Callers that don't supply ``prior_hints`` get a clean prompt —
+    PRIOR HINT COUNT defaults to 0 and the prior-hints-block is
+    empty so nothing leaks into the rendered text. Keeps legacy
+    callers unaffected."""
+    from mantis_agent.prompts import load_prompt
+
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="x", step_type="submit", params="{}",
+        failure_data="x", attempts=1, plan_context="",
+    )
+    assert "PRIOR HINTS ON THIS STEP: 0" in rendered
+    # No prior-hints text block leaked through.
+    assert "PRIOR HINTS TEXT:" not in rendered
+    # The HINT-LOOP DETECTION guidance is STILL in the prompt —
+    # Claude sees it but it triggers on count >= 2 not 0.
+    assert "HINT-LOOP DETECTION" in rendered
+
+
+def test_analyse_threads_prior_hints_into_prompt() -> None:
+    """End-to-end: ``analyse_failure_and_recover`` accepts a
+    ``prior_hints`` kwarg, formats it into a PRIOR HINTS TEXT block,
+    and the rendered prompt carries the hint text Claude can read."""
+    captured_prompt: dict = {}
+
+    def _capture(*_args, **kwargs):
+        payload = kwargs.get("json") or {}
+        msgs = payload.get("messages", [])
+        if msgs and isinstance(msgs[0].get("content"), list):
+            for block in msgs[0]["content"]:
+                if block.get("type") == "text":
+                    captured_prompt["text"] = block.get("text", "")
+                    break
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "content": [{
+                "type": "tool_use", "name": "record_recovery",
+                "input": {"mode": "halt", "reasoning": "test"},
+            }],
+        }
+        return resp
+
+    from mantis_agent.agentic_recovery import analyse_failure_and_recover
+    step = MicroIntent(intent="Click Contacted", type="submit",
+                       params={"label": "Contacted"})
+    with patch("requests.post", side_effect=_capture):
+        analyse_failure_and_recover(
+            step=step,
+            failure_data="no_state_change",
+            screenshot=None,
+            plan_context=[],
+            attempts=2,
+            api_key="k",
+            prior_hints=[
+                "Click the Contacted text in the LEAD VIEWS sidebar",
+                "Target the link text not the count number",
+            ],
+        )
+
+    text = captured_prompt.get("text", "")
+    assert "PRIOR HINTS ON THIS STEP: 2" in text, text[:500]
+    assert "Click the Contacted text" in text
+    assert "Target the link text" in text
+
+
+def test_analyse_with_no_prior_hints_renders_zero() -> None:
+    """No prior_hints kwarg → renders ``PRIOR HINTS ON THIS STEP: 0``
+    and no PRIOR HINTS TEXT block."""
+    captured: dict = {}
+
+    def _capture(*_args, **kwargs):
+        payload = kwargs.get("json") or {}
+        msgs = payload.get("messages", [])
+        for block in msgs[0]["content"]:
+            if block.get("type") == "text":
+                captured["text"] = block.get("text", "")
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            "content": [{
+                "type": "tool_use", "name": "record_recovery",
+                "input": {"mode": "halt", "reasoning": "test"},
+            }],
+        }
+        return resp
+
+    from mantis_agent.agentic_recovery import analyse_failure_and_recover
+    step = MicroIntent(intent="x", type="submit", params={})
+    with patch("requests.post", side_effect=_capture):
+        analyse_failure_and_recover(
+            step=step, failure_data="x", screenshot=None,
+            plan_context=[], attempts=1, api_key="k",
+        )
+    text = captured.get("text", "")
+    assert "PRIOR HINTS ON THIS STEP: 0" in text
+    assert "PRIOR HINTS TEXT:" not in text
+
+
 def test_call_recovery_tool_logs_warning_on_missing_tool_use_block(caplog) -> None:
     """When the Anthropic 200 OK response has no ``record_recovery``
     tool_use block, the silent ``return None`` used to leave operators
@@ -212,7 +338,7 @@ def test_no_state_change_submit_uses_opus_model() -> None:
     captured: dict = {}
 
     def _capture(*, step, failure_data, screenshot, plan_context,
-                 attempts, model=None, api_key=""):
+                 attempts, model=None, api_key="", prior_hints=None):
         captured["model"] = model
         return None  # short-circuit; we only care about the model arg.
 
@@ -651,7 +777,7 @@ def test_recovery_runs_tab_blur_traversal_on_no_state_change_submit() -> None:
     captured: dict = {}
 
     def _capture(*, step, failure_data, screenshot, plan_context,
-                 attempts, model=None, api_key=""):
+                 attempts, model=None, api_key="", prior_hints=None):
         captured["screenshot"] = screenshot
         return None  # short-circuit; we only care about the pre-call sequence.
 

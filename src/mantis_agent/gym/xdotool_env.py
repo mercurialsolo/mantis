@@ -570,6 +570,13 @@ class XdotoolGymEnv(GymEnvironment):
             result.get("els_tag"), result.get("els_text"),
             same_element, result.get("ok"),
         )
+        # Also emit into the structured reasoning trace when a runner
+        # back-reference is available. The env doesn't carry a direct
+        # runner ref by design; callers that want to attribute SoM
+        # clicks to a specific runner pass the runner via the public
+        # ``record_som_click`` helper below. We skip the trace here
+        # because we have no runner — see ``record_som_click`` in
+        # :mod:`reasoning_trace` if/when callers wire it.
         return bool(result.get("ok"))
 
     def _xdotool_type(self, text: str) -> None:

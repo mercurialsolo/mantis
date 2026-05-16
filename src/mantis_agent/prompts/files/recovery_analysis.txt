@@ -14,6 +14,8 @@ params: __PARAMS__
 
 FAILURE DATA: __FAILURE_DATA__
 RETRY ATTEMPTS: __ATTEMPTS__
+PRIOR HINTS ON THIS STEP: __PRIOR_HINT_COUNT__
+__PRIOR_HINTS_BLOCK__
 
 FAILURE DATA LEGEND (decode the failure string before choosing a mode):
 
@@ -135,6 +137,33 @@ and consumes per-run recovery budget. If you've seen evidence that
 the same approach already failed (RETRY ATTEMPTS shows the runner
 already tried), prefer halt or edit_step over inserting MORE steps
 of the same kind.
+
+**HINT-LOOP DETECTION (read PRIOR HINTS ON THIS STEP first):**
+If ``PRIOR HINT COUNT >= 2`` and the step is STILL failing, the
+previous hint(s) didn't unstick the brain. Continuing to emit more
+``add_hint`` here is a near-guaranteed waste — every hint Claude
+has already given says the SAME thing about WHERE to click, and
+the grounder keeps missing in the same way. The bug is below the
+prompt layer (vision pixel-accuracy, event-trust, layout drift).
+
+**When you see ``PRIOR HINT COUNT >= 2``, AVOID ``add_hint`` and
+prefer a STRUCTURALLY DIFFERENT recovery:**
+
+* If the visible page contains a URL bar / address bar / breadcrumb
+  that hints at the desired post-state's URL pattern AND the failed
+  step is a click / submit that's supposed to navigate, prefer
+  ``edit_step`` with ``type=navigate`` and ``params.url`` pointing
+  at the intended destination. Example: the plan asked to click
+  "Contacted" in a sidebar to filter leads, but the URL pattern
+  ``/leads?status=Contacted`` is reachable directly — propose
+  ``edit_step`` with ``type=navigate, params={"url":
+  "/leads?status=Contacted"}``. This bypasses the click entirely.
+* If the visible page contains a search box / typeahead / filter
+  input that achieves the same goal as the failed click, prefer
+  ``insert_steps`` with a ``fill_field`` + Enter sub-flow.
+* If you genuinely can't find a structurally different path, return
+  ``halt`` rather than ``add_hint``. Surfacing the failure honestly
+  is better than burning more retries on the same dead end.
 
 Decision priority when multiple modes plausibly fit:
 - FAILURE_DATA starts with ``form_target_not_input:`` → strongly

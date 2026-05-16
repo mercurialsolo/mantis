@@ -60,6 +60,14 @@ _PROMPT_NAMES: tuple[str, ...] = (
 # empty string by default; a domain harness can pass a populated block).
 _PROMPT_PLACEHOLDER_DEFAULTS: dict[str, dict[str, str]] = {
     "holo3_system": {"examples_block": ""},
+    # H8 — recovery_analysis surfaces a hint-loop signal. Defaults
+    # keep the prompt valid when the caller doesn't supply the
+    # hint context (legacy callers / unit tests that don't track
+    # per-step hint counts).
+    "recovery_analysis": {
+        "prior_hint_count": "0",
+        "prior_hints_block": "",
+    },
 }
 
 

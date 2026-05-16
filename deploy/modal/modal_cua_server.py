@@ -786,6 +786,23 @@ def _run_holo3_executor(
             max_time_minutes=task_suite.get("_max_time_minutes", 180),
         )
 
+        # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
+        # API container's ``action=reasoning_trace`` reads this file
+        # so a viewer overlay can render a structured timeline of
+        # critic decisions / Claude recovery results / etc.
+        # alongside the live MJPEG feed. Only configured when the
+        # API forwarded the run identity (CLI path uses neither).
+        if api_run_id and api_tenant_id:
+            try:
+                from mantis_agent.gym import reasoning_trace as _rt
+                _rt.configure_disk_stream(
+                    micro_runner,
+                    _run_dir(api_tenant_id, api_run_id) / "reasoning.jsonl",
+                )
+                print(f"  reasoning trace → {api_run_id}/reasoning.jsonl")
+            except Exception as exc:  # noqa: BLE001
+                print(f"  WARNING: reasoning-trace stream init failed: {exc}")
+
         # #347: default ``request_user_input`` host tool. Brains that emit
         # ``Action(TOOL_CALL, name="request_user_input")`` get a paused-run
         # snapshot on the first call, and the staged ``user_input`` on the
@@ -1734,6 +1751,48 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
             status["viewer_url"] = viewer_url
 
         action = payload["action"]
+
+        # action=reasoning_trace — return the structured event stream
+        # the runner writes to ``<run_dir>/reasoning.jsonl`` during
+        # execution. Used by viewer overlays to render the runner's
+        # decision timeline (critic gates, Claude recovery results,
+        # ReplaceStep / InsertStep directives) beside the MJPEG feed.
+        # Cheap, file-backed read — no compute.
+        #
+        # Inlined rather than importing ``mantis_agent.gym.reasoning_trace``
+        # because the API container's tiny image (fastapi + pydantic +
+        # requests) doesn't have PIL — and importing ``mantis_agent.gym``
+        # transitively pulls in PlaywrightGymEnv → PIL. The JSONL read
+        # is trivial; duplicating those ~12 lines here keeps the import
+        # chain clean.
+        if action == "reasoning_trace":
+            since_ts = str(payload.get("since") or "") or None
+            jsonl_path = _run_dir(tenant.tenant_id, run_id) / "reasoning.jsonl"
+            events: list[dict] = []
+            if jsonl_path.exists():
+                try:
+                    with jsonl_path.open("r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                ev = json.loads(line)
+                            except (json.JSONDecodeError, ValueError):
+                                continue
+                            if not isinstance(ev, dict):
+                                continue
+                            if since_ts and ev.get("ts", "") <= since_ts:
+                                continue
+                            events.append(ev)
+                except OSError:
+                    pass
+            return {
+                **status,
+                "events": events,
+                "count": len(events),
+            }
+
         if action == "cancel":
             if status.get("status") in {"queued", "running", "paused"}:
                 call_id = status.get("modal_call_id", "")
