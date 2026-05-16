@@ -14,7 +14,6 @@ unit under test; ``think()`` just forwards.
 from __future__ import annotations
 
 import importlib.util
-import sys
 
 import pytest
 from PIL import Image

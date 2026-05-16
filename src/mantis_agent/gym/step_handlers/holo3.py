@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from .. import retry_attempts as _retry
 from ..checkpoint import StepResult
 from ..runner import GymRunner
 from ..step_context import StepContext
@@ -52,8 +53,6 @@ logger = logging.getLogger(__name__)
 # (#435 item 7: Claude / Fara prompt builders use the same shape).
 # Re-export the private helpers here for back-compat with existing
 # tests that import them from this module.
-from .. import retry_attempts as _retry
-
 _PRIOR_ATTEMPTS_WINDOW = _retry._PRIOR_ATTEMPTS_WINDOW
 _format_prior_attempt = _retry.format_prior_attempt
 

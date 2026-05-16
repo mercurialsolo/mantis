@@ -10,8 +10,6 @@ ripples through one place rather than three.
 
 from __future__ import annotations
 
-import pytest
-
 from mantis_agent.gym.retry_attempts import (
     _PRIOR_ATTEMPTS_WINDOW,
     format_prior_attempt,
