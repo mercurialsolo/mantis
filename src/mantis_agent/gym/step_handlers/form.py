@@ -520,89 +520,16 @@ class ClaudeGuidedFormHandler:
             aliases = [str(a).strip() for a in aliases if str(a).strip()]
             kind = str(params.get("kind") or _SUBMIT_KIND_DEFAULT).strip().lower() or _SUBMIT_KIND_DEFAULT
             search_intent = _build_submit_search_intent(label, kind, step.intent)
-
-            # ── DOM-mode tier-0 ────────────────────────────────────
-            # Before spending a vision-grounding call on a labelled
-            # button, try a deterministic CDP query for a visible
-            # ``<button>`` / ``<input type="submit|button">`` /
-            # ``[role="button"]`` whose visible text equals ``label``
-            # (or any alias) exactly. When such an element exists,
-            # ``el.click()`` is strictly more reliable than running
-            # Holo3/Claude over a screenshot of small toolbar buttons
-            # (staff-crm-long step 8 — 6 vision retries × $0.05 each
-            # before any progress, eventually misclicking onto an
-            # unrelated lead-detail row).
-            #
-            # Skipped on retries (failure_history non-empty) — if the
-            # first DOM-mode attempt didn't move the page, the next
-            # attempt would find the same element again. Vision is
-            # the right next tool for "right label, wrong element".
+            # NOTE: ``failure_history`` was originally inlined here for
+            # a DOM-mode tier-0 path that was reverted (CUA contract:
+            # the runner must derive click targets from screenshots
+            # only, never from a direct DOM query). Lookup retained
+            # at this position so the original feedback-into-prompt
+            # block below can reuse it without re-querying.
             failure_history = (
                 runner._step_failure_history.get(index, [])
                 if hasattr(runner, "_step_failure_history") else []
             )
-            if label and kind in ("button", "submit") and not failure_history:
-                from ..som_dispatch import try_dom_labeled_click
-                # NOTE: snapshot the pre-click URL only INSIDE the
-                # ``dom_hit is not None`` branch — otherwise the helper's
-                # miss path consumes one pop of the FakeRunner's
-                # ``_url_history`` queue and the original code below
-                # sees the wrong url_before. Real runners use a stable
-                # accessor but the test doubles are deliberately
-                # destructive to catch double-reads.
-                dom_hit = try_dom_labeled_click(
-                    env, label=label, aliases=aliases, kind=kind,
-                )
-                if dom_hit is not None:
-                    url_before = runner._best_effort_current_url()
-                    runner._last_submit_pre_screenshot = screenshot
-                    rect = dom_hit.get("rect") or {}
-                    cx = int((rect.get("x") or 0) + (rect.get("w") or 0) / 2)
-                    cy = int((rect.get("y") or 0) + (rect.get("h") or 0) / 2)
-                    runner._last_submit_target = {
-                        "x": cx, "y": cy,
-                        "label": label,
-                        "matched_label": str(dom_hit.get("label") or ""),
-                        "step_index": index,
-                    }
-                    runner.costs["gpu_seconds"] += runner._adaptive_submit_settle(
-                        url_before=url_before,
-                    )
-                    runner.costs["gpu_steps"] += 1
-                    url_after_click = runner._best_effort_current_url()
-                    # Enter-key fallback for forms whose JS handler
-                    # swallowed the synthetic click (rare on CDP
-                    # ``el.click()`` but cheap to retry).
-                    if url_before and url_after_click == url_before:
-                        try:
-                            env.step(Action(
-                                action_type=ActionType.KEY_PRESS,
-                                params={"keys": "Return"},
-                            ))
-                        except Exception as enter_exc:  # noqa: BLE001
-                            logger.debug("DOM-mode Enter fallback failed: %s", enter_exc)
-                        else:
-                            runner.costs["gpu_seconds"] += runner._adaptive_submit_settle(
-                                url_before=url_before,
-                            )
-                            runner.costs["gpu_steps"] += 1
-                            url_after_click = runner._best_effort_current_url()
-                    if url_after_click and url_after_click != url_before:
-                        runner._last_known_url = url_after_click
-                    ctx.state["_executor_backend"] = "dom"
-                    runner._dump_debug_screenshot(
-                        f"submit_step{index}_post_dom_click",
-                        runner._safe_screenshot(),
-                    )
-                    logger.info(
-                        f"  [dom-form] submit '{label[:40]}' via "
-                        f"<{dom_hit.get('tag')}> exact-text match"
-                    )
-                    return StepResult(
-                        step_index=index, intent=step.intent, success=True,
-                        steps_used=1, duration=1.5,
-                        data=f"submit:{label[:40]}@dom({cx},{cy})",
-                    )
             # Agentic-recovery hints — issue #224 follow-up; epic #377
             # Phase A.3 lifts the consumption side into a shared helper
             # so any handler that builds a Claude prompt from

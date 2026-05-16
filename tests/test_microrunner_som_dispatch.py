@@ -35,7 +35,6 @@ from mantis_agent.gym.som_dispatch import (
     INPUT_LIKE_TAGS,
     is_input_like,
     probe_element_tag_at,
-    try_dom_labeled_click,
     try_som_click,
 )
 
@@ -237,100 +236,6 @@ def test_is_input_like_rejects_anchor_and_div() -> None:
     through the form_target_not_input failure path."""
     assert is_input_like({"tag": "A", "contentEditable": False}) is False
     assert is_input_like({"tag": "DIV", "contentEditable": False}) is False
-
-
-# ── try_dom_labeled_click ───────────────────────────────────────────────
-
-
-def test_try_dom_labeled_click_returns_none_when_env_lacks_cdp() -> None:
-    """No ``cdp_evaluate`` on env → helper returns None and the caller
-    falls through to vision-based grounding. Keeps the Playwright path
-    and tests that don't wire CDP from being affected by the new
-    DOM-mode tier-0."""
-    env = SimpleNamespace()
-    assert try_dom_labeled_click(env, label="Update Lead") is None
-
-
-def test_try_dom_labeled_click_returns_none_for_empty_label() -> None:
-    """An empty label has no DOM signal to anchor on; skip the JS
-    entirely and let vision handle the step. (Defensive: a plan that
-    forgot to set ``params.label`` shouldn't crash here.)"""
-    env = _CdpEvalEnv(result={"tag": "button"})
-    assert try_dom_labeled_click(env, label="") is None
-    assert env.calls == [], "no JS should run when label is empty"
-
-
-def test_try_dom_labeled_click_skips_non_button_kinds() -> None:
-    """``nav_link`` / ``row_link`` kinds are too ambiguous for the
-    exact-text DOM query (many labels collide on nav menus); skip the
-    tier-0 path and let vision do the locality reasoning."""
-    env = _CdpEvalEnv(result={"tag": "a"})
-    assert try_dom_labeled_click(env, label="Home", kind="nav_link") is None
-    assert try_dom_labeled_click(env, label="Edit", kind="row_link") is None
-    assert env.calls == []
-
-
-def test_try_dom_labeled_click_returns_none_on_cdp_exception() -> None:
-    """CDP raising mustn't propagate — caller's fallback path runs."""
-    env = _CdpEvalEnv(raises=True)
-    assert try_dom_labeled_click(env, label="Apply") is None
-
-
-def test_try_dom_labeled_click_returns_none_when_no_dom_match() -> None:
-    """JS returned ``null`` → no visible element with matching text;
-    helper surfaces that as ``None`` so the caller proceeds to vision."""
-    env = _CdpEvalEnv(result=None)
-    assert try_dom_labeled_click(env, label="Nope") is None
-
-
-def test_try_dom_labeled_click_normalises_result_shape() -> None:
-    """On success the helper returns a stable shape: tag (lower-case),
-    label (string), rect with float-coerced x/y/w/h. Callers
-    downstream rely on this shape to compute click centre + log."""
-    env = _CdpEvalEnv(result={
-        "tag": "BUTTON",
-        "label": "Apply",
-        "rect": {"x": 100, "y": 50, "w": 80, "h": 32},
-    })
-    out = try_dom_labeled_click(env, label="Apply")
-    assert out is not None
-    assert out["tag"] == "button"
-    assert out["label"] == "Apply"
-    assert out["rect"] == {"x": 100.0, "y": 50.0, "w": 80.0, "h": 32.0}
-
-
-def test_try_dom_labeled_click_includes_label_and_aliases_in_js() -> None:
-    """Aliases land in the JS literal alongside the primary label —
-    the helper iterates labels-first, then aliases-in-order. Pin the
-    presence so a refactor can't silently drop alias support."""
-    env = _CdpEvalEnv(result=None)
-    try_dom_labeled_click(
-        env, label="Update Lead",
-        aliases=["Save", "Save Changes"], kind="button",
-    )
-    assert len(env.calls) == 1
-    js = env.calls[0]
-    assert "\"Update Lead\"" in js
-    assert "\"Save\"" in js
-    assert "\"Save Changes\"" in js
-
-
-def test_try_dom_labeled_click_query_targets_button_shapes_only() -> None:
-    """The JS querySelector must cover BUTTON / INPUT[type=submit] /
-    INPUT[type=button] / [role=button] and intentionally NOT bare
-    anchors. Lock the selector text — an inadvertent ``a,`` addition
-    would re-introduce nav-link false matches."""
-    env = _CdpEvalEnv(result=None)
-    try_dom_labeled_click(env, label="x")
-    js = env.calls[0]
-    assert "button" in js
-    assert 'input[type="submit"]' in js
-    assert 'input[type="button"]' in js
-    assert '[role="button"]' in js
-    # No anchor selector — bare `a` in querySelector All would be
-    # written as `'a, '` or `, a,` in the joined selector list.
-    assert "'a, " not in js
-    assert ", a," not in js
 
 
 # ── _stamp_backend dispatch boundary ───────────────────────────────────
