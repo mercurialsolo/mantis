@@ -403,19 +403,31 @@ class ExecutionCritic:
         # invalid, we don't want to retry the consultation on the same
         # step (the policy budget exists for that).
         fired.add(step_index)
-        # Increment the shared budget counters so the terminal path
-        # sees this consultation count.
-        per_step_dict[step_index] = per_step_dict.get(step_index, 0) + 1
-        runner._total_recovery_attempts = total_attempts + 1
 
         if decision is None:
-            logger.info(
+            # Claude call failed (no key / API error / parse fallback).
+            # Don't burn the shared recovery budget — the terminal
+            # path may yet succeed on its own call. Mark fired so we
+            # don't retry, but keep budget intact for downstream.
+            logger.warning(
                 "  [critic-frontier] step %d: Claude returned no decision "
-                "(API/key/parse fallback) — recovery continues unchanged",
+                "(API/key/parse fallback) — leaving recovery budget intact "
+                "for the terminal path",
                 step_index,
             )
             return None
+
+        # Real decision received — count this as a recovery consultation
+        # against the shared per-step / per-run budget so the terminal
+        # path doesn't double-spend.
+        per_step_dict[step_index] = per_step_dict.get(step_index, 0) + 1
+        runner._total_recovery_attempts = total_attempts + 1
         if decision.mode == "halt":
+            logger.warning(
+                "  [critic-frontier] step %d: halt — Claude says no plan "
+                "tweak helps (%s)",
+                step_index, decision.reasoning[:120],
+            )
             return None
         if decision.mode == "add_hint" and decision.hint:
             from . import recovery_hints
