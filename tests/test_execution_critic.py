@@ -398,10 +398,10 @@ def test_frontier_disabled_by_default(monkeypatch) -> None:
     assert out is None
 
 
-def test_frontier_skipped_below_wrong_target_threshold(monkeypatch) -> None:
-    """Threshold = 2 wrong_target failures. After only one prior
-    failure the critic stays quiet — the cheap retry / rewriter path
-    deserves a chance first."""
+def test_frontier_skipped_below_persistent_failure_threshold(monkeypatch) -> None:
+    """Threshold = 2 rewrite-triggering failures. After only one
+    prior failure the critic stays quiet — the cheap retry /
+    rewriter path deserves a chance first."""
     monkeypatch.setenv("MANTIS_CRITIC_FRONTIER", "enabled")
     runner = _runner_with_frontier_state()
     runner._step_failure_history[0] = [
@@ -619,15 +619,113 @@ def test_frontier_maps_halt_decision_to_no_directive(monkeypatch) -> None:
     assert out is None
 
 
-def test_frontier_does_not_fire_on_non_wrong_target_failure(monkeypatch) -> None:
-    """no_state_change / brain_loop_exhausted route through other
-    capabilities — the wrong_target-specific frontier doesn't pre-
-    empt them."""
+def test_frontier_fires_on_persistent_no_state_change(monkeypatch) -> None:
+    """H6: extended gate also fires on ``no_state_change``. This is
+    the canonical staff-crm sidebar pattern — SoM clicks resolve to
+    real ``<a>`` elements (``el.click()`` returns ok=True) but the
+    page doesn't navigate, so snapshot-diff stamps no_state_change
+    before the URL postcondition can stamp wrong_target. A
+    wrong_target-only gate (the original frontier critic) was a
+    no-op on this pattern; the broader rewrite-triggering gate
+    catches it.
+    """
     monkeypatch.setenv("MANTIS_CRITIC_FRONTIER", "enabled")
     runner = _runner_with_frontier_state()
     runner._step_failure_history[0] = [
-        {"x": 1, "y": 1, "kind": "no_state_change"},
-        {"x": 2, "y": 2, "kind": "no_state_change"},
+        {"x": 1, "y": 1, "kind": "no_state_change",
+         "matched_label": "Qualified (1)"},
+        {"x": 2, "y": 2, "kind": "no_state_change",
+         "matched_label": "Proposal (37)"},
+    ]
+
+    from mantis_agent import agentic_recovery
+    from mantis_agent.agentic_recovery import RecoveryDecision
+    captured: list = []
+
+    def _fake_analyse(**kwargs):
+        captured.append(kwargs)
+        return RecoveryDecision(
+            mode="edit_step",
+            reasoning="brain consistently misses the sidebar link; direct navigate bypasses",
+            edited_step={
+                "intent": "Navigate to /leads?status=Contacted",
+                "type": "navigate",
+                "params": {"url": "/leads?status=Contacted"},
+            },
+        )
+
+    monkeypatch.setattr(agentic_recovery, "analyse_failure_and_recover", _fake_analyse)
+
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="t")
+    plan.steps.append(MicroIntent(
+        intent="Click Contacted in sidebar", type="submit",
+        params={"label": "Contacted"},
+    ))
+    state = _state()
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="no_state_change",
+    )
+    out = critic.observe_step(
+        plan, state, plan.steps[0], result, recovery_continued=True,
+    )
+    assert isinstance(out, ReplaceStep)
+    assert out.step_type == "navigate"
+    assert len(captured) == 1
+    # Reason string carries the actual failure class (no_state_change),
+    # not the obsolete "wrong_target" hardcode.
+    assert "no_state_change" in out.reason
+
+
+def test_frontier_fires_on_persistent_brain_loop_exhausted(monkeypatch) -> None:
+    """The third rewrite-triggering class also opens the gate.
+    Holo3 burning its budget without progress is a structural
+    signal the plan needs help."""
+    monkeypatch.setenv("MANTIS_CRITIC_FRONTIER", "enabled")
+    runner = _runner_with_frontier_state()
+    runner._step_failure_history[0] = [
+        {"x": 1, "y": 1, "kind": "brain_loop_exhausted"},
+        {"x": 2, "y": 2, "kind": "brain_loop_exhausted"},
+    ]
+
+    from mantis_agent import agentic_recovery
+    from mantis_agent.agentic_recovery import RecoveryDecision
+    monkeypatch.setattr(
+        agentic_recovery, "analyse_failure_and_recover",
+        lambda **_: RecoveryDecision(
+            mode="halt", reasoning="anti-bot",
+        ),
+    )
+
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="t")
+    plan.steps.append(MicroIntent(intent="x", type="click"))
+    state = _state()
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="brain_loop_exhausted",
+    )
+    # Gate opens; Claude returns halt → no directive. But the
+    # ``fired`` flag IS set so a second observation on this step
+    # doesn't re-spend.
+    out = critic.observe_step(
+        plan, state, plan.steps[0], result, recovery_continued=True,
+    )
+    assert out is None
+    assert 0 in runner._critic_frontier_fired_steps
+
+
+def test_frontier_does_not_fire_on_unknown_failure_class(monkeypatch) -> None:
+    """A failure class outside ``REWRITE_TRIGGERING_CLASSES``
+    (e.g. ``selector_miss``, ``unknown``) doesn't open the gate.
+    Those have their own recovery paths and aren't structural
+    signals the plan needs help."""
+    monkeypatch.setenv("MANTIS_CRITIC_FRONTIER", "enabled")
+    runner = _runner_with_frontier_state()
+    runner._step_failure_history[0] = [
+        {"x": 1, "y": 1, "kind": "selector_miss"},
+        {"x": 2, "y": 2, "kind": "selector_miss"},
     ]
 
     from mantis_agent import agentic_recovery
@@ -642,7 +740,7 @@ def test_frontier_does_not_fire_on_non_wrong_target_failure(monkeypatch) -> None
     state = _state()
     result = StepResult(
         step_index=0, intent="x", success=False,
-        failure_class="no_state_change",
+        failure_class="selector_miss",
     )
     out = critic.observe_step(
         plan, state, plan.steps[0], result, recovery_continued=True,

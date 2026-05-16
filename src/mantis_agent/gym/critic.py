@@ -40,12 +40,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# How many ``wrong_target`` failures on the same step before the
+# How many rewrite-triggering failures on the same step before the
 # frontier-model capability fires. Set to 2 so the first failure
 # still goes through the existing recovery loop (cheap rewriter,
 # label-match retries) — only the persistent miss escalates to a
 # Claude call.
-_FRONTIER_WRONG_TARGET_THRESHOLD: int = 2
+#
+# The gate covers any class in :data:`intent_rewriter.REWRITE_TRIGGERING_CLASSES`
+# (``wrong_target`` / ``no_state_change`` / ``brain_loop_exhausted``).
+# The original wrong_target-only gate left the canonical staff-crm
+# sidebar cascade unreachable: clicks LAND on real ``<a>`` elements
+# (so the snapshot-diff demote stamps ``no_state_change``, not
+# ``wrong_target``) yet the page doesn't navigate — exactly the
+# pattern the frontier critic exists to break.
+_FRONTIER_PERSISTENT_FAILURE_THRESHOLD: int = 2
 
 
 def _frontier_enabled() -> bool:
@@ -164,8 +172,8 @@ class ExecutionCritic:
         if rule_directive is not None:
             return rule_directive
 
-        # Frontier-model: persistent wrong_target → ask Claude.
-        return self._maybe_frontier_recover_wrong_target(
+        # Frontier-model: persistent rewrite-triggering failure → ask Claude.
+        return self._maybe_frontier_recover_persistent_failure(
             plan, state, step, step_result,
         )
 
@@ -210,7 +218,7 @@ class ExecutionCritic:
 
     # ── Frontier-model capability (#435 item 8) ─────────────────────────
 
-    def _maybe_frontier_recover_wrong_target(
+    def _maybe_frontier_recover_persistent_failure(
         self,
         plan: Any,
         state: "RunState",
@@ -218,21 +226,32 @@ class ExecutionCritic:
         step_result: "StepResult",
     ) -> Optional[Directive]:
         """Ask the frontier model (Claude via :mod:`agentic_recovery`)
-        for a mid-run plan change when a ``wrong_target`` failure
-        pattern persists.
+        for a mid-run plan change when a rewrite-triggering failure
+        pattern persists on the same step.
 
         Trigger conditions (all generic — no plan / URL / domain
         content reads in):
 
         * ``MANTIS_CRITIC_FRONTIER=enabled`` (opt-in).
-        * ``step_result.failure_class == "wrong_target"``.
-        * At least :data:`_FRONTIER_WRONG_TARGET_THRESHOLD`
-          ``wrong_target`` records in ``_step_failure_history[step_index]``
+        * ``step_result.failure_class`` is in
+          :data:`intent_rewriter.REWRITE_TRIGGERING_CLASSES`
+          (``wrong_target`` / ``no_state_change`` /
+          ``brain_loop_exhausted``).
+        * At least :data:`_FRONTIER_PERSISTENT_FAILURE_THRESHOLD`
+          rewrite-triggering records in ``_step_failure_history[step_index]``
           (skip the first miss — that's still in the cheap retry zone).
         * The frontier model hasn't already been consulted for this
           step (tracked on ``runner._critic_frontier_fired_steps``).
         * The shared recovery budget (per-step + per-run, from
           :mod:`agentic_recovery`) isn't exhausted.
+
+        The gate covers all three rewrite-triggering classes (not
+        just ``wrong_target``) because the staff-crm sidebar cascade
+        produces ``no_state_change`` failures even when SoM clicks
+        resolve to real ``<a>`` elements — the page doesn't navigate
+        so snapshot-diff fires first and stamps no_state_change
+        before the URL postcondition can stamp wrong_target. A
+        wrong_target-only gate would never trigger on that pattern.
 
         Mode mapping:
 
@@ -255,8 +274,9 @@ class ExecutionCritic:
         """
         if not _frontier_enabled():
             return None
+        from . import intent_rewriter
         failure_class = str(getattr(step_result, "failure_class", "") or "")
-        if failure_class != "wrong_target":
+        if failure_class not in intent_rewriter.REWRITE_TRIGGERING_CLASSES:
             return None
 
         runner = self.runner
@@ -265,11 +285,12 @@ class ExecutionCritic:
             runner._step_failure_history.get(step_index, [])
             if hasattr(runner, "_step_failure_history") else []
         )
-        wrong_target_count = sum(
+        failure_count = sum(
             1 for r in history
-            if isinstance(r, dict) and r.get("kind") == "wrong_target"
+            if isinstance(r, dict)
+            and str(r.get("kind") or "") in intent_rewriter.REWRITE_TRIGGERING_CLASSES
         )
-        if wrong_target_count < _FRONTIER_WRONG_TARGET_THRESHOLD:
+        if failure_count < _FRONTIER_PERSISTENT_FAILURE_THRESHOLD:
             return None
 
         # Already consulted Claude for this step? Don't double-spend.
@@ -320,7 +341,7 @@ class ExecutionCritic:
         ]
         failure_data = (
             f"failure_class={failure_class}; "
-            f"prior_wrong_target={wrong_target_count}; "
+            f"prior_failures={failure_count}; "
             f"data={(step_result.data or '')[:160]}"
         )
 
@@ -331,7 +352,7 @@ class ExecutionCritic:
                 failure_data=failure_data,
                 screenshot=screenshot,
                 plan_context=plan_context,
-                attempts=wrong_target_count,
+                attempts=failure_count,
             )
         except Exception as exc:  # noqa: BLE001 — never break runs
             logger.warning("  [critic-frontier] Claude call raised: %s", exc)
@@ -382,7 +403,7 @@ class ExecutionCritic:
                 hints=dict(getattr(step, "hints", {}) or {}),
                 reason=(
                     f"frontier critic replaced step on persistent "
-                    f"wrong_target ({wrong_target_count} prior): "
+                    f"{failure_class} ({failure_count} prior): "
                     f"{decision.reasoning[:120]}"
                 ),
             )
@@ -405,8 +426,8 @@ class ExecutionCritic:
                 step_type=step_type,
                 params=dict(first.get("params") or {}),
                 reason=(
-                    f"frontier critic insert on persistent wrong_target "
-                    f"({wrong_target_count} prior): "
+                    f"frontier critic insert on persistent "
+                    f"{failure_class} ({failure_count} prior): "
                     f"{decision.reasoning[:120]}"
                 ),
             )
