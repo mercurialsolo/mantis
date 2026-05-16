@@ -193,85 +193,126 @@ def test_claude_provider_no_region_behaves_identically_to_before() -> None:
     assert result["y"] == 400
 
 
-def test_auto_region_inference_for_submit_button() -> None:
-    """#435 follow-up: a ``submit`` step with ``kind: "button"`` and no
-    explicit ``hints.region`` defaults to ``"form-footer"`` — the
-    canonical layout for action-button rows. Removes plan-author
-    burden for the most common pattern.
+def test_auto_region_form_finalize_submit_after_fill_field() -> None:
+    """#435 follow-up: a ``(submit, button)`` step preceded by
+    ``fill_field`` actions is a form-finalize submit (Update / Save /
+    Submit) → auto-crop to ``"form-footer"``. The fill_field signal
+    distinguishes this from filter-toolbar submits (Apply / Search)
+    that share the same (type, kind) shape but live at the top of
+    the page.
     """
     from mantis_agent.gym.step_handlers.form import _auto_region_for_step
     from mantis_agent.plan_decomposer import MicroIntent
 
-    step = MicroIntent(
-        intent="Click Update Lead",
-        type="submit",
-        params={"label": "Update Lead", "kind": "button"},
+    plan_steps = [
+        MicroIntent(intent="Open edit", type="submit"),
+        MicroIntent(intent="Set Status", type="select_option"),
+        MicroIntent(intent="Set notes", type="fill_field"),   # window hit
+        MicroIntent(intent="Click Update Lead", type="submit",
+                    params={"label": "Update Lead", "kind": "button"}),
+    ]
+    region = _auto_region_for_step(
+        plan_steps[3], plan_steps[3].params,
+        plan_steps=plan_steps, step_index=3,
     )
-    region = _auto_region_for_step(step, step.params)
     assert region == "form-footer"
 
 
-def test_auto_region_inference_no_default_for_unmapped_shapes() -> None:
-    """For step shapes that don't have a clear default layout
-    (``submit`` / ``nav_link``, ``submit`` / ``row_link``,
-    ``select_option`` triggers), return empty string — caller falls
-    back to the unscoped path. Avoids cropping out targets that
-    legitimately live outside the form footer.
+def test_auto_region_filter_toolbar_submit_gets_no_default() -> None:
+    """The canonical regression case from staff-crm-long step 8:
+    a ``(submit, button)`` step preceded only by ``select_option``
+    (filter dropdown change) is NOT a form-finalize submit and must
+    NOT default to ``"form-footer"``. The Apply / Search / Sort
+    buttons live in a top toolbar; the prior flat-default cropped
+    them out and the runner couldn't click them.
     """
     from mantis_agent.gym.step_handlers.form import _auto_region_for_step
     from mantis_agent.plan_decomposer import MicroIntent
 
+    plan_steps = [
+        MicroIntent(intent="Go to leads", type="submit"),
+        MicroIntent(intent="Filter status", type="submit"),
+        MicroIntent(intent="Pick Critical", type="select_option"),
+        MicroIntent(intent="Click Apply", type="submit",
+                    params={"label": "Apply", "kind": "button"}),
+    ]
+    region = _auto_region_for_step(
+        plan_steps[3], plan_steps[3].params,
+        plan_steps=plan_steps, step_index=3,
+    )
+    assert region == ""
+
+
+def test_auto_region_inference_no_default_for_unmapped_shapes() -> None:
+    """For step shapes outside ``(submit, button)`` — ``nav_link``,
+    ``row_link``, plain ``link``, missing kind, ``select_option``
+    triggers — return empty string regardless of context. Avoids
+    cropping out targets that legitimately live in non-form regions.
+    """
+    from mantis_agent.gym.step_handlers.form import _auto_region_for_step
+    from mantis_agent.plan_decomposer import MicroIntent
+
+    # Even with a fill_field in recent context, non-button kinds
+    # don't get the footer default.
+    plan_steps = [
+        MicroIntent(intent="Fill", type="fill_field"),
+        MicroIntent(intent="x", type="submit"),
+    ]
     for params in (
         {"kind": "nav_link"},
         {"kind": "row_link"},
         {"kind": "link"},
-        {},  # no kind at all
+        {},
     ):
-        step = MicroIntent(intent="x", type="submit", params=params)
-        assert _auto_region_for_step(step, step.params) == "", (
-            f"unmapped kind {params!r} should return empty string"
-        )
+        plan_steps[1] = MicroIntent(intent="x", type="submit", params=params)
+        assert _auto_region_for_step(
+            plan_steps[1], plan_steps[1].params,
+            plan_steps=plan_steps, step_index=1,
+        ) == "", f"unmapped kind {params!r} should return empty string"
 
 
-def test_auto_region_inference_skips_select_option() -> None:
-    """``select_option`` shouldn't default to any region — the open
-    dropdown menu repositions absolutely and a form-footer crop
-    would hide the option list.
+def test_auto_region_returns_empty_when_context_unavailable() -> None:
+    """Legacy callers / unit tests that build a StepContext directly
+    don't always have plan + step_index handy. Return empty rather
+    than fall back to a flat default — under-cropping is safer than
+    mis-cropping.
     """
     from mantis_agent.gym.step_handlers.form import _auto_region_for_step
     from mantis_agent.plan_decomposer import MicroIntent
 
-    step = MicroIntent(
-        intent="Pick Foo", type="select_option",
-        params={"dropdown_label": "Bar", "option_label": "Foo"},
-    )
+    step = MicroIntent(intent="x", type="submit",
+                       params={"kind": "button", "label": "Update Lead"})
     assert _auto_region_for_step(step, step.params) == ""
 
 
-def test_explicit_region_takes_precedence_over_auto() -> None:
-    """When the plan author sets ``hints.region`` explicitly, the
-    form handler must use that value — auto-inference only fires when
-    the hint is missing. Test the form handler's logic, not just the
-    inference helper.
+def test_auto_region_window_size_limits_lookback() -> None:
+    """The lookback window is bounded (default 4 steps). A fill_field
+    deep in the plan history (e.g. login fields 20 steps earlier)
+    must NOT pull a current submit into footer territory — that
+    would over-broadly footer-crop. The signal is locality.
     """
-    # This is exercised by the form handler's actual control flow
-    # (``step_region = hints.get("region") or _auto_region_for_step(...)``).
-    # The inference helper itself doesn't see ``hints``; the handler's
-    # ``if not step_region`` check is what enforces precedence. Pin
-    # the helper's behaviour: it returns the auto value regardless
-    # of what hints contain, since hints are the caller's
-    # responsibility.
     from mantis_agent.gym.step_handlers.form import _auto_region_for_step
     from mantis_agent.plan_decomposer import MicroIntent
 
-    step = MicroIntent(
-        intent="Click", type="submit",
-        params={"kind": "button"},
-        hints={"region": "top"},  # plan author wants top
+    # Long plan: login fill_fields at index 0-1, then many unrelated
+    # steps, then a submit at index 10.
+    plan_steps: list = []
+    plan_steps.append(MicroIntent(intent="login user", type="fill_field"))
+    plan_steps.append(MicroIntent(intent="login pass", type="fill_field"))
+    for _ in range(8):
+        plan_steps.append(MicroIntent(intent="navigate", type="submit"))
+    submit_step = MicroIntent(
+        intent="Apply filter", type="submit",
+        params={"label": "Apply", "kind": "button"},
     )
-    # Helper still suggests form-footer (it's a pure function of
-    # type/kind); precedence is enforced at the handler.
-    assert _auto_region_for_step(step, step.params) == "form-footer"
+    plan_steps.append(submit_step)
+    region = _auto_region_for_step(
+        submit_step, submit_step.params,
+        plan_steps=plan_steps, step_index=10,
+    )
+    assert region == "", (
+        "old fill_fields outside the window shouldn't apply footer-crop"
+    )
 
 
 def test_claude_provider_explicit_rect_region_reprojects() -> None:
