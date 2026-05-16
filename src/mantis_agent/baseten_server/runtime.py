@@ -94,12 +94,19 @@ _build_proxy_config = build_proxy_config
 # A fresh ``/v1/cua`` request pays ~10 s for Xvfb + Chrome launch + first
 # navigation before the brain runs. Cache keyed on
 # ``(profile_dir, proxy_server)`` so successive requests with the same
-# tenant + same proxy reuse the live browser process. ``reset(start_url=...)``
-# inside the cached env handles the in-tab navigation in <500 ms.
+# tenant + same profile + same proxy reuse the live browser process.
+# ``reset(start_url=...)`` inside the cached env handles the in-tab
+# navigation in <500 ms.
 #
-# Cross-tenant isolation is preserved because the profile_dir is
-# tenant-scoped (``data_root / "chrome-profile" / <tenant_id>__<key>``)
-# and tenant requests will mismatch on the first key component.
+# Cross-tenant AND cross-profile isolation is preserved by
+# :func:`_chrome_profile_dir_for_suite`, which derives the path from
+# ``task_suite["_profile_id"]`` — a value already namespaced as
+# ``<tenant_id>__<caller_profile_id>`` by
+# :func:`server_utils.build_micro_suite`. Different profile_ids land
+# on different cache keys (and on disk in different user-data-dirs)
+# so cookies / localStorage don't leak across them. Earlier code passed
+# a flat ``data_root / "chrome-profile"`` here — the cache key was the
+# same string across tenants, and the on-disk profile was shared too.
 #
 # Set ``MANTIS_CHROME_REUSE=disabled`` to fall back to the per-request
 # launch path (the legacy behaviour). Callers can also opt out per request
@@ -110,6 +117,36 @@ _chrome_env_cache_lock = threading.Lock()
 
 def _chrome_reuse_enabled() -> bool:
     return os.environ.get("MANTIS_CHROME_REUSE", "enabled").lower() != "disabled"
+
+
+def _chrome_profile_dir_for_suite(task_suite: dict[str, Any]) -> str:
+    """Per-tenant, per-profile Chrome user-data-dir for a Baseten request.
+
+    Mirrors the same isolation guarantee the Modal path got in PR #426.
+    The earlier Baseten code passed ``data_root / "chrome-profile"`` — a
+    flat path shared across every request — which the surrounding
+    comment claimed was tenant-scoped but wasn't. Cookies / localStorage /
+    IndexedDB leaked across tenants AND across ``profile_id``s on the
+    same container.
+
+    ``task_suite["_profile_id"]`` is already server-prefixed (the
+    ``<tenant_id>__<caller_profile_id>`` shape produced by
+    :func:`server_utils.build_micro_suite`), so a single path
+    segment gives us both isolations at once. Falling back to
+    ``"default"`` keeps legacy / unscoped callers working, just with
+    them sharing one default profile rather than the previous "everyone
+    shares one chrome-profile" behaviour.
+
+    The session-reuse cache (``_chrome_env_cache``) keys on this same
+    path, so two requests with different ``profile_id``s no longer
+    accidentally share a cached Chrome instance.
+    """
+    profile_id = (
+        task_suite.get("_profile_id")
+        or task_suite.get("_state_key")
+        or "default"
+    )
+    return str(_data_root() / "chrome-profile" / _safe_state_key(str(profile_id)))
 
 
 def _shutdown_chrome_env_cache() -> None:
@@ -958,7 +995,7 @@ class BasetenCUARuntime:
             proxy_state=str(task_suite.get("_proxy_state") or ""),
             proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
             browser=os.environ.get("MANTIS_BROWSER", "google-chrome"),
-            profile_dir=str(data_root / "chrome-profile"),
+            profile_dir=_chrome_profile_dir_for_suite(task_suite),
             save_screenshots_dir=str(data_root / "screenshots"),
             reuse_session=reuse_session,
         )
@@ -1653,8 +1690,7 @@ class BasetenCUARuntime:
         else:
             reuse_session_for_request = bool(reuse_session_payload)
 
-        data_root_path = _data_root()
-        cache_profile_dir = str(data_root_path / "chrome-profile")
+        cache_profile_dir = _chrome_profile_dir_for_suite(task_suite)
         # _make_env reads proxy_server via setup_env → build_proxy_config;
         # the cache key needs to include it so two requests with different
         # proxy configs don't share a browser. Recreate the proxy URL here
