@@ -426,6 +426,137 @@ def test_fill_field_tag_guard_allows_contenteditable_div(monkeypatch):
 # ── submit ──────────────────────────────────────────────────────────
 
 
+# ── submit — DOM-mode tier-0 ────────────────────────────────────────
+
+
+def test_submit_dom_mode_tier0_clicks_via_cdp_before_vision(monkeypatch):
+    """When ``params.label`` is set and env exposes ``cdp_evaluate``
+    that returns a hit, the submit handler dispatches via DOM-mode
+    tier-0 (deterministic CDP ``el.click()``) WITHOUT calling
+    ``find_form_target`` (no vision grounding spend).
+
+    This is the staff-crm-long step-8 fix: the Apply button has an
+    exact text label and a matching ``<button>`` in the DOM, so an
+    exact CDP query is strictly more reliable than running Holo3 +
+    Claude over a screenshot of a small toolbar button.
+    """
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    runner = _FakeRunner()
+    runner._url_history = [
+        "https://app.example/leads",                              # url_before
+        "https://app.example/leads?status=Contacted",            # url_after — filter applied
+    ]
+    extractor = MagicMock()
+    env = MagicMock()
+    # CDP returns a hit for the Apply button. The helper's JS shape
+    # is locked by its own tests; here we just stub the result.
+    env.cdp_evaluate = MagicMock(return_value={
+        "tag": "button",
+        "label": "Apply",
+        "rect": {"x": 680, "y": 310, "w": 60, "h": 28},
+    })
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Click Apply button", type="submit",
+        params={"label": "Apply", "kind": "button"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    assert "@dom" in (result.data or ""), result.data
+    # No vision grounding call spent.
+    assert extractor.find_form_target.call_count == 0
+    assert runner.costs["claude_extract"] == 0
+    # URL change propagated for the runner-state snapshot.
+    assert runner._last_known_url == "https://app.example/leads?status=Contacted"
+    # Backend tag landed on the StepContext scratch.
+    assert ctx.state.get("_executor_backend") == "dom"
+
+
+def test_submit_dom_mode_tier0_skipped_on_retry(monkeypatch):
+    """When the runner's ``_step_failure_history`` shows this step has
+    already failed once, DOM-mode tier-0 is skipped — the same DOM
+    element would match again and the retry would loop on the same
+    no-state-change outcome. Vision is the right tool for "right
+    label, wrong element" on retry.
+    """
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    runner._step_failure_history = {5: [{"x": 100, "y": 200, "label": "Apply",
+                                          "kind": "no_state_change",
+                                          "reason": "no observable state change"}]}
+    runner._url_history = [
+        "https://app.example/leads",
+        "https://app.example/leads",
+    ]
+    extractor = MagicMock()
+    # Vision returns a target so the retry path can succeed (otherwise
+    # the test would only verify "tier-0 skipped" but not "vision ran").
+    extractor.find_form_target.return_value = {"x": 700, "y": 320}
+    env = MagicMock()
+    # Even with cdp_evaluate that would return a hit, tier-0 must NOT
+    # call it on retry.
+    env.cdp_evaluate = MagicMock(return_value={
+        "tag": "button", "label": "Apply",
+        "rect": {"x": 680, "y": 310, "w": 60, "h": 28},
+    })
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Click Apply", type="submit",
+        params={"label": "Apply", "kind": "button"},
+    )
+    ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    # Vision was invoked — tier-0 was skipped on retry.
+    assert extractor.find_form_target.call_count >= 1
+
+
+def test_submit_dom_mode_tier0_falls_through_on_miss(monkeypatch):
+    """When the DOM has no element matching the label, the tier-0
+    helper returns ``None`` and the handler falls through to the
+    existing vision pipeline. The cost meter accounts for the
+    vision call (claude_extract += 1) — and no DOM-side state was
+    consumed (url_history still has both entries for the vision
+    path to use).
+    """
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform",
+        lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    runner._url_history = [
+        "https://app.example/x",
+        "https://app.example/y",
+    ]
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 100, "y": 200}
+    env = MagicMock()
+    # CDP returns null — no DOM match.
+    env.cdp_evaluate = MagicMock(return_value=None)
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Click Apply", type="submit",
+        params={"label": "Apply", "kind": "button"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    assert "@dom" not in (result.data or "")
+    # Vision pipeline ran.
+    assert extractor.find_form_target.call_count >= 1
+
+
 def test_submit_target_not_found_after_scroll(monkeypatch):
     monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
 

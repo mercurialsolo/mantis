@@ -43,6 +43,7 @@ Reads:
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -186,8 +187,123 @@ def try_som_click(env: Any, x: int, y: int, policy: Any) -> bool:
         return False
 
 
+def try_dom_labeled_click(
+    env: Any,
+    *,
+    label: str,
+    aliases: list[str] | None = None,
+    kind: str = "button",
+) -> dict | None:
+    """DOM-mode tier-0 click on a button whose visible text matches a
+    plan-supplied label, dispatched via CDP ``el.click()`` before any
+    vision-based grounding runs.
+
+    Returns ``{"tag": str, "label": str, "rect": {x,y,w,h}}`` on success
+    and ``None`` on miss / no CDP / wrong kind. Designed as a cheap
+    deterministic tier-0 — the caller pre-checks the result and falls
+    through to vision-based grounding when ``None``.
+
+    Why this exists (#staff-crm-long step 8): vision grounding
+    reliably misses small toolbar buttons. Apply / Update Lead /
+    Login / Send / Save all have exact-text labels and matching
+    DOM elements. When the plan author names the label, an exact
+    DOM query is strictly more reliable than running Holo3 + Claude
+    over a screenshot. Each saved miss is ~$0.05 + 30s and avoids
+    the cascade where bad clicks navigate the agent to the wrong
+    page (the "succeeded onto the wrong URL" failure mode).
+
+    Scoped narrowly:
+
+    * Only fires on submit-button-shaped kinds (``button`` / ``submit``
+      / empty). Skips ``nav_link`` / ``row_link`` where multiple
+      elements legitimately share the same label text.
+    * Targets ``<button>`` / ``<input type="submit|button">`` /
+      ``[role="button"]`` only. Anchors (``<a>``) excluded — too many
+      label collisions on nav menus.
+    * Filters for visible (``offsetParent != null``) + enabled
+      (``!el.disabled``) elements; uses the first DOM-order match.
+    * Trims + case-folds before comparing; alias matches are first
+      tried in order.
+
+    The helper does NOT settle / verify navigation — the caller owns
+    the post-click URL-change check, debug screenshot dump, and
+    no_state_change demotion. The helper only reports whether the
+    click reached an exact-labeled element.
+    """
+    if not label:
+        return None
+    eval_fn = getattr(env, "cdp_evaluate", None)
+    if not callable(eval_fn):
+        return None
+    kind_l = (kind or "").strip().lower()
+    if kind_l and kind_l not in ("button", "submit"):
+        return None
+    candidates: list[str] = [label]
+    for alias in (aliases or []):
+        alias_s = str(alias).strip()
+        if alias_s and alias_s not in candidates:
+            candidates.append(alias_s)
+    js_labels = "[" + ",".join(json.dumps(c) for c in candidates) + "]"
+    js = (
+        "(() => {"
+        f"const labels = {js_labels}.map(s => s.trim().toLowerCase());"
+        "const sel = 'button, input[type=\"submit\"], input[type=\"button\"], [role=\"button\"]';"
+        "const elems = Array.from(document.querySelectorAll(sel));"
+        "const visible = el => {"
+        "  if (el.disabled) return false;"
+        "  if (el.offsetParent === null) return false;"
+        "  return true;"
+        "};"
+        "const textOf = el => {"
+        "  const tag = (el.tagName || '').toLowerCase();"
+        "  const raw = tag === 'input' ? (el.value || '')"
+        "    : (el.innerText || el.textContent || '');"
+        "  return raw.trim().toLowerCase();"
+        "};"
+        "let hit = null;"
+        "for (const want of labels) {"
+        "  for (const el of elems) {"
+        "    if (!visible(el)) continue;"
+        "    if (textOf(el) !== want) continue;"
+        "    hit = el; break;"
+        "  }"
+        "  if (hit) break;"
+        "}"
+        "if (!hit) return null;"
+        "const r = hit.getBoundingClientRect();"
+        "try {"
+        "  hit.click();"
+        "  return {"
+        "    tag: (hit.tagName || '').toLowerCase(),"
+        "    label: textOf(hit),"
+        "    rect: {x: r.left, y: r.top, w: r.width, h: r.height}"
+        "  };"
+        "} catch (e) { return null; }"
+        "})()"
+    )
+    try:
+        result = eval_fn(js)
+    except Exception as exc:  # noqa: BLE001 — CDP path; never crash the runner
+        logger.debug("try_dom_labeled_click CDP eval raised: %s", exc)
+        return None
+    if not isinstance(result, dict):
+        return None
+    rect = result.get("rect") or {}
+    return {
+        "tag": str(result.get("tag") or "").lower(),
+        "label": str(result.get("label") or ""),
+        "rect": {
+            "x": float(rect.get("x") or 0.0),
+            "y": float(rect.get("y") or 0.0),
+            "w": float(rect.get("w") or 0.0),
+            "h": float(rect.get("h") or 0.0),
+        },
+    }
+
+
 __all__ = [
     "try_som_click",
+    "try_dom_labeled_click",
     "probe_element_tag_at",
     "is_input_like",
     "INPUT_LIKE_TAGS",
