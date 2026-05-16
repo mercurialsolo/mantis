@@ -53,6 +53,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger("mantis_agent.gym.micro_runner")
 
 
+def _pending_form_labels(plan: "MicroPlan", current_step_index: int) -> list[str]:
+    """Audit item 2 — collect ``params.label`` from every ``fill_field``
+    step in the plan at or after ``current_step_index``.
+
+    The Holo3StepHandler forwards this list to its inner GymRunner so
+    the done-gate can reject ``done(success=True)`` on a sub-step that
+    inadvertently claims whole-plan completion while form values are
+    still pending elsewhere. Without it the gate had no signal and
+    Holo3 could short-circuit the run mid-form.
+
+    Deduplicated + ordered by appearance. Labels with empty / whitespace
+    text are dropped. Includes the current step itself when its type is
+    ``fill_field`` — the sub-runner hasn't completed it yet at the
+    moment this helper runs.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    steps = getattr(plan, "steps", []) or []
+    for step in steps[max(0, int(current_step_index)):]:
+        if str(getattr(step, "type", "") or "") != "fill_field":
+            continue
+        params = getattr(step, "params", {}) or {}
+        label = str(params.get("label") or "").strip()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        out.append(label)
+    return out
+
+
 @dataclass
 class RunState:
     """Mutable per-run state the executor mutates as it advances.
@@ -392,6 +422,12 @@ class RunExecutor:
             "listings_on_page": state.listings_on_page,
             "step_index": state.step_index,
         }
+        # #audit item 2: populate ``pending_form_labels`` from the
+        # remaining plan steps so the Holo3 sub-runner's done-gate
+        # can reject ``done(success=True)`` while outer ``fill_field``
+        # steps remain. Without this the gate had no signal and
+        # Holo3 could claim whole-plan completion mid-step.
+        runner.pending_form_labels = _pending_form_labels(plan, state.step_index)
         pre_snapshot = step_snapshot.capture(runner)
         runner._pre_step_snapshot = pre_snapshot
         # Epic #377 follow-up (#381): read the browser's URL directly
