@@ -513,7 +513,7 @@ RULES:
   (label/value/dropdown_label/option_label) using the labels the source
   plan provides. The runner trusts `params` over the prose.
 - HINTS — emit `hints` whenever the source plan gives an explicit URL
-  expectation OR a strong spatial cue. Two structured fields are
+  expectation OR a strong spatial cue. Three structured fields are
   recognised by the runner today:
     • `hints.expect_url_contains` — list of substrings the post-click
       URL MUST contain. Emit ONE entry per literal URL clue the source
@@ -539,6 +539,23 @@ RULES:
                  "expect_url_excludes": ["/leads/"]}
       Only emit these for submit / click / navigate steps (URL is
       meaningful). Skip on fill_field / select_option / extract_data.
+    • `hints.fallback_url` — when the click / submit has a STRUCTURAL
+      ALTERNATIVE that the agent can navigate to directly if the
+      click keeps misfiring. The runner's recovery layer will REPLACE
+      the click with a direct navigate after 2+ failures.
+        Source: "click 'Contacted' to filter the leads list ... the
+                 URL should now include status=Contacted"
+        → hints={"expect_url_contains": ["status=Contacted"],
+                 "fallback_url": "/leads?status=Contacted"}
+        Source: "click the lead's Robot Name to open its detail page
+                 (URL ends in /leads/<id>)"
+        → hints={"expect_url_contains": ["/leads/"]}
+        (no fallback_url — the <id> isn't predictable at plan time)
+      Emit fallback_url ONLY when the equivalent URL is PREDICTABLE
+      from the plan text alone — typically filter / view / static-
+      nav clicks where the URL pattern is named in the source. Skip
+      for clicks on dynamic data (lead rows, comment replies, etc.)
+      where the destination URL contains an ID we won't know.
 - The "reverse" field must be a CUA-executable instruction
 - Set section="setup", section="extraction", or section="pagination"
 - Set required=true for all setup/filter/form steps (this is the default)
@@ -692,7 +709,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v26_url_hints"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v27_fallback_url"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

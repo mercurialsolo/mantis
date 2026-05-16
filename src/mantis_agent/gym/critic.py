@@ -172,6 +172,14 @@ class ExecutionCritic:
         if rule_directive is not None:
             return rule_directive
 
+        # Rule-based: plan-supplied fallback_url for stuck clicks.
+        # Deterministic — fires BEFORE the frontier-model capability
+        # so a plan author who knows the structural alternative can
+        # short-circuit the Claude consultation entirely.
+        fallback_directive = self._maybe_use_fallback_url(state, step, step_result)
+        if fallback_directive is not None:
+            return fallback_directive
+
         # Frontier-model: persistent rewrite-triggering failure → ask Claude.
         return self._maybe_frontier_recover_persistent_failure(
             plan, state, step, step_result,
@@ -215,6 +223,71 @@ class ExecutionCritic:
             params={"url": base_url},
         )
 
+
+    # ── Rule-based capability — plan-supplied fallback_url ──────────────
+
+    def _maybe_use_fallback_url(
+        self,
+        state: "RunState",
+        step: MicroIntent,
+        step_result: "StepResult",
+    ) -> Optional[Directive]:
+        """When a click / submit step accumulates 2+ rewrite-triggering
+        failures AND the plan author supplied ``hints.fallback_url``,
+        replace the step with a direct ``navigate`` to that URL.
+
+        Deterministic — no Claude call. Fires BEFORE the frontier
+        capability so a plan that ALREADY names the structural
+        alternative skips the cost + non-determinism of asking Claude.
+
+        Why this is the highest-leverage rule for sites where vision
+        keeps misclicking small targets: the plan author often knows
+        the URL pattern that achieves the same post-state. ``Click
+        Contacted in sidebar`` → ``hints.fallback_url:
+        "/leads?status=Contacted"``. After two demotes the runner
+        navigates directly.
+
+        Trigger:
+
+        * ``step.type`` in ``{"submit", "click"}``
+        * ``step_result.failure_class`` is rewrite-triggering
+          (``no_state_change`` / ``wrong_target`` / ``brain_loop_exhausted``)
+        * ``step.hints.fallback_url`` is non-empty
+        * ``_step_failure_history[step_index]`` has at least 2 entries
+          (so we let the cheap retry path try first)
+        """
+        from . import intent_rewriter
+        step_type = str(getattr(step, "type", "") or "")
+        if step_type not in ("submit", "click"):
+            return None
+        failure_class = str(getattr(step_result, "failure_class", "") or "")
+        if failure_class not in intent_rewriter.REWRITE_TRIGGERING_CLASSES:
+            return None
+        hints = dict(getattr(step, "hints", {}) or {})
+        fallback_url = str(hints.get("fallback_url") or "").strip()
+        if not fallback_url:
+            return None
+        history = (
+            self.runner._step_failure_history.get(int(state.step_index), [])
+            if hasattr(self.runner, "_step_failure_history") else []
+        )
+        if not isinstance(history, list) or len(history) < 2:
+            return None
+        logger.warning(
+            "  [critic] step %d: using plan-supplied fallback_url=%r "
+            "(after %d prior failures of class %s)",
+            state.step_index, fallback_url, len(history), failure_class,
+        )
+        return ReplaceStep(
+            intent=f"Navigate to {fallback_url} (fallback for stuck click)",
+            step_type="navigate",
+            params={"url": fallback_url},
+            reason=(
+                f"plan-supplied fallback_url after {len(history)} prior "
+                f"{failure_class} failures — deterministic rule, no "
+                f"Claude consultation needed"
+            ),
+        )
 
     # ── Frontier-model capability (#435 item 8) ─────────────────────────
 
