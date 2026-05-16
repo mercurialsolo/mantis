@@ -553,6 +553,16 @@ class ClaudeGuidedFormHandler:
             aliases = [str(a).strip() for a in aliases if str(a).strip()]
             kind = str(params.get("kind") or _SUBMIT_KIND_DEFAULT).strip().lower() or _SUBMIT_KIND_DEFAULT
             search_intent = _build_submit_search_intent(label, kind, step.intent)
+            # NOTE: ``failure_history`` was originally inlined here for
+            # a DOM-mode tier-0 path that was reverted (CUA contract:
+            # the runner must derive click targets from screenshots
+            # only, never from a direct DOM query). Lookup retained
+            # at this position so the original feedback-into-prompt
+            # block below can reuse it without re-querying.
+            failure_history = (
+                runner._step_failure_history.get(index, [])
+                if hasattr(runner, "_step_failure_history") else []
+            )
             # Agentic-recovery hints — issue #224 follow-up; epic #377
             # Phase A.3 lifts the consumption side into a shared helper
             # so any handler that builds a Claude prompt from
@@ -578,10 +588,9 @@ class ClaudeGuidedFormHandler:
             # the same coordinates and fail identically (the canonical
             # case is the staff-crm "Click Qualified" step where the
             # label-text matched a status pill rather than the row link).
-            failure_history = (
-                runner._step_failure_history.get(index, [])
-                if hasattr(runner, "_step_failure_history") else []
-            )
+            #
+            # ``failure_history`` was looked up above (DOM-mode tier-0
+            # block) — reuse it here rather than re-querying the runner.
             if failure_history:
                 avoid_lines = []
                 for record in failure_history[-3:]:  # last 3 failures

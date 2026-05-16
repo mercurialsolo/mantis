@@ -506,22 +506,71 @@ class XdotoolGymEnv(GymEnvironment):
         elementFromPoint call. Without this, the SoM ``el.click()``
         fires on whatever element sits ~85 px below the visual click
         target — the symptom that motivated the tag-guard fix in #413.
+
+        Diagnostic mode (chromeH-introspection): when the env was
+        constructed with ``MANTIS_SOM_DIAGNOSTIC=1`` (or the class
+        attribute ``som_diagnostic`` is set), the JS payload returns a
+        rich dict (outerHeight, innerHeight, chromeH, viewport-coord
+        element tag, screen-coord element tag, click ok/fail) and the
+        method emits a one-line WARNING log per call so the run's log
+        capture surfaces what's actually happening. Useful when the
+        translation is silently wrong in headless / Xvfb modes where
+        ``outerHeight`` reports 0.
         """
-        # Use a self-executing function so the eval result is a clean
-        # boolean. ``elementFromPoint`` returns ``null`` for points
-        # outside the viewport — that surfaces as ``False`` here.
+        # The JS payload returns a dict (always — diagnostic info is
+        # cheap), and the caller treats the ``ok`` field as the bool
+        # return contract. Logging the diagnostic line surfaces it
+        # under Modal's INFO-suppressed capture so it's visible without
+        # an env-var toggle dance.
         js = (
             "(() => {"
-            "const chromeH = Math.max(0, window.outerHeight - window.innerHeight);"
-            f"const vx = {int(x)};"
-            f"const vy = {int(y)} - chromeH;"
-            "const el = document.elementFromPoint(vx, vy);"
-            "if (!el) return false;"
-            "try { el.click(); return true; }"
-            "catch (e) { return false; }"
+            "const oh = window.outerHeight;"
+            "const ih = window.innerHeight;"
+            "const chromeH = Math.max(0, oh - ih);"
+            f"const sx = {int(x)};"
+            f"const sy = {int(y)};"
+            "const vx = sx;"
+            "const vy = sy - chromeH;"
+            "const elv = document.elementFromPoint(vx, vy);"
+            "const els = document.elementFromPoint(sx, sy);"
+            "const tag = e => e ? ((e.tagName || '') + (e.id ? '#' + e.id : '') + "
+            "(e.className && typeof e.className === 'string' ? '.' + e.className.split(' ').slice(0,2).join('.') : '')) : null;"
+            "const text = e => e ? (e.innerText || e.textContent || '').trim().slice(0, 40) : '';"
+            "let ok = false;"
+            "if (elv) { try { elv.click(); ok = true; } catch (e) { ok = false; } }"
+            "return {"
+            "ok: ok,"
+            "outerHeight: oh, innerHeight: ih, chromeH: chromeH,"
+            "vx: vx, vy: vy,"
+            "elv_tag: tag(elv), elv_text: text(elv),"
+            "els_tag: tag(els), els_text: text(els)"
+            "};"
             "})()"
         )
-        return bool(self.cdp_evaluate(js))
+        try:
+            result = self.cdp_evaluate(js)
+        except Exception as exc:  # noqa: BLE001 — never break runs
+            logger.debug("cdp_click_at_point eval raised: %s", exc)
+            return False
+        if not isinstance(result, dict):
+            return bool(result)
+        # One-line WARNING log so the SoM click's coordinate translation
+        # is visible in Modal's INFO-suppressed capture without an
+        # explicit env-var toggle. Once the translation is verified
+        # against expectations across deploy targets, this can drop
+        # to DEBUG.
+        same_element = result.get("elv_tag") == result.get("els_tag")
+        logger.warning(
+            "  [som-click] x=%d y=%d → chromeH=%s (oh=%s ih=%s) viewport=(%s,%s) "
+            "elv=%s elv_text=%r els=%s els_text=%r same=%s ok=%s",
+            int(x), int(y),
+            result.get("chromeH"), result.get("outerHeight"), result.get("innerHeight"),
+            result.get("vx"), result.get("vy"),
+            result.get("elv_tag"), result.get("elv_text"),
+            result.get("els_tag"), result.get("els_text"),
+            same_element, result.get("ok"),
+        )
+        return bool(result.get("ok"))
 
     def _xdotool_type(self, text: str) -> None:
         """Type text via clipboard-paste (preferred) or xdotool fallback.

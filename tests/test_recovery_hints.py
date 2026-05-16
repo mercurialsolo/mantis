@@ -150,9 +150,12 @@ def test_add_hint_replaces_non_list_step_slot() -> None:
 
 def test_holo3_step_handler_splices_hints_into_inner_gym_runner_task() -> None:
     """When ``_recovery_hints[step_index]`` carries entries, the
-    Holo3 handler appends them to ``step.intent`` and forwards the
-    enriched string as the inner ``GymRunner.run(task=...)`` arg.
-    Epic #377 Phase A.3 generalizes the form-only consumption path."""
+    Holo3 handler surfaces them inside the scoped-task block built
+    by :func:`_build_scoped_task` (P1 #6 follow-up: the prior
+    behaviour appended hints to a bare ``step.intent``; the new
+    block-shaped task carries ``Sub-goal: <intent>`` as its first
+    line and the hints land in a dedicated section).
+    """
     from unittest.mock import patch
 
     from mantis_agent.gym.step_context import StepContext
@@ -196,14 +199,18 @@ def test_holo3_step_handler_splices_hints_into_inner_gym_runner_task() -> None:
         Holo3StepHandler(runner).execute(step, ctx)
 
     forwarded_task = mock_inner.run.call_args.kwargs["task"]
-    assert forwarded_task.startswith("Click the first event card")
+    # New shape: scoped block with Sub-goal: <intent> on the first line.
+    assert forwarded_task.startswith("Sub-goal: Click the first event card")
+    # Hints still surface in the task — content unchanged, packaging is
+    # what moved.
     assert "RECOVERY HINTS" in forwarded_task
     assert "avoid the photo, click the title" in forwarded_task
 
 
 def test_holo3_step_handler_no_change_when_no_hints() -> None:
-    """No hints stored → ``task`` is exactly ``step.intent`` (no
-    trailing block, no whitespace drift)."""
+    """No hints stored → ``task`` is the scoped-block intent-only
+    line (``Sub-goal: <intent>``). No trailing hints section, no
+    whitespace drift on the trailing border."""
     from unittest.mock import patch
 
     from mantis_agent.gym.step_context import StepContext
@@ -246,4 +253,6 @@ def test_holo3_step_handler_no_change_when_no_hints() -> None:
 
         Holo3StepHandler(runner).execute(step, ctx)
 
-    assert mock_inner.run.call_args.kwargs["task"] == "Click submit"
+    # Bare-intent step with no hints / verify / params → scoped block
+    # collapses to its single Sub-goal section.
+    assert mock_inner.run.call_args.kwargs["task"] == "Sub-goal: Click submit"

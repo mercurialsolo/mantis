@@ -658,7 +658,19 @@ def save_result_json(
 
 
 def micro_plan_steps_to_dicts(steps: list[Any]) -> list[dict[str, Any]]:
-    """Serialize a list of MicroIntent objects into plain dicts."""
+    """Serialize a list of MicroIntent objects into plain dicts.
+
+    Preserves ``params`` and ``hints`` so structured plan info (form
+    labels, button aliases, dropdown options, layout / region hints,
+    grounding directives) survives the wire from the decomposer to
+    the runner. Without this, downstream handlers re-parse ``intent``
+    prose for fields the decomposer already extracted — brittle on
+    long plans where 25+ steps share similar phrasing.
+
+    ``params`` and ``hints`` default to ``{}`` on the receiving side
+    via :class:`MicroIntent`'s dataclass field defaults, so older
+    callers shipping dicts without them continue to work unchanged.
+    """
     return [
         {
             "intent": s.intent,
@@ -673,6 +685,8 @@ def micro_plan_steps_to_dicts(steps: list[Any]) -> list[dict[str, Any]]:
             "section": s.section,
             "required": s.required,
             "gate": s.gate,
+            "params": dict(getattr(s, "params", {}) or {}),
+            "hints": dict(getattr(s, "hints", {}) or {}),
         }
         for s in steps
     ]

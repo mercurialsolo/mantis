@@ -189,7 +189,11 @@ def test_cdp_click_at_point_subtracts_chrome_offset_in_js() -> None:
     viewport bug. Today SoM defaults to off so the bug hasn't bitten
     production traffic, but enabling SoM with the old JS would have
     clicked the wrong element (typically the button 85 px below the
-    intended target). Pin the offset in the JS literally."""
+    intended target). Pin the chromeH-subtraction logic literally —
+    the JS now also returns a diagnostic dict (outerHeight,
+    innerHeight, elementFromPoint at both screen and viewport coords)
+    so the SoM click path can be debugged from Modal logs without
+    a separate diagnostic build."""
     from mantis_agent.gym.xdotool_env import XdotoolGymEnv
     instance = XdotoolGymEnv.__new__(XdotoolGymEnv)
 
@@ -199,9 +203,66 @@ def test_cdp_click_at_point_subtracts_chrome_offset_in_js() -> None:
 
     assert len(captured) == 1
     js = captured[0]
-    assert "window.outerHeight - window.innerHeight" in js
+    # chromeH = outerHeight - innerHeight (the rule that maps
+    # screen-y → viewport-y) must still be in the script.
+    assert "window.outerHeight" in js
+    assert "window.innerHeight" in js
+    assert "chromeH = Math.max(0, oh - ih)" in js
     assert "document.elementFromPoint" in js
-    assert "- chromeH" in js
+    # Y is subtracted by chromeH before the elementFromPoint call.
+    assert "vy = sy - chromeH" in js
+
+
+def test_cdp_click_at_point_returns_ok_from_diagnostic_dict() -> None:
+    """The JS now returns a dict ``{ok, outerHeight, innerHeight, ...}``;
+    the method must surface ``ok`` as the bool return so callers and
+    the existing ``try_som_click`` policy gate are unaffected."""
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+    instance = XdotoolGymEnv.__new__(XdotoolGymEnv)
+
+    instance.cdp_evaluate = lambda _expr: {  # type: ignore[assignment]
+        "ok": True, "outerHeight": 720, "innerHeight": 635, "chromeH": 85,
+        "vx": 44, "vy": 305,
+        "elv_tag": "A", "elv_text": "Contacted (7)",
+        "els_tag": "A", "els_text": "Contacted (7)",
+    }
+    assert instance.cdp_click_at_point(44, 390) is True
+
+    instance.cdp_evaluate = lambda _expr: {  # type: ignore[assignment]
+        "ok": False, "outerHeight": 0, "innerHeight": 0, "chromeH": 0,
+        "vx": 44, "vy": 390,
+        "elv_tag": None, "elv_text": "",
+        "els_tag": None, "els_text": "",
+    }
+    assert instance.cdp_click_at_point(44, 390) is False
+
+
+def test_cdp_click_at_point_back_compat_scalar_result() -> None:
+    """Pre-diagnostic deploys / mocks that return a scalar boolean
+    still get the same bool surface (back-compat for callers /
+    tests that don't yet return the rich dict)."""
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+    instance = XdotoolGymEnv.__new__(XdotoolGymEnv)
+
+    instance.cdp_evaluate = lambda _expr: True  # type: ignore[assignment]
+    assert instance.cdp_click_at_point(10, 20) is True
+    instance.cdp_evaluate = lambda _expr: False  # type: ignore[assignment]
+    assert instance.cdp_click_at_point(10, 20) is False
+    instance.cdp_evaluate = lambda _expr: None  # type: ignore[assignment]
+    assert instance.cdp_click_at_point(10, 20) is False
+
+
+def test_cdp_click_at_point_swallows_cdp_exceptions() -> None:
+    """CDP failures must not propagate — caller's xdotool fallback
+    runs on ``False``."""
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+    instance = XdotoolGymEnv.__new__(XdotoolGymEnv)
+
+    def _raise(_expr):
+        raise RuntimeError("CDP unreachable")
+
+    instance.cdp_evaluate = _raise  # type: ignore[assignment]
+    assert instance.cdp_click_at_point(10, 20) is False
 
 
 def test_is_input_like_allows_unknown_when_cdp_unavailable() -> None:

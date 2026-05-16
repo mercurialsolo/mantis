@@ -529,6 +529,8 @@ def test_micro_plan_steps_to_dicts():
         section = "extraction"
         required = False
         gate = False
+        params = {"label": "X", "kind": "button"}
+        hints = {"region": "form-footer"}
 
     dicts = micro_plan_steps_to_dicts([FakeIntent()])
     assert len(dicts) == 1
@@ -537,6 +539,111 @@ def test_micro_plan_steps_to_dicts():
     assert d["type"] == "click"
     assert d["grounding"] is True
     assert d["section"] == "extraction"
+    # Plan fidelity (P0 #1): params + hints must survive the wire so
+    # downstream form / region handlers don't have to re-parse intent
+    # prose for structured fields the decomposer already extracted.
+    assert d["params"] == {"label": "X", "kind": "button"}
+    assert d["hints"] == {"region": "form-footer"}
+
+
+def test_micro_plan_steps_to_dicts_defaults_when_params_hints_absent():
+    """Legacy callers / minimal fakes that don't define ``params`` or
+    ``hints`` at all (e.g. early test doubles) still serialise to dicts
+    with both keys present as empty dicts. Receiving side reconstructs
+    via ``MicroIntent(**d)`` which expects every field — empties are
+    safe because :class:`MicroIntent` ``params`` / ``hints`` defaults
+    are also ``{}``.
+    """
+    class MinimalIntent:
+        intent = "navigate"
+        type = "navigate"
+        verify = ""
+        budget = 3
+        reverse = ""
+        grounding = False
+        claude_only = False
+        loop_target = -1
+        loop_count = 0
+        section = ""
+        required = False
+        gate = False
+
+    dicts = micro_plan_steps_to_dicts([MinimalIntent()])
+    assert dicts[0]["params"] == {}
+    assert dicts[0]["hints"] == {}
+
+
+def test_micro_plan_steps_to_dicts_roundtrip_through_microintent():
+    """End-to-end: a real :class:`MicroIntent` with params + hints
+    serializes → dict → reconstructs via ``MicroIntent(**dict)``
+    with every structured field intact. This is the contract
+    ``baseten_server/runtime.py:1360`` and ``modal_cua_server.py:712``
+    rely on to rebuild the runner-side plan from the wire payload.
+    """
+    from mantis_agent.plan_decomposer import MicroIntent
+
+    original = MicroIntent(
+        intent="Click Update Lead button",
+        type="submit",
+        params={"label": "Update Lead", "kind": "button",
+                "aliases": ["Save", "Save Changes"]},
+        hints={"region": "form-footer", "layout": "single"},
+        section="edit",
+        required=True,
+    )
+    serialised = micro_plan_steps_to_dicts([original])[0]
+    rebuilt = MicroIntent(**serialised)
+    assert rebuilt.intent == original.intent
+    assert rebuilt.type == original.type
+    assert rebuilt.params == original.params
+    assert rebuilt.hints == original.hints
+    assert rebuilt.required is True
+
+
+def test_plan_signature_distinguishes_plans_with_differing_params():
+    """Two plans with identical ``intent``/``type`` skeletons but
+    different ``params`` (e.g. one targets ``Update Lead``, the other
+    ``Save Changes``) must hash to DIFFERENT signatures. Without this,
+    a resume could silently reuse a stale checkpoint against a
+    logically-different plan and corrupt step indices.
+    """
+    from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
+    from mantis_agent.gym.checkpoint_manager import CheckpointManager
+
+    plan_a = MicroPlan(domain="x", steps=[
+        MicroIntent(intent="Click button", type="submit",
+                    params={"label": "Update Lead"}),
+    ])
+    plan_b = MicroPlan(domain="x", steps=[
+        MicroIntent(intent="Click button", type="submit",
+                    params={"label": "Save Changes"}),
+    ])
+    sig_a = CheckpointManager.compute_plan_signature(plan_a)
+    sig_b = CheckpointManager.compute_plan_signature(plan_b)
+    assert sig_a != sig_b, (
+        "plans differing only in params.label must produce different "
+        "checkpoint signatures"
+    )
+
+
+def test_plan_signature_distinguishes_plans_with_differing_hints():
+    """Same shape as above but for ``hints`` — a plan that pins
+    ``hints.region: form-footer`` must NOT share a signature with one
+    that defaults to no region hint.
+    """
+    from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
+    from mantis_agent.gym.checkpoint_manager import CheckpointManager
+
+    plan_with_hint = MicroPlan(domain="x", steps=[
+        MicroIntent(intent="Click", type="submit",
+                    hints={"region": "form-footer"}),
+    ])
+    plan_no_hint = MicroPlan(domain="x", steps=[
+        MicroIntent(intent="Click", type="submit"),
+    ])
+    sig_with = CheckpointManager.compute_plan_signature(plan_with_hint)
+    sig_without = CheckpointManager.compute_plan_signature(plan_no_hint)
+    assert sig_with != sig_without
 
 
 def test_parse_lead_row_dict():

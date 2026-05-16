@@ -65,6 +65,12 @@ class CheckpointManager:
         Used to fail fast on resume when the on-disk checkpoint was
         produced by a different plan shape — silently resuming with a
         mismatched plan would corrupt step indices.
+
+        Includes ``params`` and ``hints`` so two plans that share the
+        ``intent`` / ``type`` skeleton but differ in form labels,
+        button aliases, dropdown values, or layout hints are treated
+        as distinct. Without this, a resume could blindly replay a
+        stale checkpoint against a logically-different plan.
         """
         payload = [
             {
@@ -80,6 +86,8 @@ class CheckpointManager:
                 "section": step.section,
                 "required": step.required,
                 "gate": step.gate,
+                "params": dict(getattr(step, "params", {}) or {}),
+                "hints": dict(getattr(step, "hints", {}) or {}),
             }
             for step in plan.steps
         ]
