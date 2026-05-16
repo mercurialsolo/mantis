@@ -139,6 +139,39 @@ def record_insert_step(
     })
 
 
+def record_replace_step(
+    runner: Any,
+    *,
+    step_index: int,
+    original_type: str,
+    new_intent: str,
+    new_type: str,
+    reason: str,
+    source: str = "critic",
+) -> None:
+    """The critic (typically a frontier-model observer) replaced the
+    step at ``step_index`` in place — same plan slot, different
+    action. Distinct from ``insert_step`` (which splices a NEW step)
+    and from the ``rewrite`` event (which only edits the intent
+    prose, keeping the same step type / params).
+
+    Common trigger: a ``wrong_target`` failure cascade where vision
+    keeps clicking adjacent items. The frontier model proposes a
+    structurally different action (e.g. direct navigate instead of
+    sidebar link click) that bypasses the grounding miss.
+    """
+    _append(runner, {
+        "kind": "replace_step",
+        "step_index": int(step_index),
+        "source": str(source),
+        "original_type": str(original_type),
+        "new_intent": str(new_intent)[:200],
+        "new_type": str(new_type),
+        "reason": str(reason)[:200],
+        "at": _now_iso(),
+    })
+
+
 def snapshot(runner: Any) -> list[dict[str, Any]]:
     """Plain list copy for the result envelope. Empty list when no
     events recorded (preserves ``json.dumps`` compatibility)."""
