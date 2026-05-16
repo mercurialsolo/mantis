@@ -185,6 +185,10 @@ class MicroPlanRunner:
         self._opened_detail_in_new_tab = False
         self._active_checkpoint_context = None
         self._pre_step_snapshot, self._final_status = None, "running"
+        # #audit item 4: halt_reason last set by ``_persist`` — read by
+        # ``build_micro_result`` to surface honest terminal status
+        # (``budget_cap`` / ``time_cap`` / ``step_halt`` …).
+        self._final_halt_reason: str = ""
         # Stash for the SPA-aware submit demotion check. The form
         # handler's submit branch sets this just before clicking the
         # submit button; ``run_executor._maybe_demote_form_no_change``

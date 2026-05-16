@@ -613,18 +613,48 @@ class BasetenCUARuntime:
                     return
                 self._save_detached_result(run_id, result)
                 finished_at = _utc_now()
-                self._write_detached_status(
-                    run_id,
-                    {
-                        "status": "succeeded",
-                        "finished_at": finished_at,
-                        "summary": self._result_summary(result),
-                    },
-                )
-                self._append_detached_event(run_id, "succeeded")
+                # #audit item 4: read the honest terminal_status from
+                # the runner's result envelope and use it as the
+                # canonical detached-status. The legacy practice of
+                # writing "succeeded" on any non-exception result hid
+                # halts (REQUIRED step failures, budget/time caps) as
+                # successful runs.
+                #
+                # Wire-level status mapping for callers that consume
+                # action=status:
+                #   completed              → succeeded (back-compat)
+                #   completed_with_failures → completed_with_failures
+                #   halted / budget_exceeded / time_exceeded → halted
+                #     (with status_detail carrying the specific reason)
+                #   anything else → succeeded (defensive — old plans
+                #     don't surface terminal_status)
+                rt_status = ""
+                halt_reason = ""
+                if isinstance(result, dict):
+                    rt_status = str(result.get("terminal_status") or "")
+                    halt_reason = str(result.get("halt_reason") or "")
+                if rt_status == "completed":
+                    wire_status = "succeeded"
+                elif rt_status == "completed_with_failures":
+                    wire_status = "completed_with_failures"
+                elif rt_status in ("halted", "budget_exceeded", "time_exceeded"):
+                    wire_status = "halted"
+                else:
+                    wire_status = "succeeded"
+                status_blob: dict[str, Any] = {
+                    "status": wire_status,
+                    "finished_at": finished_at,
+                    "summary": self._result_summary(result),
+                }
+                if rt_status:
+                    status_blob["terminal_status"] = rt_status
+                if halt_reason:
+                    status_blob["halt_reason"] = halt_reason
+                self._write_detached_status(run_id, status_blob)
+                self._append_detached_event(run_id, wire_status)
                 self._append_runs_log(
                     run_id, payload, result,
-                    status="succeeded", finished_at=finished_at,
+                    status=wire_status, finished_at=finished_at,
                 )
         except Exception as exc:
             logger.exception("detached run %s failed", run_id)
@@ -838,8 +868,35 @@ class BasetenCUARuntime:
                 return self._raw_text_suite(resolved.read_text(), payload)
         return self._micro_suite_from_path(str(micro_path), payload)
 
+    # #audit item 1: long raw plans are brittle — the executor maps
+    # them to a single Holo3 task and the brain has no scaffolding to
+    # decompose internally. The threshold below is the budget the
+    # /v1/predict surface enforces unless the caller explicitly opts
+    # in via ``payload.allow_raw_long_plan = True``. Word count
+    # rather than char count because line breaks / whitespace in the
+    # source text dominate at small scale.
+    _RAW_LONG_PLAN_WORD_LIMIT: int = 80
+
     def _raw_text_suite(self, plan_text: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Wrap raw free-text in a single-task task_suite without decomposition."""
+        """Wrap raw free-text in a single-task task_suite without decomposition.
+
+        Long plans should always decompose — the executor's done-gate
+        and recovery loop assume single-goal tasks. Raw long plans
+        either oscillate or terminate prematurely. Callers that
+        genuinely want to feed a long text directly (benchmark
+        scaffolding, ablation harness) opt in via
+        ``payload.allow_raw_long_plan = True``.
+        """
+        words = len((plan_text or "").split())
+        allow_long = bool(payload.get("allow_raw_long_plan", False))
+        if words > self._RAW_LONG_PLAN_WORD_LIMIT and not allow_long:
+            raise ValueError(
+                f"raw plan_text has {words} words; server cap for "
+                f"decompose=False is {self._RAW_LONG_PLAN_WORD_LIMIT}. "
+                f"Either drop decompose=False (the decomposer handles "
+                f"long plans), or pass allow_raw_long_plan=true if you "
+                f"intend the brain to run the full text as a single task."
+            )
         return {
             "session_name": str(payload.get("session_name") or "plan_text_raw"),
             "base_url": str(payload.get("base_url") or ""),
@@ -866,6 +923,13 @@ class BasetenCUARuntime:
         )
 
         steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
+        # #audit item 5: validate the parsed plan against MAX_STEPS /
+        # MAX_LOOP_ITERATIONS / required-field rules BEFORE handing it
+        # to build_micro_suite. Catches obvious problems (a 1000-step
+        # plan from a runaway decomposer, missing intent/type on a
+        # step) before the run consumes any Modal time.
+        from mantis_agent.api_schemas import validate_micro_steps
+        steps_dicts = validate_micro_steps(steps_dicts)
         data_root = _data_root()
         return build_micro_suite(
             steps_dicts,
@@ -956,6 +1020,11 @@ class BasetenCUARuntime:
                 logger.warning("Baseten: no fallback plan found, using minimal navigate-only plan")
 
         steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
+        # #audit item 5: same validation gate as the from-text path —
+        # catches malformed JSON plans (missing required fields, step
+        # count over the cap) before the run starts.
+        from mantis_agent.api_schemas import validate_micro_steps
+        steps_dicts = validate_micro_steps(steps_dicts)
         data_root = _data_root()
         suite = build_micro_suite(
             steps_dicts,

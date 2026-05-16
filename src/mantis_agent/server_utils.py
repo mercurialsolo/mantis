@@ -474,6 +474,30 @@ def build_micro_result(
     leads = list(unique_leads.values())
     costs = getattr(runner, "_final_costs", {})
     status = costs.get("status") or getattr(runner, "_final_status", "unknown")
+    # #audit item 4: top-level ``terminal_status`` + ``halt_reason``
+    # so the detached-status writer can map honestly rather than
+    # writing blanket "succeeded" on any non-exception return.
+    # Mapping rules:
+    #   ``completed`` + any step.success=False → completed_with_failures
+    #   ``completed`` + all success            → completed
+    #   ``halted``   + halt_reason=budget_cap  → budget_exceeded
+    #   ``halted``   + halt_reason=time_cap    → time_exceeded
+    #   ``halted``   + anything else           → halted
+    #   ``cancelled`` / ``paused``             → preserved as-is
+    runner_status = str(getattr(runner, "_final_status", "") or "")
+    halt_reason = str(getattr(runner, "_final_halt_reason", "") or "")
+    if runner_status == "completed":
+        any_failed = any(not r.success for r in step_results)
+        terminal_status = "completed_with_failures" if any_failed else "completed"
+    elif runner_status == "halted":
+        if halt_reason == "budget_cap":
+            terminal_status = "budget_exceeded"
+        elif halt_reason == "time_cap":
+            terminal_status = "time_exceeded"
+        else:
+            terminal_status = "halted"
+    else:
+        terminal_status = runner_status or "unknown"
 
     dynamic_verification = runner.dynamic_verification_report(status=status)
     dynamic_verification_summary = {
@@ -523,6 +547,11 @@ def build_micro_result(
         "session_name": session_name,
         "model": model_name,
         "mode": "micro_intent",
+        # #audit item 4: honest terminal-state surface for the detached
+        # status writer. Replaces the prior practice of stamping
+        # "succeeded" on any non-exception result.
+        "terminal_status": terminal_status,
+        "halt_reason": halt_reason,
         "total_time_s": round(elapsed_seconds),
         "wall_time_breakdown": wall_time_breakdown,
         "steps_executed": len(step_results),
