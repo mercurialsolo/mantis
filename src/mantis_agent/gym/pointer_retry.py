@@ -103,7 +103,7 @@ def pointer_retry_if_unchanged(
     ):
         return url_after_click
 
-    logger.info(
+    logger.warning(
         "  %s SoM click ok=True but URL stable — retrying via CDP "
         "Input.dispatchMouseEvent (real pointer events, isTrusted=true)",
         log_prefix,
