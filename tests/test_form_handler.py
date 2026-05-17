@@ -663,6 +663,88 @@ def test_select_option_full_success(monkeypatch):
     assert runner.costs["gpu_steps"] == 2
 
 
+def test_select_option_native_select_blurs_and_verifies(monkeypatch):
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 100, "y": 200}
+    extractor.verify_dropdown_value.return_value = {
+        "observed": "Qualified",
+        "matches": True,
+    }
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        {"tag": "SELECT", "name": "status", "id": "lead-status"},
+        {"ok": True, "value": "qualified", "text": "Qualified"},
+    ]
+    env.screenshot.return_value = "verify-shot"
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Pick Qualified",
+        type="select_option",
+        params={"dropdown_label": "Lead Status", "option_label": "Qualified"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    assert result.data == "select:Lead Status=Qualified"
+    # Native select skips click-open + option-pick, but still blurs the
+    # focused control so app form state commits before the next step.
+    assert [
+        c.args[0].params for c in env.step.call_args_list
+        if c.args[0].action_type == ActionType.KEY_PRESS
+    ] == [{"keys": "Tab"}]
+    assert [
+        c for c in env.step.call_args_list
+        if c.args[0].action_type == ActionType.CLICK
+    ] == []
+    extractor.verify_dropdown_value.assert_called_once_with(
+        "verify-shot",
+        dropdown_label="Lead Status",
+        expected_value="Qualified",
+    )
+    assert runner.costs["claude_extract"] == 2
+    assert runner.costs["gpu_steps"] == 1
+
+
+def test_select_option_native_select_mismatch_fails(monkeypatch):
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 100, "y": 200}
+    extractor.verify_dropdown_value.return_value = {
+        "observed": "Contacted",
+        "matches": False,
+    }
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        {"tag": "SELECT", "name": "status", "id": "lead-status"},
+        {"ok": True, "value": "qualified", "text": "Qualified"},
+    ]
+    env.screenshot.return_value = "verify-shot"
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Pick Qualified",
+        type="select_option",
+        params={"dropdown_label": "Lead Status", "option_label": "Qualified"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is False
+    assert result.data == "select_mismatch:got=Contacted_wanted=Qualified"
+    assert runner.dump_calls == [("select_mismatch_step5", "verify-shot")]
+    assert [
+        c.args[0].params for c in env.step.call_args_list
+        if c.args[0].action_type == ActionType.KEY_PRESS
+    ] == [{"keys": "Tab"}]
+    assert runner.costs["claude_extract"] == 2
+    assert runner.costs["gpu_steps"] == 1
+
+
 def test_unknown_step_type_returns_failure(monkeypatch):
     monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
     runner = _FakeRunner()
@@ -958,3 +1040,118 @@ def test_tab_walk_focus_reset_failure_does_not_abort(monkeypatch):
     match = _tab_walk_to_nav_link(env, "Contacted")
     assert match is not None
     assert match["tabs"] == 1
+
+
+# ── _tab_walk_to_input (PR-L) ─────────────────────────────────────────
+
+
+def test_tab_walk_input_matches_by_label_for(monkeypatch):
+    """Tab-walk matches an <input> when an adjacent <label for=ID> text
+    matches the target label. Canonical staff-crm-long step 13 pattern.
+    """
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_input
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,  # focus reset
+        # First Tab — focus a non-input element
+        {"tag": "A", "name": "", "placeholder": "", "ariaLabel": "",
+         "siblingText": "", "labelText": "", "value": "", "isInputLike": False},
+        # Second Tab — focus the target input, matched by labelText
+        {"tag": "INPUT", "name": "estimated_value", "placeholder": "",
+         "ariaLabel": "", "siblingText": "", "labelText": "Estimated Deal Value",
+         "value": "461927.81", "isInputLike": True},
+    ]
+
+    match = _tab_walk_to_input(env, "Estimated Deal Value")
+    assert match is not None
+    assert match["tabs"] == 2
+    assert match["tag"] == "INPUT"
+    assert match["value"] == "461927.81"
+
+
+def test_tab_walk_input_matches_by_placeholder(monkeypatch):
+    """Match by placeholder when no <label for> binding exists."""
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_input
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,
+        {"tag": "INPUT", "name": "", "placeholder": "Enter your email",
+         "ariaLabel": "", "siblingText": "", "labelText": "",
+         "value": "", "isInputLike": True},
+    ]
+
+    match = _tab_walk_to_input(env, "email")
+    assert match is not None
+    assert match["tag"] == "INPUT"
+
+
+def test_tab_walk_input_matches_textarea(monkeypatch):
+    """<textarea> elements are also valid fill_field targets."""
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_input
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,
+        {"tag": "TEXTAREA", "name": "notes", "placeholder": "",
+         "ariaLabel": "", "siblingText": "Notes & Comments",
+         "labelText": "", "value": "", "isInputLike": True},
+    ]
+
+    match = _tab_walk_to_input(env, "Notes & Comments")
+    assert match is not None
+    assert match["tag"] == "TEXTAREA"
+
+
+def test_tab_walk_input_rejects_non_input_with_matching_name(monkeypatch):
+    """A <div> with matching name attr doesn't count — only true
+    input-like elements are matched.
+    """
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_input
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,
+        {"tag": "DIV", "name": "email", "placeholder": "", "ariaLabel": "",
+         "siblingText": "", "labelText": "", "value": "", "isInputLike": False},
+    ]
+
+    match = _tab_walk_to_input(env, "email", max_tabs=1)
+    assert match is None
+
+
+def test_tab_walk_input_returns_none_on_no_match(monkeypatch):
+    """When no input matches the label within budget, returns None."""
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_input
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,
+        {"tag": "INPUT", "name": "something_else", "placeholder": "",
+         "ariaLabel": "", "siblingText": "", "labelText": "Other Field",
+         "value": "", "isInputLike": True},
+    ]
+
+    match = _tab_walk_to_input(env, "Estimated Value", max_tabs=1)
+    assert match is None
+
+
+def test_tab_walk_input_empty_label_returns_none() -> None:
+    """No label = nothing to match against."""
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_input
+
+    env = MagicMock()
+    assert _tab_walk_to_input(env, "") is None
+    assert _tab_walk_to_input(env, "   ") is None
+    env.cdp_evaluate.assert_not_called()
