@@ -1057,6 +1057,17 @@ class ClaudeGuidedFormHandler:
                     )
                     match = _tab_walk_to_nav_link(env, label)
                     if match is not None:
+                        # Two-stage activation. Enter is the cheap, most-
+                        # browsers-do-the-right-thing path; it works for
+                        # `<a href="...">`. But many SPAs use anchors
+                        # without href + JS routing — for those Enter
+                        # doesn't trigger nav, and we need a real-pointer
+                        # click at the focused element's center to fire
+                        # React's onClick handler (real keyboard event
+                        # turns out to be insufficient when the framework
+                        # listens for click only). Run `9e51591d` confirmed
+                        # this: Tab-walk found Contacted (8) at Tab+34
+                        # twice, Enter didn't navigate either time.
                         try:
                             env.step(Action(
                                 action_type=ActionType.KEY_PRESS,
@@ -1072,8 +1083,67 @@ class ClaudeGuidedFormHandler:
                                 url_before=url_before,
                             )
                             runner.costs["gpu_steps"] += 1
-                            time.sleep(0.8)
+                            time.sleep(0.6)
                             url_after_click = runner._best_effort_current_url()
+                        # Stage 2: if Enter didn't navigate, real-pointer
+                        # click at the focused anchor's center. Requires
+                        # CDP introspection of the active element's
+                        # bounding rect + chrome offset, then dispatches
+                        # via Input.dispatchMouseEvent (isTrusted=true).
+                        if (
+                            url_before
+                            and url_after_click == url_before
+                            and hasattr(env, "cdp_evaluate")
+                            and hasattr(env, "cdp_click_via_pointer")
+                            and hasattr(env, "_chrome_offset_px")
+                        ):
+                            logger.warning(
+                                "  [claude-form] tab-walk: Enter didn't navigate "
+                                "— dispatching real-pointer click at focused "
+                                "anchor's center"
+                            )
+                            try:
+                                rect = env.cdp_evaluate(
+                                    "(() => {"
+                                    "const el = document.activeElement;"
+                                    "if (!el || !el.getBoundingClientRect) return null;"
+                                    "const r = el.getBoundingClientRect();"
+                                    "return {"
+                                    "  x: Math.round(r.left + r.width / 2),"
+                                    "  y: Math.round(r.top + r.height / 2)"
+                                    "};"
+                                    "})()"
+                                )
+                            except Exception as rect_exc:  # noqa: BLE001
+                                logger.debug("tab-walk rect read raised: %s", rect_exc)
+                                rect = None
+                            if isinstance(rect, dict) and "x" in rect and "y" in rect:
+                                try:
+                                    chrome_h = int(env._chrome_offset_px() or 0)
+                                except Exception:  # noqa: BLE001
+                                    chrome_h = 0
+                                screen_x = int(rect["x"])
+                                screen_y = int(rect["y"]) + chrome_h
+                                logger.warning(
+                                    "  [claude-form] tab-walk: focused-anchor "
+                                    "rect center=(%d,%d) screen=(%d,%d)",
+                                    int(rect["x"]), int(rect["y"]),
+                                    screen_x, screen_y,
+                                )
+                                try:
+                                    env.cdp_click_via_pointer(screen_x, screen_y)
+                                except Exception as click_exc:  # noqa: BLE001
+                                    logger.debug(
+                                        "tab-walk real-pointer click raised: %s",
+                                        click_exc,
+                                    )
+                                else:
+                                    runner.costs["gpu_seconds"] += runner._adaptive_submit_settle(
+                                        url_before=url_before,
+                                    )
+                                    runner.costs["gpu_steps"] += 1
+                                    time.sleep(0.6)
+                                    url_after_click = runner._best_effort_current_url()
                         runner._dump_debug_screenshot(
                             f"submit_step{index}_post_tab_walk",
                             runner._safe_screenshot(),
