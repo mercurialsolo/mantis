@@ -250,10 +250,15 @@ def _auto_region_for_step(
 # target choice — same pattern the SoM diagnostic already uses to
 # inspect what element is at a clicked point.
 #
-# Defaults are conservative: 30 Tab presses (covers most sidebars
-# even on plans that start focus deep inside a form), case-insensitive
-# substring match, ESC + Home before tabbing to reset focus + scroll.
-_TAB_WALK_MAX_TABS = 30
+# Defaults: 60 Tab presses (covers staff-crm's deep focus order — login
+# form has ~5 inputs, top nav has ~6 items, then 25+ sidebar / table
+# header items before reaching the LEAD VIEWS list). Case-insensitive
+# substring match. ESC + Home before tabbing to reset focus + scroll.
+#
+# Bumped from 30 → 60 after run `3e846b36` showed the staff-crm
+# sidebar's Contacted anchor wasn't reached within 30 Tabs. Cost is
+# capped at ~$0.02 of CDP introspection per walk (~$0.0003/Tab).
+_TAB_WALK_MAX_TABS = 60
 _TAB_WALK_KEY_DELAY = 0.12  # seconds between Tab keypresses
 
 
@@ -308,6 +313,10 @@ def _tab_walk_to_nav_link(
         "})()"
     )
 
+    # Trail of (tag, short_name) tuples we visited — surfaced on
+    # no-match for postmortem. Bounded by max_tabs so it never grows
+    # beyond ~60 entries.
+    visited: list[tuple[str, str]] = []
     for i in range(1, max_tabs + 1):
         try:
             env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Tab"}))
@@ -324,6 +333,7 @@ def _tab_walk_to_nav_link(
             continue
         name = str(result.get("name") or "").strip().lower()
         tag = str(result.get("tag") or "").strip().upper()
+        visited.append((tag, str(result.get("name") or "")[:40]))
         if tag == "A" and name and (needle == name or needle in name):
             logger.warning(
                 "  [claude-form] tab-walk: matched anchor at Tab+%d "
@@ -332,9 +342,14 @@ def _tab_walk_to_nav_link(
             )
             return {"tabs": i, "tag": tag, "name": str(result.get("name") or "")}
 
+    # Compact trail for postmortem: tag+name of each focused element.
+    # Truncate per-element name to 20 chars so the log line stays
+    # readable even at max_tabs=60.
+    trail = ", ".join(f"{t}({n[:20]})" for t, n in visited)
     logger.warning(
-        "  [claude-form] tab-walk: no anchor matched %r after %d Tabs",
-        target_label, max_tabs,
+        "  [claude-form] tab-walk: no anchor matched %r after %d Tabs — "
+        "visited: %s",
+        target_label, max_tabs, trail[:1200],
     )
     return None
 
