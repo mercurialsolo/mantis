@@ -554,6 +554,23 @@ class XdotoolGymEnv(GymEnvironment):
             return False
         if not isinstance(result, dict):
             return bool(result)
+        # Stash the SoM diagnostic on the env so the retry-context
+        # recorder can include what was at the click point in the
+        # next brain prompt. PR-H pattern (Option 1): when a click
+        # fails as no_state_change, the brain's retry sees the
+        # ``elv_tag``/``elv_text`` at its prior coord — a post-action
+        # observation, not DOM-target derivation, so this stays
+        # CUA-compliant. Cleared on next ``cdp_click_at_point``;
+        # callers that want a snapshot read it BEFORE the next click.
+        self._last_som_diag = {
+            "x": int(x),
+            "y": int(y),
+            "elv_tag": str(result.get("elv_tag") or ""),
+            "elv_text": str(result.get("elv_text") or ""),
+            "els_tag": str(result.get("els_tag") or ""),
+            "els_text": str(result.get("els_text") or ""),
+            "ok": bool(result.get("ok")),
+        }
         # One-line WARNING log so the SoM click's coordinate translation
         # is visible in Modal's INFO-suppressed capture without an
         # explicit env-var toggle. Once the translation is verified

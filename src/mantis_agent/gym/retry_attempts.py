@@ -46,11 +46,19 @@ _OUTCOME_VERBS: dict[str, str] = {
 def format_prior_attempt(record: dict) -> str:
     """One human-readable line per prior failed attempt.
 
-    Format: ``clicked (x, y) targeting "<matched_label>" → <outcome>``.
+    Format: ``clicked (x, y) targeting "<matched_label>" → <outcome>``,
+    optionally appended with ``[hit <elv_tag>: "<elv_text>"]`` when the
+    SoM diagnostic captured what was at the click pixel.
 
     The outcome verb is keyed off ``record["kind"]`` (the failure
     class the runner stamps when demoting). Falls back to a generic
     ``failed (<kind>)`` when the kind is unknown.
+
+    The SoM clause (PR-H Option 1) gives the brain the same signal a
+    human gets from cursor state: the brain sees on retry that its
+    prior coord landed on, e.g. a TD parent instead of the intended
+    `<a>` child, and can adjust the pixel choice without DOM-target
+    derivation.
 
     Defensive on every field — a partial record (e.g. no
     ``matched_label``) still produces a sensible line rather than
@@ -64,7 +72,16 @@ def format_prior_attempt(record: dict) -> str:
     outcome = _OUTCOME_VERBS.get(kind, f"failed ({kind or 'unknown'})")
     target_clause = f' targeting "{matched}"' if matched else ""
     detail = f"; {reason[:120]}" if reason else ""
-    return f"clicked ({x}, {y}){target_clause} → {outcome}{detail}"
+    elv_tag = str(record.get("som_elv_tag") or "").strip()
+    elv_text = str(record.get("som_elv_text") or "").strip()
+    som_clause = ""
+    if elv_tag or elv_text:
+        # Compact form: ``[hit TD: "Tempest Cleaner"]``. The brain
+        # reads "hit X" as "your prior pixel landed on X" and adjusts.
+        tag_part = elv_tag or "?"
+        text_part = f': "{elv_text}"' if elv_text else ""
+        som_clause = f' [hit {tag_part}{text_part}]'
+    return f"clicked ({x}, {y}){target_clause} → {outcome}{detail}{som_clause}"
 
 
 def render_attempts_block(
