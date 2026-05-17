@@ -871,10 +871,15 @@ def test_tab_walk_case_insensitive_substring_match(monkeypatch):
     assert match["tabs"] == 1
 
 
-def test_tab_walk_rejects_non_anchor_match(monkeypatch):
-    """A BUTTON named "Contacted" doesn't count — only `<a>` elements
-    match. Avoids accidentally pressing Enter on a button-shaped item
-    that doesn't behave like a nav link.
+def test_tab_walk_accepts_button_tag(monkeypatch):
+    """Tab-walk matches both `<a>` and `<button>` tags. Extended after
+    staff-crm-long step 10 surfaced a kind=button step (Edit Lead)
+    hitting the parent-container click-trap — Tab-walk now reaches
+    buttons too, not just anchors.
+
+    Was: ``test_tab_walk_rejects_non_anchor_match`` (asserted BUTTON
+    didn't match). New behavior: BUTTON with matching label IS a valid
+    target.
     """
     from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
 
@@ -883,14 +888,36 @@ def test_tab_walk_rejects_non_anchor_match(monkeypatch):
     env = MagicMock()
     env.cdp_evaluate.side_effect = [
         True,  # focus reset
-        {"tag": "BUTTON", "name": "Contacted"},  # right name, wrong tag
-        {"tag": "A", "name": "Contacted (0)"},   # correct
+        {"tag": "DIV", "name": "Contacted"},  # right name, but DIV (still excluded)
+        {"tag": "BUTTON", "name": "Contacted"},  # match — accepted now
     ]
 
     match = _tab_walk_to_nav_link(env, "Contacted")
 
     assert match is not None
     assert match["tabs"] == 2
+    assert match["tag"] == "BUTTON"
+
+
+def test_tab_walk_rejects_div_match(monkeypatch):
+    """Non-interactive tags (DIV, SPAN, etc.) are NOT matched, even when
+    the accessible name matches. Tab-walk targets only true clickable
+    elements that activate via Enter from focused state.
+    """
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,
+        {"tag": "DIV", "name": "Contacted"},  # name matches but DIV — excluded
+        {"tag": "SPAN", "name": "Contacted"}, # same
+        # Walk continues until budget exhausted
+    ]
+
+    match = _tab_walk_to_nav_link(env, "Contacted", max_tabs=2)
+    assert match is None
 
 
 def test_tab_walk_handles_cdp_evaluate_exception(monkeypatch):
