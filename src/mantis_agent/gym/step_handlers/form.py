@@ -546,6 +546,11 @@ def _tab_walk_to_input(
             str(result.get(k) or "").strip().lower()
             for k in ("labelText", "ariaLabel", "placeholder", "name", "siblingText")
         ]
+        if tag in ("INPUT", "TEXTAREA"):
+            logger.warning(
+                "  [claude-form] tab-walk-input probe at Tab+%d: needle=%r candidates=%r",
+                i, needle, candidates,
+            )
         if any(_label_matches(needle, c) for c in candidates):
             logger.warning(
                 "  [claude-form] tab-walk-input: matched %s at Tab+%d "
