@@ -291,10 +291,33 @@ def _tab_walk_to_nav_link(
         )
         return None
 
-    # Reset focus + scroll position so the walk starts from a known
-    # state. Escape closes any open popovers/dropdowns; Home scrolls
-    # to top; Tab from there walks the natural document order.
+    # Reset focus to document.body so the first Tab lands on the FIRST
+    # tabbable element in DOM order — not on whatever was focused by
+    # the prior click + Enter. Without this, the walk skips items
+    # earlier than the previous click position. Run `012bbc94` showed
+    # the trail starting mid-sidebar (Proposal, Negotiation, ...)
+    # because focus was on Qualified after the prior click; we were
+    # tabbing FORWARD from there and missing New Leads / Contacted /
+    # Qualified.
+    #
+    # We use CDP rather than keypresses because no key (Escape, Home,
+    # End, Tab+Shift, …) reliably moves focus to body across browsers.
+    # ``document.body.focus()`` requires a brief tabindex assignment
+    # because body is not focusable by default.
     try:
+        env.cdp_evaluate(
+            "(() => {"
+            "try { if (document.activeElement) document.activeElement.blur(); } catch (e) {}"
+            "try {"
+            "  document.body.tabIndex = -1;"
+            "  document.body.focus();"
+            "  document.body.removeAttribute('tabindex');"
+            "} catch (e) {}"
+            "return true;"
+            "})()"
+        )
+        # Also Home for scroll reset (so the FIRST tabbable element is
+        # actually visible if vision wants to corroborate later).
         env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
         env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
         time.sleep(0.3)
