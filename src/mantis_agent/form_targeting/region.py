@@ -58,6 +58,20 @@ _NAMED_REGIONS: dict[str, tuple[float, float, float, float]] = {
     # lives at the top.
     "form-footer":  (0.0, 0.6, 1.0, 1.0),
     "form-header":  (0.0, 0.0, 1.0, 0.25),
+    # Sidebar-specific aliases. ``"left"`` is a 33% strip that
+    # includes EVERY left-rail item — QUICK LINKS, LEAD VIEWS,
+    # BY PRIORITY, ACTIONS, SYSTEM. On staff-crm-long the brain
+    # learned an "average sidebar position" that pointed at the
+    # wrong section. ``"sidebar-list-mid"`` narrows to the
+    # middle band of the left strip where filter lists typically
+    # live (LEAD VIEWS / Categories / Tags), eliminating
+    # multi-section ambiguity. Use when the plan names a SPECIFIC
+    # sidebar list (``Click Contacted in LEAD VIEWS sidebar`` →
+    # this region; ``Click All Leads in QUICK LINKS sidebar`` →
+    # ``"sidebar-list-top"``).
+    "sidebar-list-top":    (0.0, 0.15, 0.14, 0.40),
+    "sidebar-list-mid":    (0.0, 0.35, 0.14, 0.60),
+    "sidebar-list-bottom": (0.0, 0.55, 0.14, 0.80),
 }
 
 

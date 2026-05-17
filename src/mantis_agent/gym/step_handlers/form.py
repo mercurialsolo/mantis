@@ -802,7 +802,35 @@ class ClaudeGuidedFormHandler:
                 # when the SoM path was used (executor_backend ==
                 # "som") and the URL stayed stable — i.e. we're in
                 # the trust-gated case.
+                #
+                # Gate tightening (PR-D follow-up to #445): the gate's
+                # ``url_after_click == url_before`` check used to read
+                # the URL once, immediately after ``_adaptive_submit_settle``.
+                # That race-loses when the synthetic click triggers a
+                # brief navigation that bounces back: the settle returns
+                # early on the intermediate URL, the immediate poll
+                # captures the (different) intermediate, and the gate
+                # doesn't fire. Re-poll after a short stabilization
+                # window and compare the FINAL settled URL — the
+                # bounce-back case now correctly satisfies the gate
+                # and the pointer-retry actually runs.
                 url_after_click = runner._best_effort_current_url()
+                time.sleep(0.8)  # stabilization window
+                final_url = runner._best_effort_current_url()
+                # A blank ``final_url`` means the runner couldn't read
+                # the URL on the second poll — treat as missing info
+                # rather than a navigation. Otherwise a transient
+                # read-fail would mask a genuine no-navigation case
+                # (gate fires on bogus inequality) or hide a genuine
+                # navigation (gate misfires the retry).
+                if final_url and final_url != url_after_click:
+                    logger.warning(
+                        "  [claude-form] post-click URL bounce detected: "
+                        "settle saw %r, final is %r — pointer-retry "
+                        "evaluates against final",
+                        (url_after_click or "")[:80], final_url[:80],
+                    )
+                    url_after_click = final_url
                 if (
                     url_before
                     and url_after_click == url_before
@@ -824,6 +852,8 @@ class ClaudeGuidedFormHandler:
                             url_before=url_before,
                         )
                         runner.costs["gpu_steps"] += 1
+                        # Same final-URL evaluation as the pre-retry guard.
+                        time.sleep(0.8)
                         url_after_click = runner._best_effort_current_url()
 
                 # Enter-key fallback: HTML forms whose JS swallows the click
