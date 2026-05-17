@@ -556,6 +556,21 @@ RULES:
       nav clicks where the URL pattern is named in the source. Skip
       for clicks on dynamic data (lead rows, comment replies, etc.)
       where the destination URL contains an ID we won't know.
+
+      CAVEAT — fallback_url assumes the site is URL-DRIVEN: that
+      navigating directly to the URL produces the same observable
+      state as clicking the original element. Many SPA admin
+      consoles (CRMs, ticket systems, dashboards) accept the URL
+      visually but strip the query string and apply default state,
+      so direct navigation does NOT match the click's intended
+      effect — the click handler maintains in-app state that the
+      route doesn't. When you can see from the source plan that
+      the site routes only via clicks (e.g. "the URL bar updates
+      after you click but typing the same URL in the address bar
+      loads the default view"), DO NOT emit fallback_url; let the
+      frontier critic propose a different recovery instead. Default
+      to emitting fallback_url unless the source explicitly warns
+      about URL-stripping or SPA-only state.
 - The "reverse" field must be a CUA-executable instruction
 - Set section="setup", section="extraction", or section="pagination"
 - Set required=true for all setup/filter/form steps (this is the default)
@@ -709,7 +724,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v27_fallback_url"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v28_fallback_url_url_driven"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

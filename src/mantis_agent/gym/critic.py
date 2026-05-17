@@ -212,6 +212,14 @@ class ExecutionCritic:
             # propose an alternative. Fall through to whatever the
             # recovery policy decided.
             return None
+        # Reasoning-trace event so viewer overlays see the
+        # deterministic recovery alongside the frontier-critic events.
+        from . import reasoning_trace as _trace
+        _trace.record(
+            self.runner, layer="critic-navigate-back-recovery", kind="fire",
+            summary=f"inserting direct navigate to {base_url[:80]}",
+            base_url=base_url[:200],
+        )
         return InsertStep(
             intent=f"Navigate to {base_url}",
             step_type="navigate",
@@ -277,6 +285,21 @@ class ExecutionCritic:
             "  [critic] step %d: using plan-supplied fallback_url=%r "
             "(after %d prior failures of class %s)",
             state.step_index, fallback_url, len(history), failure_class,
+        )
+        # Reasoning-trace event so viewer overlays see the
+        # deterministic replacement alongside the frontier-critic
+        # events the Claude-based capability emits.
+        from . import reasoning_trace as _trace
+        _trace.record(
+            self.runner, layer="critic-fallback-url", kind="fire",
+            summary=(
+                f"replaced step with navigate to {fallback_url[:80]} "
+                f"(after {len(history)} {failure_class} failures)"
+            ),
+            step_index=int(state.step_index),
+            failure_class=failure_class,
+            failure_count=len(history),
+            fallback_url=fallback_url[:200],
         )
         return ReplaceStep(
             intent=f"Navigate to {fallback_url} (fallback for stuck click)",

@@ -185,6 +185,73 @@ def test_fallback_url_skipped_for_non_rewrite_failure_class() -> None:
     assert out is None
 
 
+def test_fallback_url_emits_reasoning_trace_event() -> None:
+    """When the deterministic fallback_url rule fires, a structured
+    event lands on ``runner._healing_events`` so the viewer overlay
+    can render it on the timeline alongside the Claude-based critic
+    events. Without this, the rule was invisible to the trace
+    endpoint (count=0 events even when the rule fired)."""
+    runner = _runner_with_failure_history(step_index=0, n_failures=2)
+    runner._reasoning_jsonl_path = None  # don't write to disk; in-memory only
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(
+            intent="Click Contacted", type="submit",
+            hints={"fallback_url": "https://x.example/leads?status=Contacted"},
+        ),
+    ])
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="no_state_change",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    assert isinstance(out, ReplaceStep)
+    # A reasoning event landed.
+    events = [
+        e for e in runner._healing_events
+        if isinstance(e, dict) and e.get("layer") == "critic-fallback-url"
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event["kind"] == "fire"
+    assert event["category"] == "reasoning"
+    assert "leads?status=Contacted" in event["summary"]
+    assert event["detail"]["failure_class"] == "no_state_change"
+    assert event["detail"]["failure_count"] == 2
+
+
+def test_navigate_back_recovery_emits_reasoning_trace_event() -> None:
+    """Same trace plumbing for the older navigate_back rule. Without
+    this the deterministic recovery slipped through the viewer's
+    timeline."""
+    runner = SimpleNamespace(
+        _results_base_url="https://example.com/discover",
+        _healing_events=[],
+    )
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(intent="back", type="navigate_back"),
+    ])
+    result = StepResult(
+        step_index=0, intent="back", success=False,
+        failure_class="brain_loop_exhausted",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    assert out is not None  # InsertStep emitted
+    events = [
+        e for e in runner._healing_events
+        if isinstance(e, dict)
+        and e.get("layer") == "critic-navigate-back-recovery"
+    ]
+    assert len(events) == 1
+    assert events[0]["kind"] == "fire"
+    assert "discover" in events[0]["summary"]
+
+
 def test_fallback_url_fires_before_frontier_capability(monkeypatch) -> None:
     """The deterministic rule must run BEFORE the frontier-model
     capability. Otherwise a plan with a known fallback wastes the

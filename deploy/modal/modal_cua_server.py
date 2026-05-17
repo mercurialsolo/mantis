@@ -892,6 +892,14 @@ def _run_holo3_executor(
             "status": result.get("costs", {}).get("status", ""),
             "dynamic_verification_summary": result.get("dynamic_verification_summary"),
             "run_id": run_id,
+            # #audit item 4 follow-up: the Modal entry was dropping
+            # ``terminal_status`` + ``halt_reason`` from the envelope
+            # so the API container couldn't read them off the result.
+            # Re-export both so ``_do_action`` can map the wire
+            # ``status`` honestly instead of stamping "succeeded" on
+            # every non-exception result.
+            "terminal_status": result.get("terminal_status", ""),
+            "halt_reason": result.get("halt_reason", ""),
         }
         # #347: surface paused state to the Modal API container. The poll
         # path detects ``_paused`` on the FunctionCall result and writes
@@ -1918,8 +1926,41 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
                         _write_status(tenant.tenant_id, run_id, status)
                         release_profile_lock(tenant, status.get("profile_id", ""))
                     else:
-                        status["status"] = "succeeded"
+                        # #audit item 4 follow-up: read the honest
+                        # terminal_status off the envelope (the Modal
+                        # entry surfaces it explicitly now). Map the
+                        # internal value to the wire status with the
+                        # same rules as ``baseten_server/runtime.py``
+                        # (which already had this fix):
+                        #   completed              → succeeded (back-compat)
+                        #   completed_with_failures → completed_with_failures
+                        #   halted / budget_exceeded / time_exceeded → halted
+                        #   anything else / missing  → succeeded (defensive)
+                        rt_status = ""
+                        halt_reason = ""
+                        if isinstance(result, dict):
+                            rt_status = str(result.get("terminal_status") or "")
+                            halt_reason = str(result.get("halt_reason") or "")
+                        if rt_status == "completed":
+                            wire_status = "succeeded"
+                        elif rt_status == "completed_with_failures":
+                            wire_status = "completed_with_failures"
+                        elif rt_status in (
+                            "halted", "budget_exceeded", "time_exceeded",
+                        ):
+                            wire_status = "halted"
+                        else:
+                            wire_status = "succeeded"
+                        status["status"] = wire_status
                         status["updated_at"] = datetime.now(timezone.utc).isoformat()
+                        # Surface the finer detail under explicit keys
+                        # alongside the back-compat wire status so
+                        # callers that want to distinguish budget vs
+                        # time vs step-halt can branch on them.
+                        if rt_status:
+                            status["terminal_status"] = rt_status
+                        if halt_reason:
+                            status["halt_reason"] = halt_reason
                         _write_status(tenant.tenant_id, run_id, status)
                         _write_result(
                             tenant.tenant_id,
