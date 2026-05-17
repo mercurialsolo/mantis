@@ -997,14 +997,35 @@ class ClaudeGuidedFormHandler:
                 if (
                     url_before
                     and url_after_click == url_before
-                    and (params.get("kind") or "") == "nav_link"
+                    and (params.get("kind") or "") in {"nav_link", "row_link", "cell_link"}
                 ):
+                    # For row_link / cell_link the plan often doesn't
+                    # carry a label (the anchor text is dynamic per row).
+                    # Recover the label from the most-recent SoM diag
+                    # in this step's failure history — the failed click
+                    # captured the visible text via elementFromPoint.
+                    match_label = label
+                    if not match_label:
+                        history_records = (
+                            (getattr(runner, "_step_failure_history", {}) or {})
+                            .get(index, [])
+                        )
+                        if history_records:
+                            last = history_records[-1]
+                            match_label = str(last.get("som_elv_text") or "").strip()
+                            if match_label:
+                                logger.warning(
+                                    "  [claude-form] Tab-walk: no plan label "
+                                    "for %s; using SoM-captured elv_text %r",
+                                    params.get("kind") or "?", match_label,
+                                )
                     logger.warning(
                         "  [claude-form] click + Enter both no-op'd on "
-                        "nav_link '%s' — trying Tab-walk DOM-anchor fallback",
-                        label,
+                        "%s '%s' — trying Tab-walk DOM-anchor fallback",
+                        params.get("kind") or "?",
+                        match_label or "(no label)",
                     )
-                    match = _tab_walk_to_nav_link(env, label)
+                    match = _tab_walk_to_nav_link(env, match_label)
                     if match is not None:
                         # Two-stage activation. Enter is the cheap, most-
                         # browsers-do-the-right-thing path; it works for

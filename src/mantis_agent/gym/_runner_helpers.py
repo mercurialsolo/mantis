@@ -847,11 +847,22 @@ def execute_step(
                     data="filters_not_applied",
                 )
             return _stamp_backend(registry.get("click").execute(step, ctx), ctx)
+        # Preserve ``kind`` and ``aliases`` from the original click step
+        # so downstream form-handler logic (Tab-walk for nav_link /
+        # row_link / cell_link, region inference, alias matching) sees
+        # the same hints the plan author specified. Pre-fix, only
+        # ``label`` was threaded — the Tab-walk fallback for row_link
+        # steps couldn't fire because ``kind`` got dropped here.
+        orig_params = step.params or {}
         synthesised = MicroIntent(
             intent=step.intent, type="submit",
             budget=step.budget, section=step.section,
             required=step.required,
-            params={"label": (step.params or {}).get("label", "")},
+            params={
+                "label": orig_params.get("label", ""),
+                "kind": orig_params.get("kind", ""),
+                "aliases": orig_params.get("aliases", []),
+            },
         )
         return _stamp_backend(registry.get("submit").execute(synthesised, ctx), ctx)
 
