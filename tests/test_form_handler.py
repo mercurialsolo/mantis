@@ -780,3 +780,154 @@ def test_right_click_uses_intent_string_when_no_label(monkeypatch):
     call_args = extractor.find_form_target.call_args
     search_intent = call_args.args[1]
     assert "first table row" in search_intent
+
+
+# ── PR-E: Tab-walk fallback for nav_link kind ────────────────────────
+
+
+def test_tab_walk_returns_match_when_anchor_found_in_budget(monkeypatch):
+    """Tab-walk presses Tab, inspects focused element via cdp_evaluate,
+    returns a match dict when an `<a>` element's accessible name matches.
+    """
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    # Sequence of cdp_evaluate calls:
+    #   [0] focus reset (returns True / unused)
+    #   [1..N] inspections after each Tab. Match on Tab #3.
+    env.cdp_evaluate.side_effect = [
+        True,  # focus reset
+        {"tag": "INPUT", "name": "search"},
+        {"tag": "BUTTON", "name": "Logout"},
+        {"tag": "A", "name": "Contacted (0)"},
+    ]
+
+    match = _tab_walk_to_nav_link(env, "Contacted")
+
+    assert match is not None
+    assert match["tabs"] == 3
+    assert match["tag"] == "A"
+    assert "Contacted" in match["name"]
+
+
+def test_tab_walk_returns_none_when_no_match_within_budget(monkeypatch):
+    """When max_tabs Tabs pass without a matching anchor, return None."""
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.return_value = {"tag": "INPUT", "name": "anything else"}
+
+    match = _tab_walk_to_nav_link(env, "Contacted", max_tabs=5)
+
+    assert match is None
+    # cdp_evaluate called max_tabs (5) inspections + 1 focus reset = 6
+    assert env.cdp_evaluate.call_count == 6
+
+
+def test_tab_walk_returns_none_when_env_lacks_cdp_evaluate(monkeypatch):
+    """No cdp_evaluate → return None immediately (no fallback to vision)."""
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    # MagicMock auto-creates attrs; spec= constrains it
+    env = MagicMock(spec=[])
+    match = _tab_walk_to_nav_link(env, "Contacted")
+    assert match is None
+
+
+def test_tab_walk_empty_label_returns_none(monkeypatch):
+    """Empty / whitespace-only label is unwalkable — return None."""
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    assert _tab_walk_to_nav_link(env, "") is None
+    assert _tab_walk_to_nav_link(env, "   ") is None
+    # cdp_evaluate never queried — short-circuit before the loop
+    env.cdp_evaluate.assert_not_called()
+
+
+def test_tab_walk_case_insensitive_substring_match(monkeypatch):
+    """Match is case-insensitive and substring: "contacted" matches "Contacted (0)"."""
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,  # focus reset
+        {"tag": "A", "name": "Contacted (0)"},  # matches "contacted" substring
+    ]
+
+    match = _tab_walk_to_nav_link(env, "contacted")
+
+    assert match is not None
+    assert match["tabs"] == 1
+
+
+def test_tab_walk_rejects_non_anchor_match(monkeypatch):
+    """A BUTTON named "Contacted" doesn't count — only `<a>` elements
+    match. Avoids accidentally pressing Enter on a button-shaped item
+    that doesn't behave like a nav link.
+    """
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,  # focus reset
+        {"tag": "BUTTON", "name": "Contacted"},  # right name, wrong tag
+        {"tag": "A", "name": "Contacted (0)"},   # correct
+    ]
+
+    match = _tab_walk_to_nav_link(env, "Contacted")
+
+    assert match is not None
+    assert match["tabs"] == 2
+
+
+def test_tab_walk_handles_cdp_evaluate_exception(monkeypatch):
+    """cdp_evaluate raising on one iteration shouldn't abort the walk —
+    skip the iteration and continue tabbing.
+    """
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,  # focus reset
+        RuntimeError("transient CDP read fail"),
+        {"tag": "A", "name": "Contacted (0)"},
+    ]
+
+    match = _tab_walk_to_nav_link(env, "Contacted")
+
+    assert match is not None
+    assert match["tabs"] == 2
+
+
+def test_tab_walk_focus_reset_failure_does_not_abort(monkeypatch):
+    """If the focus-reset cdp_evaluate call raises, tab-walk should still
+    proceed with Tab/inspect — the reset is best-effort.
+    """
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_nav_link
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        RuntimeError("reset failed (still continue)"),
+        {"tag": "A", "name": "Contacted (0)"},
+    ]
+
+    match = _tab_walk_to_nav_link(env, "Contacted")
+    assert match is not None
+    assert match["tabs"] == 1

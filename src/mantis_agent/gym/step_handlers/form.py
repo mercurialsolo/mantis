@@ -234,6 +234,149 @@ def _auto_region_for_step(
     return ""
 
 
+# PR-D follow-up — Tier-2 fallback for nav_link sidebar clicks.
+# When vision + region cropping + retry context all fail to land on the
+# target sidebar anchor (canonical case: cross-session layout drift
+# where ``y=390`` hits Qualified in one tenant and Contacted in
+# another), Tab through the DOM's focusable elements until the focus
+# ring lands on an anchor whose accessible name matches the plan's
+# label. Then fire Enter. Layout-drift-immune because Tab order is
+# DOM-anchored, not pixel-anchored.
+#
+# Why this is CUA-compliant: per ``feedback_cua_no_dom_access`` rule,
+# the runner must derive click TARGETS from screenshots only. Tab is
+# a procedural keyboard action (no derivation); reading
+# ``document.activeElement.textContent`` is a state observation, not a
+# target choice — same pattern the SoM diagnostic already uses to
+# inspect what element is at a clicked point.
+#
+# Defaults: 60 Tab presses (covers staff-crm's deep focus order — login
+# form has ~5 inputs, top nav has ~6 items, then 25+ sidebar / table
+# header items before reaching the LEAD VIEWS list). Case-insensitive
+# substring match. ESC + Home before tabbing to reset focus + scroll.
+#
+# Bumped from 30 → 60 after run `3e846b36` showed the staff-crm
+# sidebar's Contacted anchor wasn't reached within 30 Tabs. Cost is
+# capped at ~$0.02 of CDP introspection per walk (~$0.0003/Tab).
+_TAB_WALK_MAX_TABS = 60
+_TAB_WALK_KEY_DELAY = 0.12  # seconds between Tab keypresses
+
+
+def _tab_walk_to_nav_link(
+    env: Any,
+    target_label: str,
+    *,
+    max_tabs: int = _TAB_WALK_MAX_TABS,
+) -> dict[str, Any] | None:
+    """Tab through focusable elements until the focus ring lands on an
+    anchor whose accessible name matches ``target_label``.
+
+    Returns the match dict ``{"tabs": int, "tag": str, "name": str}``
+    when found; returns ``None`` otherwise. On match, callers should
+    fire ``Enter`` to activate the focused anchor.
+
+    Requires the env to expose ``cdp_evaluate`` (CDP Runtime.evaluate).
+    Without it, returns ``None`` immediately — no fallback to
+    blind-tab-and-screenshot because the cost would balloon past the
+    value of a single screenshot-driven retry.
+    """
+    if not target_label:
+        return None
+    needle = target_label.strip().lower()
+    if not needle:
+        return None
+    if not hasattr(env, "cdp_evaluate"):
+        logger.debug(
+            "  [claude-form] tab-walk: env lacks cdp_evaluate — skipping",
+        )
+        return None
+
+    # Reset focus to document.body so the first Tab lands on the FIRST
+    # tabbable element in DOM order — not on whatever was focused by
+    # the prior click + Enter. Without this, the walk skips items
+    # earlier than the previous click position. Run `012bbc94` showed
+    # the trail starting mid-sidebar (Proposal, Negotiation, ...)
+    # because focus was on Qualified after the prior click; we were
+    # tabbing FORWARD from there and missing New Leads / Contacted /
+    # Qualified.
+    #
+    # We use CDP rather than keypresses because no key (Escape, Home,
+    # End, Tab+Shift, …) reliably moves focus to body across browsers.
+    # ``document.body.focus()`` requires a brief tabindex assignment
+    # because body is not focusable by default.
+    try:
+        env.cdp_evaluate(
+            "(() => {"
+            "try { if (document.activeElement) document.activeElement.blur(); } catch (e) {}"
+            "try {"
+            "  document.body.tabIndex = -1;"
+            "  document.body.focus();"
+            "  document.body.removeAttribute('tabindex');"
+            "} catch (e) {}"
+            "return true;"
+            "})()"
+        )
+        # Also Home for scroll reset (so the FIRST tabbable element is
+        # actually visible if vision wants to corroborate later).
+        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+        time.sleep(0.3)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("tab-walk reset failed: %s", exc)
+
+    js_inspect = (
+        "(() => {"
+        "const el = document.activeElement;"
+        "if (!el) return {tag: '', name: ''};"
+        "const aria = el.getAttribute && el.getAttribute('aria-label');"
+        "const txt = (el.textContent || el.innerText || '').trim();"
+        "const val = (el.value || '').trim();"
+        "const name = (aria || txt || val || '').trim().slice(0, 120);"
+        "return {tag: el.tagName || '', name: name};"
+        "})()"
+    )
+
+    # Trail of (tag, short_name) tuples we visited — surfaced on
+    # no-match for postmortem. Bounded by max_tabs so it never grows
+    # beyond ~60 entries.
+    visited: list[tuple[str, str]] = []
+    for i in range(1, max_tabs + 1):
+        try:
+            env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Tab"}))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("tab-walk: Tab dispatch raised: %s", exc)
+            return None
+        time.sleep(_TAB_WALK_KEY_DELAY)
+        try:
+            result = env.cdp_evaluate(js_inspect)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("tab-walk: cdp_evaluate raised: %s", exc)
+            continue
+        if not isinstance(result, dict):
+            continue
+        name = str(result.get("name") or "").strip().lower()
+        tag = str(result.get("tag") or "").strip().upper()
+        visited.append((tag, str(result.get("name") or "")[:40]))
+        if tag == "A" and name and (needle == name or needle in name):
+            logger.warning(
+                "  [claude-form] tab-walk: matched anchor at Tab+%d "
+                "(tag=%s name=%r) for target=%r",
+                i, tag, result.get("name"), target_label,
+            )
+            return {"tabs": i, "tag": tag, "name": str(result.get("name") or "")}
+
+    # Compact trail for postmortem: tag+name of each focused element.
+    # Truncate per-element name to 20 chars so the log line stays
+    # readable even at max_tabs=60.
+    trail = ", ".join(f"{t}({n[:20]})" for t, n in visited)
+    logger.warning(
+        "  [claude-form] tab-walk: no anchor matched %r after %d Tabs — "
+        "visited: %s",
+        target_label, max_tabs, trail[:1200],
+    )
+    return None
+
+
 def _build_submit_search_intent(label: str, kind: str, fallback: str) -> str:
     """Construct the find_form_target prompt for a submit step.
 
@@ -891,6 +1034,120 @@ class ClaudeGuidedFormHandler:
                         f"submit_step{index}_post_click",
                         runner._safe_screenshot(),
                     )
+
+                # PR-E: Tab-walk fallback for ``kind=nav_link``. The
+                # canonical failure mode (staff-crm-long step 6): vision
+                # + region cropping + retry context all pick coordinates
+                # that resolve to the wrong sibling anchor (cross-
+                # session sidebar layout drift). Tab order is DOM-
+                # anchored and immune to that drift — walk Tab until a
+                # focused anchor matches the plan's label, then fire
+                # Enter. Bounded to 30 Tab presses (~$0.05 of grounding
+                # if every step took a screenshot, but we use CDP
+                # introspection here so it's near-free).
+                if (
+                    url_before
+                    and url_after_click == url_before
+                    and (params.get("kind") or "") == "nav_link"
+                ):
+                    logger.warning(
+                        "  [claude-form] click + Enter both no-op'd on "
+                        "nav_link '%s' — trying Tab-walk DOM-anchor fallback",
+                        label,
+                    )
+                    match = _tab_walk_to_nav_link(env, label)
+                    if match is not None:
+                        # Two-stage activation. Enter is the cheap, most-
+                        # browsers-do-the-right-thing path; it works for
+                        # `<a href="...">`. But many SPAs use anchors
+                        # without href + JS routing — for those Enter
+                        # doesn't trigger nav, and we need a real-pointer
+                        # click at the focused element's center to fire
+                        # React's onClick handler (real keyboard event
+                        # turns out to be insufficient when the framework
+                        # listens for click only). Run `9e51591d` confirmed
+                        # this: Tab-walk found Contacted (8) at Tab+34
+                        # twice, Enter didn't navigate either time.
+                        try:
+                            env.step(Action(
+                                action_type=ActionType.KEY_PRESS,
+                                params={"keys": "Return"},
+                            ))
+                        except Exception as tab_enter_exc:  # noqa: BLE001
+                            logger.debug(
+                                "tab-walk Enter dispatch raised: %s",
+                                tab_enter_exc,
+                            )
+                        else:
+                            runner.costs["gpu_seconds"] += runner._adaptive_submit_settle(
+                                url_before=url_before,
+                            )
+                            runner.costs["gpu_steps"] += 1
+                            time.sleep(0.6)
+                            url_after_click = runner._best_effort_current_url()
+                        # Stage 2: if Enter didn't navigate, real-pointer
+                        # click at the focused anchor's center. Requires
+                        # CDP introspection of the active element's
+                        # bounding rect + chrome offset, then dispatches
+                        # via Input.dispatchMouseEvent (isTrusted=true).
+                        if (
+                            url_before
+                            and url_after_click == url_before
+                            and hasattr(env, "cdp_evaluate")
+                            and hasattr(env, "cdp_click_via_pointer")
+                            and hasattr(env, "_chrome_offset_px")
+                        ):
+                            logger.warning(
+                                "  [claude-form] tab-walk: Enter didn't navigate "
+                                "— dispatching real-pointer click at focused "
+                                "anchor's center"
+                            )
+                            try:
+                                rect = env.cdp_evaluate(
+                                    "(() => {"
+                                    "const el = document.activeElement;"
+                                    "if (!el || !el.getBoundingClientRect) return null;"
+                                    "const r = el.getBoundingClientRect();"
+                                    "return {"
+                                    "  x: Math.round(r.left + r.width / 2),"
+                                    "  y: Math.round(r.top + r.height / 2)"
+                                    "};"
+                                    "})()"
+                                )
+                            except Exception as rect_exc:  # noqa: BLE001
+                                logger.debug("tab-walk rect read raised: %s", rect_exc)
+                                rect = None
+                            if isinstance(rect, dict) and "x" in rect and "y" in rect:
+                                try:
+                                    chrome_h = int(env._chrome_offset_px() or 0)
+                                except Exception:  # noqa: BLE001
+                                    chrome_h = 0
+                                screen_x = int(rect["x"])
+                                screen_y = int(rect["y"]) + chrome_h
+                                logger.warning(
+                                    "  [claude-form] tab-walk: focused-anchor "
+                                    "rect center=(%d,%d) screen=(%d,%d)",
+                                    int(rect["x"]), int(rect["y"]),
+                                    screen_x, screen_y,
+                                )
+                                try:
+                                    env.cdp_click_via_pointer(screen_x, screen_y)
+                                except Exception as click_exc:  # noqa: BLE001
+                                    logger.debug(
+                                        "tab-walk real-pointer click raised: %s",
+                                        click_exc,
+                                    )
+                                else:
+                                    runner.costs["gpu_seconds"] += runner._adaptive_submit_settle(
+                                        url_before=url_before,
+                                    )
+                                    runner.costs["gpu_steps"] += 1
+                                    time.sleep(0.6)
+                                    url_after_click = runner._best_effort_current_url()
+                        runner._dump_debug_screenshot(
+                            f"submit_step{index}_post_tab_walk",
+                            runner._safe_screenshot(),
+                        )
 
                 # Propagate any post-submit URL change to runner._last_known_url
                 # so step_snapshot.diff() picks it up. Without this, a successful
