@@ -223,17 +223,25 @@ class LocalBackend:
             extra={"mode": "subprocess", "proc": proc, "port": port},
         )
 
-    def wait_healthy(self, handle: RuntimeHandle, *, timeout_s: float = 90.0) -> None:
+    def wait_healthy(self, handle: RuntimeHandle, *, timeout_s: float = 180.0) -> None:
         """Poll ``/__env__/health`` until 200 or ``timeout_s`` elapses.
 
-        Default 90 s covers heavily contended CI runners. The previous
-        60 s ceiling (#364) still flaked on different sub-tests of
-        ``test_admin_token_isolation`` and ``test_env_up`` across many
-        PRs, always on the same first-boot path (fresh Python subprocess
-        + FastAPI import + uvicorn bind). The poll loop exits as soon
-        as the env responds 200, so the higher cap costs nothing on the
-        happy path — it only changes whether we surface a noisy
-        TimeoutError on a slow boot.
+        Default bumped to 180 s after the 90 s ceiling continued flaking
+        across PRs #449 and #453 (this session, 2026-05-17), each time
+        on a different ``test_env_up.py`` sub-test that hit the
+        FastAPI-cold-start race. History:
+
+        - 60 s (#364) — flaked
+        - 90 s (#???) — flaked on PRs #449, #453 in one investigation session
+        - 180 s (current) — covers the slowest CI runners we've observed
+
+        The poll loop exits as soon as the env responds 200, so the
+        higher cap costs nothing on the happy path (healthy boots
+        complete in 1-3 s) — it only changes whether we surface a
+        noisy TimeoutError on a slow boot. The right place to invest
+        further is making the stub env's first-paint faster (lazy
+        FastAPI imports, deferred uvicorn worker bind), not bumping
+        the cap a third time.
         """
         deadline = time.time() + timeout_s
         last_err: Exception | None = None

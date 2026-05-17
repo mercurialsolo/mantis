@@ -60,7 +60,7 @@ def test_local_backend_starts_and_stops_stub_env():
     backend = LocalBackend()
     handle = backend.start("stub-test", seed=7, now="2026-02-01T00:00:00Z")
     try:
-        backend.wait_healthy(handle, timeout_s=90.0)
+        backend.wait_healthy(handle, timeout_s=180.0)
         status, body = _http_get(f"{handle.url}/__env__/health")
         assert status == 200
         payload = json.loads(body)
@@ -98,7 +98,7 @@ def test_local_backend_two_starts_get_distinct_urls():
     # does synchronously.
     backend = LocalBackend()
     h1 = backend.start("stub-test")
-    backend.wait_healthy(h1, timeout_s=90.0)
+    backend.wait_healthy(h1, timeout_s=180.0)
     h2 = backend.start("stub-test")
     try:
         assert h1.url != h2.url
@@ -110,7 +110,7 @@ def test_local_backend_two_starts_get_distinct_urls():
 def test_stop_is_idempotent():
     backend = LocalBackend()
     handle = backend.start("stub-test")
-    backend.wait_healthy(handle, timeout_s=90.0)
+    backend.wait_healthy(handle, timeout_s=180.0)
     backend.stop(handle)
     backend.stop(handle)  # second call must not raise
 
