@@ -738,6 +738,99 @@ class XdotoolGymEnv(GymEnvironment):
                 env=self._env, capture_output=True, timeout=20,
             )
 
+    def _navigate_running_browser(self, url: str) -> None:
+        """Navigate the already-running browser to ``url``.
+
+        Prefers CDP ``Page.navigate`` (programmatic navigation through
+        Chrome's browser process). Falls back to xclip-paste then
+        xdotool-type into the omnibox if CDP is unreachable.
+
+        Why CDP first: the legacy path here was
+        ``Ctrl+L`` + ``Ctrl+A`` + ``_xdotool_type(url)`` + ``Enter``,
+        which silently no-op'd whenever CDP's ``Input.insertText`` was
+        available. ``Input.insertText`` operates on the renderer
+        (the web page's focused DOM element); the omnibox lives in
+        Chrome's UI process and never receives the text. ``Ctrl+A``
+        then ``Enter`` would re-navigate to whatever was already in
+        the omnibox — typically the current page's URL — producing
+        a navigate that "looked successful" (HTTP 200, page loaded)
+        but landed on the wrong URL. Surfaced in staff-crm-long
+        verification run 1eb0b0c7 (2026-05-17).
+
+        ``Page.navigate`` is the programmatic-navigation primitive
+        Chrome exposes; it preserves cookies, session storage,
+        history, and back-forward state same as a user-typed URL.
+        """
+        logger.info(f"Navigating to {url[:80]} (via CDP Page.navigate)")
+        ok, _ = self._cdp_call("Page.navigate", {"url": url})
+        if ok:
+            time.sleep(self._settle_time + 2)
+            return
+
+        # Fallback: omnibox typing. Bypass CDP path inside _xdotool_type
+        # because we KNOW it doesn't reach Chrome's UI chrome. Use xclip
+        # paste (which honors X focus, including the omnibox) or, if
+        # xclip is unavailable, raw xdotool type.
+        logger.warning(
+            "CDP Page.navigate unavailable; falling back to omnibox typing"
+        )
+        self._xdotool("key", "ctrl+l")
+        time.sleep(0.3)
+        self._xdotool("key", "ctrl+a")
+        time.sleep(0.2)
+        self._type_into_omnibox(url)
+        time.sleep(0.3)
+        self._xdotool("key", "Return")
+        time.sleep(self._settle_time + 2)
+
+    def _type_into_omnibox(self, url: str) -> None:
+        """Type ``url`` into the currently-focused omnibox via xclip
+        or xdotool.
+
+        Skips the CDP ``Input.insertText`` path that ``_xdotool_type``
+        prefers: that path targets the renderer's page DOM, not Chrome's
+        UI. The omnibox has X focus (set by the caller's ``Ctrl+L``),
+        so a clipboard paste or keystroke chain reaches it correctly.
+        """
+        if not url:
+            return
+
+        # xclip + Ctrl+V — fastest, no per-character timing.
+        if os.environ.get("MANTIS_DISABLE_PASTE_TYPE", "") != "1":
+            try:
+                xclip_proc = subprocess.Popen(
+                    ["xclip", "-selection", "clipboard", "-loops", "1"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=self._env,
+                )
+                xclip_proc.stdin.write(url.encode())
+                xclip_proc.stdin.close()
+                time.sleep(0.05)
+                subprocess.run(
+                    ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+                    env=self._env, timeout=5, check=True,
+                    capture_output=True,
+                )
+                try:
+                    xclip_proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    xclip_proc.terminate()
+                return
+            except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+                logger.warning(
+                    "xclip omnibox paste failed (%s); using xdotool type", exc,
+                )
+
+        # Last-resort: xdotool type. Slower (per-character) but works
+        # without xclip. Same delay knob as the legacy code path.
+        delay_ms = int(os.environ.get("MANTIS_TYPE_DELAY_MS", "60"))
+        subprocess.run(
+            ["xdotool", "type", "--clearmodifiers", "--delay", str(delay_ms), url],
+            env=self._env, capture_output=True, timeout=20,
+        )
+
     # ── GymEnvironment interface ─────────────────────────────────────
 
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
@@ -747,16 +840,7 @@ class XdotoolGymEnv(GymEnvironment):
         # Browser already running
         if self._browser_proc and self._browser_proc.poll() is None:
             if url and url != "about:blank":
-                # Navigate to the specified URL
-                logger.info(f"Navigating to {url[:60]}")
-                self._xdotool("key", "ctrl+l")
-                time.sleep(0.3)
-                self._xdotool("key", "ctrl+a")
-                time.sleep(0.2)
-                self._xdotool_type(url)
-                time.sleep(0.3)
-                self._xdotool("key", "Return")
-                time.sleep(self._settle_time + 2)
+                self._navigate_running_browser(url)
             else:
                 # No URL — just capture current page state (for sub-plan micro-steps)
                 logger.info("Reusing browser (no navigation)")
