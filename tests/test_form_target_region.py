@@ -39,6 +39,39 @@ def test_crop_to_region_top_half_yields_upper_half() -> None:
     assert offset == (0, 0)
 
 
+def test_crop_to_region_sidebar_list_mid_narrows_to_middle_band() -> None:
+    # 14% wide × 25% tall, centred on the middle of the left rail.
+    # On a 1280x800 screenshot:
+    #   left   = 0
+    #   top    = 800 * 0.35 = 280
+    #   right  = 1280 * 0.14 = 179
+    #   bottom = 800 * 0.60 = 480
+    # → cropped size (179, 200), offset (0, 280)
+    cropped, offset = crop_to_region(_img(1280, 800), "sidebar-list-mid")
+    assert cropped.size == (179, 200)
+    assert offset == (0, 280)
+
+
+def test_crop_to_region_sidebar_list_top_is_above_mid() -> None:
+    _, off_top = crop_to_region(_img(1280, 800), "sidebar-list-top")
+    _, off_mid = crop_to_region(_img(1280, 800), "sidebar-list-mid")
+    _, off_bot = crop_to_region(_img(1280, 800), "sidebar-list-bottom")
+    # Strict y-ordering — the three sidebar bands tile the rail.
+    assert off_top[1] < off_mid[1] < off_bot[1]
+    # All start at the screen's left edge.
+    assert off_top[0] == off_mid[0] == off_bot[0] == 0
+
+
+def test_crop_to_region_sidebar_list_is_narrower_than_left() -> None:
+    """The whole point of sidebar-list-* is to be narrower than the
+    33%-wide ``"left"`` region — that's what eliminates the
+    multi-section ambiguity (#447 follow-up).
+    """
+    cropped_sidebar, _ = crop_to_region(_img(1280, 800), "sidebar-list-mid")
+    cropped_left, _ = crop_to_region(_img(1280, 800), "left")
+    assert cropped_sidebar.width < cropped_left.width
+
+
 def test_crop_to_region_unknown_named_region_returns_full_screenshot() -> None:
     """Defensive: a typo in a plan hint must not crash. The caller's
     behaviour should fall back to the unchanged-screenshot path.
