@@ -43,6 +43,7 @@ shrinks; that's a separate ergonomic cleanup.
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import time
@@ -1227,6 +1228,99 @@ class ClaudeGuidedFormHandler:
             if not target:
                 logger.warning(f"  [claude-form] select_option: dropdown '{dropdown}' not found")
                 return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
+            # Native `<select>` fast path — if SoM resolves the
+            # dropdown target to a `<select>` element, skip the
+            # click-to-open + click-an-option dance entirely. Chrome
+            # renders native `<select>` option lists as OS-level UI
+            # widgets (not page DOM), so vision can't find option text
+            # in a screenshot after opening. The standard programmatic
+            # interaction is `el.value = X; el.dispatchEvent('change')`
+            # — what MCP / Playwright / Selenium all use.
+            #
+            # CUA-compliant: the brain's option choice (option_label
+            # from the plan) is the input; we use CDP to dispatch the
+            # change at the protocol level. Same pattern PR-G uses for
+            # real-pointer click dispatch — vision-derived choice,
+            # procedural CDP dispatch.
+            try:
+                # Probe the target via SoM. cdp_click_at_point stashes
+                # the elv tag/text on env._last_som_diag, which lets us
+                # detect a native `<select>` without an extra round-trip.
+                if hasattr(env, "cdp_click_at_point") and hasattr(env, "cdp_evaluate"):
+                    # Peek at what's under the dropdown coordinates
+                    # WITHOUT clicking — use elementFromPoint directly.
+                    elv_probe = env.cdp_evaluate(
+                        "(() => {"
+                        f"const oh = window.outerHeight, ih = window.innerHeight;"
+                        f"const chromeH = Math.max(0, oh - ih);"
+                        f"const el = document.elementFromPoint({int(target['x'])}, {int(target['y'])} - chromeH);"
+                        "if (!el) return null;"
+                        "return {tag: el.tagName, name: el.name || '', id: el.id || ''};"
+                        "})()"
+                    )
+                    if isinstance(elv_probe, dict) and elv_probe.get("tag") == "SELECT":
+                        logger.warning(
+                            "  [claude-form] select_option: native <select> "
+                            "detected at (%s,%s) — using programmatic value-set",
+                            target["x"], target["y"],
+                        )
+                        # Find the option by visible text and dispatch
+                        # change. Case-insensitive substring match so
+                        # plan option_label "High" matches option "High"
+                        # even with whitespace or icon prefixes.
+                        # JSON-escape option to survive `'`/`"` in the
+                        # plan-supplied label.
+                        js_set = (
+                            "(() => {"
+                            f"const oh = window.outerHeight, ih = window.innerHeight;"
+                            f"const chromeH = Math.max(0, oh - ih);"
+                            f"const el = document.elementFromPoint({int(target['x'])}, {int(target['y'])} - chromeH);"
+                            "if (!el || el.tagName !== 'SELECT') return {ok: false, reason: 'not_a_select'};"
+                            f"const target_text = {json.dumps(option)}.toLowerCase().trim();"
+                            "let picked = null;"
+                            "for (const opt of el.options) {"
+                            "  const t = (opt.text || '').toLowerCase().trim();"
+                            "  if (t === target_text || t.includes(target_text)) { picked = opt; break; }"
+                            "}"
+                            "if (!picked) return {ok: false, reason: 'option_not_in_select', "
+                            "  available: Array.from(el.options).map(o => o.text)};"
+                            "const setter = Object.getOwnPropertyDescriptor("
+                            "  window.HTMLSelectElement.prototype, 'value').set;"
+                            "setter.call(el, picked.value);"
+                            "el.dispatchEvent(new Event('input', {bubbles: true}));"
+                            "el.dispatchEvent(new Event('change', {bubbles: true}));"
+                            "return {ok: true, value: picked.value, text: picked.text};"
+                            "})()"
+                        )
+                        set_result = env.cdp_evaluate(js_set)
+                        if isinstance(set_result, dict) and set_result.get("ok"):
+                            logger.info(
+                                "  [claude-form] select_option (native) "
+                                "'%s' = '%s'",
+                                dropdown[:30], option[:30],
+                            )
+                            ctx.state["_executor_backend"] = "som"
+                            runner.costs["gpu_steps"] += 1
+                            time.sleep(0.5)
+                            return StepResult(
+                                step_index=index, intent=step.intent,
+                                success=True, steps_used=1, duration=1.0,
+                                data=f"select:{dropdown[:30]}={option[:30]}",
+                            )
+                        else:
+                            logger.warning(
+                                "  [claude-form] select_option native fast-"
+                                "path failed: %s — falling through to "
+                                "click-based open+pick",
+                                set_result,
+                            )
+            except Exception as native_exc:  # noqa: BLE001
+                logger.debug(
+                    "select_option native fast-path raised: %s — "
+                    "falling through to click-based path",
+                    native_exc,
+                )
+
             try:
                 time.sleep(random.uniform(0.3, 0.8))
                 # #300: SoM-anchored dropdown-open click. Same React
