@@ -855,6 +855,26 @@ class RunExecutor:
             if elv_tag or elv_text:
                 record["som_elv_tag"] = elv_tag
                 record["som_elv_text"] = elv_text[:60]
+                logger.warning(
+                    "  [retry-history] step %d: attached SoM diag "
+                    "elv=%s elv_text=%r to failure record (kind=%s)",
+                    step_index, elv_tag, elv_text[:40], kind,
+                )
+            else:
+                logger.warning(
+                    "  [retry-history] step %d: SoM diag at "
+                    "(%s,%s) had empty elv (probably off-screen) — "
+                    "no enrichment",
+                    step_index, som_diag.get("x"), som_diag.get("y"),
+                )
+        else:
+            logger.warning(
+                "  [retry-history] step %d: SoM diag coords "
+                "(%s,%s) don't match target (%s,%s) — no enrichment",
+                step_index,
+                som_diag.get("x"), som_diag.get("y"),
+                target.get("x"), target.get("y"),
+            )
         history.append(record)
 
     @staticmethod
