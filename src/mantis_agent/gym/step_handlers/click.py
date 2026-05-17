@@ -315,6 +315,15 @@ class ClaudeGuidedClickHandler:
         except Exception:
             pre_click_screenshot = None
 
+        # Capture pre-click URL so the post-click trust-gate retry has
+        # a baseline to compare against. ``_best_effort_current_url``
+        # returns "" on any error so the retry's gate fails closed.
+        url_before_click: str = ""
+        try:
+            url_before_click = str(getattr(runner, "_best_effort_current_url", lambda: "")() or "")
+        except Exception:
+            url_before_click = ""
+
         # Click — #300: try SoM-anchored CDP dispatch first when the
         # routing policy promotes it AND the env exposes the CDP click
         # shim. Falls through to legacy xdotool on policy-off /
@@ -346,6 +355,23 @@ class ClaudeGuidedClickHandler:
             return StepResult(step_index=index, intent=step.intent, success=False)
         # Stash so the rest of execute() can tag the eventual StepResult.
         ctx.state["_executor_backend"] = primary_click_backend
+
+        # PR-G: SoM ``el.click()`` returns ok=True but the page didn't
+        # navigate. The synthetic click event has ``isTrusted=false`` and
+        # some SPA frameworks gate on trusted gestures and silently
+        # reject the synthetic chain — surfaced on staff-crm-long step
+        # 8 (row Robot-Name link, run ``74add5d8``). Retry once with CDP
+        # ``Input.dispatchMouseEvent`` (isTrusted=true, indistinguishable
+        # from a real click). Same primitive PR #447 Fix B added to the
+        # submit handler; extracted to ``pointer_retry`` so both handlers
+        # share the gate logic and stabilization-window semantics.
+        from ..pointer_retry import pointer_retry_if_unchanged
+        pointer_retry_if_unchanged(
+            env, runner, x, y,
+            url_before=url_before_click,
+            executor_backend=primary_click_backend,
+            log_prefix="[claude-click]",
+        )
 
         # Verify: are we on a detail page? Retry once (page may still load)
         # Prefer CDP over screenshot URL extraction — issue #89 §1.

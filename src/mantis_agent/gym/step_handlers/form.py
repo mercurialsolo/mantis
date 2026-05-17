@@ -935,69 +935,18 @@ class ClaudeGuidedFormHandler:
                 runner.costs["gpu_steps"] += 1
 
                 # #audit batch follow-up: SoM ``el.click()`` returns
-                # ok=True but the page didn't navigate. The synthetic
-                # click event has ``isTrusted=false``; some SPA
-                # frameworks gate on trusted gestures and silently
-                # reject the synthetic chain. Retry once with CDP
-                # ``Input.dispatchMouseEvent`` which produces a
-                # protocol-level click that's indistinguishable from
-                # a real mouse click (isTrusted=true). Only fires
-                # when the SoM path was used (executor_backend ==
-                # "som") and the URL stayed stable — i.e. we're in
-                # the trust-gated case.
-                #
-                # Gate tightening (PR-D follow-up to #445): the gate's
-                # ``url_after_click == url_before`` check used to read
-                # the URL once, immediately after ``_adaptive_submit_settle``.
-                # That race-loses when the synthetic click triggers a
-                # brief navigation that bounces back: the settle returns
-                # early on the intermediate URL, the immediate poll
-                # captures the (different) intermediate, and the gate
-                # doesn't fire. Re-poll after a short stabilization
-                # window and compare the FINAL settled URL — the
-                # bounce-back case now correctly satisfies the gate
-                # and the pointer-retry actually runs.
-                url_after_click = runner._best_effort_current_url()
-                time.sleep(0.8)  # stabilization window
-                final_url = runner._best_effort_current_url()
-                # A blank ``final_url`` means the runner couldn't read
-                # the URL on the second poll — treat as missing info
-                # rather than a navigation. Otherwise a transient
-                # read-fail would mask a genuine no-navigation case
-                # (gate fires on bogus inequality) or hide a genuine
-                # navigation (gate misfires the retry).
-                if final_url and final_url != url_after_click:
-                    logger.warning(
-                        "  [claude-form] post-click URL bounce detected: "
-                        "settle saw %r, final is %r — pointer-retry "
-                        "evaluates against final",
-                        (url_after_click or "")[:80], final_url[:80],
-                    )
-                    url_after_click = final_url
-                if (
-                    url_before
-                    and url_after_click == url_before
-                    and ctx.state.get("_executor_backend") == "som"
-                    and hasattr(env, "cdp_click_via_pointer")
-                ):
-                    logger.info(
-                        "  [claude-form] SoM click ok=True but URL stable — "
-                        "retrying via CDP Input.dispatchMouseEvent "
-                        "(real pointer events, isTrusted=true)"
-                    )
-                    try:
-                        ok = env.cdp_click_via_pointer(x, y)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("pointer-retry dispatch raised: %s", exc)
-                        ok = False
-                    if ok:
-                        runner.costs["gpu_seconds"] += runner._adaptive_submit_settle(
-                            url_before=url_before,
-                        )
-                        runner.costs["gpu_steps"] += 1
-                        # Same final-URL evaluation as the pre-retry guard.
-                        time.sleep(0.8)
-                        url_after_click = runner._best_effort_current_url()
+                # ok=True but the page didn't navigate. Trust-gate-
+                # bypass logic extracted to ``pointer_retry`` (PR-G
+                # follow-up) so the click handler can call the same
+                # primitive. See that module's docstring for the full
+                # rationale, gate conditions, and bounce-detection.
+                from ..pointer_retry import pointer_retry_if_unchanged
+                url_after_click = pointer_retry_if_unchanged(
+                    env, runner, x, y,
+                    url_before=url_before,
+                    executor_backend=str(ctx.state.get("_executor_backend") or ""),
+                    log_prefix="[claude-form]",
+                )
 
                 # Enter-key fallback: HTML forms whose JS swallows the click
                 # event still submit on Return in a focused input (the
