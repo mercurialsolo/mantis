@@ -199,6 +199,50 @@ def test_result_without_schema_not_viable():
     assert "year" in result.missing_required_reason()
 
 
+def test_dealer_reason_recipe_gated_without_schema() -> None:
+    """No ExtractionSchema → no spam check, regardless of content.
+
+    Pre-2026-05-17 the legacy fallback ran boattrader's
+    ``contains_dealer_text`` / ``seller_looks_like_dealer`` on every
+    un-schema'd ExtractionResult, leaking vertical-specific keywords
+    into unrelated plans. Surfaced as staff-crm-long step 9 rejecting
+    a CRM lead-detail page as ``REJECTED_DEALER``. Spam classification
+    is now strictly opt-in via the recipe's ExtractionSchema.
+    """
+    # Content that WOULD trigger the legacy boattrader path:
+    # - is_dealer=True
+    # - seller name containing 'Brothers Marine' (legacy dealer indicator)
+    # - raw_response containing 'more boats from this dealer' phrase
+    result = ExtractionResult(
+        is_dealer=True,
+        seller="Brothers Marine",
+        raw_response="more boats from this dealer",
+    )
+    # No schema → no spam check, regardless of content.
+    assert result.dealer_reason() == ""
+    assert result.is_private_seller() is True
+
+
+def test_dealer_reason_recipe_gated_with_schema() -> None:
+    """With ExtractionSchema configured (recipe opted in), spam
+    detection runs as expected — recipe-author's spam_label and
+    keyword indicators control the behavior.
+    """
+    schema = ExtractionSchema(
+        required_fields=["title"],
+        spam_indicators=["sponsored"],
+        spam_label="dealer/spam",
+    )
+    result = ExtractionResult(
+        _schema=schema,
+        extracted_fields={"title": "Some Listing"},
+        raw_response="Sponsored placement on the site",
+    )
+    reason = result.dealer_reason()
+    assert reason != ""
+    assert "sponsored" in reason.lower() or "dealer/spam" in reason
+
+
 # ── ClaudeExtractor with schema ──
 
 
