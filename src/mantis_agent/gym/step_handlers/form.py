@@ -250,15 +250,20 @@ def _auto_region_for_step(
 # target choice — same pattern the SoM diagnostic already uses to
 # inspect what element is at a clicked point.
 #
-# Defaults: 60 Tab presses (covers staff-crm's deep focus order — login
-# form has ~5 inputs, top nav has ~6 items, then 25+ sidebar / table
-# header items before reaching the LEAD VIEWS list). Case-insensitive
-# substring match. ESC + Home before tabbing to reset focus + scroll.
+# Defaults: 100 Tab presses (covers staff-crm's full focus order
+# including table rows after the sidebar/top-nav prelude).
 #
-# Bumped from 30 → 60 after run `3e846b36` showed the staff-crm
-# sidebar's Contacted anchor wasn't reached within 30 Tabs. Cost is
-# capped at ~$0.02 of CDP introspection per walk (~$0.0003/Tab).
-_TAB_WALK_MAX_TABS = 60
+# History:
+# - 30 (PR #448 v1) — too short, hit the sidebar's Contacted at Tab+34
+# - 60 (PR #448 v2) — covered sidebar but ran out before row-link
+#   table entries. Run 13288dc0 visited 60 elements: top nav + entire
+#   sidebar (LEAD VIEWS, BY PRIORITY, ACTIONS, SYSTEM) + footer links,
+#   ending at "A(Home), A(Leads)" with the table-row anchors
+#   ("Tempest Cleaner" etc.) still ~15-25 Tabs further down.
+# - 100 (current) — empirically clears all preludes + several rows
+#   of the data table. Cost is still ~$0.02 / walk because it's CDP
+#   introspection, not vision (~$0.0002/Tab).
+_TAB_WALK_MAX_TABS = 100
 _TAB_WALK_KEY_DELAY = 0.12  # seconds between Tab keypresses
 
 
