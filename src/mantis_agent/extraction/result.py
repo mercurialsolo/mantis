@@ -19,7 +19,6 @@ import re
 from dataclasses import dataclass, field
 
 from .schema import ExtractionContext, ExtractionSchema
-from .spam import contains_dealer_text, seller_looks_like_dealer
 
 
 @dataclass
@@ -48,24 +47,34 @@ class ExtractionResult:
     _schema: ExtractionSchema | None = field(default=None, repr=False)
 
     def dealer_reason(self) -> str:
-        """Return a reason if this looks like spam/dealer inventory."""
-        if self._schema:
-            if self.is_dealer:
-                return f"extractor marked as {self._schema.spam_label}"
-            if self._schema.seller_looks_like_spam(self.seller or self.extracted_fields.get("seller", "")):
-                seller = self.seller or self.extracted_fields.get("seller", "")
-                return f"seller looks like {self._schema.spam_label}: {seller}"
-            text = f"{self.url} {self.raw_response} " + " ".join(self.extracted_fields.values())
-            if self._schema.contains_spam_text(text):
-                return f"{self._schema.spam_label} indicator in listing text"
+        """Return a reason if this looks like spam/dealer inventory.
+
+        Spam classification is RECIPE-GATED: only plans whose
+        extraction was configured with an :class:`ExtractionSchema`
+        (typically via a recipe like ``marketplace_listings``) opt
+        into spam detection. Plans without a schema get ``""`` — no
+        spam check — so the framework doesn't leak vertical-specific
+        keyword heuristics (``"dealer"``, ``"sponsored"``, marketplace-
+        seller phrases) into unrelated domains.
+
+        Pre-2026-05-17 behavior had a legacy fallback that ran
+        BoatTrader's ``contains_dealer_text`` / ``seller_looks_like_dealer``
+        on EVERY un-schema'd ExtractionResult. The staff-crm-long step 9
+        halt surfaced the leak: a CRM lead-detail page's text tripped the
+        boattrader heuristics and the whole step rejected as
+        ``REJECTED_DEALER``. Per ``feedback_no_plan_specific_framework``,
+        framework primitives must not bake in plan/vertical specifics.
+        """
+        if self._schema is None:
             return ""
-        # Legacy BoatTrader path
         if self.is_dealer:
-            return "extractor marked listing as dealer"
-        if seller_looks_like_dealer(self.seller):
-            return f"seller looks like dealer: {self.seller}"
-        if contains_dealer_text(f"{self.url} {self.price} {self.raw_response}"):
-            return "dealer/sponsored indicator in listing text"
+            return f"extractor marked as {self._schema.spam_label}"
+        if self._schema.seller_looks_like_spam(self.seller or self.extracted_fields.get("seller", "")):
+            seller = self.seller or self.extracted_fields.get("seller", "")
+            return f"seller looks like {self._schema.spam_label}: {seller}"
+        text = f"{self.url} {self.raw_response} " + " ".join(self.extracted_fields.values())
+        if self._schema.contains_spam_text(text):
+            return f"{self._schema.spam_label} indicator in listing text"
         return ""
 
     def is_private_seller(self) -> bool:

@@ -2,10 +2,31 @@ import json
 
 from mantis_agent.extraction import ExtractionResult
 from mantis_agent.gym.micro_runner import MicroPlanRunner, RunCheckpoint, StepResult
+from mantis_agent.recipes.marketplace_listings.schema import SCHEMA as MARKETPLACE_SCHEMA
+
+
+def _marketplace_result(**kwargs) -> ExtractionResult:
+    """Build an ExtractionResult configured for the marketplace_listings
+    recipe. Populates ``extracted_fields`` with the same data as the
+    positional kwargs so ``is_viable()``'s schema-aware path can find
+    required fields (year, make).
+
+    The legacy test signatures predate the recipe pattern: they passed
+    year/make/etc. as positional fields. After PR #102, schema-aware
+    code reads from ``extracted_fields``; populating both keeps the
+    tests faithful to what real extraction produces.
+    """
+    result = ExtractionResult(_schema=MARKETPLACE_SCHEMA, **kwargs)
+    # Mirror positional fields into extracted_fields so schema reads see them.
+    for k in ("year", "make", "model", "price", "phone", "url", "seller"):
+        v = getattr(result, k, "")
+        if v:
+            result.extracted_fields.setdefault(k, v)
+    return result
 
 
 def test_private_seller_is_viable():
-    result = ExtractionResult(
+    result = _marketplace_result(
         year="2006",
         make="Luhrs",
         model="41 Convertible",
@@ -21,7 +42,7 @@ def test_private_seller_is_viable():
 
 
 def test_private_seller_without_phone_is_viable_but_not_phone_lead():
-    result = ExtractionResult(
+    result = _marketplace_result(
         year="1987",
         make="Beneteau",
         model="Idylle 15.50",
@@ -38,7 +59,10 @@ def test_private_seller_without_phone_is_viable_but_not_phone_lead():
 
 
 def test_dealer_inventory_is_not_viable_even_with_phone():
-    result = ExtractionResult(
+    """Spam detection requires the marketplace_listings schema —
+    boattrader's dealer keywords no longer leak into schema-less
+    extraction (PR follow-up to staff-crm-long step 9 fix)."""
+    result = _marketplace_result(
         year="2026",
         make="Azimut",
         model="S8",
@@ -53,7 +77,7 @@ def test_dealer_inventory_is_not_viable_even_with_phone():
 
 
 def test_dealer_url_is_not_viable():
-    result = ExtractionResult(
+    result = _marketplace_result(
         year="2026",
         make="Azimut",
         model="Verve 48",
