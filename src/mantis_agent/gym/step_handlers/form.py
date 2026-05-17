@@ -250,15 +250,20 @@ def _auto_region_for_step(
 # target choice — same pattern the SoM diagnostic already uses to
 # inspect what element is at a clicked point.
 #
-# Defaults: 60 Tab presses (covers staff-crm's deep focus order — login
-# form has ~5 inputs, top nav has ~6 items, then 25+ sidebar / table
-# header items before reaching the LEAD VIEWS list). Case-insensitive
-# substring match. ESC + Home before tabbing to reset focus + scroll.
+# Defaults: 100 Tab presses (covers staff-crm's full focus order
+# including table rows after the sidebar/top-nav prelude).
 #
-# Bumped from 30 → 60 after run `3e846b36` showed the staff-crm
-# sidebar's Contacted anchor wasn't reached within 30 Tabs. Cost is
-# capped at ~$0.02 of CDP introspection per walk (~$0.0003/Tab).
-_TAB_WALK_MAX_TABS = 60
+# History:
+# - 30 (PR #448 v1) — too short, hit the sidebar's Contacted at Tab+34
+# - 60 (PR #448 v2) — covered sidebar but ran out before row-link
+#   table entries. Run 13288dc0 visited 60 elements: top nav + entire
+#   sidebar (LEAD VIEWS, BY PRIORITY, ACTIONS, SYSTEM) + footer links,
+#   ending at "A(Home), A(Leads)" with the table-row anchors
+#   ("Tempest Cleaner" etc.) still ~15-25 Tabs further down.
+# - 100 (current) — empirically clears all preludes + several rows
+#   of the data table. Cost is still ~$0.02 / walk because it's CDP
+#   introspection, not vision (~$0.0002/Tab).
+_TAB_WALK_MAX_TABS = 100
 _TAB_WALK_KEY_DELAY = 0.12  # seconds between Tab keypresses
 
 
@@ -997,14 +1002,35 @@ class ClaudeGuidedFormHandler:
                 if (
                     url_before
                     and url_after_click == url_before
-                    and (params.get("kind") or "") == "nav_link"
+                    and (params.get("kind") or "") in {"nav_link", "row_link", "cell_link"}
                 ):
+                    # For row_link / cell_link the plan often doesn't
+                    # carry a label (the anchor text is dynamic per row).
+                    # Recover the label from the most-recent SoM diag
+                    # in this step's failure history — the failed click
+                    # captured the visible text via elementFromPoint.
+                    match_label = label
+                    if not match_label:
+                        history_records = (
+                            (getattr(runner, "_step_failure_history", {}) or {})
+                            .get(index, [])
+                        )
+                        if history_records:
+                            last = history_records[-1]
+                            match_label = str(last.get("som_elv_text") or "").strip()
+                            if match_label:
+                                logger.warning(
+                                    "  [claude-form] Tab-walk: no plan label "
+                                    "for %s; using SoM-captured elv_text %r",
+                                    params.get("kind") or "?", match_label,
+                                )
                     logger.warning(
                         "  [claude-form] click + Enter both no-op'd on "
-                        "nav_link '%s' — trying Tab-walk DOM-anchor fallback",
-                        label,
+                        "%s '%s' — trying Tab-walk DOM-anchor fallback",
+                        params.get("kind") or "?",
+                        match_label or "(no label)",
                     )
-                    match = _tab_walk_to_nav_link(env, label)
+                    match = _tab_walk_to_nav_link(env, match_label)
                     if match is not None:
                         # Two-stage activation. Enter is the cheap, most-
                         # browsers-do-the-right-thing path; it works for

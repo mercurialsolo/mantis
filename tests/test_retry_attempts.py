@@ -94,6 +94,56 @@ def test_format_prior_attempt_clips_long_reason() -> None:
     assert "x" * 121 not in out
 
 
+# ── SoM diagnostic enrichment (PR-H Option 1) ────────────────────────
+
+
+def test_format_prior_attempt_includes_som_elv_when_present() -> None:
+    """A failure record with ``som_elv_tag`` + ``som_elv_text`` renders
+    a `[hit TAG: "text"]` clause so the brain knows what its prior
+    pixel landed on. Critical for staff-crm row-link clicks where the
+    brain mis-targets a TD instead of the child <a>.
+    """
+    out = format_prior_attempt({
+        "x": 315, "y": 224,
+        "kind": "no_state_change",
+        "matched_label": "Tempest Cleaner",
+        "som_elv_tag": "TD",
+        "som_elv_text": "Tempest Cleaner",
+    })
+    assert "[hit TD" in out
+    assert "Tempest Cleaner" in out
+    # The line still has the original click + outcome info
+    assert "clicked (315, 224)" in out
+    assert "no observable state change" in out
+
+
+def test_format_prior_attempt_som_elv_tag_only() -> None:
+    """When the elv has a tag but no text (icon-only button), render
+    the tag clause without an empty quote pair.
+    """
+    out = format_prior_attempt({
+        "x": 100, "y": 100,
+        "kind": "no_state_change",
+        "som_elv_tag": "BUTTON",
+        "som_elv_text": "",
+    })
+    assert "[hit BUTTON]" in out
+    assert '""' not in out  # no empty quote pair
+
+
+def test_format_prior_attempt_no_som_data_renders_unchanged() -> None:
+    """Records without SoM diagnostic data render identically to the
+    pre-PR-H format — backward compatibility.
+    """
+    out = format_prior_attempt({
+        "x": 50, "y": 60,
+        "kind": "wrong_target",
+        "matched_label": "Login",
+    })
+    assert "[hit " not in out
+    assert "wrong target" in out
+
+
 # ── render_attempts_block — window cap + empty handling ─────────────
 
 

@@ -828,14 +828,54 @@ class RunExecutor:
         if not hasattr(runner, "_step_failure_history"):
             return
         history = runner._step_failure_history.setdefault(step_index, [])
-        history.append({
+        # PR-H (Option 1): enrich retry context with the SoM
+        # diagnostic from the most recent click. Tells the next brain
+        # prompt "you clicked at (x, y) and the element at that
+        # pixel was <elv_tag> with text <elv_text>" — the same signal
+        # a human gets from cursor state, lets the brain adjust its
+        # pixel choice on retry without DOM-target derivation.
+        som_diag = getattr(getattr(runner, "env", None), "_last_som_diag", None) or {}
+        record = {
             "x": target.get("x"),
             "y": target.get("y"),
             "label": target.get("label", ""),
             "matched_label": target.get("matched_label", ""),
             "kind": kind,
             "reason": reason,
-        })
+        }
+        # Only attach SoM data if it's for THIS click's coords. Stale
+        # diagnostics from an earlier step's click would mislead the
+        # retry prompt.
+        if (
+            som_diag.get("x") == target.get("x")
+            and som_diag.get("y") == target.get("y")
+        ):
+            elv_tag = str(som_diag.get("elv_tag") or "").strip()
+            elv_text = str(som_diag.get("elv_text") or "").strip()
+            if elv_tag or elv_text:
+                record["som_elv_tag"] = elv_tag
+                record["som_elv_text"] = elv_text[:60]
+                logger.warning(
+                    "  [retry-history] step %d: attached SoM diag "
+                    "elv=%s elv_text=%r to failure record (kind=%s)",
+                    step_index, elv_tag, elv_text[:40], kind,
+                )
+            else:
+                logger.warning(
+                    "  [retry-history] step %d: SoM diag at "
+                    "(%s,%s) had empty elv (probably off-screen) — "
+                    "no enrichment",
+                    step_index, som_diag.get("x"), som_diag.get("y"),
+                )
+        else:
+            logger.warning(
+                "  [retry-history] step %d: SoM diag coords "
+                "(%s,%s) don't match target (%s,%s) — no enrichment",
+                step_index,
+                som_diag.get("x"), som_diag.get("y"),
+                target.get("x"), target.get("y"),
+            )
+        history.append(record)
 
     @staticmethod
     def _maybe_set_handler_override(
