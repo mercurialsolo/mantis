@@ -414,6 +414,23 @@ class ExecutionCritic:
         no value in waiting for a second observe_step call when the
         intermediate retry just burns more budget.
         """
+        # Unconditional entry diagnostic — fires every time the
+        # method is invoked, regardless of whether any gate passes.
+        # If this log line is absent from a Modal run after step
+        # 8 halts, the critic chain isn't reaching this method at
+        # all (deploy not picked up by the executor container, or
+        # wiring removed). With this line present, the subsequent
+        # diagnostic skip-lines reveal which gate fails.
+        logger.warning(
+            "  [critic-row-link] step %d: ENTER — step.type=%r, "
+            "params=%s, hints=%s, failure_class=%r",
+            state.step_index,
+            getattr(step, "type", None),
+            list((getattr(step, "params", {}) or {}).keys()),
+            list((getattr(step, "hints", {}) or {}).keys()),
+            getattr(step_result, "failure_class", None),
+        )
+
         step_type = str(getattr(step, "type", "") or "")
         if step_type not in ("submit", "click"):
             logger.debug(
