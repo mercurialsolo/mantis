@@ -1457,8 +1457,8 @@ def _emit_canonical_trajectory_event(
     deterministic placeholder so the emitter doesn't raise on a
     no-id local script.
     """
-    store_dir = os.environ.get(_CANONICAL_EVENTS_DIR_ENV, "").strip()
-    if not store_dir:
+    base_dir = os.environ.get(_CANONICAL_EVENTS_DIR_ENV, "").strip()
+    if not base_dir:
         return
     emitter = getattr(runner, "_trajectory_emitter", None)
     if emitter is None:
@@ -1467,6 +1467,11 @@ def _emit_canonical_trajectory_event(
             or str(getattr(runner, "_run_id", "") or "")
             or "local_run"
         )
+        # ``base_dir`` is the *root* across all runs; the per-run
+        # JSONL store lives under ``<base_dir>/<run_id>/`` so events
+        # from concurrent runs don't collide in a single file and a
+        # later reader can address one run by directory listing.
+        store_dir = os.path.join(base_dir, run_id)
         try:
             from ..cua_contracts import TrajectoryEmitter
             emitter = TrajectoryEmitter(

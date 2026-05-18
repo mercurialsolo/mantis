@@ -290,7 +290,8 @@ def test_run_executor_hook_writes_when_env_set(
     monkeypatch, tmp_path: Path,
 ) -> None:
     """End-to-end through the run_executor helper: env var set →
-    emitter lazy-created → event lands on disk."""
+    emitter lazy-created → event lands on disk under the per-run
+    subdirectory (``<base_dir>/<run_id>/trajectory.jsonl``)."""
     from mantis_agent.gym.run_executor import _emit_canonical_trajectory_event
 
     monkeypatch.setenv("MANTIS_CANONICAL_EVENTS_DIR", str(tmp_path))
@@ -303,10 +304,33 @@ def test_run_executor_hook_writes_when_env_set(
     # Second step on the same runner reuses the emitter.
     _emit_canonical_trajectory_event(runner, _intent(), _ok_step_result(index=1))
 
-    jsonl = (tmp_path / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
+    run_dir = tmp_path / "wire_in_test"
+    jsonl = (run_dir / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
     assert len(jsonl) == 2
     indices = [json.loads(line)["step_index"] for line in jsonl]
     assert indices == [0, 1]
+
+
+def test_run_executor_hook_isolates_per_run_directories(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Concurrent runs land under distinct ``<base_dir>/<run_id>/``
+    subdirs so the JSONL files never collide."""
+    from mantis_agent.gym.run_executor import _emit_canonical_trajectory_event
+
+    monkeypatch.setenv("MANTIS_CANONICAL_EVENTS_DIR", str(tmp_path))
+
+    class _RunnerA:
+        run_id = "run_a"
+
+    class _RunnerB:
+        run_id = "run_b"
+
+    _emit_canonical_trajectory_event(_RunnerA(), _intent(), _ok_step_result(index=0))
+    _emit_canonical_trajectory_event(_RunnerB(), _intent(), _ok_step_result(index=0))
+
+    assert (tmp_path / "run_a" / JSONL_FILENAME).exists()
+    assert (tmp_path / "run_b" / JSONL_FILENAME).exists()
 
 
 def test_run_executor_hook_idempotent_across_retry(
@@ -325,7 +349,7 @@ def test_run_executor_hook_idempotent_across_retry(
     _emit_canonical_trajectory_event(runner, _intent(), _ok_step_result(index=0))
     _emit_canonical_trajectory_event(runner, _intent(), _fail_step_result(index=0))
 
-    jsonl = (tmp_path / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
+    jsonl = (tmp_path / "retry_test" / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
     assert len(jsonl) == 1  # only the first emit landed
 
 
@@ -346,7 +370,7 @@ def test_run_executor_hook_falls_back_to_default_run_id(
     runner = _Runner()
     _emit_canonical_trajectory_event(runner, _intent(), _ok_step_result(index=0))
 
-    jsonl = (tmp_path / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
+    jsonl = (tmp_path / "local_run" / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
     assert len(jsonl) == 1
     record = json.loads(jsonl[0])
     assert record["run_id"] == "local_run"
