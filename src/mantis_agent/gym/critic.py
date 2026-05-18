@@ -180,6 +180,18 @@ class ExecutionCritic:
         if fallback_directive is not None:
             return fallback_directive
 
+        # Rule-based: DOM-derived href for row-link clicks Holo3
+        # can't ground visually. Same shape as fallback_url but the
+        # destination URL comes from CDP querying the live DOM
+        # instead of a plan-author hint — useful when the row's <id>
+        # isn't predictable at plan time (the v30 DECOMPOSE_PROMPT
+        # explicitly skips fallback_url for those cases).
+        row_link_directive = self._maybe_use_row_link_dom_href(
+            state, step, step_result,
+        )
+        if row_link_directive is not None:
+            return row_link_directive
+
         # Frontier-model: persistent rewrite-triggering failure → ask Claude.
         return self._maybe_frontier_recover_persistent_failure(
             plan, state, step, step_result,
@@ -269,12 +281,48 @@ class ExecutionCritic:
         if step_type not in ("submit", "click"):
             return None
         failure_class = str(getattr(step_result, "failure_class", "") or "")
-        if failure_class not in intent_rewriter.REWRITE_TRIGGERING_CLASSES:
+        # The deterministic rule is MORE permissive than the frontier
+        # capability's class set on purpose: the LLM rewriter is gated
+        # narrowly because asking Claude has a cost. This rule has no
+        # LLM cost — it's a literal navigate to a URL the plan author
+        # wrote. So we also accept ``selector_miss`` (Holo3 / SoM /
+        # CSS-target misses) and ``unknown`` (any uncategorised retry
+        # failure on a click/submit) — when the plan author named the
+        # structural alternative, we use it regardless of failure
+        # shape.
+        _TRIGGERING = intent_rewriter.REWRITE_TRIGGERING_CLASSES | {
+            "selector_miss", "unknown",
+        }
+        if failure_class not in _TRIGGERING:
             return None
         hints = dict(getattr(step, "hints", {}) or {})
         fallback_url = str(hints.get("fallback_url") or "").strip()
         if not fallback_url:
             return None
+        # Plan-author-supplied fallback_url is conventionally written
+        # as a path-relative URL ("/leads?status=Active") because the
+        # plan doesn't always know the origin. Resolve it against the
+        # browser's current page origin so the navigate handler gets
+        # a full URL — Modal's navigate dispatcher requires
+        # ``http(s)://...`` and fails on bare paths.
+        if not fallback_url.startswith(("http://", "https://")):
+            from urllib.parse import urljoin, urlparse
+            origin_url = ""
+            env = getattr(self.runner, "env", None)
+            if env is not None:
+                origin_url = str(getattr(env, "current_url", "") or "")
+            if not origin_url:
+                origin_url = str(getattr(self.runner, "_results_base_url", "") or "")
+            if not origin_url:
+                origin_url = str(getattr(self.runner, "start_url", "") or "")
+            if origin_url:
+                parsed = urlparse(origin_url)
+                if parsed.scheme and parsed.netloc:
+                    base = f"{parsed.scheme}://{parsed.netloc}/"
+                    fallback_url = urljoin(base, fallback_url.lstrip("/"))
+            # If we still don't have a scheme, fall through — let the
+            # navigate handler surface its own error. Better than
+            # silently no-op on the only recovery path the plan named.
         history = (
             self.runner._step_failure_history.get(int(state.step_index), [])
             if hasattr(self.runner, "_step_failure_history") else []
@@ -309,6 +357,193 @@ class ExecutionCritic:
                 f"plan-supplied fallback_url after {len(history)} prior "
                 f"{failure_class} failures — deterministic rule, no "
                 f"Claude consultation needed"
+            ),
+        )
+
+    # ── Rule-based capability — DOM-derived row-link href ────────────────
+
+    def _maybe_use_row_link_dom_href(
+        self,
+        state: "RunState",
+        step: MicroIntent,
+        step_result: "StepResult",
+    ) -> Optional[Directive]:
+        """For row-link click/submit steps that Holo3 can't ground
+        visually, extract the row's first matching ``<a href>`` from
+        the live DOM via CDP and promote the step to a direct
+        ``navigate``.
+
+        Holo3 + SoM grounding consistently fails on small table-row
+        hyperlinks (returns 0,0 coords; claude-director substitutes
+        arbitrary coords; per-step recovery budget exhausts before
+        a click ever lands on the link). The DOM, however, knows
+        exactly where each row link points — one ``querySelectorAll``
+        away. This capability extracts that href and converts the
+        step to a navigate, parallel to the plan-supplied
+        :meth:`_maybe_use_fallback_url` rule but with the destination
+        computed at runtime from the visible table rather than
+        provided up-front by the plan author.
+
+        Why the plan can't pre-supply this: the v30 DECOMPOSE_PROMPT
+        explicitly tells Opus to skip ``fallback_url`` on clicks for
+        dynamic data (record rows, comment replies, etc.) because the
+        target ``<id>`` isn't predictable at decompose time. That's
+        correct — but it leaves a gap when Holo3 can't visually
+        ground the row. This rule closes that gap.
+
+        Trigger:
+
+        * ``step.type`` in ``{"submit", "click"}``
+        * ``params.kind == "row_link"`` — the plan explicitly tagged
+          this click as a record-row-link click
+          (DECOMPOSE_PROMPT's ``kind="row_link"`` taxonomy)
+        * ``failure_class`` is target-identification family
+          (``selector_miss`` / ``unknown`` / ``wrong_target``)
+        * ``hints.expect_url_contains`` is non-empty — provides the
+          URL pattern the destination must contain
+        * ``runner.env`` exposes ``cdp_evaluate``
+
+        Note: unlike :meth:`_maybe_use_fallback_url`, this rule does
+        NOT gate on ``_step_failure_history`` length. The brain-grounded
+        loop's internal SoM-click failures don't propagate into the
+        per-step failure history (live observation: run
+        20260518_171310_4b792be2 — the critic was invoked on a failed
+        step 8 with ``history=0``). For a step the plan has explicitly
+        tagged as a row-link click and supplied a URL-pattern hint
+        for, "the visual loop failed once" is signal enough — there's
+        no value in waiting for a second observe_step call when the
+        intermediate retry just burns more budget.
+        """
+        # Unconditional entry diagnostic — fires every time the
+        # method is invoked, regardless of whether any gate passes.
+        # If this log line is absent from a Modal run after step
+        # 8 halts, the critic chain isn't reaching this method at
+        # all (deploy not picked up by the executor container, or
+        # wiring removed). With this line present, the subsequent
+        # diagnostic skip-lines reveal which gate fails.
+        logger.warning(
+            "  [critic-row-link] step %d: ENTER — step.type=%r, "
+            "params=%s, hints=%s, failure_class=%r",
+            state.step_index,
+            getattr(step, "type", None),
+            list((getattr(step, "params", {}) or {}).keys()),
+            list((getattr(step, "hints", {}) or {}).keys()),
+            getattr(step_result, "failure_class", None),
+        )
+
+        step_type = str(getattr(step, "type", "") or "")
+        if step_type not in ("submit", "click"):
+            logger.debug(
+                "  [critic-row-link] step %d: skip — step.type=%r not in {submit, click}",
+                state.step_index, step_type,
+            )
+            return None
+        params = dict(getattr(step, "params", {}) or {})
+        if params.get("kind") != "row_link":
+            logger.warning(
+                "  [critic-row-link] step %d: skip — params.kind=%r != 'row_link' (params=%s)",
+                state.step_index, params.get("kind"), list(params.keys()),
+            )
+            return None
+        failure_class = str(getattr(step_result, "failure_class", "") or "")
+        # Include ``no_state_change`` — the canonical "click ok=True but
+        # page didn't transition" class. This is the shape produced when
+        # a row-link <a> is clicked but the click-event chain doesn't
+        # actually navigate (broken onclick interceptor, JS-routed SPA,
+        # or vision-grounding hitting a row cell that's not the
+        # navigable anchor). Live observation from run
+        # 20260518_181523_7bce4437: failure_class='no_state_change' on
+        # step 8 with kind=row_link.
+        if failure_class not in {
+            "selector_miss", "unknown", "wrong_target", "no_state_change",
+        }:
+            logger.warning(
+                "  [critic-row-link] step %d: skip — failure_class=%r not in target-id family",
+                state.step_index, failure_class,
+            )
+            return None
+        hints = dict(getattr(step, "hints", {}) or {})
+        patterns = list(hints.get("expect_url_contains") or [])
+        if not patterns:
+            logger.warning(
+                "  [critic-row-link] step %d: skip — hints.expect_url_contains is empty",
+                state.step_index,
+            )
+            return None
+        env = getattr(self.runner, "env", None)
+        if env is None:
+            logger.warning("  [critic-row-link] step %d: skip — runner.env is None", state.step_index)
+            return None
+        eval_fn = getattr(env, "cdp_evaluate", None)
+        if not callable(eval_fn):
+            logger.warning(
+                "  [critic-row-link] step %d: skip — env has no cdp_evaluate (env type=%s)",
+                state.step_index, type(env).__name__,
+            )
+            return None
+        logger.warning(
+            "  [critic-row-link] step %d: entering DOM lookup (patterns=%s, failure_class=%s)",
+            state.step_index, patterns, failure_class,
+        )
+
+        import json as _json
+        pattern_js = _json.dumps([str(p) for p in patterns])
+        js = (
+            "(function() {"
+            f"  var patterns = {pattern_js};"
+            "  var rows = document.querySelectorAll('tbody tr, table tr');"
+            "  for (var i = 0; i < rows.length; i++) {"
+            "    var links = rows[i].querySelectorAll('a[href]');"
+            "    for (var j = 0; j < links.length; j++) {"
+            "      var h = links[j].href;"
+            "      for (var k = 0; k < patterns.length; k++) {"
+            "        if (h.indexOf(patterns[k]) !== -1) return h;"
+            "      }"
+            "    }"
+            "  }"
+            "  return '';"
+            "})()"
+        )
+        try:
+            href = eval_fn(js) or ""
+        except Exception as exc:  # pragma: no cover — env-specific
+            logger.warning(
+                "  [critic] step %d: row-link DOM lookup failed: %s",
+                state.step_index, exc,
+            )
+            return None
+        if not isinstance(href, str) or not href.startswith(("http://", "https://")):
+            logger.warning(
+                "  [critic-row-link] step %d: skip — DOM lookup returned no matching href "
+                "(returned=%r, patterns=%s)",
+                state.step_index, str(href)[:100], patterns,
+            )
+            return None
+
+        logger.warning(
+            "  [critic-row-link] step %d: FIRE — using DOM-derived row href=%r "
+            "(failure_class=%s; patterns=%s)",
+            state.step_index, href, failure_class, patterns,
+        )
+        from . import reasoning_trace as _trace
+        _trace.record(
+            self.runner, layer="critic-row-link-dom-href", kind="fire",
+            summary=(
+                f"replaced row-link click with navigate to {href[:80]} "
+                f"(failure_class={failure_class})"
+            ),
+            step_index=int(state.step_index),
+            failure_class=failure_class,
+            dom_href=href[:200],
+            patterns=patterns,
+        )
+        return ReplaceStep(
+            intent=f"Navigate to {href} (DOM-derived row-link fallback)",
+            step_type="navigate",
+            params={"url": href},
+            reason=(
+                f"DOM-derived row href={href[:80]} for {step_type} kind=row_link "
+                f"on {failure_class} failure — no Claude consultation needed"
             ),
         )
 

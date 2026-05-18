@@ -54,15 +54,15 @@ The phases form a DAG: setup runs first, then extraction loops, then pagination.
 Use these phase roles:
 - SETUP: navigate to URL, apply filters (required=true)
 - GATE: verify page state after setup (gate=true, claude_only=true)
-- DISCOVERY: scan visible listings on current page
-- ADMISSION: click a listing card (grounding=true)
+- DISCOVERY: scan visible items / rows / cards on current page
+- ADMISSION: click into one item (grounding=true)
 - EXTRACTION: read data from detail page (claude_only=true)
 - REJECTION: decide keep/reject based on entity rules (claude_only=true)
 - RETURN: go back to results page
-- PAGINATION: click Next page (grounding=true)
+- PAGINATION: advance to the next page or page section (grounding=true)
 
 For the intent_template of each phase, write a clear 1-sentence CUA instruction.
-Customize based on what the probe found (filter names, listing layout, pagination type).
+Customize based on what the probe found (filter names, page layout, pagination type).
 
 Output ONLY valid JSON:
 {{
@@ -88,9 +88,8 @@ Output ONLY valid JSON:
 RULES:
 - POSITIVE framing only: "Click the title text" not "Don't click the photo"
 - Each intent_template: ONE action, ONE sentence, under 20 words
-- Include WHAT + WHERE: "Click Private Seller text in left sidebar"
-- Extraction steps must inspect contact area AND expanded description
-- Reject dealers, brokers, sponsored, MarineMax listings even if phone visible
+- Include WHAT + WHERE: e.g. "Click <filter label> in the left sidebar"
+- Extraction steps must inspect the primary content area AND any expanded sections
 - Use allowed reveal actions: {allowed_reveals}
 - Avoid forbidden actions: {forbidden_actions}
 """
@@ -121,6 +120,7 @@ class GraphLearner:
         start_url: str = "",
         n_samples: int = 3,
         force_relearn: bool = False,
+        recipe_name: str | None = None,
     ) -> WorkflowGraph:
         """Full learning pipeline with enhancement loop.
 
@@ -161,9 +161,38 @@ class GraphLearner:
             prober = SiteProber(env=self.env, api_key=self.api_key)
             probe = prober.probe(objective.start_url, objective)
 
-        # 4. Enhance plan — fill gaps using probe knowledge
+        # 4. Enhance plan — fill gaps using probe knowledge. Recipe-supplied
+        # URL-filter encoding strategies (#464) flow in via
+        # ``PlanEnhancer(filter_url_strategies=...)``. When the caller
+        # passes ``recipe_name``, resolve the recipe's SiteConfig
+        # overlay and forward its ``filter_url_strategies`` mapping so
+        # the enhancer's URL builder is driven by the recipe instead
+        # of being a no-op.
         from .enhancer import PlanEnhancer
-        enhancer = PlanEnhancer(api_key=self.api_key)
+        filter_strategies: dict[str, str] = {}
+        if recipe_name:
+            try:
+                from .. import recipes as _recipes  # local import to keep startup fast
+                site_cfg = _recipes.load_site_config(recipe_name)
+                if site_cfg is not None:
+                    filter_strategies = dict(
+                        getattr(site_cfg, "filter_url_strategies", {}) or {}
+                    )
+                if filter_strategies:
+                    logger.info(
+                        "GraphLearner: loaded %d filter_url_strategies from recipe %r",
+                        len(filter_strategies), recipe_name,
+                    )
+            except ModuleNotFoundError:
+                logger.warning(
+                    "GraphLearner: recipe %r not found; running without "
+                    "URL-filter overlay",
+                    recipe_name,
+                )
+        enhancer = PlanEnhancer(
+            api_key=self.api_key,
+            filter_url_strategies=filter_strategies,
+        )
         enhancement = enhancer.enhance(objective, probe)
         logger.info(
             "GraphLearner: enhanced — nav_url=%s, %d filter strategies, pagination=%s",

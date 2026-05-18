@@ -1,7 +1,20 @@
-"""Plan Optimizer — preprocesses text plans for reliable CUA execution.
+"""Plan Optimizer — recipe-scoped text-plan → task-suite preprocessor.
 
-Takes a raw text plan and produces an optimized execution plan that
-accounts for known CUA limitations:
+**Recipe scope** (issue #462): the intent / form-pattern detection and
+phase builders in this module bake in marketplace_listings (BoatTrader)
+assumptions — "Private Seller" filtering, "outside boat lead" form
+patterns, boat-typed extraction intents. ``optimize_plan`` now requires
+``recipe_name="marketplace_listings"`` to make that contract explicit.
+
+For generic objective → micro-plan decomposition, use the
+recipe-neutral surfaces instead:
+
+- ``--micro`` / :mod:`mantis_agent.plan_decomposer` for plain text
+  plans on any vertical.
+- ``--graph-learn`` / :mod:`mantis_agent.graph.learner` for
+  probe-driven plan enhancement with recipe overlays.
+
+This module's responsibilities (for marketplace plans only):
 
 1. AUTH SEPARATION: Detect login/OAuth flows → extract as pre-steps
    with session saving. The main workflow then uses saved sessions.
@@ -24,6 +37,7 @@ Usage:
     task_suite = optimize_plan(
         plan_text=open("plans/example/spec.md").read(),
         inputs={"zip_code": "33101", "admin_password": "xyz"},
+        recipe_name="marketplace_listings",
     )
     # Returns a task suite JSON ready for modal_web_tasks_opencua.py
 
@@ -207,12 +221,16 @@ def _try_llm_optimize(brain: Any, plan_text: str, inputs: dict[str, str],
         return None
 
 
+_SUPPORTED_RECIPES: frozenset[str] = frozenset({"marketplace_listings"})
+
+
 def optimize_plan(
     plan_text: str,
     inputs: dict[str, str] | None = None,
     session_name: str = "workflow",
     max_listings: int = 30,
     brain: Any = None,
+    recipe_name: str | None = None,
 ) -> dict:
     """Optimize a text plan for CUA execution using an LLM brain.
 
@@ -220,20 +238,38 @@ def optimize_plan(
     The LLM analyzes the plan and produces structured task sections with
     proper ordering, session management, and loop configs.
 
+    Per issue #462, ``recipe_name`` is required and must name a recipe
+    this module's heuristics support — currently only
+    ``"marketplace_listings"``. Generic / non-marketplace objectives
+    should use ``--micro`` (:mod:`mantis_agent.plan_decomposer`) or
+    ``--graph-learn`` instead.
+
     Args:
         plan_text: Free-text plan/spec describing the workflow.
         inputs: Variable substitutions (e.g. {"zip_code": "33101"}).
         session_name: Name for session persistence.
         max_listings: Cap for loop iterations.
         brain: LLM brain with query() method. Required.
+        recipe_name: Recipe scoping the optimizer's heuristics. Must
+            be one of :data:`_SUPPORTED_RECIPES`. Passing anything
+            else (or ``None``) raises ``ValueError``.
 
     Returns:
         Task suite JSON dict (compatible with modal_web_tasks_opencua.py).
 
     Raises:
-        ValueError: If no brain is provided.
+        ValueError: If no brain is provided or the recipe is unsupported.
     """
     inputs = inputs or {}
+
+    if recipe_name not in _SUPPORTED_RECIPES:
+        raise ValueError(
+            f"optimize_plan is scoped to the marketplace_listings recipe; "
+            f"got recipe_name={recipe_name!r}. For generic objective → "
+            f"micro-plan decomposition use `--micro` "
+            f"(mantis_agent.plan_decomposer) or `--graph-learn` "
+            f"(mantis_agent.graph.learner) instead."
+        )
 
     if brain is None:
         raise ValueError(

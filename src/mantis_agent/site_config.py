@@ -18,7 +18,7 @@ Usage:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
@@ -81,6 +81,20 @@ class SiteConfig:
     # pin a regression on photo coordinates. Empty tuple = no forced
     # grounding (default; routine clicks still benefit from #117 cache).
     require_independent_grounding: tuple[str, ...] = ()
+
+    # #464: URL-filter encoding rules. Maps objective-text keywords (e.g.
+    # "private seller") to URL path segments (e.g. "by-owner") for the
+    # PlanEnhancer's filtered-URL builder. Empty dict = no URL-segment
+    # building (default — generic CRM/admin flows don't have predictable
+    # URL filter formats). The marketplace_listings recipe populates this
+    # with the BoatTrader pattern set; recipes for other URL-driven sites
+    # should do the same.
+    #
+    # Value shape: keyword → URL segment template. Templates support one
+    # {value} placeholder for numeric / extracted values (e.g.
+    # "zip-{value}" → "zip-33101"). Keyword-only entries (without a
+    # placeholder) are treated as boolean filters.
+    filter_url_strategies: dict[str, str] = field(default_factory=dict)
 
     def is_detail_page(self, url: str, base_url: str = "") -> bool:
         """Check if ``url`` is a post-click detail page.
@@ -377,9 +391,14 @@ class SiteConfig:
                 if other.require_independent_grounding
                 else self.require_independent_grounding
             ),
+            filter_url_strategies=(
+                dict(other.filter_url_strategies)
+                if other.filter_url_strategies
+                else dict(self.filter_url_strategies)
+            ),
         )
 
-    def to_dict(self) -> dict[str, str | bool]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "domain": self.domain,
             "detail_page_pattern": self.detail_page_pattern,
@@ -391,6 +410,7 @@ class SiteConfig:
             "filtered_results_url": self.filtered_results_url,
             "prefer_som_grounding": self.prefer_som_grounding,
             "require_independent_grounding": list(self.require_independent_grounding),
+            "filter_url_strategies": dict(self.filter_url_strategies),
         }
 
     @classmethod

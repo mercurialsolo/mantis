@@ -138,9 +138,9 @@ class MicroIntent:
     #   right_click   : {"label": str, "aliases"?: list[str]}  # opens native context menu
     #   navigate      : {"wait_after_load_seconds"?: int}
     # ``aliases`` (#89 §2) lets a plan list synonyms for a primary submit
-    # button whose copy varies across products (e.g. "Update Lead" /
-    # "Save" / "Save Changes"). Use only for primary submit — never for
-    # nav links or unique-label clickables.
+    # button whose copy varies across products (e.g. "Save" / "Save Changes"
+    # / "Apply"). Use only for primary submit — never for nav links or
+    # unique-label clickables.
     # Empty for everything else; the runner falls back to parsing `intent`.
     params: dict[str, Any] = field(default_factory=dict)
     # Per-step grounding hints for the runner. Free-form, plan-driven —
@@ -403,7 +403,7 @@ VERB → STEP-TYPE MAPPING (FORM FLOWS):
    step MUST include params.kind classifying the visual affordance:
 
    • params.kind="button" — form-submit / call-to-action buttons
-       "click the Submit button", "click Save", "click Update Lead",
+       "click the Submit button", "click Save", "click the primary action button",
        "press Continue", "submit the form", "click the {Edit/Cancel} button"
        → submit with params={"label": "<button text>", "kind": "button"}.
 
@@ -518,43 +518,44 @@ RULES:
     • `hints.expect_url_contains` — list of substrings the post-click
       URL MUST contain. Emit ONE entry per literal URL clue the source
       plan names. Examples:
-        Source: "click Contacted ... the URL should now include
-                 status=Contacted"
-        → hints={"expect_url_contains": ["status=Contacted"]}
-        Source: "click Apply ... URL now also includes priority=Critical"
-        (already has status=Contacted from prior step — keep BOTH)
-        → hints={"expect_url_contains": ["status=Contacted",
-                                          "priority=Critical"]}
-        Source: "land on a Lead Detail page whose URL pattern /leads/<id>"
-        → hints={"expect_url_contains": ["/leads/"]}
+        Source: "click 'Active' in the status sidebar to filter the
+                 items list ... the URL should now include status=Active"
+        → hints={"expect_url_contains": ["status=Active"]}
+        Source: "click Apply ... URL now also includes priority=High"
+        (already has status=Active from prior step — keep BOTH)
+        → hints={"expect_url_contains": ["status=Active",
+                                          "priority=High"]}
+        Source: "land on an item detail page whose URL pattern
+                 /items/<id>"
+        → hints={"expect_url_contains": ["/items/"]}
       Without this hint, a click that "changed state" but landed on the
-      wrong URL slides through as success — the canonical staff-crm
-      "Contacted status pill mismatch" failure mode.
+      wrong URL slides through as success — a common failure mode when
+      a filter pill toggles a tab visually but doesn't navigate.
     • `hints.expect_url_excludes` — list of substrings the post-click
       URL MUST NOT contain. Useful for the "shouldn't drift to a
       detail page" cases:
-        Source: "click Contacted in the LEAD VIEWS sidebar — do NOT
-                 land on an individual lead"
-        → hints={"expect_url_contains": ["status=Contacted"],
-                 "expect_url_excludes": ["/leads/"]}
+        Source: "click 'Active' in the sidebar — do NOT
+                 land on an individual item detail"
+        → hints={"expect_url_contains": ["status=Active"],
+                 "expect_url_excludes": ["/items/"]}
       Only emit these for submit / click / navigate steps (URL is
       meaningful). Skip on fill_field / select_option / extract_data.
     • `hints.fallback_url` — when the click / submit has a STRUCTURAL
       ALTERNATIVE that the agent can navigate to directly if the
       click keeps misfiring. The runner's recovery layer will REPLACE
       the click with a direct navigate after 2+ failures.
-        Source: "click 'Contacted' to filter the leads list ... the
-                 URL should now include status=Contacted"
-        → hints={"expect_url_contains": ["status=Contacted"],
-                 "fallback_url": "/leads?status=Contacted"}
-        Source: "click the lead's Robot Name to open its detail page
-                 (URL ends in /leads/<id>)"
-        → hints={"expect_url_contains": ["/leads/"]}
+        Source: "click 'Active' to filter the items list ... the
+                 URL should now include status=Active"
+        → hints={"expect_url_contains": ["status=Active"],
+                 "fallback_url": "/items?status=Active"}
+        Source: "click the item's title to open its detail page
+                 (URL ends in /items/<id>)"
+        → hints={"expect_url_contains": ["/items/"]}
         (no fallback_url — the <id> isn't predictable at plan time)
       Emit fallback_url ONLY when the equivalent URL is PREDICTABLE
       from the plan text alone — typically filter / view / static-
       nav clicks where the URL pattern is named in the source. Skip
-      for clicks on dynamic data (lead rows, comment replies, etc.)
+      for clicks on dynamic data (record rows, comment replies, etc.)
       where the destination URL contains an ID we won't know.
 
       CAVEAT — fallback_url assumes the site is URL-DRIVEN: that
@@ -638,8 +639,8 @@ STEP TYPES:
           (budget=4, params={"label": "<visible button or link text>",
                              "aliases": ["<synonym1>", "<synonym2>", ...]})
           Use `aliases` ONLY for primary submit buttons whose copy varies
-          across products: "Update Lead" / "Save" / "Save Changes" all do
-          the same thing. Do NOT add aliases for nav links, tab clicks, or
+          across products: "Save" / "Save Changes" / "Apply" all do the
+          same thing. Do NOT add aliases for nav links, tab clicks, or
           any other unique-label element — they cause false matches.
 - select_option: Open a dropdown and pick an option by visible text
                  (budget=6, params={"dropdown_label": "<dropdown name>",
@@ -724,7 +725,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v28_fallback_url_url_driven"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v30_concrete_neutral_examples"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

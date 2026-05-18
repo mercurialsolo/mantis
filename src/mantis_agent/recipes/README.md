@@ -12,6 +12,8 @@ declare a recipe by name; the loader pulls in only what's needed.
 | Name | What it does | Sites tested |
 |---|---|---|
 | [`marketplace_listings`](marketplace_listings/) | Vehicle / boat / RV listings → structured row per item (year / make / model / price / phone / seller / spam) | BoatTrader and comparable marketplaces |
+| [`marketplace_planner`](marketplace_planner/) | Legacy CLI: text marketplace plan → Claude-Opus micro-plan + browse summaries. Not on the default path; use `--micro` + `marketplace_listings` instead. | BoatTrader |
+| [`staff_crm`](staff_crm/) | Staff / internal CRM admin console — supplies URL-filter encoding for sidebar / dropdown filters that aren't reliably clickable | Staff CRM-style consoles |
 | [`job_listings`](job_listings/) | Public jobs board → first N roles with title / team / location / url | Greenhouse / Lever / Workday-style boards |
 | [`form_submit`](form_submit/) | Open + fill + submit a form, capture the response | `httpbin.org/forms/post` and similar single-page forms |
 | [`search_results`](search_results/) | SERP → top N organic results as `{title, url, snippet}` | Google / Bing / DuckDuckGo |

@@ -2313,10 +2313,14 @@ def main(
         )
 
         print("  Preprocessing plan with Gemma4...")
+        # optimize_plan is scoped to the marketplace_listings recipe
+        # (#462). The `--plan-file` Modal path is BoatTrader-shaped today;
+        # generic plans should go through `--micro` instead.
         task_suite = optimize_plan(
             plan_text=plan_text, inputs=plan_inputs,
             session_name=session_name, max_listings=max_listings,
             brain=planner_brain,
+            recipe_name="marketplace_listings",
         )
 
         opt_info = task_suite.pop("_optimization", {})
