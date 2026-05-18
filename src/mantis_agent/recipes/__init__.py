@@ -77,3 +77,34 @@ def load_site_config(name: str) -> "SiteConfig | None":
         # Some other intermediate import error — surface it.
         raise
     return getattr(mod, "SITE_CONFIG", None)
+
+
+def load_loop_overrides(name: str) -> dict[str, object]:
+    """Resolve ``mantis_agent.recipes.<name>.loop_overrides.LOOP_OVERRIDES``.
+
+    Same shape contract as :func:`load_site_config`: missing
+    ``loop_overrides.py`` returns an empty dict (recipe ships no loop
+    customizations), missing recipe directory raises. The empty-dict
+    path lets the caller spread the result into a ``LoopConfig`` without
+    branching on whether the recipe ships loop overrides::
+
+        overrides = recipes.load_loop_overrides(recipe_name)
+        loop_cfg = LoopConfig(iteration_intent=..., **overrides)
+
+    Keys must match ``gym.workflow_runner.LoopConfig`` field names. See
+    :mod:`mantis_agent.recipes.marketplace_listings.loop_overrides` for
+    the reference shape (issue #463).
+    """
+    try:
+        mod = importlib.import_module(f"{__name__}.{name}.loop_overrides")
+    except ModuleNotFoundError as exc:
+        missing = getattr(exc, "name", "") or ""
+        if missing.endswith(f".{name}"):
+            raise
+        if missing == f"{__name__}.{name}.loop_overrides":
+            return {}
+        raise
+    overrides = getattr(mod, "LOOP_OVERRIDES", None)
+    if overrides is None:
+        return {}
+    return dict(overrides)

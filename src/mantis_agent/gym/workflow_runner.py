@@ -93,23 +93,6 @@ def _extract_url_from_text(text: str, domain: str = "") -> str | None:
     return None
 
 
-# Legacy BoatTrader-specific URL extractor (kept as backup/reference)
-def _extract_boattrader_url(text: str) -> str | None:
-    """Extract a BoatTrader listing URL from text (legacy)."""
-    match = _re_module.search(
-        r"(?:https?://)?(?:www\.)?boattrader\.com/boats?/[\w\-]+(?:/[\w\-]*)*/?",
-        text,
-    )
-    if match:
-        url = match.group()
-        url = _re_module.sub(r"^https?://(?:www\.)?", "", url)
-        if url.rstrip("/") in ("boattrader.com/boats", "boattrader.com/boat"):
-            return None
-        slug = _re_module.search(r"/boats?/([\w\-]+)", url)
-        if slug and len(slug.group(1)) > 5:
-            return url
-    return None
-
 ORDINALS = {
     1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth",
     6: "sixth", 7: "seventh", 8: "eighth", 9: "ninth", 10: "tenth",
@@ -132,7 +115,15 @@ PAGE_EXHAUSTED_SIGNALS = [
 
 @dataclass
 class LoopConfig:
-    """Configuration for a dynamic loop."""
+    """Configuration for a dynamic loop.
+
+    The first block of fields is loop-shape — required for every loop.
+    The second block is recipe-injected behavior the runner used to
+    hardcode for marketplace_listings (see issue #463). Defaults are
+    empty so the generic loop runner stays neutral when no recipe is
+    selected; the marketplace_listings recipe supplies them via
+    ``recipes.load_loop_overrides("marketplace_listings")``.
+    """
     iteration_intent: str       # Template with {ORDINAL}, {N} placeholders
     pagination_intent: str = "Scroll to the bottom and click the Next page button or '>' arrow. If there is no next page, call terminate('failure') with 'no more pages'."
     max_iterations: int = 50    # Safety cap
@@ -140,6 +131,14 @@ class LoopConfig:
     max_steps_per_iteration: int = 60
     max_retries_per_iteration: int = 2
     max_steps_pagination: int = 20
+
+    # Recipe-injected loop behavior. All optional; empty defaults keep
+    # the generic loop runner free of vertical assumptions.
+    entity_name: str = "item"                          # "listing" / "lead" / "row"
+    spam_signals: tuple[str, ...] = ()                 # dealer/sponsored skip tokens
+    offsite_brand_domains: tuple[str, ...] = ()        # vertical-specific external sites
+    entity_keywords: tuple[str, ...] = ()              # viability-check fallback
+    gallery_trap_hint: str = ""                        # parameterized recovery copy
 
 
 class FailureCategory:
@@ -157,23 +156,20 @@ class FailureCategory:
     UNKNOWN = "unknown"
 
 
-# Default spam/dealer signals for failure classification (BoatTrader defaults kept as backup)
-DEFAULT_DEALER_SIGNALS = [
-    "more from this dealer", "view dealer website", "dealer listing",
-    "visit seller website", "more boats from this dealer",
-]
-
-
-def _classify_failure(data: str, result=None, spam_signals: list[str] | None = None) -> tuple[str, str]:
+def _classify_failure(data: str, result=None, spam_signals: list[str] | tuple[str, ...] | None = None) -> tuple[str, str]:
     """Classify a failed iteration into category + reason.
 
     Returns (category, reason) tuple for structured logging.
+
+    ``spam_signals`` is supplied by ``LoopConfig.spam_signals`` (which a
+    recipe like ``marketplace_listings`` populates). When no recipe is
+    active and no signals are passed, the dealer/spam-listing class is
+    simply unreachable — there are no built-in vertical assumptions.
     """
     text = (data or "").lower()
 
     # Spam/dealer listing detection (highest priority — wrong listing type entirely)
-    signals = spam_signals or DEFAULT_DEALER_SIGNALS
-    if any(sig in text for sig in signals):
+    if spam_signals and any(sig in text for sig in spam_signals):
         return FailureCategory.DEALER_LISTING, "Clicked spam/dealer listing instead of target entity"
 
     if "popup" in text or "modal" in text or "contact seller" in text or "request info" in text:
@@ -594,10 +590,14 @@ class WorkflowRunner:
                 _listing_url = _extract_url_from_text(extracted)
                 viable = self._validate_viable(extracted, listing_url=_listing_url)
 
-            # Classify failure for structured logging
+            # Classify failure for structured logging. spam_signals come
+            # from the active recipe (LoopConfig.spam_signals); empty when
+            # no recipe is active and the dealer-listing class is unreachable.
             fail_cat, fail_reason = "", ""
             if not viable:
-                fail_cat, fail_reason = _classify_failure(extracted, result)
+                fail_cat, fail_reason = _classify_failure(
+                    extracted, result, spam_signals=self.config.spam_signals or None
+                )
 
             iter_result = IterationResult(
                 iteration=global_iteration,
@@ -1096,14 +1096,16 @@ class WorkflowRunner:
                     count += 1
         return count
 
-    @staticmethod
-    def _distill_learning(result, iter_result, viable: bool) -> str:
+    def _distill_learning(self, result, iter_result, viable: bool) -> str:
         """Analyze the trajectory and distill actionable learnings.
 
         Examines the full trajectory to detect failure patterns:
-        - Off-site navigation (Facebook, Instagram, external dealer sites)
+        - Off-site navigation (social media is universal; vertical-specific
+          brand domains come from ``LoopConfig.offsite_brand_domains``)
         - Backtracking loops (repeated Alt+Left)
-        - Image gallery traps
+        - Image gallery traps (recovery copy from
+          ``LoopConfig.gallery_trap_hint`` when supplied, generic
+          otherwise)
         - Wrong clicks (ads, social icons, menus)
         - Cookie/popup blocking
         - Successful patterns to reinforce
@@ -1130,16 +1132,14 @@ class WorkflowRunner:
                     f"ONLY click result card titles, not social icons or footer links."
                 )
 
-        # External brand/dealer sites — static method, so no `self` to pull from.
-        external_sites = [
-            "hanover yachts", "tige boats", "cobalt boats", "bayliner.com",
-            "sea ray.com", "boston whaler.com", "grady-white.com",
-        ]
-        for site in external_sites:
+        # External vertical-specific brand sites — supplied by the active
+        # recipe via LoopConfig.offsite_brand_domains; empty when no recipe.
+        entity = self.config.entity_name or "item"
+        for site in self.config.offsite_brand_domains:
             if site in all_thinking or site in data:
                 return (
                     f"You navigated to an external website ({site}). "
-                    f"Only click listings within the search results page. "
+                    f"Only click {entity}s within the search results page. "
                     f"If you end up on a different site, press Alt+Left immediately to go back."
                 )
 
@@ -1153,16 +1153,17 @@ class WorkflowRunner:
                 "not menu items, ads, social icons, or navigation links."
             )
 
-        # ── Image gallery trap ──
+        # ── Image gallery trap — vertical-specific recipe wins if set,
+        # otherwise emit a neutral fallback that names the active entity.
         if "image viewer" in all_thinking or "lightbox" in all_thinking or "1 of" in all_thinking or "gallery" in all_thinking:
+            if self.config.gallery_trap_hint:
+                return self.config.gallery_trap_hint.format(entity_name=entity)
             return (
-                "You clicked the PHOTO and got trapped in an image gallery. "
-                "Press Escape then Alt+Left to go back. "
-                "NEXT TIME: do NOT click the boat photo. Instead click one of these:\n"
-                "  - The boat NAME TEXT (e.g. '2022 Grady-White Freedom 235')\n"
-                "  - The PRICE text (e.g. '$145,000')\n"
-                "  - A 'View Details', 'See Details', or 'Contact Seller' link\n"
-                "These open the detail page WITHOUT the gallery trap."
+                f"You clicked the PHOTO and got trapped in an image gallery. "
+                f"Press Escape then Alt+Left to go back. "
+                f"NEXT TIME: do NOT click the {entity}'s photo. Instead click "
+                f"the {entity}'s TITLE TEXT or a 'View Details' / 'See Details' "
+                f"link. These open the detail page without the gallery trap."
             )
 
         # ── 404 / Page Not Found / external site ──
@@ -1366,12 +1367,10 @@ class WorkflowRunner:
         data = str(data)
         text = data.lower()
 
-        # Reject dealer listings (not private sellers — no phone numbers)
-        dealer_signals = [
-            "more from this dealer", "view dealer website",
-            "more boats from this dealer", "visit seller website",
-        ]
-        if any(sig in text for sig in dealer_signals):
+        # Reject dealer/spam listings supplied by the active recipe.
+        # ``spam_signals`` is empty when no recipe is selected; the
+        # generic loop runner imposes no vertical assumptions.
+        if self.config.spam_signals and any(sig in text for sig in self.config.spam_signals):
             return False
 
         # Reject error/blocked pages
@@ -1406,18 +1405,11 @@ class WorkflowRunner:
         has_year = bool(re.search(r'(?:19|20)\d{2}', data))
         has_price = bool(re.search(r'\$[\d,]+', data))
         has_entity_info = False
-        # Use extractor schema keywords if available, else default boat keywords
-        entity_keywords = getattr(self, '_entity_keywords', None)
-        if entity_keywords is None:
-            # Default: BoatTrader keywords (kept as backup for backward compat)
-            entity_keywords = [
-                "make", "model", "hull", "engine", "console", "cabin",
-                "grady", "boston whaler", "sea hunt", "tracker", "yamaha",
-                "mercury", "suzuki", "honda", "evinrude", "intrepid",
-                "azimut", "sea ray", "sundeck", "walkaround", "sportfish",
-                "bayliner", "chaparral", "everglades", "cigarette", "century",
-                "cobia", "nor-tech", "may-craft", "key west", "robalo",
-            ]
+        # Entity keywords come from (in order): the extractor's schema,
+        # the active recipe (LoopConfig.entity_keywords), or none. When
+        # both are empty the keyword check is skipped and viability
+        # falls back to year/price only.
+        entity_keywords = getattr(self, '_entity_keywords', None) or self.config.entity_keywords
         for kw in entity_keywords:
             if kw in text:
                 has_entity_info = True

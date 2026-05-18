@@ -358,6 +358,18 @@ def run_opencua_tasks(
                     status = "VIABLE" if iter_result.success else "SKIP"
                     print(f"  [{iter_num}] {status} — {viable_so_far}/{total_so_far} viable ({elapsed:.0f}s)")
 
+                # Recipe-injected loop overrides (issue #463). When the
+                # plan declares a recipe, spread its loop_overrides into
+                # LoopConfig so vertical-specific dealer signals, brand
+                # domains, entity keywords, and gallery-trap copy flow
+                # in without contaminating the generic runner. Empty
+                # dict when no recipe is selected.
+                loop_overrides: dict = {}
+                recipe_name = task_config.get("recipe")
+                if recipe_name:
+                    from mantis_agent import recipes
+                    loop_overrides = recipes.load_loop_overrides(recipe_name)
+
                 loop_cfg = LoopConfig(
                     iteration_intent=intent,
                     pagination_intent=task_config["loop"].get("pagination_intent",
@@ -365,6 +377,7 @@ def run_opencua_tasks(
                     max_iterations=task_config["loop"].get("max_iterations", 50),
                     max_pages=task_config["loop"].get("max_pages", 10),
                     max_steps_per_iteration=max_steps,
+                    **loop_overrides,
                 )
                 wf_runner = WorkflowRunner(brain=brain, env=env, loop_config=loop_cfg,
                                            on_iteration=on_loop_iteration)
