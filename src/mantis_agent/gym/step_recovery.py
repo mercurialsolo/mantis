@@ -220,6 +220,69 @@ class StepRecoveryPolicy:
         # ── required: retry budget then halt ────────────────────────────
         if step.required:
             attempt = step_retry_counts.get(step_index, 0) + 1
+
+            # Deterministic CDP scroll fallback — applies to required
+            # scroll steps that have already burned at least one full
+            # Holo3 brain budget on a brain_loop_exhausted failure.
+            # The scroll IS what the plan asked for; dispatching it via
+            # CDP is the same action by a different mechanism after
+            # the visual loop has demonstrably failed. Permitted by
+            # feedback_cua_no_dom_access.md (CDP allowed for dispatching
+            # vision-derived actions, not for deriving targets).
+            #
+            # Without this short-circuit, the required path burns
+            # max_retries × Holo3-budget-25 steps with zero observable
+            # scroll progress, then escalates to agentic_recovery which
+            # correctly chooses halt. This wastes ~3 minutes and
+            # ~$0.50 per stuck-scroll incident. Live repro:
+            # BoatTrader urlnav-cdpscroll runs 1779134490 / 1779134923.
+            if (
+                step.type == "scroll"
+                and str(getattr(step_result, "failure_class", "") or "") == "brain_loop_exhausted"
+                and attempt >= 2
+            ):
+                env = getattr(runner, "env", None)
+                cdp_eval = getattr(env, "cdp_evaluate", None) if env is not None else None
+                if callable(cdp_eval):
+                    from . import step_snapshot as _snap
+                    pre = None
+                    try:
+                        pre = _snap.capture(runner)
+                    except Exception:
+                        pre = None
+                    try:
+                        cdp_eval("window.scrollBy(0, window.innerHeight)")
+                    except Exception as exc:  # noqa: BLE001
+                        logger_.warning(
+                            f"  [{step_index}] scroll CDP fallback dispatch failed: {exc}"
+                        )
+                    else:
+                        try:
+                            post = _snap.capture(runner)
+                            moved = (
+                                pre is None
+                                or pre.viewport_stage != post.viewport_stage
+                                or pre.scroll_signature != post.scroll_signature
+                            )
+                        except Exception:
+                            moved = True
+                        if moved:
+                            logger_.warning(
+                                f"  [{step_index}] scroll brain_loop_exhausted "
+                                f"x{attempt} — CDP fallback dispatched "
+                                f"window.scrollBy(0, innerHeight); viewport moved, advancing"
+                            )
+                            return RecoveryOutcome(
+                                halt=False, step_index=step_index + 1,
+                                halt_reason="scroll_cdp_fallback",
+                            )
+                        logger_.warning(
+                            f"  [{step_index}] scroll brain_loop_exhausted "
+                            f"x{attempt} — CDP fallback fired but viewport unchanged "
+                            f"(page bottom / scroll blocked); continuing retry budget"
+                        )
+                        # Fall through to the normal retry path below.
+
             if attempt <= max_retries:
                 step_retry_counts[step_index] = attempt
                 logger_.warning(

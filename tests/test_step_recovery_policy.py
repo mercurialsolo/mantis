@@ -460,6 +460,71 @@ def test_scroll_failure_advances_as_pseudo_success():
     assert outcome.halt_reason == "scroll_no_done"
 
 
+def test_required_scroll_brain_loop_second_attempt_cdp_fallback_advances(monkeypatch):
+    """A required scroll step that hits brain_loop_exhausted on attempt
+    2 should dispatch a CDP window.scrollBy and advance, short-
+    circuiting the second Holo3 retry. Without this, the required
+    branch burns max_retries × full-brain-budget on a page where
+    Holo3 demonstrably can't make observable scroll progress
+    (sticky header swallowing wheel events, etc.)."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    import mantis_agent.gym.step_snapshot as _snap
+    captured = []
+    class _Snap:
+        def __init__(self, vs, sig): self.viewport_stage = vs; self.scroll_signature = sig
+    def _cap(_runner):
+        result = _Snap(len(captured), f"sig-{len(captured)}")
+        captured.append(result)
+        return result
+    monkeypatch.setattr(_snap, "capture", _cap)
+
+    policy = StepRecoveryPolicy(runner)
+    # attempt counter is read as step_retry_counts.get(step_index, 0) + 1.
+    # Pass {0: 1} so attempt becomes 2 (second pass) and the CDP fallback
+    # gate (``attempt >= 2``) fires.
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Press Page Down", type="scroll", required=True),
+        step_result=_result(failure_class="brain_loop_exhausted"),
+        plan=_plan("scroll"),
+        step_index=0,
+        step_retry_counts={0: 1},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 1  # advance
+    assert outcome.halt_reason == "scroll_cdp_fallback"
+    runner.env.cdp_evaluate.assert_called_once_with("window.scrollBy(0, window.innerHeight)")
+
+
+def test_required_scroll_brain_loop_first_attempt_retries_normally(monkeypatch):
+    """First attempt of a required scroll step still goes through the
+    regular retry path so intent_rewriter can rewrite the goal-shape
+    intent before the CDP fallback kicks in."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    policy = StepRecoveryPolicy(runner)
+    retries: dict = {}
+
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Scroll to lazy-load", type="scroll", required=True),
+        step_result=_result(failure_class="brain_loop_exhausted"),
+        plan=_plan("scroll"),
+        step_index=0,
+        step_retry_counts=retries,
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 0  # retry same step
+    assert outcome.halt_reason == "required_retry:scroll:1"
+    runner.env.cdp_evaluate.assert_not_called()
+    assert retries[0] == 1
+
+
 def test_scroll_brain_loop_first_failure_keeps_step_and_arms_counter():
     """First brain_loop_exhausted on a scroll keeps the step so the
     intent_rewriter can convert the goal-shaped intent into a
