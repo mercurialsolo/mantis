@@ -93,7 +93,9 @@ def test_fallback_url_replaces_step_after_two_failures() -> None:
     )
     assert isinstance(out, ReplaceStep)
     assert out.step_type == "navigate"
-    assert out.params == {"url": "/leads?status=Contacted"}
+    # Relative path resolved against the runner's _results_base_url
+    # (the test fixture seeds it to "https://example.com").
+    assert out.params == {"url": "https://example.com/leads?status=Contacted"}
     assert "fallback_url" in out.reason
 
 
@@ -174,6 +176,73 @@ def test_fallback_url_fires_on_selector_miss() -> None:
     assert isinstance(out, ReplaceStep)
     assert out.step_type == "navigate"
     assert out.params == {"url": "https://example.com/leads?status=Contacted"}
+
+
+def test_fallback_url_relative_path_resolved_against_current_url() -> None:
+    """Plan-author-supplied fallback_url is conventionally a path-
+    relative URL (the plan doesn't know the origin at decompose time).
+    The critic should resolve it against the browser's current page
+    origin before emitting the navigate step — Modal's navigate
+    dispatcher requires a full http(s)://... URL and fails on bare
+    paths. Live repro: run 20260518_113708_25c9d5e8 — critic
+    correctly promoted step 6 to fallback navigate but the navigate
+    halted on the relative path."""
+    runner = _runner_with_failure_history(step_index=0, n_failures=2)
+    runner.env = SimpleNamespace(current_url="https://crm.example.com/dashboard")
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(
+            intent="Click Contacted", type="submit",
+            hints={"fallback_url": "/leads?status=Contacted"},
+        ),
+    ])
+    runner._step_failure_history = {
+        0: [
+            {"x": 1, "y": 1, "kind": "selector_miss"},
+            {"x": 2, "y": 2, "kind": "selector_miss"},
+        ]
+    }
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="selector_miss",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    assert isinstance(out, ReplaceStep)
+    assert out.params == {
+        "url": "https://crm.example.com/leads?status=Contacted",
+    }
+
+
+def test_fallback_url_absolute_url_preserved() -> None:
+    """When the plan author already supplied an absolute URL, the
+    critic uses it verbatim — no rewrites, no origin guessing."""
+    runner = _runner_with_failure_history(step_index=0, n_failures=2)
+    runner.env = SimpleNamespace(current_url="https://example.com/page")
+    critic = ExecutionCritic(runner)
+    abs_url = "https://other-site.example.com/leads?status=Contacted"
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(
+            intent="Click Contacted", type="submit",
+            hints={"fallback_url": abs_url},
+        ),
+    ])
+    runner._step_failure_history = {
+        0: [
+            {"x": 1, "y": 1, "kind": "selector_miss"},
+            {"x": 2, "y": 2, "kind": "selector_miss"},
+        ]
+    }
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="selector_miss",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    assert isinstance(out, ReplaceStep)
+    assert out.params == {"url": abs_url}
 
 
 def test_fallback_url_fires_on_unknown_class() -> None:

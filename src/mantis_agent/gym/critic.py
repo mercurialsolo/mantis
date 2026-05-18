@@ -287,6 +287,30 @@ class ExecutionCritic:
         fallback_url = str(hints.get("fallback_url") or "").strip()
         if not fallback_url:
             return None
+        # Plan-author-supplied fallback_url is conventionally written
+        # as a path-relative URL ("/leads?status=Active") because the
+        # plan doesn't always know the origin. Resolve it against the
+        # browser's current page origin so the navigate handler gets
+        # a full URL — Modal's navigate dispatcher requires
+        # ``http(s)://...`` and fails on bare paths.
+        if not fallback_url.startswith(("http://", "https://")):
+            from urllib.parse import urljoin, urlparse
+            origin_url = ""
+            env = getattr(self.runner, "env", None)
+            if env is not None:
+                origin_url = str(getattr(env, "current_url", "") or "")
+            if not origin_url:
+                origin_url = str(getattr(self.runner, "_results_base_url", "") or "")
+            if not origin_url:
+                origin_url = str(getattr(self.runner, "start_url", "") or "")
+            if origin_url:
+                parsed = urlparse(origin_url)
+                if parsed.scheme and parsed.netloc:
+                    base = f"{parsed.scheme}://{parsed.netloc}/"
+                    fallback_url = urljoin(base, fallback_url.lstrip("/"))
+            # If we still don't have a scheme, fall through — let the
+            # navigate handler surface its own error. Better than
+            # silently no-op on the only recovery path the plan named.
         history = (
             self.runner._step_failure_history.get(int(state.step_index), [])
             if hasattr(self.runner, "_step_failure_history") else []
