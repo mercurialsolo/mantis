@@ -268,6 +268,31 @@ _TAB_WALK_MAX_TABS = 100
 _TAB_WALK_KEY_DELAY = 0.12  # seconds between Tab keypresses
 
 
+def _label_matches(needle: str, candidate: str) -> bool:
+    """Tab-walk anchor/input label matcher.
+
+    Returns True when ``needle`` should be considered a match for
+    ``candidate``. Lifts a strict exact/substring check (which rejects
+    "Estimated Value" against "Estimated Deal Value:" because the
+    word "Deal" interrupts the substring) into token-subset matching:
+    all whitespace-split tokens of ``needle`` must appear among the
+    tokens of ``candidate``, order-independent.
+
+    Both arguments are expected pre-lowercased and stripped. Empty
+    needle returns False; empty candidate returns False unless needle
+    is also empty (caller-side guard).
+    """
+    if not needle or not candidate:
+        return False
+    if needle == candidate or needle in candidate:
+        return True
+    needle_tokens = {t for t in needle.split() if t}
+    if not needle_tokens:
+        return False
+    cand_tokens = {t.strip(":,.()[]") for t in candidate.split() if t}
+    return needle_tokens.issubset(cand_tokens)
+
+
 def _tab_walk_to_nav_link(
     env: Any,
     target_label: str,
@@ -370,7 +395,7 @@ def _tab_walk_to_nav_link(
         # parent-container click-trap pattern: vision picks coords that
         # resolve to the toolbar `<div>` wrapping the button, not the
         # `<button>` itself. Tab-walk reaches the button via DOM order.
-        if tag in ("A", "BUTTON") and name and (needle == name or needle in name):
+        if tag in ("A", "BUTTON") and name and _label_matches(needle, name):
             logger.warning(
                 "  [claude-form] tab-walk: matched %s at Tab+%d "
                 "(tag=%s name=%r) for target=%r",
@@ -521,7 +546,7 @@ def _tab_walk_to_input(
             str(result.get(k) or "").strip().lower()
             for k in ("labelText", "ariaLabel", "placeholder", "name", "siblingText")
         ]
-        if any(c and (needle == c or needle in c) for c in candidates):
+        if any(_label_matches(needle, c) for c in candidates):
             logger.warning(
                 "  [claude-form] tab-walk-input: matched %s at Tab+%d "
                 "(label=%r aria=%r placeholder=%r name=%r) for target=%r",

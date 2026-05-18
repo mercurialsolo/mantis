@@ -1155,3 +1155,60 @@ def test_tab_walk_input_empty_label_returns_none() -> None:
     assert _tab_walk_to_input(env, "") is None
     assert _tab_walk_to_input(env, "   ") is None
     env.cdp_evaluate.assert_not_called()
+
+
+# ── PR-M: token-subset matcher (lifts strict-substring failure modes) ──
+
+
+def test_label_matches_exact_and_substring() -> None:
+    """Token-subset matcher preserves prior exact / substring semantics."""
+    from mantis_agent.gym.step_handlers.form import _label_matches
+
+    assert _label_matches("contacted", "contacted") is True
+    assert _label_matches("contacted", "contacted (0)") is True
+    assert _label_matches("save", "save changes") is True
+    assert _label_matches("save", "") is False
+    assert _label_matches("", "anything") is False
+
+
+def test_label_matches_token_subset_with_interleaved_word() -> None:
+    """Plan says 'Estimated Value', input shows 'Estimated Deal Value' —
+    word "Deal" interrupts the substring but tokens are a subset. Must match."""
+    from mantis_agent.gym.step_handlers.form import _label_matches
+
+    assert _label_matches("estimated value", "estimated deal value") is True
+    assert _label_matches("estimated value", "estimated deal value:") is True
+    assert _label_matches("phone number", "contact phone number (required)") is True
+
+
+def test_label_matches_rejects_missing_token() -> None:
+    """Token-subset is strict on every token — missing one fails."""
+    from mantis_agent.gym.step_handlers.form import _label_matches
+
+    # "estimated revenue value" has no "revenue" in the candidate.
+    assert _label_matches("estimated revenue value", "estimated value") is False
+    # Login vs Sign In is a semantic mismatch; tokens don't overlap.
+    assert _label_matches("login", "sign in") is False
+
+
+def test_tab_walk_input_matches_via_token_subset(monkeypatch) -> None:
+    """End-to-end: tab-walk-input matches when placeholder has extra word
+    between the plan-label tokens (staff-crm-long step 13 pattern)."""
+    from mantis_agent.gym.step_handlers.form import _tab_walk_to_input
+
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+
+    env = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        True,  # focus reset
+        {
+            "tag": "INPUT", "name": "estimated_deal_value", "placeholder": "Estimated Deal Value",
+            "ariaLabel": "", "siblingText": "", "labelText": "", "value": "4619727.81",
+            "isInputLike": True,
+        },
+    ]
+
+    match = _tab_walk_to_input(env, "Estimated Value", max_tabs=2)
+    assert match is not None
+    assert match["tag"] == "INPUT"
+    assert match["value"] == "4619727.81"
