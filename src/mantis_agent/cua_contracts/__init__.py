@@ -51,7 +51,9 @@ from .adapters import (
     classify_legacy_reversibility,
     observation_from_screenshot_ref,
     step_from_micro_intent,
+    verdict_from_step_result,
 )
+from .emit import JSONL_FILENAME, TrajectoryEmitter
 from .types import (
     ActionResult,
     Observation,
@@ -84,6 +86,8 @@ __all__ = [
     "TrajectoryEvent",
     "Verdict",
     "VerdictKind",
+    "JSONL_FILENAME",
+    "TrajectoryEmitter",
     "action_result_from_action",
     "classify_legacy_reversibility",
     "observation_from_screenshot_ref",
@@ -92,4 +96,5 @@ __all__ = [
     "validate_task_spec",
     "validate_trajectory_event",
     "validate_verdict",
+    "verdict_from_step_result",
 ]

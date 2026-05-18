@@ -25,11 +25,32 @@ from .types import (
     ReversibilityClass,
     SCHEMA_VERSION,
     Step,
+    Verdict,
+    VerdictKind,
 )
 
 if TYPE_CHECKING:
     from ..actions import Action
+    from ..gym.checkpoint import StepResult
     from ..plan_decomposer import MicroIntent
+
+
+# Failure classes that genuinely can't be recovered from without
+# operator intervention — re-running them would just churn budget.
+# Anything not in this set defaults to RECOVERABLE so the retry /
+# recovery / replan ladder gets a shot before terminating.
+#
+# Empty ``failure_class`` on a failed step also defaults to
+# RECOVERABLE — the safer choice when classification was missing.
+# #477's action ontology will refine this; for v1 the set stays
+# small and grep-able so an operator auditing a HALT can find the
+# entry quickly.
+_NON_RECOVERABLE_FAILURE_CLASSES: frozenset[str] = frozenset({
+    "cf_challenge",      # Cloudflare bot challenge — needs new IP / browser
+    "http_4xx",          # 401 / 403 / 404 — credential or routing problem
+    "extractor_error",   # extractor itself crashed, not a content miss
+    "budget_exceeded",   # already exhausted the per-step budget
+})
 
 
 # Mapping from legacy MicroIntent.type strings to a coarse
@@ -145,6 +166,51 @@ def action_result_from_action(
         grounding_trace=grounding_trace or {},
         dispatched=dispatched,
         dispatch_error=dispatch_error,
+    )
+
+
+def verdict_from_step_result(r: "StepResult") -> Verdict:
+    """Project a legacy :class:`~mantis_agent.gym.checkpoint.StepResult`
+    onto :class:`Verdict` (#478, #480).
+
+    Until #480 lands a typed verdict at the source, the runner records
+    outcome as a tuple of ``(success: bool, failure_class: str,
+    data: str)``. This adapter is the projection the canonical event
+    emitter uses on every step:
+
+    * ``success=True`` → :class:`VerdictKind.OK`. ``reason`` is empty
+      (happy path needs no recovery code); ``evidence`` carries the
+      runner's ``data`` string (often a brief "extracted 7 leads" /
+      "navigated to /detail/123" note).
+    * ``success=False`` + ``failure_class`` in
+      :data:`_NON_RECOVERABLE_FAILURE_CLASSES` →
+      :class:`VerdictKind.NON_RECOVERABLE`. Recovery loops on these
+      classes burn budget without converging.
+    * ``success=False`` everything else → :class:`VerdictKind.RECOVERABLE`.
+      ``reason`` falls back to ``"unknown"`` when no class was
+      stamped so the validator accepts the verdict (it requires a
+      non-empty reason on failure verdicts).
+    """
+    if r.success:
+        return Verdict(
+            schema_version=SCHEMA_VERSION,
+            kind=VerdictKind.OK,
+            reason="",
+            evidence=str(getattr(r, "data", "") or ""),
+            confidence=1.0,
+        )
+    failure_class = str(getattr(r, "failure_class", "") or "")
+    kind = (
+        VerdictKind.NON_RECOVERABLE
+        if failure_class in _NON_RECOVERABLE_FAILURE_CLASSES
+        else VerdictKind.RECOVERABLE
+    )
+    return Verdict(
+        schema_version=SCHEMA_VERSION,
+        kind=kind,
+        reason=failure_class or "unknown",
+        evidence=str(getattr(r, "data", "") or ""),
+        confidence=0.5 if kind == VerdictKind.RECOVERABLE else 0.9,
     )
 
 

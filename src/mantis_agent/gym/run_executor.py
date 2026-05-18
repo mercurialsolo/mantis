@@ -36,6 +36,7 @@ so the back-reference can collapse.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -467,6 +468,18 @@ class RunExecutor:
         runner._log_progress(step_result, state.results)
         runner._log_step_diff(pre_snapshot, effective_step, step_result)
         _emit_action_metric(runner, effective_step, step_result)
+        # #478: append a canonical TrajectoryEvent to the per-run
+        # JSONL store (one-line side channel; failure here never
+        # blocks the run). Gated by ``MANTIS_CANONICAL_EVENTS_DIR``
+        # so production paths can roll out the writer first, then
+        # downstream consumers, then flip the env var without a
+        # redeploy. Emit happens AFTER the post-step bookkeeping
+        # finishes (verdict materialised, classification stamped)
+        # and BEFORE any retry / recovery branch that would
+        # construct a second StepResult for the same logical step —
+        # the emitter is idempotent on step_index but the first emit
+        # is the truthful one.
+        _emit_canonical_trajectory_event(runner, effective_step, step_result)
         if not step_result.success:
             runner._dump_debug_screenshot(
                 f"step{state.step_index}_post_{effective_step.type}",
@@ -1416,6 +1429,62 @@ def _stamp_failure_context(step_result: StepResult, env: Any) -> None:
 
 
 # ── #156 per-action observability ──────────────────────────────────────
+
+
+_CANONICAL_EVENTS_DIR_ENV: str = "MANTIS_CANONICAL_EVENTS_DIR"
+
+
+def _emit_canonical_trajectory_event(
+    runner: Any, step: MicroIntent, step_result: StepResult,
+) -> None:
+    """Append one validated :class:`TrajectoryEvent` per step (#478).
+
+    Side channel — never raises, never blocks the runner. Gated by
+    the ``MANTIS_CANONICAL_EVENTS_DIR`` env var so the writer can be
+    rolled out independently of any reader.
+
+    The per-run :class:`TrajectoryEmitter` is created lazily on first
+    call and stashed on the runner; subsequent steps reuse it (one
+    file handle's worth of overhead per step). Idempotency is owned
+    by the emitter — calling this helper twice on the same
+    ``(run_id, step_index)`` is a silent no-op, which lines up with
+    the retry / recovery / demote paths that can run this code more
+    than once per logical step.
+
+    ``run_id`` resolution honours the same shape the existing
+    result-payload writer expects: prefer ``runner.run_id`` (set by
+    the API path), fall back to ``runner._run_id`` (legacy), then a
+    deterministic placeholder so the emitter doesn't raise on a
+    no-id local script.
+    """
+    store_dir = os.environ.get(_CANONICAL_EVENTS_DIR_ENV, "").strip()
+    if not store_dir:
+        return
+    emitter = getattr(runner, "_trajectory_emitter", None)
+    if emitter is None:
+        run_id = (
+            str(getattr(runner, "run_id", "") or "")
+            or str(getattr(runner, "_run_id", "") or "")
+            or "local_run"
+        )
+        try:
+            from ..cua_contracts import TrajectoryEmitter
+            emitter = TrajectoryEmitter(
+                run_id=run_id,
+                store_dir=store_dir,
+                versions=dict(getattr(runner, "_canonical_event_versions", {}) or {}),
+            )
+        except Exception as exc:  # noqa: BLE001 — never break a run
+            logger.debug("canonical event emitter init failed: %s", exc)
+            runner._trajectory_emitter = False  # type: ignore[attr-defined]
+            return
+        runner._trajectory_emitter = emitter  # type: ignore[attr-defined]
+    if emitter is False:
+        return
+    try:
+        emitter.emit(step, step_result)
+    except Exception as exc:  # noqa: BLE001 — never break a run
+        logger.debug("canonical event emit raised: %s", exc)
 
 
 def _emit_action_metric(
