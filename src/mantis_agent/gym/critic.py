@@ -446,7 +446,17 @@ class ExecutionCritic:
             )
             return None
         failure_class = str(getattr(step_result, "failure_class", "") or "")
-        if failure_class not in {"selector_miss", "unknown", "wrong_target"}:
+        # Include ``no_state_change`` — the canonical "click ok=True but
+        # page didn't transition" class. This is the shape produced when
+        # a row-link <a> is clicked but the click-event chain doesn't
+        # actually navigate (broken onclick interceptor, JS-routed SPA,
+        # or vision-grounding hitting a row cell that's not the
+        # navigable anchor). Live observation from run
+        # 20260518_181523_7bce4437: failure_class='no_state_change' on
+        # step 8 with kind=row_link.
+        if failure_class not in {
+            "selector_miss", "unknown", "wrong_target", "no_state_change",
+        }:
             logger.warning(
                 "  [critic-row-link] step %d: skip — failure_class=%r not in target-id family",
                 state.step_index, failure_class,
