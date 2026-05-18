@@ -362,10 +362,18 @@ def _tab_walk_to_nav_link(
         name = str(result.get("name") or "").strip().lower()
         tag = str(result.get("tag") or "").strip().upper()
         visited.append((tag, str(result.get("name") or "")[:40]))
-        if tag == "A" and name and (needle == name or needle in name):
+        # Accept `<a>` (nav/row/cell links) AND `<button>` — both are
+        # primary interactive elements that activate via Enter from
+        # focused state. Extended from anchor-only after staff-crm-long
+        # step 10 surfaced a `kind=button` step (Edit Lead) hitting the
+        # parent-container click-trap pattern: vision picks coords that
+        # resolve to the toolbar `<div>` wrapping the button, not the
+        # `<button>` itself. Tab-walk reaches the button via DOM order.
+        if tag in ("A", "BUTTON") and name and (needle == name or needle in name):
             logger.warning(
-                "  [claude-form] tab-walk: matched anchor at Tab+%d "
+                "  [claude-form] tab-walk: matched %s at Tab+%d "
                 "(tag=%s name=%r) for target=%r",
+                "button" if tag == "BUTTON" else "anchor",
                 i, tag, result.get("name"), target_label,
             )
             return {"tabs": i, "tag": tag, "name": str(result.get("name") or "")}
@@ -1002,7 +1010,7 @@ class ClaudeGuidedFormHandler:
                 if (
                     url_before
                     and url_after_click == url_before
-                    and (params.get("kind") or "") in {"nav_link", "row_link", "cell_link"}
+                    and (params.get("kind") or "") in {"nav_link", "row_link", "cell_link", "button"}
                 ):
                     # For row_link / cell_link the plan often doesn't
                     # carry a label (the anchor text is dynamic per row).

@@ -83,22 +83,18 @@ def test_local_backend_starts_and_stops_stub_env():
 
 
 def test_local_backend_two_starts_get_distinct_urls():
-    # The test contract is "two backend.start() calls produce
-    # distinct URLs (port allocation works)". Earlier versions
-    # actually booted both subprocesses to verify; on a 2-vCPU
-    # GitHub runner that flaked persistently — even with the
-    # 90 s budget and serialized starts, two FastAPI imports
-    # competing for the same box can't both come up.
-    #
-    # The fix: assert the property we actually want (URL
-    # distinctness) and skip the wait_healthy on h2 — it
-    # contributes nothing to the assertion. h1 is fully booted
-    # so we still confirm a real backend cycle works; h2 just
-    # needs a distinct port assigned, which ``backend.start``
-    # does synchronously.
+    # Contract: two backend.start() calls produce distinct URLs
+    # (port allocation works). This is purely a property of
+    # ``_pick_free_port`` which runs synchronously inside
+    # backend.start. Earlier versions wait_healthy'd h1 to also
+    # confirm a real backend cycle, but that wait races h2's
+    # spawning subprocess for CPU on slow CI runners — even the
+    # 180 s budget wasn't enough on 2-vCPU GitHub runners (this
+    # family flaked 4x in a row across #355–#453). Real-boot
+    # coverage already lives in test_local_backend_starts_and_
+    # stops_stub_env above; here we only assert port-distinctness.
     backend = LocalBackend()
     h1 = backend.start("stub-test")
-    backend.wait_healthy(h1, timeout_s=180.0)
     h2 = backend.start("stub-test")
     try:
         assert h1.url != h2.url
@@ -108,9 +104,13 @@ def test_local_backend_two_starts_get_distinct_urls():
 
 
 def test_stop_is_idempotent():
+    # ``stop`` must work regardless of subprocess boot state —
+    # the contract is "calling stop twice doesn't raise", which
+    # holds whether the child is mid-import or fully bound.
+    # Skipping wait_healthy keeps this test off the slow-runner
+    # FastAPI-import flake path.
     backend = LocalBackend()
     handle = backend.start("stub-test")
-    backend.wait_healthy(handle, timeout_s=180.0)
     backend.stop(handle)
     backend.stop(handle)  # second call must not raise
 
