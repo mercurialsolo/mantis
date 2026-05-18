@@ -85,6 +85,45 @@ def test_failure_payload_omits_last_action_when_none() -> None:
     assert "last_action" not in out
 
 
+# ── #419: brain reasoning lands on every step ──────────────────────────
+
+
+def test_success_payload_carries_reasoning_when_set() -> None:
+    """#419: the audit triple needs reasoning on success steps too,
+    not only failures. Otherwise post-mortem can't see the chain of
+    thought that LED to the failed step — just the final one."""
+    out = pack_step(_success(reasoning="I clicked the 'Continue' button because..."))
+    assert out["reasoning"] == "I clicked the 'Continue' button because..."
+
+
+def test_success_payload_omits_reasoning_when_empty() -> None:
+    """Handlers that don't drive a brain (navigate / paginate / form
+    fill / gate) leave reasoning empty — the key must stay out so
+    success steps stay slim."""
+    out = pack_step(_success())
+    assert "reasoning" not in out
+
+
+def test_failure_payload_carries_reasoning_alongside_last_action() -> None:
+    """Reasoning is the chain-of-thought for this step (every brain
+    iteration); last_action.reasoning is the FINAL action's reasoning
+    only. Both can be present and they don't redundant — they cover
+    different audit axes."""
+    action = Action(
+        action_type=ActionType.CLICK,
+        params={"x": 100, "y": 200, "button": "left"},
+        reasoning="final action: click submit",
+    )
+    out = pack_step(_failure(
+        last_action=action,
+        reasoning="step-level chain: tried scroll, then refocused, then clicked",
+    ))
+    assert out["reasoning"] == (
+        "step-level chain: tried scroll, then refocused, then clicked"
+    )
+    assert out["last_action"]["reasoning"] == "final action: click submit"
+
+
 def test_failure_payload_base64_encodes_screenshot() -> None:
     png_bytes = b"\x89PNG\r\n\x1a\nfake-png-bytes"
     out = pack_step(_failure(screenshot_png=png_bytes))

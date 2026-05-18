@@ -57,6 +57,15 @@ def pack_step(r: Any, *, time_breakdown: dict[str, float] | None = None) -> dict
     if time_breakdown is not None:
         payload["time_breakdown"] = {k: round(v, 3) for k, v in time_breakdown.items()}
 
+    # #419: brain reasoning lands on EVERY step (not just failures) so
+    # the audit triple — reasoning / predicted / observed — is complete
+    # for post-mortem and SFT pipelines. Handlers that don't drive a
+    # brain leave ``reasoning`` empty; the key is omitted in that case
+    # to keep the success-step payload slim.
+    reasoning = _as_str(getattr(r, "reasoning", ""))
+    if reasoning:
+        payload["reasoning"] = reasoning
+
     if payload["success"]:
         return payload
 

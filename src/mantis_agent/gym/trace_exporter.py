@@ -94,6 +94,10 @@ def _step_to_dict(step: StepResult) -> dict[str, Any]:
         "last_action": _action_to_dict(step.last_action),
         "predicted_outcome": getattr(step, "predicted_outcome", "") or "",
         "observed_outcome": getattr(step, "observed_outcome", "") or "",
+        # #419: brain's articulated reasoning for the action that drove
+        # this step. Empty for handlers that don't run a brain
+        # (deterministic navigate / paginate / form fill / gate).
+        "reasoning": getattr(step, "reasoning", "") or "",
     }
 
 

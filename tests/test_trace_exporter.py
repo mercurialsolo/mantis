@@ -116,7 +116,7 @@ def test_export_payload_schema_top_level_fields(tmp_path):
     # Steps round-trip with the expected fields
     step = payload["steps"][0]
     for field in ("step_index", "intent", "success", "data", "duration", "reversed",
-                  "predicted_outcome", "observed_outcome", "last_action"):
+                  "predicted_outcome", "observed_outcome", "last_action", "reasoning"):
         assert field in step
 
 
@@ -130,6 +130,31 @@ def test_export_serializes_action(tmp_path):
     action_dict = payload["steps"][0]["last_action"]
     assert action_dict["action_type"] == "click"
     assert action_dict["params"] == {"x": 100, "y": 200}
+
+
+def test_export_carries_reasoning_per_step(tmp_path):
+    """#419: brain reasoning surfaces in the trace per-step so
+    SFT pipelines can read it as a feature."""
+    exp = TraceExporter(export_dir=str(tmp_path))
+    runner = _runner_stub()
+    step = _step(0)
+    step.reasoning = "Held the search bar by clicking input, then typed query"
+    out = exp.maybe_export(runner, [step], status="completed")
+    payload = json.loads(Path(out).read_text())
+    assert payload["steps"][0]["reasoning"] == (
+        "Held the search bar by clicking input, then typed query"
+    )
+
+
+def test_export_reasoning_defaults_to_empty_when_handler_did_not_stamp(tmp_path):
+    """Deterministic handlers (navigate / paginate / form fill) don't
+    drive a brain and leave reasoning empty — the trace must still
+    round-trip without raising."""
+    exp = TraceExporter(export_dir=str(tmp_path))
+    runner = _runner_stub()
+    out = exp.maybe_export(runner, [_step(0)], status="completed")
+    payload = json.loads(Path(out).read_text())
+    assert payload["steps"][0]["reasoning"] == ""
 
 
 def test_export_handles_predicted_observed_outcomes(tmp_path):
