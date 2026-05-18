@@ -265,8 +265,38 @@ class StepRecoveryPolicy:
                             return -1.0  # sentinel — can't read
 
                     pre_y = _read_scroll_y()
+                    # Multi-prong scroll dispatch — covers three
+                    # browser scroll mechanisms in one CDP call so we
+                    # don't need separate readbacks per attempt:
+                    # (a) window.scrollBy — works when <body> is the
+                    #     scrolling root.
+                    # (b) document.scrollingElement.scrollBy — works
+                    #     when the page sets a different scrolling
+                    #     root (e.g. <html> with overflow on body).
+                    # (c) PageDown KeyboardEvent on document — routes
+                    #     through the browser's keyboard-driven scroll
+                    #     handler, which inner-scroll containers
+                    #     ("results panel" SPA pattern) typically
+                    #     subscribe to.
+                    # Still action-only — we're not deriving any
+                    # target from the DOM; we're just dispatching the
+                    # plan-requested scroll through every standard
+                    # mechanism.
+                    scroll_js = (
+                        "(function(){"
+                        "  var h = window.innerHeight;"
+                        "  window.scrollBy(0, h);"
+                        "  if (document.scrollingElement) "
+                        "    document.scrollingElement.scrollBy(0, h);"
+                        "  document.dispatchEvent(new KeyboardEvent("
+                        "    'keydown',"
+                        "    {key:'PageDown', code:'PageDown', "
+                        "     keyCode:34, which:34, bubbles:true}"
+                        "  ));"
+                        "})()"
+                    )
                     try:
-                        cdp_eval("window.scrollBy(0, window.innerHeight)")
+                        cdp_eval(scroll_js)
                     except Exception as exc:  # noqa: BLE001
                         logger_.warning(
                             f"  [{step_index}] scroll CDP fallback dispatch failed: {exc}"

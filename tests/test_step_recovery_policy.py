@@ -474,7 +474,8 @@ def test_required_scroll_brain_loop_second_attempt_cdp_fallback_advances(monkeyp
     cdp_calls = []
     def _cdp(expr):
         cdp_calls.append(expr)
-        if expr.startswith("window.scrollBy"):
+        # Multi-prong scroll JS contains both scrollBy and KeyboardEvent.
+        if "scrollBy" in expr or "KeyboardEvent" in expr:
             return None
         if "scrollY" in expr:
             return 0.0 if cdp_calls.count(expr) == 1 else 800.0
@@ -495,9 +496,10 @@ def test_required_scroll_brain_loop_second_attempt_cdp_fallback_advances(monkeyp
     assert outcome.halt is False
     assert outcome.step_index == 1  # advance
     assert outcome.halt_reason == "scroll_cdp_fallback"
-    # Three CDP calls: scrollY read, scrollBy dispatch, scrollY read.
+    # Three CDP calls: scrollY read, multi-prong scroll dispatch, scrollY read.
     assert len(cdp_calls) == 3
     assert any("scrollBy" in c for c in cdp_calls)
+    assert any("KeyboardEvent" in c for c in cdp_calls)
 
 
 def test_required_scroll_brain_loop_cdp_fires_but_scrollY_unchanged_continues_retry(monkeypatch):
@@ -509,7 +511,7 @@ def test_required_scroll_brain_loop_cdp_fires_but_scrollY_unchanged_continues_re
     runner = _runner_stub()
     # scrollY stays at 0 before and after.
     def _cdp(expr):
-        if expr.startswith("window.scrollBy"):
+        if "scrollBy" in expr or "KeyboardEvent" in expr:
             return None
         return 0.0  # always return 0 for scrollY reads
     runner.env.cdp_evaluate.side_effect = _cdp
