@@ -43,6 +43,7 @@ shrinks; that's a separate ergonomic cleanup.
 
 from __future__ import annotations
 
+import json
 import logging
 import random
 import time
@@ -390,6 +391,162 @@ def _tab_walk_to_nav_link(
     return None
 
 
+def _tab_walk_to_input(
+    env: Any,
+    target_label: str,
+    *,
+    max_tabs: int = _TAB_WALK_MAX_TABS,
+) -> dict[str, Any] | None:
+    """Tab through focusables until focus lands on an `<input>` /
+    `<textarea>` / `[contenteditable]` whose label/placeholder/aria
+    matches ``target_label``.
+
+    Counterpart to ``_tab_walk_to_nav_link`` for fill_field steps. The
+    canonical failure mode (staff-crm-long step 13): vision picks
+    coordinates that resolve to a `<td>` wrapping the actual `<input>`;
+    the form handler's tag-guard correctly refuses to click the TD;
+    fill_field halts. Tab order is DOM-anchored and reaches the input
+    regardless of what the TD's pixel area covers.
+
+    Returns ``{"tabs": int, "tag": str, "name": str, "value": str}``
+    on match — including the field's CURRENT value so the caller can
+    apply ``skip_if_field_has_value`` semantics without a second
+    CDP round-trip.
+
+    CUA-compliant: Tab is procedural; reading
+    ``document.activeElement.{name,placeholder,value}`` is state
+    observation, same as the link-Tab-walk's textContent read.
+
+    Match criteria, in priority order (first match wins):
+    1. ``<label for=ID>`` text matches ``target_label``
+    2. ``aria-label`` / ``aria-labelledby`` resolves to matching text
+    3. ``placeholder`` contains target_label
+    4. ``name`` attribute matches target_label (case-insensitive)
+    5. Previous-sibling text contains target_label (staff-crm pattern)
+    """
+    if not target_label:
+        return None
+    needle = target_label.strip().lower()
+    if not needle:
+        return None
+    if not hasattr(env, "cdp_evaluate"):
+        return None
+
+    try:
+        env.cdp_evaluate(
+            "(() => {"
+            "try { if (document.activeElement) document.activeElement.blur(); } catch (e) {}"
+            "try {"
+            "  document.body.tabIndex = -1;"
+            "  document.body.focus();"
+            "  document.body.removeAttribute('tabindex');"
+            "} catch (e) {}"
+            "return true;"
+            "})()"
+        )
+        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
+        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
+        time.sleep(0.3)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("tab-walk-input reset failed: %s", exc)
+
+    # Probe each focused element for input-shape + label/placeholder/aria
+    # matching. Same JS pattern as ``_tab_walk_to_nav_link`` but with
+    # extra fields collected and a different ``matches`` predicate.
+    js_inspect = (
+        "(() => {"
+        "const el = document.activeElement;"
+        "if (!el) return null;"
+        "const tag = (el.tagName || '').toUpperCase();"
+        "const editable = el.isContentEditable === true;"
+        "const isInputLike = tag === 'INPUT' || tag === 'TEXTAREA' || editable;"
+        "if (!isInputLike) return {tag: tag, name: '', placeholder: '', "
+        "  ariaLabel: '', siblingText: '', labelText: '', value: '', isInputLike: false};"
+        "const id = el.id || '';"
+        "let labelText = '';"
+        "if (id) {"
+        "  const lab = document.querySelector('label[for=\"' + id.replace(/\"/g, '\\\\\"') + '\"]');"
+        "  if (lab) labelText = (lab.innerText || lab.textContent || '').trim();"
+        "}"
+        "let prevText = '';"
+        "let cur = el.previousElementSibling;"
+        "for (let i = 0; i < 2 && cur; i++, cur = cur.previousElementSibling) {"
+        "  const t = (cur.innerText || cur.textContent || '').trim();"
+        "  if (t) { prevText = t; break; }"
+        "}"
+        "if (!prevText && el.parentElement) {"
+        "  const pcur = el.parentElement.previousElementSibling;"
+        "  if (pcur) prevText = (pcur.innerText || pcur.textContent || '').trim();"
+        "}"
+        "return {"
+        "  tag: tag,"
+        "  name: (el.getAttribute('name') || '').trim(),"
+        "  placeholder: (el.getAttribute('placeholder') || '').trim(),"
+        "  ariaLabel: (el.getAttribute('aria-label') || '').trim(),"
+        "  siblingText: prevText.slice(0, 120),"
+        "  labelText: labelText.slice(0, 120),"
+        "  value: (el.value === undefined ? '' : String(el.value)).slice(0, 200),"
+        "  isInputLike: true,"
+        "};"
+        "})()"
+    )
+
+    visited: list[tuple[str, str]] = []
+    for i in range(1, max_tabs + 1):
+        try:
+            env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Tab"}))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("tab-walk-input: Tab dispatch raised: %s", exc)
+            return None
+        time.sleep(_TAB_WALK_KEY_DELAY)
+        try:
+            result = env.cdp_evaluate(js_inspect)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("tab-walk-input: cdp_evaluate raised: %s", exc)
+            continue
+        if not isinstance(result, dict):
+            continue
+        tag = str(result.get("tag") or "").upper()
+        # Always record for trail, even non-input focuses
+        summary = (
+            result.get("labelText") or result.get("ariaLabel")
+            or result.get("placeholder") or result.get("name")
+            or result.get("siblingText") or ""
+        )
+        visited.append((tag, str(summary)[:40]))
+        if not result.get("isInputLike"):
+            continue
+        # Match against label / aria / placeholder / name / sibling-text
+        candidates = [
+            str(result.get(k) or "").strip().lower()
+            for k in ("labelText", "ariaLabel", "placeholder", "name", "siblingText")
+        ]
+        if any(c and (needle == c or needle in c) for c in candidates):
+            logger.warning(
+                "  [claude-form] tab-walk-input: matched %s at Tab+%d "
+                "(label=%r aria=%r placeholder=%r name=%r) for target=%r",
+                tag, i,
+                result.get("labelText"), result.get("ariaLabel"),
+                result.get("placeholder"), result.get("name"),
+                target_label,
+            )
+            return {
+                "tabs": i,
+                "tag": tag,
+                "name": str(result.get("name") or ""),
+                "value": str(result.get("value") or ""),
+                "label": str(result.get("labelText") or result.get("ariaLabel") or ""),
+            }
+
+    trail = ", ".join(f"{t}({n[:20]})" for t, n in visited)
+    logger.warning(
+        "  [claude-form] tab-walk-input: no input matched %r after %d Tabs — "
+        "visited: %s",
+        target_label, max_tabs, trail[:1200],
+    )
+    return None
+
+
 def _build_submit_search_intent(label: str, kind: str, fallback: str) -> str:
     """Construct the find_form_target prompt for a submit step.
 
@@ -630,19 +787,75 @@ class ClaudeGuidedFormHandler:
             if not is_input_like(tag_info):
                 tag_name = (tag_info or {}).get("tag", "?")
                 logger.warning(
-                    "  [claude-form] fill_field: refusing click at "
-                    "(%d, %d) — elementFromPoint=%s is not "
-                    "input-shaped (would dismiss form / mis-submit)",
+                    "  [claude-form] fill_field: tag-guard refused click at "
+                    "(%d, %d) — elementFromPoint=%s is not input-shaped — "
+                    "trying Tab-walk DOM-input fallback",
                     x, y, tag_name,
                 )
-                # #411: feed the exact failure back as a recovery hint
-                # so the next attempt's find_form_target doesn't re-pick
-                # the same wrong coordinate. The Lu.ma "Your Info" modal
-                # is the canonical reproducer: Claude vision keeps
-                # returning the Register button at (618, 587) for the
-                # Title field; without this hint, every retry returns
-                # the same coord and burns the step budget on identical
-                # tag-guard refusals.
+                # PR-L: Tab-walk fallback for fill_field. The brain
+                # picked a non-input target (canonical staff-crm step
+                # 13: clicked the `<td>` wrapping the Estimated Value
+                # `<input>`). Tab through focusables looking for an
+                # input whose label / placeholder / aria matches —
+                # same primitive as PR-J's button-kind Tab-walk but
+                # matching <input>/<textarea> instead of <a>/<button>.
+                tab_match = _tab_walk_to_input(env, label)
+                if tab_match is not None:
+                    # Tab-walk landed on the input — it's now focused.
+                    # Apply the same skip-if-field-has-value semantics
+                    # as the vision-grounded path below; otherwise
+                    # clear via ctrl+a+Delete and type the new value.
+                    skip_if_value = bool((step.params or {}).get(
+                        "skip_if_field_has_value", False,
+                    ))
+                    current_value = tab_match.get("value", "").strip()
+                    if skip_if_value and current_value:
+                        logger.warning(
+                            "  [claude-form] fill_field (tab-walk): field "
+                            "'%s' already has value %r — skipping (plan "
+                            "opted into skip_if_field_has_value)",
+                            label, current_value[:40],
+                        )
+                        ctx.state["_executor_backend"] = "som"
+                        return StepResult(
+                            step_index=index, intent=step.intent,
+                            success=True, steps_used=1, duration=0.5,
+                            data=f"fill:{label}:skipped_existing_value",
+                        )
+                    type_value = value or ""
+                    try:
+                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+a"}))
+                        time.sleep(0.15)
+                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Delete"}))
+                        time.sleep(0.15)
+                        if type_value:
+                            env.step(Action(action_type=ActionType.TYPE, params={"text": type_value}))
+                            time.sleep(0.3)
+                        ctx.state["_executor_backend"] = "som"
+                        runner.costs["gpu_steps"] += 1
+                        logger.info(
+                            "  [claude-form] fill_field (tab-walk): "
+                            "filled %s='%s' via DOM-anchored focus",
+                            label[:30], (type_value or "")[:30],
+                        )
+                        return StepResult(
+                            step_index=index, intent=step.intent,
+                            success=True, steps_used=1, duration=1.0,
+                            data=f"fill:{label}",
+                        )
+                    except Exception as fill_exc:  # noqa: BLE001
+                        logger.warning(
+                            "  [claude-form] fill_field tab-walk type "
+                            "raised: %s — falling through to recovery hint",
+                            fill_exc,
+                        )
+
+                # Fall through to legacy recovery-hint path when
+                # Tab-walk also misses (input not tab-reachable, label
+                # match failed, etc.). #411: feed the exact failure
+                # back as a recovery hint so the next attempt's
+                # find_form_target doesn't re-pick the same wrong
+                # coordinate.
                 avoid_label = label or step.intent[:40]
                 _hints.add_hint(
                     runner, index,
@@ -662,6 +875,38 @@ class ClaudeGuidedFormHandler:
                     data=f"form_target_not_input:{tag_name}",
                 )
             type_value = value or target.get("value") or ""
+            # PR-L Fix 2: honor ``skip_if_field_has_value`` opt-in.
+            # When the plan author marks a fill_field as conditional
+            # (canonical staff-crm-long step 13: "Enter 250000 ... if
+            # empty"), peek at the input's current value via CDP and
+            # short-circuit when non-empty. Reading the value is a
+            # state observation (CUA-compliant) — same as the SoM
+            # diagnostic that already reads elementFromPoint text.
+            if (step.params or {}).get("skip_if_field_has_value", False):
+                try:
+                    current = env.cdp_evaluate(
+                        "(() => {"
+                        f"const oh = window.outerHeight, ih = window.innerHeight;"
+                        f"const chromeH = Math.max(0, oh - ih);"
+                        f"const el = document.elementFromPoint({int(x)}, {int(y)} - chromeH);"
+                        "if (!el || (el.value === undefined && !el.isContentEditable)) return '';"
+                        "return String(el.value || el.textContent || '').trim();"
+                        "})()"
+                    )
+                except Exception:  # noqa: BLE001
+                    current = ""
+                if isinstance(current, str) and current.strip():
+                    logger.warning(
+                        "  [claude-form] fill_field: field '%s' already "
+                        "has value %r — skipping (plan opted into "
+                        "skip_if_field_has_value)",
+                        label, current[:40],
+                    )
+                    return StepResult(
+                        step_index=index, intent=step.intent,
+                        success=True, steps_used=1, duration=0.5,
+                        data=f"fill:{label}:skipped_existing_value",
+                    )
             try:
                 # Click the field, clear any pre-filled value, then type.
                 time.sleep(random.uniform(0.3, 0.8))
@@ -1235,6 +1480,164 @@ class ClaudeGuidedFormHandler:
             if not target:
                 logger.warning(f"  [claude-form] select_option: dropdown '{dropdown}' not found")
                 return StepResult(step_index=index, intent=step.intent, success=False, data="form_target_not_found")
+            # Native `<select>` fast path — if SoM resolves the
+            # dropdown target to a `<select>` element, skip the
+            # click-to-open + click-an-option dance entirely. Chrome
+            # renders native `<select>` option lists as OS-level UI
+            # widgets (not page DOM), so vision can't find option text
+            # in a screenshot after opening. The standard programmatic
+            # interaction is `el.value = X; el.dispatchEvent('change')`
+            # — what MCP / Playwright / Selenium all use.
+            #
+            # CUA-compliant: the brain's option choice (option_label
+            # from the plan) is the input; we use CDP to dispatch the
+            # change at the protocol level. Same pattern PR-G uses for
+            # real-pointer click dispatch — vision-derived choice,
+            # procedural CDP dispatch.
+            try:
+                # Probe the target via SoM. cdp_click_at_point stashes
+                # the elv tag/text on env._last_som_diag, which lets us
+                # detect a native `<select>` without an extra round-trip.
+                if hasattr(env, "cdp_click_at_point") and hasattr(env, "cdp_evaluate"):
+                    # Peek at what's under the dropdown coordinates
+                    # WITHOUT clicking — use elementFromPoint directly.
+                    elv_probe = env.cdp_evaluate(
+                        "(() => {"
+                        f"const oh = window.outerHeight, ih = window.innerHeight;"
+                        f"const chromeH = Math.max(0, oh - ih);"
+                        f"const el = document.elementFromPoint({int(target['x'])}, {int(target['y'])} - chromeH);"
+                        "if (!el) return null;"
+                        "return {tag: el.tagName, name: el.name || '', id: el.id || ''};"
+                        "})()"
+                    )
+                    if isinstance(elv_probe, dict) and elv_probe.get("tag") == "SELECT":
+                        logger.warning(
+                            "  [claude-form] select_option: native <select> "
+                            "detected at (%s,%s) — using programmatic value-set",
+                            target["x"], target["y"],
+                        )
+                        # Find the option by visible text and dispatch
+                        # change. Case-insensitive substring match so
+                        # plan option_label "High" matches option "High"
+                        # even with whitespace or icon prefixes.
+                        # JSON-escape option to survive `'`/`"` in the
+                        # plan-supplied label.
+                        js_set = (
+                            "(() => {"
+                            f"const oh = window.outerHeight, ih = window.innerHeight;"
+                            f"const chromeH = Math.max(0, oh - ih);"
+                            f"const el = document.elementFromPoint({int(target['x'])}, {int(target['y'])} - chromeH);"
+                            "if (!el || el.tagName !== 'SELECT') return {ok: false, reason: 'not_a_select'};"
+                            f"const target_text = {json.dumps(option)}.toLowerCase().trim();"
+                            "let picked = null;"
+                            "for (const opt of el.options) {"
+                            "  const t = (opt.text || '').toLowerCase().trim();"
+                            "  if (t === target_text || t.includes(target_text)) { picked = opt; break; }"
+                            "}"
+                            "if (!picked) return {ok: false, reason: 'option_not_in_select', "
+                            "  available: Array.from(el.options).map(o => o.text)};"
+                            "const setter = Object.getOwnPropertyDescriptor("
+                            "  window.HTMLSelectElement.prototype, 'value').set;"
+                            "setter.call(el, picked.value);"
+                            "el.dispatchEvent(new Event('input', {bubbles: true}));"
+                            "el.dispatchEvent(new Event('change', {bubbles: true}));"
+                            "return {ok: true, value: picked.value, text: picked.text};"
+                            "})()"
+                        )
+                        set_result = env.cdp_evaluate(js_set)
+                        if isinstance(set_result, dict) and set_result.get("ok"):
+                            logger.warning(
+                                "  [claude-form] select_option (native) "
+                                "'%s' = '%s'",
+                                dropdown[:30], option[:30],
+                            )
+                            ctx.state["_executor_backend"] = "som"
+                            runner.costs["gpu_steps"] += 1
+                            # Mirror the click-based select path below: many
+                            # controlled forms do not commit select state until
+                            # focus leaves the field. Returning success before
+                            # blur/readback is how a long plan silently carries
+                            # stale form state into the final submit.
+                            try:
+                                env.step(Action(
+                                    action_type=ActionType.KEY_PRESS,
+                                    params={"keys": "Tab"},
+                                ))
+                            except Exception:
+                                pass
+                            time.sleep(0.7)
+                            if dropdown and option:
+                                verify: dict | None = None
+                                verify_shot = None
+                                try:
+                                    verify_shot = env.screenshot()
+                                    verify = target_provider.verify_dropdown_value(
+                                        verify_shot,
+                                        dropdown_label=dropdown,
+                                        expected_value=option,
+                                    )
+                                    runner.costs["claude_extract"] += 1
+                                except Exception as ve:  # noqa: BLE001
+                                    logger.warning(
+                                        "  [claude-form] native select "
+                                        "verify_dropdown_value raised: %s",
+                                        ve,
+                                    )
+                                if verify is None:
+                                    logger.warning(
+                                        "  [claude-form] native select verifier "
+                                        "returned None — proceeding without "
+                                        "readback; downstream verify gate is "
+                                        "the safety net"
+                                    )
+                                else:
+                                    logger.warning(
+                                        "  [claude-form] native select verify: "
+                                        "dropdown='%s' expected='%s' observed='%s' "
+                                        "matches=%s",
+                                        dropdown[:30], option[:30],
+                                        (verify.get("observed") or "<empty>")[:40],
+                                        verify.get("matches"),
+                                    )
+                                if verify is not None and not verify.get("matches", False):
+                                    observed = (verify.get("observed") or "").strip() or "<unknown>"
+                                    logger.warning(
+                                        "  [claude-form] native select mismatch: "
+                                        "dropdown '%s' shows '%s' but expected '%s'",
+                                        dropdown[:30], observed[:40], option[:30],
+                                    )
+                                    if verify_shot is not None:
+                                        runner._dump_debug_screenshot(
+                                            f"select_mismatch_step{index}",
+                                            verify_shot,
+                                        )
+                                    return StepResult(
+                                        step_index=index, intent=step.intent,
+                                        success=False,
+                                        data=(
+                                            f"select_mismatch:got={observed[:40]}"
+                                            f"_wanted={option[:30]}"
+                                        ),
+                                    )
+                            return StepResult(
+                                step_index=index, intent=step.intent,
+                                success=True, steps_used=1, duration=1.0,
+                                data=f"select:{dropdown[:30]}={option[:30]}",
+                            )
+                        else:
+                            logger.warning(
+                                "  [claude-form] select_option native fast-"
+                                "path failed: %s — falling through to "
+                                "click-based open+pick",
+                                set_result,
+                            )
+            except Exception as native_exc:  # noqa: BLE001
+                logger.debug(
+                    "select_option native fast-path raised: %s — "
+                    "falling through to click-based path",
+                    native_exc,
+                )
+
             try:
                 time.sleep(random.uniform(0.3, 0.8))
                 # #300: SoM-anchored dropdown-open click. Same React
