@@ -150,6 +150,25 @@ def test_overlay_keeps_derived_spam_label_when_set() -> None:
     assert result.spam_label == "recruiter"
 
 
+def test_load_site_config_staff_crm_exposes_filter_url_strategies() -> None:
+    """Smoke: the staff_crm recipe ships a SiteConfig with the
+    keyword → query-string filter mapping that GraphLearner /
+    PlanEnhancer consume to emit direct navigates for filter steps
+    (workaround for fixtures whose sidebar onclick is non-functional
+    or whose dropdown options Holo3 can't visually ground)."""
+    cfg = recipes.load_site_config("staff_crm")
+    assert cfg is not None
+    # Status filters — every named LEAD VIEWS sidebar entry maps to a
+    # status=<value> URL fragment.
+    assert cfg.filter_url_strategies.get("contacted") == "status=Contacted"
+    assert cfg.filter_url_strategies.get("qualified") == "status=Qualified"
+    # Priority filters from the BY PRIORITY sidebar / dropdown.
+    assert cfg.filter_url_strategies.get("high") == "priority=High"
+    assert cfg.filter_url_strategies.get("critical") == "priority=Critical"
+    # URL patterns for the lead surface.
+    assert cfg.detail_page_pattern == r"/leads/\d+"
+
+
 def test_overlay_with_marketplace_listings_recipe() -> None:
     """Smoke: end-to-end overlay from a derive-flavoured base into the
     actual ``marketplace_listings`` recipe. Confirms the recipe's

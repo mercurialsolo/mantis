@@ -245,6 +245,125 @@ def test_fallback_url_absolute_url_preserved() -> None:
     assert out.params == {"url": abs_url}
 
 
+def test_row_link_dom_href_promotes_to_navigate() -> None:
+    """When a click/submit step has ``params.kind="row_link"`` and
+    ``hints.expect_url_contains``, and the env's ``cdp_evaluate``
+    returns a matching href, the critic replaces the step with a
+    direct navigate to that href. Closes the loop on the canonical
+    Holo3 row-link grounding gap (live repro:
+    20260518_161044_079742b8 step 8)."""
+    runner = _runner_with_failure_history(step_index=0, n_failures=1)
+    # Mock env with cdp_evaluate returning the DOM-derived href.
+    def fake_cdp(js: str):
+        # Validate the JS contains the expected pattern array.
+        assert "/leads/" in js
+        return "https://crm.example.com/leads/289"
+    runner.env = SimpleNamespace(cdp_evaluate=fake_cdp)
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(
+            intent="Open the first lead by clicking its Robot Name",
+            type="submit",
+            params={"label": "first lead row", "kind": "row_link"},
+            hints={"expect_url_contains": ["/leads/"]},
+        ),
+    ])
+    runner._step_failure_history = {
+        0: [{"x": 0, "y": 0, "kind": "selector_miss"}],
+    }
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="selector_miss",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    assert isinstance(out, ReplaceStep)
+    assert out.step_type == "navigate"
+    assert out.params == {"url": "https://crm.example.com/leads/289"}
+    assert "row" in out.reason
+
+
+def test_row_link_dom_href_skips_when_kind_is_not_row_link() -> None:
+    """The DOM-href rule is scoped to ``kind="row_link"`` clicks
+    specifically — other click shapes (buttons, plain links, tabs)
+    use the regular fallback_url path or no fallback at all."""
+    runner = _runner_with_failure_history(step_index=0, n_failures=2)
+    runner.env = SimpleNamespace(cdp_evaluate=lambda js: "https://x/y")
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(
+            intent="Click Save", type="submit",
+            params={"label": "Save", "kind": "button"},  # not row_link
+            hints={"expect_url_contains": ["/saved"]},
+        ),
+    ])
+    runner._step_failure_history = {
+        0: [{"x": 1, "y": 1, "kind": "selector_miss"},
+            {"x": 2, "y": 2, "kind": "selector_miss"}],
+    }
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="selector_miss",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    # Should fall through (no fallback_url either) — None.
+    assert out is None
+
+
+def test_row_link_dom_href_skips_when_cdp_unavailable() -> None:
+    """When the env doesn't expose ``cdp_evaluate`` (e.g. some
+    Playwright test envs), the rule no-ops. The critic falls through
+    to whatever capability is next in the chain."""
+    runner = _runner_with_failure_history(step_index=0, n_failures=1)
+    runner.env = SimpleNamespace()  # no cdp_evaluate
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(
+            intent="Open first row", type="submit",
+            params={"label": "first row", "kind": "row_link"},
+            hints={"expect_url_contains": ["/leads/"]},
+        ),
+    ])
+    runner._step_failure_history = {
+        0: [{"x": 0, "y": 0, "kind": "selector_miss"}],
+    }
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="selector_miss",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    assert out is None
+
+
+def test_row_link_dom_href_skips_below_failure_threshold() -> None:
+    """The deterministic rule waits for ≥1 prior failure so the
+    visual grounding path gets a chance first."""
+    runner = _runner_with_failure_history(step_index=0, n_failures=0)
+    runner.env = SimpleNamespace(cdp_evaluate=lambda js: "https://x/y/1")
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(
+            intent="Open first row", type="submit",
+            params={"label": "first row", "kind": "row_link"},
+            hints={"expect_url_contains": ["/leads/"]},
+        ),
+    ])
+    runner._step_failure_history = {0: []}
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="selector_miss",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    assert out is None
+
+
 def test_fallback_url_fires_on_unknown_class() -> None:
     """When the failure classifier can't categorise the prose (returns
     ``unknown``), the deterministic rule still fires if the plan

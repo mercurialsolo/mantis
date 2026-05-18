@@ -120,6 +120,7 @@ class GraphLearner:
         start_url: str = "",
         n_samples: int = 3,
         force_relearn: bool = False,
+        recipe_name: str | None = None,
     ) -> WorkflowGraph:
         """Full learning pipeline with enhancement loop.
 
@@ -162,17 +163,36 @@ class GraphLearner:
 
         # 4. Enhance plan — fill gaps using probe knowledge. Recipe-supplied
         # URL-filter encoding strategies (#464) flow in via
-        # ``PlanEnhancer(filter_url_strategies=...)``. GraphLearner does
-        # not yet resolve a recipe name → SiteConfig mapping (follow-up:
-        # wire ``self.recipe_name`` through ``learn()``), so the
-        # enhancer's URL builder is a no-op here today. The pre-#464
-        # behavior — implicit BoatTrader URL encoding for every
-        # objective — is intentionally retired; callers needing it
-        # should construct ``PlanEnhancer`` directly with the
-        # marketplace_listings recipe's
-        # ``SiteConfig.filter_url_strategies``.
+        # ``PlanEnhancer(filter_url_strategies=...)``. When the caller
+        # passes ``recipe_name``, resolve the recipe's SiteConfig
+        # overlay and forward its ``filter_url_strategies`` mapping so
+        # the enhancer's URL builder is driven by the recipe instead
+        # of being a no-op.
         from .enhancer import PlanEnhancer
-        enhancer = PlanEnhancer(api_key=self.api_key)
+        filter_strategies: dict[str, str] = {}
+        if recipe_name:
+            try:
+                from .. import recipes as _recipes  # local import to keep startup fast
+                site_cfg = _recipes.load_site_config(recipe_name)
+                if site_cfg is not None:
+                    filter_strategies = dict(
+                        getattr(site_cfg, "filter_url_strategies", {}) or {}
+                    )
+                if filter_strategies:
+                    logger.info(
+                        "GraphLearner: loaded %d filter_url_strategies from recipe %r",
+                        len(filter_strategies), recipe_name,
+                    )
+            except ModuleNotFoundError:
+                logger.warning(
+                    "GraphLearner: recipe %r not found; running without "
+                    "URL-filter overlay",
+                    recipe_name,
+                )
+        enhancer = PlanEnhancer(
+            api_key=self.api_key,
+            filter_url_strategies=filter_strategies,
+        )
         enhancement = enhancer.enhance(objective, probe)
         logger.info(
             "GraphLearner: enhanced — nav_url=%s, %d filter strategies, pagination=%s",
