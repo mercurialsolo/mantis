@@ -340,11 +340,19 @@ def test_row_link_dom_href_skips_when_cdp_unavailable() -> None:
     assert out is None
 
 
-def test_row_link_dom_href_skips_below_failure_threshold() -> None:
-    """The deterministic rule waits for ≥1 prior failure so the
-    visual grounding path gets a chance first."""
+def test_row_link_dom_href_fires_on_first_failure() -> None:
+    """The row-link rule does NOT gate on _step_failure_history
+    length (unlike _maybe_use_fallback_url). The brain-grounded
+    loop's internal SoM-click failures don't propagate into the
+    per-step failure history, so requiring ≥ 1 prior failure
+    silently never fires (observed in run
+    20260518_171310_4b792be2). For a step the plan has explicitly
+    tagged with kind=row_link and expect_url_contains, one failed
+    observe_step is signal enough."""
     runner = _runner_with_failure_history(step_index=0, n_failures=0)
-    runner.env = SimpleNamespace(cdp_evaluate=lambda js: "https://x/y/1")
+    runner.env = SimpleNamespace(
+        cdp_evaluate=lambda js: "https://crm.example.com/leads/289",
+    )
     critic = ExecutionCritic(runner)
     plan = MicroPlan(domain="x", steps=[
         MicroIntent(
@@ -361,7 +369,9 @@ def test_row_link_dom_href_skips_below_failure_threshold() -> None:
     out = critic.observe_step(
         plan, _state(0), plan.steps[0], result, recovery_continued=True,
     )
-    assert out is None
+    assert isinstance(out, ReplaceStep)
+    assert out.step_type == "navigate"
+    assert out.params == {"url": "https://crm.example.com/leads/289"}
 
 
 def test_fallback_url_fires_on_unknown_class() -> None:

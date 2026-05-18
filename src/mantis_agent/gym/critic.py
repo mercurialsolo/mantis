@@ -402,8 +402,17 @@ class ExecutionCritic:
         * ``hints.expect_url_contains`` is non-empty — provides the
           URL pattern the destination must contain
         * ``runner.env`` exposes ``cdp_evaluate``
-        * At least one prior failure on this step (give visual
-          grounding one try first)
+
+        Note: unlike :meth:`_maybe_use_fallback_url`, this rule does
+        NOT gate on ``_step_failure_history`` length. The brain-grounded
+        loop's internal SoM-click failures don't propagate into the
+        per-step failure history (live observation: run
+        20260518_171310_4b792be2 — the critic was invoked on a failed
+        step 8 with ``history=0``). For a step the plan has explicitly
+        tagged as a row-link click and supplied a URL-pattern hint
+        for, "the visual loop failed once" is signal enough — there's
+        no value in waiting for a second observe_step call when the
+        intermediate retry just burns more budget.
         """
         step_type = str(getattr(step, "type", "") or "")
         if step_type not in ("submit", "click"):
@@ -417,12 +426,6 @@ class ExecutionCritic:
         hints = dict(getattr(step, "hints", {}) or {})
         patterns = list(hints.get("expect_url_contains") or [])
         if not patterns:
-            return None
-        history = (
-            self.runner._step_failure_history.get(int(state.step_index), [])
-            if hasattr(self.runner, "_step_failure_history") else []
-        )
-        if not isinstance(history, list) or len(history) < 1:
             return None
         env = getattr(self.runner, "env", None)
         if env is None:
@@ -462,19 +465,18 @@ class ExecutionCritic:
 
         logger.warning(
             "  [critic] step %d: using DOM-derived row href=%r "
-            "(after %d prior failures of class %s; patterns=%s)",
-            state.step_index, href, len(history), failure_class, patterns,
+            "(failure_class=%s; patterns=%s)",
+            state.step_index, href, failure_class, patterns,
         )
         from . import reasoning_trace as _trace
         _trace.record(
             self.runner, layer="critic-row-link-dom-href", kind="fire",
             summary=(
                 f"replaced row-link click with navigate to {href[:80]} "
-                f"(after {len(history)} {failure_class} failures)"
+                f"(failure_class={failure_class})"
             ),
             step_index=int(state.step_index),
             failure_class=failure_class,
-            failure_count=len(history),
             dom_href=href[:200],
             patterns=patterns,
         )
@@ -484,8 +486,7 @@ class ExecutionCritic:
             params={"url": href},
             reason=(
                 f"DOM-derived row href={href[:80]} for {step_type} kind=row_link "
-                f"after {len(history)} {failure_class} failures — no Claude "
-                f"consultation needed"
+                f"on {failure_class} failure — no Claude consultation needed"
             ),
         )
 
