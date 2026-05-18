@@ -336,6 +336,72 @@ class StepRecoveryPolicy:
                 getattr(step_result, "failure_class", "") or ""
             )
             if failure_class == "brain_loop_exhausted":
+                # First failure: keep the step so intent_rewriter can
+                # convert the goal-shaped scroll intent into something
+                # mechanical ("Press Page Down by viewport height") and
+                # Holo3 gets a second pass with the cleaner phrasing.
+                #
+                # Second+ failure: Holo3 demonstrably can't make
+                # observable scroll progress on this page (sticky
+                # header swallowing wheel events, overlay capturing
+                # focus, page already at the bottom, …). Dispatch a
+                # deterministic scroll via CDP and check whether the
+                # viewport actually moves. The scroll is a vision-
+                # derived action (the plan asked for a scroll) executed
+                # via a CDP keyboard event — within the CUA contract
+                # per feedback_cua_no_dom_access.md (CDP allowed for
+                # dispatching vision-derived actions; we're not reading
+                # DOM state to derive a target). Live repro of the
+                # third-Holo3-budget-burn pattern this addresses:
+                # BoatTrader run 20260518 (urlnav-pp-nosort) — three
+                # consecutive brain_loop_exhausted on identical scroll
+                # intents with no viewport delta.
+                prior_failures = step_retry_counts.get(step_index, 0)
+                env = getattr(runner, "env", None)
+                cdp_eval = getattr(env, "cdp_evaluate", None) if env is not None else None
+                if prior_failures >= 1 and callable(cdp_eval):
+                    from . import step_snapshot as _snap
+                    pre = None
+                    try:
+                        pre = _snap.capture(runner)
+                    except Exception:
+                        pre = None
+                    try:
+                        cdp_eval("window.scrollBy(0, window.innerHeight)")
+                    except Exception as exc:  # noqa: BLE001
+                        logger_.warning(
+                            f"  [{step_index}] scroll CDP fallback "
+                            f"dispatch failed: {exc} — keeping step for retry"
+                        )
+                    else:
+                        try:
+                            post = _snap.capture(runner)
+                            moved = (
+                                pre is None
+                                or pre.viewport_stage != post.viewport_stage
+                                or pre.scroll_signature != post.scroll_signature
+                            )
+                        except Exception:
+                            moved = True
+                        if moved:
+                            logger_.warning(
+                                f"  [{step_index}] scroll brain_loop_exhausted "
+                                f"x{prior_failures+1} — CDP fallback dispatched "
+                                f"window.scrollBy(0, innerHeight); viewport "
+                                f"moved, advancing"
+                            )
+                            return RecoveryOutcome(
+                                halt=False, step_index=step_index + 1,
+                                halt_reason="scroll_cdp_fallback",
+                            )
+                        logger_.warning(
+                            f"  [{step_index}] scroll brain_loop_exhausted "
+                            f"x{prior_failures+1} — CDP fallback fired but "
+                            f"viewport unchanged (page bottom or scroll "
+                            f"blocked); keeping step for one more retry"
+                        )
+                # First failure (or no CDP env): legacy keep-step path
+                # so intent_rewriter / next retry can affect the step.
                 logger_.warning(
                     f"  [{step_index}] scroll brain_loop_exhausted — "
                     f"keeping step for retry (was blindly advancing)"

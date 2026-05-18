@@ -49,8 +49,11 @@ def _runner_stub() -> MagicMock:
     return runner
 
 
-def _result(*, success: bool = False, data: str = "") -> StepResult:
-    return StepResult(step_index=0, intent="x", success=success, data=data)
+def _result(*, success: bool = False, data: str = "", failure_class: str = "") -> StepResult:
+    return StepResult(
+        step_index=0, intent="x", success=success, data=data,
+        failure_class=failure_class,
+    )
 
 
 def _plan(*types: str) -> MicroPlan:
@@ -455,6 +458,99 @@ def test_scroll_failure_advances_as_pseudo_success():
     assert outcome.halt is False
     assert outcome.step_index == 1
     assert outcome.halt_reason == "scroll_no_done"
+
+
+def test_scroll_brain_loop_first_failure_keeps_step():
+    """First brain_loop_exhausted on a scroll keeps the step so the
+    intent_rewriter can convert the goal-shaped intent into a
+    mechanical "Page Down" instruction on Holo3's next attempt."""
+    runner = _runner_stub()
+    # No prior failures yet (this IS the first one).
+    policy = StepRecoveryPolicy(runner)
+
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Scroll to trigger lazy-load", type="scroll"),
+        step_result=_result(failure_class="brain_loop_exhausted"),
+        plan=_plan("scroll"),
+        step_index=0,
+        step_retry_counts={},  # first attempt, no retries recorded
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 0  # keep step
+    assert outcome.halt_reason == "scroll_brain_loop_keep_step"
+    # CDP fallback should NOT have fired on the first failure.
+    runner.env.cdp_evaluate.assert_not_called()
+
+
+def test_scroll_brain_loop_second_failure_dispatches_cdp_and_advances(monkeypatch):
+    """Second brain_loop_exhausted on a scroll dispatches a CDP
+    window.scrollBy and advances. Vision-derived action (the plan
+    asked for a scroll) executed via CDP — within the CUA contract.
+    Live repro: BoatTrader urlnav-pp-nosort run, three consecutive
+    brain_loop_exhausted on identical scroll intents."""
+    runner = _runner_stub()
+    # Stub step_snapshot.capture to simulate a viewport change.
+    import mantis_agent.gym.step_snapshot as _snap
+    captured = []
+    class _Snap:
+        def __init__(self, vs, sig): self.viewport_stage = vs; self.scroll_signature = sig
+    def _cap(_runner):
+        # First call (pre) returns vs=0; second (post) returns vs=1 → "moved".
+        result = _Snap(len(captured), f"sig-{len(captured)}")
+        captured.append(result)
+        return result
+    monkeypatch.setattr(_snap, "capture", _cap)
+
+    policy = StepRecoveryPolicy(runner)
+
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Page Down", type="scroll"),
+        step_result=_result(failure_class="brain_loop_exhausted"),
+        plan=_plan("scroll"),
+        step_index=0,
+        step_retry_counts={0: 1},  # one prior failure already recorded
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 1  # advance
+    assert outcome.halt_reason == "scroll_cdp_fallback"
+    # CDP scroll dispatched.
+    runner.env.cdp_evaluate.assert_called_once_with("window.scrollBy(0, window.innerHeight)")
+
+
+def test_scroll_brain_loop_cdp_fallback_no_viewport_delta_keeps_step(monkeypatch):
+    """When the CDP scroll dispatch fires but the viewport doesn't
+    actually move (page at bottom, overlay swallowing scroll), the
+    recovery keeps the step rather than falsely advancing — same
+    safety property as the legacy no-delta path."""
+    runner = _runner_stub()
+    import mantis_agent.gym.step_snapshot as _snap
+    # Snapshot capture returns IDENTICAL state pre + post.
+    class _Snap:
+        def __init__(self): self.viewport_stage = 0; self.scroll_signature = "same"
+    monkeypatch.setattr(_snap, "capture", lambda _r: _Snap())
+
+    policy = StepRecoveryPolicy(runner)
+
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Page Down", type="scroll"),
+        step_result=_result(failure_class="brain_loop_exhausted"),
+        plan=_plan("scroll"),
+        step_index=0,
+        step_retry_counts={0: 1},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 0  # keep step
+    assert outcome.halt_reason == "scroll_brain_loop_keep_step"
+    runner.env.cdp_evaluate.assert_called_once()  # CDP did fire
 
 
 def test_paginate_failure_exhausts_loop_counters_and_advances():
