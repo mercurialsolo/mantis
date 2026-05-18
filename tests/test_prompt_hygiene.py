@@ -22,6 +22,9 @@ from pathlib import Path
 
 import pytest
 
+from mantis_agent.graph.enhancer import ENHANCE_PROMPT
+from mantis_agent.graph.learner import GENERATE_SKELETON_PROMPT
+from mantis_agent.graph.probe import PROBE_DETAIL_PROMPT, PROBE_RESULTS_PROMPT
 from mantis_agent.plan_decomposer import DECOMPOSE_PROMPT
 
 _RECOVERY_TXT = (
@@ -62,12 +65,16 @@ def _generic_prompts() -> list[tuple[str, str]]:
     """Return (label, body) pairs for every generic-framework prompt
     that the cleanup chain has reached so far.
 
-    Add an entry here in the PR that scrubs that surface:
-    - PR-4 will add the three ``graph.*`` prompts
+    The PR chain (#460-#464) is now complete; new generic prompts
+    added in future work should be appended here.
     """
     return [
         ("prompts/files/recovery_analysis.txt", _RECOVERY_TXT.read_text()),
         ("plan_decomposer.DECOMPOSE_PROMPT", DECOMPOSE_PROMPT),
+        ("graph.learner.GENERATE_SKELETON_PROMPT", GENERATE_SKELETON_PROMPT),
+        ("graph.probe.PROBE_RESULTS_PROMPT", PROBE_RESULTS_PROMPT),
+        ("graph.probe.PROBE_DETAIL_PROMPT", PROBE_DETAIL_PROMPT),
+        ("graph.enhancer.ENHANCE_PROMPT", ENHANCE_PROMPT),
     ]
 
 

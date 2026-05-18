@@ -98,8 +98,8 @@ Analyze the page and output ONLY valid JSON:
     "location": "bottom center or bottom right or ...",
     "next_text": "Next or > or ..."
   }},
-  "dealer_signals": ["text patterns that indicate dealer/company listings, e.g. More From This Dealer"],
-  "sponsored_signals": ["text patterns that indicate sponsored/ad content, e.g. Sponsored, Advertisement"],
+  "dealer_signals": ["text patterns that indicate non-organic / brokered items the agent should skip (vary by site)"],
+  "sponsored_signals": ["text patterns that indicate sponsored/ad content, e.g. Sponsored, Advertisement, Promoted"],
   "estimated_listings_per_page": 25
 }}
 
@@ -107,7 +107,7 @@ Focus on:
 - What UI elements are filter controls (dropdowns, checkboxes, links)?
 - How are search results displayed (cards, rows, tiles)?
 - Where is the pagination (page numbers, Next button, infinite scroll)?
-- What distinguishes organic results from sponsored/dealer content?
+- What distinguishes organic / first-party results from sponsored / brokered ones?
 """
 
 
@@ -121,14 +121,14 @@ I'm showing you {n_screenshots} screenshots of a detail page at different scroll
 
 Analyze the page and output ONLY valid JSON:
 {{
-  "url_pattern": "pattern in the URL that identifies detail pages, e.g. /boat/<slug>/",
+  "url_pattern": "pattern in the URL that identifies detail pages, e.g. /<entity>/<id>/ or /<entity>/<slug>/",
   "has_phone_section": true,
-  "phone_location": "where phone numbers appear, e.g. right sidebar contact section",
+  "phone_location": "where contact / phone information appears, e.g. right sidebar contact section",
   "has_expandable_sections": true,
   "expandable_sections": ["section names that can be expanded, e.g. Description, More Details"],
   "expand_controls": ["text of expand buttons, e.g. Show more, Read more, See full description"],
-  "seller_info_location": "where seller info appears",
-  "key_fields_visible": ["fields visible without scrolling, e.g. title, price, year"],
+  "seller_info_location": "where seller / owner / poster info appears",
+  "key_fields_visible": ["fields visible without scrolling, e.g. title, price, date"],
   "key_fields_hidden": ["fields that require scrolling or expanding, e.g. phone, description"]
 }}
 """
