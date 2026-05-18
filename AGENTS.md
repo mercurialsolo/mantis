@@ -33,8 +33,8 @@ memory store.
 
 Mantis CUA fixes are validated by:
 1. Local unit tests in `tests/test_form_handler.py` etc. — fast gate.
-2. Modal redeploy + plan rerun against `staffai-test-crm.exe.xyz`
-   (the staff-crm-long stress-test fixture) — real-world gate.
+2. Modal redeploy + plan rerun against the staff-crm-long
+   stress-test fixture — real-world gate.
 3. Grep modal logs for the PR-specific signature line. Absence of the
    signature means the deployed code doesn't have your change (often
    because of Modal warm-container or new-app-id-per-deploy caveats
