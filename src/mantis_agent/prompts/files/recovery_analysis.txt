@@ -64,10 +64,10 @@ FAILURE DATA LEGEND (decode the failure string before choosing a mode):
     (``fill_field`` to a valid value, or ``select_option`` for a
     bad enum) BEFORE the failed submit. The next attempt at the
     submit will then succeed because the form is valid.
-    Example: a "Estimated Deal Value" field showing
-    "461927.81" with a red "value must be a whole number" error
+    Example: an integer-only numeric field showing a decimal value
+    ("461927.81") with a red "value must be a whole number" error
     → ``insert_steps=[{"type": "fill_field", "params": {"label":
-    "Estimated Deal Value", "value": "461928"}}]``.
+    "<the field's rendered label>", "value": "461928"}}]``.
 
 PLAN CONTEXT (steps already completed successfully):
 __PLAN_CONTEXT__
@@ -80,9 +80,10 @@ RECOVERY MODES (pick ONE via the record_recovery tool):
    you can see what the right element is and just need to tell
    the searcher to pick it.
 
-   Example A (label mismatch): the failed step said "Click 'Update
-   Lead'" but the actual button reads "Save" — so hint="The save
-   button is labeled 'Save', not 'Update Lead'."
+   Example A (label mismatch): the failed step asked to click a
+   button by one label but the actual button on screen reads
+   something else — so hint="The primary action button is labeled
+   '<rendered label>', not '<step's params.label>'."
 
    Example B (coord mis-grounding — the ``form_target_not_input``
    case): the failed step asked to fill the "Title" input but the
@@ -124,12 +125,13 @@ RECOVERY MODES (pick ONE via the record_recovery tool):
    - **PROGRESS EVIDENCE** — multiple prior retries (RETRY ATTEMPTS
      >= 2) tried scrolling / clicking but the page state shown in
      the screenshot still looks like the SAME content the earlier
-     attempts saw. If three scrolls down and the "Robot Information"
-     section is still at the top, the form likely has no further
-     content below — the requested target may not exist on this page
-     state. Prefer halt over insert_steps when this signal is
-     present; another scroll is unlikely to reach a section that
-     hasn't moved across multiple attempts.
+     attempts saw. If three scrolls down and the same section
+     heading is still pinned at the top of the viewport, the form
+     likely has no further content below — the requested target
+     may not exist on this page state. Prefer halt over
+     insert_steps when this signal is present; another scroll is
+     unlikely to reach a section that hasn't moved across multiple
+     attempts.
    No plan tweak would help; surface the failure to the operator.
 
 Be conservative on insert_steps: each insertion takes ~30 seconds
@@ -153,11 +155,12 @@ prefer a STRUCTURALLY DIFFERENT recovery:**
   that hints at the desired post-state's URL pattern AND the failed
   step is a click / submit that's supposed to navigate, prefer
   ``edit_step`` with ``type=navigate`` and ``params.url`` pointing
-  at the intended destination. Example: the plan asked to click
-  "Contacted" in a sidebar to filter leads, but the URL pattern
-  ``/leads?status=Contacted`` is reachable directly — propose
-  ``edit_step`` with ``type=navigate, params={"url":
-  "/leads?status=Contacted"}``. This bypasses the click entirely.
+  at the intended destination. Example: the plan asked to click a
+  status / category filter in a sidebar, but the same filter is
+  reachable as a query string on the current list-page URL —
+  propose ``edit_step`` with ``type=navigate, params={"url":
+  "<list-page URL>?<filter-key>=<filter-value>"}``. This bypasses
+  the click entirely.
 * If the visible page contains a search box / typeahead / filter
   input that achieves the same goal as the failed click, prefer
   ``insert_steps`` with a ``fill_field`` + Enter sub-flow.

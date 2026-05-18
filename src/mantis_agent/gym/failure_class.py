@@ -80,6 +80,16 @@ _DATA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         "fill_error", "submit_error", "click_error", "select_error",
         "not found", "no element", "element not visible",
         "filters_not_applied",
+        # Holo3 / SoM grounding signals — when the brain returned
+        # coordinates but the runner's SoM verification said the click
+        # landed on the wrong element ("ok=False"), or when the click
+        # dispatch couldn't pin a grounded target ("grounding=NO"), or
+        # claude-director re-routed coordinates mid-attempt because the
+        # original ones missed ("director: substituting"). All three
+        # are evidence that the vision pipeline misidentified the
+        # target — same family as a CSS selector miss.
+        "som-click", "ok=false", "grounding=no",
+        "director: substituting",
     )),
     ("extractor_error", ("scan_error", "extract_error", "extractor", "scrape")),
     ("budget_exceeded", (

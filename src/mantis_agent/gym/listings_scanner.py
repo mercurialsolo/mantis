@@ -99,21 +99,27 @@ class ListingsScanner:
         self.viewport_stage = 0
 
     @staticmethod
-    def scroll_directive_for(listings_count: int) -> str | None:
+    def scroll_directive_for(listings_count: int, entity_name: str = "listing") -> str | None:
         """Return the click-intent hint when ``listings_count > 0``.
 
         Stateless because the executor tracks the "attempted on this
         page" counter separately from ``listings_attempted`` (the
         executor's count survives DUPLICATE skips; the scanner's
-        counter advances on successful clicks). Same wording as the
-        pre-Phase-4 inline directive so plan-decomposer caches and
-        downstream prompts stay byte-identical.
+        counter advances on successful clicks).
+
+        ``entity_name`` defaults to ``"listing"`` so callers that
+        don't supply it get the pre-#463 string byte-identical
+        (plan-decomposer caches and downstream prompts stay valid).
+        Recipes / generic loop callers can pass ``"item"`` / ``"row"``
+        / etc. to avoid forcing a marketplace-listings mental model on
+        non-marketplace flows.
         """
         if listings_count <= 0:
             return None
+        plural = entity_name + "s"
         return (
-            f"Scroll down past the first {listings_count} listings. "
-            f"Then click the next listing title text below a photo."
+            f"Scroll down past the first {listings_count} {plural}. "
+            f"Then click the next {entity_name} title text below a photo."
         )
 
     def advance_attempted(self) -> None:

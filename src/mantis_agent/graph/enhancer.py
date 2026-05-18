@@ -32,6 +32,46 @@ from .probe import ProbeResult
 logger = logging.getLogger(__name__)
 
 
+_KEYWORD_VALUE_PATTERNS: dict[str, re.Pattern[str]] = {
+    "zip": re.compile(r"(?:zip\s*(?:code)?\s*)(\d{5})"),
+    "zip code": re.compile(r"(?:zip\s*(?:code)?\s*)(\d{5})"),
+    "price": re.compile(r"\$\s*([\d,]+)"),
+    "min price": re.compile(r"\$\s*([\d,]+)"),
+    "minimum price": re.compile(r"\$\s*([\d,]+)"),
+    "city": re.compile(r"\b(?:near|in)\s+([a-z][a-z\-]+)"),
+    "location": re.compile(r"\b(?:near|in)\s+([a-z][a-z\-]+)"),
+    "state": re.compile(r"\b(florida|california|texas|new york)\b"),
+}
+
+_STATE_ABBREVIATIONS: dict[str, str] = {
+    "florida": "fl", "california": "ca", "texas": "tx", "new york": "ny",
+}
+
+
+def _extract_filter_value(keyword: str, objective_text: str) -> str:
+    """Extract the value for a templated filter keyword from objective text.
+
+    Driven by ``_KEYWORD_VALUE_PATTERNS``; returns the empty string when
+    no match is found. State names are normalized to two-letter codes
+    so the URL segment matches the canonical site convention (``fl``
+    not ``florida``).
+    """
+    pattern = _KEYWORD_VALUE_PATTERNS.get(keyword.lower())
+    if not pattern:
+        return ""
+    match = pattern.search(objective_text)
+    if not match:
+        return ""
+    value = match.group(1).lower()
+    if keyword.lower() == "state":
+        return _STATE_ABBREVIATIONS.get(value, value)
+    if keyword.lower() in ("price", "min price", "minimum price"):
+        return value.replace(",", "")
+    if value in ("the", "a", "an", "all"):
+        return ""
+    return value
+
+
 ENHANCE_PROMPT = """\
 You are enhancing a CUA (Computer Use Agent) plan with concrete site knowledge.
 
@@ -58,13 +98,13 @@ Based on the probe results, determine the BEST approach for each step:
    If filters can be URL-encoded, build the full filtered URL.
    If not, use the base results page URL.
 
-3. LISTING CLICK TARGET: How should listing cards be clicked?
-   Describe the card layout based on probe results.
+3. ITEM CLICK TARGET: How should each item / row / card be clicked?
+   Describe the item layout based on probe results.
 
 4. DETAIL PAGE ACTIONS: What needs to happen on the detail page?
    - How many scrolls to reach key content?
    - Are there expandable sections? Which ones?
-   - Where is contact/phone information?
+   - Where is the relevant detail / contact information located?
 
 5. PAGINATION: How does pagination work?
    - URL-based (/page-N/), query param (?page=N), or button click?
@@ -87,11 +127,30 @@ Output ONLY valid JSON:
 
 
 class PlanEnhancer:
-    """Fill gaps in vague plans using site probe knowledge."""
+    """Fill gaps in vague plans using site probe knowledge.
 
-    def __init__(self, api_key: str = "", model: str = "claude-opus-4-7"):
+    ``filter_url_strategies`` (issue #464) maps lowercased objective
+    keywords to URL path-segment templates. When non-empty, the
+    enhancer attempts to encode required filters as URL segments
+    (the BoatTrader / marketplace_listings pattern). When empty
+    (the default), the URL builder is a no-op — generic CRM / admin
+    flows don't carry predictable URL encoding rules and shouldn't
+    inherit boattrader-shaped URL guesses.
+
+    Recipes populate this via ``SiteConfig.filter_url_strategies``;
+    see ``recipes/marketplace_listings/site_config.py`` for the
+    reference set.
+    """
+
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = "claude-opus-4-7",
+        filter_url_strategies: dict[str, str] | None = None,
+    ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
+        self.filter_url_strategies: dict[str, str] = dict(filter_url_strategies or {})
 
     def enhance(
         self,
@@ -209,25 +268,27 @@ class PlanEnhancer:
         url = self._try_build_filtered_url(url, objective)
 
         # Determine filter strategy per filter
-        # If the URL was enhanced with filter segments, mark those as "url" method
+        # If the URL was enhanced with filter segments, mark those as "url" method.
+        # The keyword→segment-template mapping comes from the active recipe via
+        # ``self.filter_url_strategies``; when empty, no filter is classified as
+        # url-encoded (generic flow).
         url_lower = url.lower()
         filter_strategy = []
         for filt in objective.required_filters:
             filt_lower = filt.lower()
             method = "unknown"
 
-            # Check if this filter got encoded into the URL
+            # Check if this filter got encoded into the URL by looking at the
+            # recipe's templates. ``segment_prefix`` strips ``{value}`` so we
+            # can match segments like ``zip-33101`` against template ``zip-{value}``.
             url_encoded = False
-            if "by-owner" in url_lower and filt_lower in ("private seller", "by owner"):
-                url_encoded = True
-            elif "zip-" in url_lower and filt_lower in ("zip", "location", "zip code"):
-                url_encoded = True
-            elif "price-" in url_lower and filt_lower in ("price", "min price", "minimum price"):
-                url_encoded = True
-            elif "city-" in url_lower and filt_lower in ("city", "location"):
-                url_encoded = True
-            elif "state-" in url_lower and filt_lower in ("state", "location"):
-                url_encoded = True
+            for keyword, template in self.filter_url_strategies.items():
+                if keyword.lower() != filt_lower:
+                    continue
+                segment_prefix = template.split("{value}")[0]
+                if segment_prefix and segment_prefix in url_lower:
+                    url_encoded = True
+                    break
 
             if url_encoded:
                 method = "url"
@@ -286,72 +347,55 @@ class PlanEnhancer:
     def _try_build_filtered_url(self, base_url: str, objective: ObjectiveSpec) -> str:
         """Try to build a URL with filters encoded in the path.
 
-        Scans the objective text for filter values (zip codes, price,
-        seller type keywords) and attempts to encode them as URL segments.
-        Returns the enhanced URL, or the original if no pattern detected.
+        Drives URL-segment encoding off ``self.filter_url_strategies``
+        (issue #464). When that mapping is empty the function is a no-op
+        and returns ``base_url`` unchanged — the pre-#464 hardcoded
+        BoatTrader patterns now live in the marketplace_listings recipe's
+        ``site_config.py`` and only apply when that recipe is selected.
+
+        Keyword entries with no ``{value}`` placeholder are boolean
+        filters (toggle the segment when the keyword appears in the
+        objective text). Entries with ``{value}`` are extracted-value
+        filters — the function scans the objective text for the
+        keyword's expected value pattern (zip = 5 digits, price = $N,
+        city/state = first word after "in"/"near") and substitutes it.
+
+        Empty mapping → no encoding. Empty objective text → returns
+        ``base_url`` unchanged. Generic CRM / admin / inspect-only
+        plans never picked up URL guesses, even before.
         """
-        if not base_url:
+        if not base_url or not self.filter_url_strategies:
             return base_url
 
         raw = objective.raw_text.lower()
         url = base_url.rstrip("/")
         segments: list[str] = []
 
-        # Detect common URL-encodable filter patterns from the objective text
-        # Private seller / by owner
-        if "private seller" in raw or "by owner" in raw or "by-owner" in raw:
-            if "/by-owner" not in url:
-                segments.append("by-owner")
-
-        # Zip code
-        zip_match = re.search(r"(?:zip\s*(?:code)?\s*)(\d{5})", raw)
-        if zip_match:
-            zipcode = zip_match.group(1)
-            if f"zip-{zipcode}" not in url:
-                segments.append(f"zip-{zipcode}")
-
-        # State
-        state_match = re.search(r"\b(florida|california|texas|new york|miami)\b", raw)
-        if state_match:
-            state_name = state_match.group(1)
-            state_map = {
-                "florida": "state-fl", "california": "state-ca",
-                "texas": "state-tx", "new york": "state-ny",
-            }
-            state_seg = state_map.get(state_name, "")
-            if state_seg and state_seg not in url:
-                segments.append(state_seg)
-
-        # City
-        city_match = re.search(r"\b(?:near|in)\s+(\w+)(?:\s+(?:fl|ca|tx|ny))?\b", raw)
-        if city_match:
-            city = city_match.group(1).lower()
-            if city not in ("the", "a", "an", "all") and f"city-{city}" not in url:
-                segments.append(f"city-{city}")
-
-        # Price
-        price_match = re.search(r"\$\s*([\d,]+)", raw)
-        if price_match:
-            price = price_match.group(1).replace(",", "")
-            if f"price-{price}" not in url:
-                segments.append(f"price-{price}")
+        # Group strategies into boolean toggles vs templated. We iterate
+        # in insertion order so recipes can document the canonical
+        # segment order by listing them in that order.
+        seen_segments: set[str] = set()
+        for keyword, template in self.filter_url_strategies.items():
+            kw_lower = keyword.lower()
+            if "{value}" not in template:
+                # Boolean toggle — encode if the keyword appears in
+                # the objective and the segment isn't already on the URL.
+                if kw_lower in raw and template not in url and template not in seen_segments:
+                    segments.append(template)
+                    seen_segments.add(template)
+                continue
+            # Templated — extract a value for the keyword.
+            value = _extract_filter_value(keyword, raw)
+            if not value:
+                continue
+            seg = template.format(value=value)
+            if seg not in url and seg not in seen_segments:
+                segments.append(seg)
+                seen_segments.add(seg)
 
         if not segments:
             return base_url
 
-        # Sort segments in canonical order: state → city → zip → by-owner → price
-        # This matches the URL pattern used by BoatTrader and similar sites
-        ORDER = {"state-": 0, "city-": 1, "zip-": 2, "by-owner": 3, "price-": 4}
-
-        def seg_order(seg: str) -> int:
-            for prefix, rank in ORDER.items():
-                if seg.startswith(prefix) or seg == prefix.rstrip("-"):
-                    return rank
-            return 5
-
-        segments.sort(key=seg_order)
-
-        # Append segments to URL path
         enhanced = url
         for seg in segments:
             enhanced = f"{enhanced}/{seg}"
@@ -442,10 +486,20 @@ class PlanEnhancer:
         )
 
         # ── Extraction phases ──
+        # Click intent: bias toward organic results when the objective
+        # supplies forbidden_actions ("Contact Seller", "Sponsored", etc.);
+        # stay neutral otherwise so non-marketplace flows don't get
+        # listings-shaped guidance.
         card_desc = enhancement.get("card_description", "")
-        click_intent = f"Click an organic {entity} title; skip sponsored and dealer cards"
-        if card_desc:
-            click_intent = f"Click the title text of an organic {entity} card ({card_desc}); skip sponsored cards"
+        if objective.forbidden_actions:
+            skip_hint = ", ".join(objective.forbidden_actions[:3])
+            click_intent = f"Click an organic {entity} title; skip items matching: {skip_hint}"
+            if card_desc:
+                click_intent = f"Click the title text of an organic {entity} card ({card_desc}); skip items matching: {skip_hint}"
+        else:
+            click_intent = f"Click the {entity} title text on the results page"
+            if card_desc:
+                click_intent = f"Click the title text of a {entity} card ({card_desc})"
 
         phases["admit_candidate"] = PhaseNode(
             id="admit_candidate",
