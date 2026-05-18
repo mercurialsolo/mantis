@@ -269,7 +269,19 @@ class ExecutionCritic:
         if step_type not in ("submit", "click"):
             return None
         failure_class = str(getattr(step_result, "failure_class", "") or "")
-        if failure_class not in intent_rewriter.REWRITE_TRIGGERING_CLASSES:
+        # The deterministic rule is MORE permissive than the frontier
+        # capability's class set on purpose: the LLM rewriter is gated
+        # narrowly because asking Claude has a cost. This rule has no
+        # LLM cost — it's a literal navigate to a URL the plan author
+        # wrote. So we also accept ``selector_miss`` (Holo3 / SoM /
+        # CSS-target misses) and ``unknown`` (any uncategorised retry
+        # failure on a click/submit) — when the plan author named the
+        # structural alternative, we use it regardless of failure
+        # shape.
+        _TRIGGERING = intent_rewriter.REWRITE_TRIGGERING_CLASSES | {
+            "selector_miss", "unknown",
+        }
+        if failure_class not in _TRIGGERING:
             return None
         hints = dict(getattr(step, "hints", {}) or {})
         fallback_url = str(hints.get("fallback_url") or "").strip()

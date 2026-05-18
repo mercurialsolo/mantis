@@ -46,6 +46,26 @@ def test_selector_miss() -> None:
     assert classify("filters_not_applied", "") == "selector_miss"
 
 
+def test_selector_miss_from_holo3_som_grounding_signals() -> None:
+    """Holo3 / SoM grounding misses emit prose like
+    ``[som-click] x=... y=... ok=False`` or ``[click] grounding=NO``,
+    and claude-director substitutes coordinates with
+    ``director: substituting click(...) → click(...)``. All three are
+    vision-pipeline target-misidentifications — same family as a
+    CSS selector miss. Pre-#464 follow-up these came back as
+    ``unknown`` and the critic's deterministic fallback_url rule
+    couldn't fire."""
+    assert classify(
+        "[som-click] x=97 y=0 → chromeH=87 els_text='' same=False ok=False",
+        "",
+    ) == "selector_miss"
+    assert classify("[click] (99,538) grounding=NO", "") == "selector_miss"
+    assert classify(
+        "claude-director: substituting click({'x': 0, 'y': 0}) → click({'x': 531, 'y': 320})",
+        "",
+    ) == "selector_miss"
+
+
 def test_extractor_error() -> None:
     assert classify("scan_error", "") == "extractor_error"
     assert classify("extract_error: empty payload", "") == "extractor_error"

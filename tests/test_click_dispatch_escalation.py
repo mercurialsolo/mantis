@@ -139,6 +139,73 @@ def test_fallback_url_skipped_without_hint() -> None:
     assert out is None  # no fallback emitted; critic may try frontier
 
 
+def test_fallback_url_fires_on_selector_miss() -> None:
+    """Holo3 / SoM grounding misses classify as ``selector_miss``. The
+    deterministic fallback_url rule is MORE permissive than the
+    LLM-consulting frontier capability (no Claude cost; the URL is
+    plan-author-supplied), so it accepts ``selector_miss`` as a
+    triggering class too. Without this, a v30-shape plan with
+    fallback_url emitted on a click step that Holo3 can't ground
+    burns the retry budget on alternative-strategy substitutions
+    before the deterministic navigate ever fires (live repro in
+    run 20260518_054136_b72b7ab5)."""
+    runner = _runner_with_failure_history(step_index=0, n_failures=2)
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(
+            intent="Click Contacted in sidebar", type="submit",
+            params={"label": "Contacted"},
+            hints={"fallback_url": "https://example.com/leads?status=Contacted"},
+        ),
+    ])
+    runner._step_failure_history = {
+        0: [
+            {"x": 1, "y": 1, "kind": "selector_miss"},
+            {"x": 2, "y": 2, "kind": "selector_miss"},
+        ]
+    }
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="selector_miss",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    assert isinstance(out, ReplaceStep)
+    assert out.step_type == "navigate"
+    assert out.params == {"url": "https://example.com/leads?status=Contacted"}
+
+
+def test_fallback_url_fires_on_unknown_class() -> None:
+    """When the failure classifier can't categorise the prose (returns
+    ``unknown``), the deterministic rule still fires if the plan
+    supplied a fallback_url. Frontier capability stays gated on the
+    narrow class set; deterministic navigate is cheap."""
+    runner = _runner_with_failure_history(step_index=0, n_failures=2)
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="x", steps=[
+        MicroIntent(
+            intent="Click Contacted", type="submit",
+            hints={"fallback_url": "https://example.com/leads?status=Contacted"},
+        ),
+    ])
+    runner._step_failure_history = {
+        0: [
+            {"x": 1, "y": 1, "kind": "unknown"},
+            {"x": 2, "y": 2, "kind": "unknown"},
+        ]
+    }
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="unknown",
+    )
+    out = critic.observe_step(
+        plan, _state(0), plan.steps[0], result, recovery_continued=True,
+    )
+    assert isinstance(out, ReplaceStep)
+    assert out.step_type == "navigate"
+
+
 def test_fallback_url_skipped_for_non_click_step_types() -> None:
     """The rule is scoped to ``submit`` and ``click`` step types
     (the ones that have a meaningful structural alternative).
@@ -163,10 +230,18 @@ def test_fallback_url_skipped_for_non_click_step_types() -> None:
     assert out is None
 
 
-def test_fallback_url_skipped_for_non_rewrite_failure_class() -> None:
-    """``selector_miss`` / ``unknown`` aren't structural signals; the
-    plan-supplied alternative doesn't apply. Those failures have
-    their own recovery paths."""
+@pytest.mark.parametrize(
+    "non_triggering_class",
+    ["cf_challenge", "http_4xx", "http_5xx", "nav_timeout",
+     "extractor_error", "budget_exceeded"],
+)
+def test_fallback_url_skipped_for_unrelated_failure_classes(non_triggering_class: str) -> None:
+    """Failures unrelated to target identification — Cloudflare, HTTP
+    error pages, navigation timeouts, extractor errors, budget burns
+    — won't be helped by navigating to the same site. The rule
+    deliberately ignores them. Triggering classes are
+    ``REWRITE_TRIGGERING_CLASSES | {selector_miss, unknown}`` (the
+    target-identification failure family)."""
     runner = _runner_with_failure_history(step_index=0, n_failures=3)
     critic = ExecutionCritic(runner)
     plan = MicroPlan(domain="x", steps=[
@@ -177,7 +252,7 @@ def test_fallback_url_skipped_for_non_rewrite_failure_class() -> None:
     ])
     result = StepResult(
         step_index=0, intent="x", success=False,
-        failure_class="selector_miss",
+        failure_class=non_triggering_class,
     )
     out = critic.observe_step(
         plan, _state(0), plan.steps[0], result, recovery_continued=True,
