@@ -46,7 +46,12 @@ BUCKETS: tuple[str, ...] = (
     "settle",         # post-action wait (fixed or adaptive)
     "claude_ground",  # ClaudeGrounding.refine_click(...) coordinate refinement
     "claude_extract", # ClaudeExtractor.find_* — extraction calls
-    "claude_verify",  # gate verification, DynamicPlanVerifier checks
+    "claude_verify",  # legacy verifier path — multi-screenshot click verification
+    # #421 split: ``verify_gate`` defaults to Haiku 4.5 and escalates
+    # to Opus on FAIL. Tracking the two as separate buckets lets cost
+    # reports show the actual savings + escalation hit-rate per run.
+    "claude_verify_haiku",            # gate verification (cheap default)
+    "claude_verify_opus_escalation",  # gate re-ask after Haiku FAIL
     "load",           # env.reset(url) page-load + Cloudflare wait + proxy CONNECT
     "overhead",       # residual: runner orchestration, dispatch, Python (computed lazily)
 )

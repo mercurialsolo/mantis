@@ -56,14 +56,34 @@ def _wired(extractor: ClaudeExtractor) -> tuple[MagicMock, MagicMock]:
 # ── verify_gate ─────────────────────────────────────────────────────────
 
 
-def test_verify_gate_routes_through_tool_schema() -> None:
+def _wire_verify(
+    extractor: ClaudeExtractor,
+) -> tuple[MagicMock, MagicMock, MagicMock]:
+    """Replace the Haiku + Opus verify clients with mocks (#421).
+
+    Returns (haiku_mock, opus_mock, call_mock). The legacy ``_call``
+    seam is also blocked so a regression that drops the tool_use
+    routing surfaces as a test failure rather than silent prose
+    parsing.
+    """
+    haiku = MagicMock()
+    opus = MagicMock()
+    extractor._verify_client.call_with_tool_schema = haiku  # type: ignore[method-assign]
+    extractor._verify_escalation_client.call_with_tool_schema = opus  # type: ignore[method-assign]
+    call = MagicMock(side_effect=AssertionError("legacy _call must not be used"))
+    extractor._call = call  # type: ignore[method-assign]
+    return haiku, opus, call
+
+
+def test_verify_gate_routes_through_haiku_first() -> None:
     extractor = ClaudeExtractor(api_key="dummy")
-    tool, call = _wired(extractor)
-    tool.return_value = {"passed": True, "reason": "Filters applied"}
+    haiku, opus, call = _wire_verify(extractor)
+    haiku.return_value = {"passed": True, "reason": "Filters applied"}
 
     passed, reason = extractor.verify_gate(_img(), "Filters applied")
 
-    tool.assert_called_once()
+    haiku.assert_called_once()
+    opus.assert_not_called()  # no escalation when Haiku says PASS
     call.assert_not_called()
     assert passed is True
     assert reason == "Filters applied"
@@ -72,12 +92,12 @@ def test_verify_gate_routes_through_tool_schema() -> None:
 def test_verify_gate_schema_shape() -> None:
     """The tool's input_schema must lock the boolean / string fields."""
     extractor = ClaudeExtractor(api_key="dummy")
-    tool, _ = _wired(extractor)
-    tool.return_value = {"passed": False, "reason": "Filters missing"}
+    haiku, _, _ = _wire_verify(extractor)
+    haiku.return_value = {"passed": True, "reason": "ok"}
 
     extractor.verify_gate(_img(), "Filters applied")
 
-    schema = tool.call_args.kwargs["input_schema"]
+    schema = haiku.call_args.kwargs["input_schema"]
     assert schema["properties"]["passed"]["type"] == "boolean"
     assert schema["properties"]["reason"]["type"] == "string"
     assert set(schema["required"]) == {"passed", "reason"}
@@ -86,14 +106,85 @@ def test_verify_gate_schema_shape() -> None:
 def test_verify_gate_returns_false_on_no_tool_use() -> None:
     """Server-side validation can't fail on shape, but the tool_use
     block can be missing entirely (API regression). The runner halts
-    on a False gate, which is the right safety default."""
+    on a False gate, which is the right safety default. No escalation
+    fires when the Haiku call itself failed to return a usable result —
+    a transient API blip shouldn't be papered over by burning an Opus
+    call too."""
     extractor = ClaudeExtractor(api_key="dummy")
-    tool, _ = _wired(extractor)
-    tool.return_value = None
+    haiku, opus, _ = _wire_verify(extractor)
+    haiku.return_value = None
 
     passed, reason = extractor.verify_gate(_img(), "anything")
     assert passed is False
     assert "tool_use" in reason
+    opus.assert_not_called()
+
+
+def test_verify_gate_escalates_to_opus_on_haiku_fail() -> None:
+    """Haiku FAIL must trigger one Opus re-ask (#421 §3). Trust Opus
+    when it disagrees — recovery loops on a Haiku false-negative cost
+    ~$0.50, the escalation costs ~$0.003."""
+    extractor = ClaudeExtractor(api_key="dummy")
+    haiku, opus, _ = _wire_verify(extractor)
+    haiku.return_value = {"passed": False, "reason": "haiku-uncertain"}
+    opus.return_value = {"passed": True, "reason": "opus-saw-filter-pill"}
+
+    passed, reason = extractor.verify_gate(_img(), "filters applied")
+
+    haiku.assert_called_once()
+    opus.assert_called_once()
+    assert passed is True
+    assert reason == "opus-saw-filter-pill"
+
+
+def test_verify_gate_keeps_fail_when_opus_also_fails() -> None:
+    """Both verdicts FAIL → final FAIL with Opus's reason (more
+    authoritative than Haiku's)."""
+    extractor = ClaudeExtractor(api_key="dummy")
+    haiku, opus, _ = _wire_verify(extractor)
+    haiku.return_value = {"passed": False, "reason": "haiku-no-filter"}
+    opus.return_value = {"passed": False, "reason": "opus-confirmed-no-filter"}
+
+    passed, reason = extractor.verify_gate(_img(), "filters applied")
+
+    assert passed is False
+    assert reason == "opus-confirmed-no-filter"
+
+
+def test_verify_gate_keeps_haiku_verdict_when_escalation_errors() -> None:
+    """Opus call errors out (returns None) — fall back to Haiku's
+    FAIL verdict rather than hide it behind a None."""
+    extractor = ClaudeExtractor(api_key="dummy")
+    haiku, opus, _ = _wire_verify(extractor)
+    haiku.return_value = {"passed": False, "reason": "haiku-no-filter"}
+    opus.return_value = None
+
+    passed, reason = extractor.verify_gate(_img(), "filters applied")
+
+    assert passed is False
+    assert reason == "haiku-no-filter"
+
+
+def test_verify_gate_opts_into_cache_tools() -> None:
+    """#421 §4: ``verify_gate`` must mark the tool spec as
+    cache-eligible so the schema/description amortise across all
+    gates in a run."""
+    extractor = ClaudeExtractor(api_key="dummy")
+    haiku, _, _ = _wire_verify(extractor)
+    haiku.return_value = {"passed": True, "reason": "ok"}
+
+    extractor.verify_gate(_img(), "anything")
+
+    assert haiku.call_args.kwargs.get("cache_tools") is True
+
+
+def test_verify_gate_uses_haiku_default_model() -> None:
+    """#421 §2: the verify client defaults to Haiku 4.5; the
+    escalation client defaults to Opus 4.7. Operators can pin
+    either via env, but the constructor defaults must be stable."""
+    extractor = ClaudeExtractor(api_key="dummy")
+    assert extractor._verify_client.model == "claude-haiku-4-5-20251001"
+    assert extractor._verify_escalation_client.model == "claude-opus-4-7"
 
 
 # ── find_filter_target ──────────────────────────────────────────────────

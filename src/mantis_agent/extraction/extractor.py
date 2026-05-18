@@ -48,6 +48,22 @@ from .result import ExtractionResult
 from .schema import ExtractionSchema
 from .spam import contains_dealer_text, parse_bool, seller_looks_like_dealer
 
+# Default model for cheap binary verifier calls (verify_gate, StepVerifier).
+# Haiku 4.5 is roughly 10× cheaper per token than Opus 4.7 and well-
+# capable of "does the screenshot show X?" boolean judgements. Operators
+# can pin a stronger model per-deployment via ``MANTIS_VERIFY_MODEL``;
+# kept as an env override so a regression can be rolled back without a
+# code change. See #421.
+_VERIFY_MODEL = os.environ.get("MANTIS_VERIFY_MODEL", "claude-haiku-4-5-20251001")
+
+# Escalation model: re-asked once on Haiku ``passed=False`` to avoid
+# false-negative recovery loops (#421 §3). Recovery is the real cost
+# spike (re-navigate + re-extract + re-verify ≈ $0.50+) so a ~$0.003
+# escalation pays for itself many times over.
+_VERIFY_ESCALATION_MODEL = os.environ.get(
+    "MANTIS_VERIFY_ESCALATION_MODEL", "claude-opus-4-7",
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -204,6 +220,23 @@ class ClaudeExtractor:
             api_key=self.api_key,
             model=self.model,
             log_prefix="ClaudeExtractor",
+        )
+        # Verifier clients (#421). ``verify_gate`` is binary yes/no —
+        # well within Haiku 4.5's range and ~85% cheaper per call. The
+        # escalation client re-asks Opus once on a Haiku FAIL so we
+        # don't trigger expensive recovery loops on a Haiku false-
+        # negative. Both clients share the extractor's api_key and
+        # tag into a distinct time bucket so cost reports can show
+        # ``claude_verify_haiku`` vs ``claude_verify_opus_escalation``.
+        self._verify_client = AnthropicToolUseClient(
+            api_key=self.api_key,
+            model=_VERIFY_MODEL,
+            log_prefix="ClaudeVerifyHaiku",
+        )
+        self._verify_escalation_client = AnthropicToolUseClient(
+            api_key=self.api_key,
+            model=_VERIFY_ESCALATION_MODEL,
+            log_prefix="ClaudeVerifyOpus",
         )
 
     # ── Dynamic prompt generation from schema ─────────────────────
@@ -890,6 +923,29 @@ class ClaudeExtractor:
             _bucket="claude_verify",
         )
 
+    # Stable across all verify_gate calls — split out so prompt caching
+    # (the ``cache_tools=True`` path) actually amortises across a run.
+    # Kept as ClassVar so the Anthropic prompt-cache breakpoint hashes
+    # the same string every call.
+    _VERIFY_GATE_TOOL_DESCRIPTION: ClassVar[str] = (
+        "Report whether the gate condition holds based on what is "
+        "visible in the screenshot."
+    )
+    _VERIFY_GATE_INPUT_SCHEMA: ClassVar[dict[str, Any]] = {
+        "type": "object",
+        "properties": {
+            "passed": {
+                "type": "boolean",
+                "description": "True iff the condition holds.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "What you see that confirms or denies the condition.",
+            },
+        },
+        "required": ["passed", "reason"],
+    }
+
     def verify_gate(self, screenshot: Image.Image, expected: str) -> tuple[bool, str]:
         """Verify a gate condition from a screenshot.
 
@@ -898,6 +954,24 @@ class ClaudeExtractor:
         boolean / string shape is server-validated; any failure mode
         falls through to ``(False, reason)`` so the runner halts on
         an unverified gate (safer than silently passing).
+
+        #421 routing:
+
+        - **Haiku 4.5 first.** The verify client (``_verify_client``)
+          defaults to Haiku — ~10× cheaper per call than Opus and
+          well-capable of binary "is X visible?" judgements. The tool
+          spec is cached (``cache_tools=True``) so the tool def +
+          schema is amortised across all gates in a run.
+        - **Opus escalation on FAIL.** If Haiku returns
+          ``passed=False`` we re-ask Opus once via
+          ``_verify_escalation_client``. The recovery loop a false-
+          negative would trigger costs ≥ $0.50; the escalation costs
+          ~$0.003 so the math is one-sided. If Opus also fails we
+          return that verdict; if Opus passes we trust Opus and emit
+          a WARNING so the disagreement is visible in Modal logs.
+        - **Opus error keeps Haiku verdict.** If the escalation call
+          errors out (None) we fall back to the Haiku verdict rather
+          than hide the original failure behind a None.
         """
         prompt = (
             f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
@@ -905,29 +979,14 @@ class ClaudeExtractor:
             f"Look at the page heading, URL bar, result count, and any active filter tags."
         )
 
-        parsed = self._call_with_tool_schema(
+        parsed = self._verify_client.call_with_tool_schema(
             screenshot,
             prompt,
             tool_name="report_gate_verification",
-            tool_description=(
-                "Report whether the gate condition holds based on what is "
-                "visible in the screenshot."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "passed": {
-                        "type": "boolean",
-                        "description": "True iff the condition holds.",
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "What you see that confirms or denies the condition.",
-                    },
-                },
-                "required": ["passed", "reason"],
-            },
-            _bucket="claude_verify",
+            tool_description=self._VERIFY_GATE_TOOL_DESCRIPTION,
+            input_schema=self._VERIFY_GATE_INPUT_SCHEMA,
+            time_bucket="claude_verify_haiku",
+            cache_tools=True,
         )
 
         if not parsed:
@@ -935,6 +994,34 @@ class ClaudeExtractor:
 
         passed = bool(parsed.get("passed", False))
         reason = str(parsed.get("reason", ""))
+
+        if not passed:
+            escalated = self._verify_escalation_client.call_with_tool_schema(
+                screenshot,
+                prompt,
+                tool_name="report_gate_verification",
+                tool_description=self._VERIFY_GATE_TOOL_DESCRIPTION,
+                input_schema=self._VERIFY_GATE_INPUT_SCHEMA,
+                time_bucket="claude_verify_opus_escalation",
+                cache_tools=True,
+            )
+            if escalated is not None:
+                escalated_passed = bool(escalated.get("passed", False))
+                escalated_reason = str(escalated.get("reason", ""))
+                if escalated_passed:
+                    # WARNING (not INFO) so the disagreement survives
+                    # Modal's INFO-suppressed log capture — see
+                    # feedback_modal_info_log_suppression. Operators
+                    # auditing whether Haiku-default is regressing
+                    # accuracy can grep production logs for this.
+                    logger.warning(
+                        "  [gate] escalation HAIKU_FAIL → OPUS_PASS: "
+                        "haiku=%r opus=%r",
+                        reason[:80], escalated_reason[:80],
+                    )
+                passed = escalated_passed
+                reason = escalated_reason
+
         logger.info(f"  [gate] {'PASS' if passed else 'FAIL'}: {reason[:80]}")
         return passed, reason
 
