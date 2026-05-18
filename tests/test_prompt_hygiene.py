@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from mantis_agent.plan_decomposer import DECOMPOSE_PROMPT
+
 _RECOVERY_TXT = (
     Path(__file__).resolve().parents[1]
     / "src"
@@ -61,11 +63,11 @@ def _generic_prompts() -> list[tuple[str, str]]:
     that the cleanup chain has reached so far.
 
     Add an entry here in the PR that scrubs that surface:
-    - PR-2 will add ``plan_decomposer.DECOMPOSE_PROMPT``
     - PR-4 will add the three ``graph.*`` prompts
     """
     return [
         ("prompts/files/recovery_analysis.txt", _RECOVERY_TXT.read_text()),
+        ("plan_decomposer.DECOMPOSE_PROMPT", DECOMPOSE_PROMPT),
     ]
 
 
