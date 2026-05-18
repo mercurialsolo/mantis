@@ -351,12 +351,21 @@ class StepRecoveryPolicy:
                 # via a CDP keyboard event — within the CUA contract
                 # per feedback_cua_no_dom_access.md (CDP allowed for
                 # dispatching vision-derived actions; we're not reading
-                # DOM state to derive a target). Live repro of the
-                # third-Holo3-budget-burn pattern this addresses:
-                # BoatTrader run 20260518 (urlnav-pp-nosort) — three
-                # consecutive brain_loop_exhausted on identical scroll
-                # intents with no viewport delta.
-                prior_failures = step_retry_counts.get(step_index, 0)
+                # DOM state to derive a target).
+                #
+                # We track failure count under a scroll-specific key
+                # in step_retry_counts (the ``scroll_brain_loop:<idx>``
+                # prefix) so we don't share the count with the
+                # ``required`` budget on the same step (different
+                # semantics — required halts at max_retries, scroll
+                # has its own retry/CDP escalation policy). Live repro
+                # of the third-Holo3-budget-burn pattern this
+                # addresses: BoatTrader run 20260518 (urlnav-pp-nosort)
+                # — three consecutive brain_loop_exhausted on identical
+                # scroll intents with no viewport delta and no critic
+                # action.
+                scroll_key = f"scroll_brain_loop:{step_index}"
+                prior_failures = step_retry_counts.get(scroll_key, 0)
                 env = getattr(runner, "env", None)
                 cdp_eval = getattr(env, "cdp_evaluate", None) if env is not None else None
                 if prior_failures >= 1 and callable(cdp_eval):
@@ -402,9 +411,13 @@ class StepRecoveryPolicy:
                         )
                 # First failure (or no CDP env): legacy keep-step path
                 # so intent_rewriter / next retry can affect the step.
+                # Bump the scroll-specific counter so the CDP fallback
+                # gate (``prior_failures >= 1``) fires on the next pass.
+                step_retry_counts[scroll_key] = prior_failures + 1
                 logger_.warning(
-                    f"  [{step_index}] scroll brain_loop_exhausted — "
-                    f"keeping step for retry (was blindly advancing)"
+                    f"  [{step_index}] scroll brain_loop_exhausted "
+                    f"(scroll_retry={prior_failures + 1}) — "
+                    f"keeping step for retry (CDP fallback armed for next pass)"
                 )
                 return RecoveryOutcome(
                     halt=False, step_index=step_index,

@@ -460,20 +460,22 @@ def test_scroll_failure_advances_as_pseudo_success():
     assert outcome.halt_reason == "scroll_no_done"
 
 
-def test_scroll_brain_loop_first_failure_keeps_step():
+def test_scroll_brain_loop_first_failure_keeps_step_and_arms_counter():
     """First brain_loop_exhausted on a scroll keeps the step so the
     intent_rewriter can convert the goal-shaped intent into a
-    mechanical "Page Down" instruction on Holo3's next attempt."""
+    mechanical "Page Down" instruction on Holo3's next attempt. The
+    scroll-specific retry counter is bumped so the CDP fallback fires
+    on the next pass."""
     runner = _runner_stub()
-    # No prior failures yet (this IS the first one).
     policy = StepRecoveryPolicy(runner)
+    retries: dict = {}
 
     outcome = policy.handle_failure(
         step=MicroIntent(intent="Scroll to trigger lazy-load", type="scroll"),
         step_result=_result(failure_class="brain_loop_exhausted"),
         plan=_plan("scroll"),
         step_index=0,
-        step_retry_counts={},  # first attempt, no retries recorded
+        step_retry_counts=retries,
         loop_counters={},
         max_retries=2,
         listings_on_page=0,
@@ -483,6 +485,8 @@ def test_scroll_brain_loop_first_failure_keeps_step():
     assert outcome.halt_reason == "scroll_brain_loop_keep_step"
     # CDP fallback should NOT have fired on the first failure.
     runner.env.cdp_evaluate.assert_not_called()
+    # Scroll-specific counter armed for the next pass.
+    assert retries.get("scroll_brain_loop:0") == 1
 
 
 def test_scroll_brain_loop_second_failure_dispatches_cdp_and_advances(monkeypatch):
@@ -511,7 +515,7 @@ def test_scroll_brain_loop_second_failure_dispatches_cdp_and_advances(monkeypatc
         step_result=_result(failure_class="brain_loop_exhausted"),
         plan=_plan("scroll"),
         step_index=0,
-        step_retry_counts={0: 1},  # one prior failure already recorded
+        step_retry_counts={"scroll_brain_loop:0": 1},  # armed by prior pass
         loop_counters={},
         max_retries=2,
         listings_on_page=0,
@@ -542,7 +546,7 @@ def test_scroll_brain_loop_cdp_fallback_no_viewport_delta_keeps_step(monkeypatch
         step_result=_result(failure_class="brain_loop_exhausted"),
         plan=_plan("scroll"),
         step_index=0,
-        step_retry_counts={0: 1},
+        step_retry_counts={"scroll_brain_loop:0": 1},
         loop_counters={},
         max_retries=2,
         listings_on_page=0,
