@@ -599,7 +599,9 @@ def test_scroll_brain_loop_second_failure_dispatches_cdp_and_advances(monkeypatc
     import mantis_agent.gym.step_snapshot as _snap
     captured = []
     class _Snap:
-        def __init__(self, vs, sig): self.viewport_stage = vs; self.scroll_signature = sig
+        def __init__(self, vs, sig):
+            self.viewport_stage = vs
+            self.scroll_signature = sig
     def _cap(_runner):
         # First call (pre) returns vs=0; second (post) returns vs=1 → "moved".
         result = _Snap(len(captured), f"sig-{len(captured)}")
@@ -635,7 +637,9 @@ def test_scroll_brain_loop_cdp_fallback_no_viewport_delta_keeps_step(monkeypatch
     import mantis_agent.gym.step_snapshot as _snap
     # Snapshot capture returns IDENTICAL state pre + post.
     class _Snap:
-        def __init__(self): self.viewport_stage = 0; self.scroll_signature = "same"
+        def __init__(self):
+            self.viewport_stage = 0
+            self.scroll_signature = "same"
     monkeypatch.setattr(_snap, "capture", lambda _r: _Snap())
 
     policy = StepRecoveryPolicy(runner)
