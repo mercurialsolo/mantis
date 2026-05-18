@@ -518,39 +518,39 @@ RULES:
     • `hints.expect_url_contains` — list of substrings the post-click
       URL MUST contain. Emit ONE entry per literal URL clue the source
       plan names. Examples:
-        Source: "click <status filter> ... the URL should now include
-                 status=<value>"
-        → hints={"expect_url_contains": ["status=<value>"]}
-        Source: "click Apply ... URL now also includes priority=<value>"
-        (already has status=<value> from prior step — keep BOTH)
-        → hints={"expect_url_contains": ["status=<value>",
-                                          "priority=<value>"]}
-        Source: "land on a record detail page whose URL pattern
-                 /<entity>/<id>"
-        → hints={"expect_url_contains": ["/<entity>/"]}
+        Source: "click 'Active' in the status sidebar to filter the
+                 items list ... the URL should now include status=Active"
+        → hints={"expect_url_contains": ["status=Active"]}
+        Source: "click Apply ... URL now also includes priority=High"
+        (already has status=Active from prior step — keep BOTH)
+        → hints={"expect_url_contains": ["status=Active",
+                                          "priority=High"]}
+        Source: "land on an item detail page whose URL pattern
+                 /items/<id>"
+        → hints={"expect_url_contains": ["/items/"]}
       Without this hint, a click that "changed state" but landed on the
       wrong URL slides through as success — a common failure mode when
       a filter pill toggles a tab visually but doesn't navigate.
     • `hints.expect_url_excludes` — list of substrings the post-click
       URL MUST NOT contain. Useful for the "shouldn't drift to a
       detail page" cases:
-        Source: "click <status filter> in the sidebar — do NOT
-                 land on an individual record detail"
-        → hints={"expect_url_contains": ["status=<value>"],
-                 "expect_url_excludes": ["/<entity>/"]}
+        Source: "click 'Active' in the sidebar — do NOT
+                 land on an individual item detail"
+        → hints={"expect_url_contains": ["status=Active"],
+                 "expect_url_excludes": ["/items/"]}
       Only emit these for submit / click / navigate steps (URL is
       meaningful). Skip on fill_field / select_option / extract_data.
     • `hints.fallback_url` — when the click / submit has a STRUCTURAL
       ALTERNATIVE that the agent can navigate to directly if the
       click keeps misfiring. The runner's recovery layer will REPLACE
       the click with a direct navigate after 2+ failures.
-        Source: "click a status filter to narrow the list ... the
-                 URL should now include status=<value>"
-        → hints={"expect_url_contains": ["status=<value>"],
-                 "fallback_url": "/<list-page>?status=<value>"}
-        Source: "click the record's title to open its detail page
-                 (URL ends in /<entity>/<id>)"
-        → hints={"expect_url_contains": ["/<entity>/"]}
+        Source: "click 'Active' to filter the items list ... the
+                 URL should now include status=Active"
+        → hints={"expect_url_contains": ["status=Active"],
+                 "fallback_url": "/items?status=Active"}
+        Source: "click the item's title to open its detail page
+                 (URL ends in /items/<id>)"
+        → hints={"expect_url_contains": ["/items/"]}
         (no fallback_url — the <id> isn't predictable at plan time)
       Emit fallback_url ONLY when the equivalent URL is PREDICTABLE
       from the plan text alone — typically filter / view / static-
@@ -725,7 +725,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v29_neutral_examples"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v30_concrete_neutral_examples"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
