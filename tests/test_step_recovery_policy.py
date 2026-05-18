@@ -462,27 +462,26 @@ def test_scroll_failure_advances_as_pseudo_success():
 
 def test_required_scroll_brain_loop_second_attempt_cdp_fallback_advances(monkeypatch):
     """A required scroll step that hits brain_loop_exhausted on attempt
-    2 should dispatch a CDP window.scrollBy and advance, short-
-    circuiting the second Holo3 retry. Without this, the required
-    branch burns max_retries × full-brain-budget on a page where
-    Holo3 demonstrably can't make observable scroll progress
-    (sticky header swallowing wheel events, etc.)."""
+    2 should dispatch a CDP window.scrollBy and advance when window.
+    scrollY actually moved. Verifies via CDP-side scroll-position
+    readback rather than the runner's internal _viewport_stage
+    counter (which doesn't update on side-effect CDP calls)."""
     monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
     runner = _runner_stub()
-    import mantis_agent.gym.step_snapshot as _snap
-    captured = []
-    class _Snap:
-        def __init__(self, vs, sig): self.viewport_stage = vs; self.scroll_signature = sig
-    def _cap(_runner):
-        result = _Snap(len(captured), f"sig-{len(captured)}")
-        captured.append(result)
-        return result
-    monkeypatch.setattr(_snap, "capture", _cap)
+    # Simulate the page scrolling: first cdp_evaluate (read scrollY)
+    # returns 0, second (scrollBy) returns None, third (read scrollY)
+    # returns 800.
+    cdp_calls = []
+    def _cdp(expr):
+        cdp_calls.append(expr)
+        if expr.startswith("window.scrollBy"):
+            return None
+        if "scrollY" in expr:
+            return 0.0 if cdp_calls.count(expr) == 1 else 800.0
+        return None
+    runner.env.cdp_evaluate.side_effect = _cdp
 
     policy = StepRecoveryPolicy(runner)
-    # attempt counter is read as step_retry_counts.get(step_index, 0) + 1.
-    # Pass {0: 1} so attempt becomes 2 (second pass) and the CDP fallback
-    # gate (``attempt >= 2``) fires.
     outcome = policy.handle_failure(
         step=MicroIntent(intent="Press Page Down", type="scroll", required=True),
         step_result=_result(failure_class="brain_loop_exhausted"),
@@ -496,7 +495,40 @@ def test_required_scroll_brain_loop_second_attempt_cdp_fallback_advances(monkeyp
     assert outcome.halt is False
     assert outcome.step_index == 1  # advance
     assert outcome.halt_reason == "scroll_cdp_fallback"
-    runner.env.cdp_evaluate.assert_called_once_with("window.scrollBy(0, window.innerHeight)")
+    # Three CDP calls: scrollY read, scrollBy dispatch, scrollY read.
+    assert len(cdp_calls) == 3
+    assert any("scrollBy" in c for c in cdp_calls)
+
+
+def test_required_scroll_brain_loop_cdp_fires_but_scrollY_unchanged_continues_retry(monkeypatch):
+    """When CDP scrollBy fires but window.scrollY doesn't move (page
+    already at bottom, overflow:hidden, sub-element scroller capturing
+    events), the fallback falls through to the normal retry budget
+    rather than falsely advancing."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    # scrollY stays at 0 before and after.
+    def _cdp(expr):
+        if expr.startswith("window.scrollBy"):
+            return None
+        return 0.0  # always return 0 for scrollY reads
+    runner.env.cdp_evaluate.side_effect = _cdp
+
+    policy = StepRecoveryPolicy(runner)
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Page Down", type="scroll", required=True),
+        step_result=_result(failure_class="brain_loop_exhausted"),
+        plan=_plan("scroll"),
+        step_index=0,
+        step_retry_counts={0: 1},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    # Fall-through: regular retry path returns required_retry, NOT
+    # scroll_cdp_fallback.
+    assert outcome.halt is False
+    assert outcome.halt_reason.startswith("required_retry:scroll")
 
 
 def test_required_scroll_brain_loop_first_attempt_retries_normally(monkeypatch):

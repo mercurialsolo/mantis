@@ -244,12 +244,27 @@ class StepRecoveryPolicy:
                 env = getattr(runner, "env", None)
                 cdp_eval = getattr(env, "cdp_evaluate", None) if env is not None else None
                 if callable(cdp_eval):
-                    from . import step_snapshot as _snap
-                    pre = None
-                    try:
-                        pre = _snap.capture(runner)
-                    except Exception:
-                        pre = None
+                    # Read the actual browser scroll position before and
+                    # after the dispatch. step_snapshot.capture() reads
+                    # runner-internal counters (_viewport_stage,
+                    # _scroll_state) that aren't updated by side-effect
+                    # CDP calls, so we'd always see "unchanged" using
+                    # the snapshot path. Reading window.scrollY via CDP
+                    # is post-action verification of an action we
+                    # already dispatched — distinct from "DOM-derived
+                    # grounding" which feedback_cua_no_dom_access.md
+                    # forbids. We're not deriving a target; we're
+                    # checking whether our own scroll took effect.
+                    def _read_scroll_y() -> float:
+                        try:
+                            v = cdp_eval(
+                                "(window.scrollY || document.documentElement.scrollTop || 0)"
+                            )
+                            return float(v) if v is not None else 0.0
+                        except Exception:
+                            return -1.0  # sentinel — can't read
+
+                    pre_y = _read_scroll_y()
                     try:
                         cdp_eval("window.scrollBy(0, window.innerHeight)")
                     except Exception as exc:  # noqa: BLE001
@@ -257,20 +272,20 @@ class StepRecoveryPolicy:
                             f"  [{step_index}] scroll CDP fallback dispatch failed: {exc}"
                         )
                     else:
-                        try:
-                            post = _snap.capture(runner)
-                            moved = (
-                                pre is None
-                                or pre.viewport_stage != post.viewport_stage
-                                or pre.scroll_signature != post.scroll_signature
-                            )
-                        except Exception:
-                            moved = True
+                        post_y = _read_scroll_y()
+                        # Treat ≥ 50px as a meaningful scroll. Below
+                        # that and the page either was already at the
+                        # bottom or has overflow:hidden / a sub-element
+                        # scroller capturing the event.
+                        moved = (
+                            pre_y >= 0 and post_y >= 0 and (post_y - pre_y) >= 50
+                        )
                         if moved:
                             logger_.warning(
                                 f"  [{step_index}] scroll brain_loop_exhausted "
                                 f"x{attempt} — CDP fallback dispatched "
-                                f"window.scrollBy(0, innerHeight); viewport moved, advancing"
+                                f"window.scrollBy(0, innerHeight); scrollY "
+                                f"{pre_y:.0f} → {post_y:.0f}, advancing"
                             )
                             return RecoveryOutcome(
                                 halt=False, step_index=step_index + 1,
@@ -278,8 +293,9 @@ class StepRecoveryPolicy:
                             )
                         logger_.warning(
                             f"  [{step_index}] scroll brain_loop_exhausted "
-                            f"x{attempt} — CDP fallback fired but viewport unchanged "
-                            f"(page bottom / scroll blocked); continuing retry budget"
+                            f"x{attempt} — CDP fallback fired but scrollY "
+                            f"{pre_y:.0f} → {post_y:.0f} (Δ<50px; page bottom "
+                            f"or sub-element scroller); continuing retry budget"
                         )
                         # Fall through to the normal retry path below.
 
