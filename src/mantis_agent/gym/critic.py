@@ -423,14 +423,14 @@ class ExecutionCritic:
             return None
         params = dict(getattr(step, "params", {}) or {})
         if params.get("kind") != "row_link":
-            logger.info(
+            logger.warning(
                 "  [critic-row-link] step %d: skip — params.kind=%r != 'row_link' (params=%s)",
                 state.step_index, params.get("kind"), list(params.keys()),
             )
             return None
         failure_class = str(getattr(step_result, "failure_class", "") or "")
         if failure_class not in {"selector_miss", "unknown", "wrong_target"}:
-            logger.info(
+            logger.warning(
                 "  [critic-row-link] step %d: skip — failure_class=%r not in target-id family",
                 state.step_index, failure_class,
             )
@@ -438,23 +438,23 @@ class ExecutionCritic:
         hints = dict(getattr(step, "hints", {}) or {})
         patterns = list(hints.get("expect_url_contains") or [])
         if not patterns:
-            logger.info(
+            logger.warning(
                 "  [critic-row-link] step %d: skip — hints.expect_url_contains is empty",
                 state.step_index,
             )
             return None
         env = getattr(self.runner, "env", None)
         if env is None:
-            logger.info("  [critic-row-link] step %d: skip — runner.env is None", state.step_index)
+            logger.warning("  [critic-row-link] step %d: skip — runner.env is None", state.step_index)
             return None
         eval_fn = getattr(env, "cdp_evaluate", None)
         if not callable(eval_fn):
-            logger.info(
+            logger.warning(
                 "  [critic-row-link] step %d: skip — env has no cdp_evaluate (env type=%s)",
                 state.step_index, type(env).__name__,
             )
             return None
-        logger.info(
+        logger.warning(
             "  [critic-row-link] step %d: entering DOM lookup (patterns=%s, failure_class=%s)",
             state.step_index, patterns, failure_class,
         )
@@ -486,7 +486,7 @@ class ExecutionCritic:
             )
             return None
         if not isinstance(href, str) or not href.startswith(("http://", "https://")):
-            logger.info(
+            logger.warning(
                 "  [critic-row-link] step %d: skip — DOM lookup returned no matching href "
                 "(returned=%r, patterns=%s)",
                 state.step_index, str(href)[:100], patterns,
