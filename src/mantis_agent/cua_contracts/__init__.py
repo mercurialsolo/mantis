@@ -60,6 +60,13 @@ from .ontology import (
     is_irreversible,
     validate_action_type,
 )
+from .lifecycle import (
+    PURE_PHASES,
+    SIDE_EFFECTFUL_PHASES,
+    Activity,
+    LifecyclePhase,
+)
+from .versions import VERSION_KEYS, collect_versions
 from .types import (
     ActionResult,
     GroundingTrace,
@@ -84,15 +91,20 @@ from .validation import (
 __all__ = [
     "ActionResult",
     "ActionTyped",
+    "Activity",
     "ContractValidationError",
     "GroundingTrace",
+    "LifecyclePhase",
     "Observation",
+    "PURE_PHASES",
     "Plan",
     "ReversibilityClass",
     "SCHEMA_VERSION",
+    "SIDE_EFFECTFUL_PHASES",
     "Step",
     "TaskSpec",
     "TrajectoryEvent",
+    "VERSION_KEYS",
     "Verdict",
     "VerdictKind",
     "JSONL_FILENAME",
@@ -100,6 +112,7 @@ __all__ = [
     "action_result_from_action",
     "classify_action",
     "classify_legacy_reversibility",
+    "collect_versions",
     "is_irreversible",
     "observation_from_screenshot_ref",
     "step_from_micro_intent",

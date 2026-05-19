@@ -170,3 +170,58 @@ def validate_trajectory_event(event: TrajectoryEvent) -> None:
             "TrajectoryEvent.versions must be a dict (slot for model / "
             "prompt / browser stamps — #488)"
         )
+    _validate_versions(event.versions)
+
+
+# Keys the validator REQUIRES on every committed event (#488). Both
+# are static facts about the writer's contract / ontology shape;
+# they're populated by :func:`~.versions.collect_versions` at
+# emitter-construction time so a writer that goes through the
+# normal path always has them.
+#
+# Model / prompt / runtime stamps are optional in v1 — they
+# populate incrementally as handlers + deploy scripts thread their
+# stamps through. A future bump can promote some of those to
+# required once population is universal.
+_REQUIRED_VERSION_KEYS: frozenset[str] = frozenset({
+    "action_ontology",
+    "contracts_schema",
+})
+
+
+def _validate_versions(versions: dict) -> None:
+    """Enforce the minimum required set + shape on ``versions``.
+
+    Required keys (per :issue:`488` acceptance: "Missing required
+    version fields fail validation"):
+
+    * ``action_ontology`` — bump signal for the closed action enum.
+    * ``contracts_schema`` — bump signal for the cua_contracts
+      package itself.
+
+    All other keys (model + prompt stamps, runtime stamps) are
+    optional in v1 — populated where available. Values must be
+    non-empty strings; an empty string is "we tried but couldn't
+    determine" and is rejected so the event stream stays
+    interpretable.
+    """
+    missing = _REQUIRED_VERSION_KEYS - set(versions)
+    if missing:
+        raise ContractValidationError(
+            f"TrajectoryEvent.versions missing required keys: "
+            f"{sorted(missing)}; the canonical writer must stamp "
+            f"these on every event (#488)"
+        )
+    for key, value in versions.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ContractValidationError(
+                f"TrajectoryEvent.versions entries must be str→str; "
+                f"got {key!r}={value!r}"
+            )
+        if not value.strip():
+            raise ContractValidationError(
+                f"TrajectoryEvent.versions[{key!r}] is empty — drop "
+                f"unset keys rather than emit empty strings, so "
+                f"readers can distinguish 'not stamped' from "
+                f"'stamped as blank'"
+            )

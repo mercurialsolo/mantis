@@ -1524,11 +1524,24 @@ def _emit_canonical_trajectory_event(
         # later reader can address one run by directory listing.
         store_dir = os.path.join(base_dir, run_id)
         try:
-            from ..cua_contracts import TrajectoryEmitter
+            from ..cua_contracts import TrajectoryEmitter, collect_versions
+            # #488: stamp the canonical version dict at emitter
+            # construction so every event carries the contract
+            # schema version + ontology version + any runtime / per-
+            # role model + prompt stamps the runner has surfaced via
+            # ``runner.runtime_versions``. Legacy
+            # ``_canonical_event_versions`` is honoured as an explicit
+            # override for callers that want full control of the
+            # stamp dict.
+            override = getattr(runner, "_canonical_event_versions", None)
+            if isinstance(override, dict) and override:
+                versions = dict(override)
+            else:
+                versions = collect_versions(runner)
             emitter = TrajectoryEmitter(
                 run_id=run_id,
                 store_dir=store_dir,
-                versions=dict(getattr(runner, "_canonical_event_versions", {}) or {}),
+                versions=versions,
             )
         except Exception as exc:  # noqa: BLE001 — never break a run
             logger.debug("canonical event emitter init failed: %s", exc)
