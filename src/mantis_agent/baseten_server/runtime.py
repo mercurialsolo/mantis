@@ -33,6 +33,7 @@ from ..server_utils import (
     build_proxy_config,
     micro_plan_steps_to_dicts,
     parse_lead_row,
+    persist_run_artifacts,
     plan_signature_from_steps,
     result_summary,
     safe_state_key,
@@ -721,6 +722,14 @@ class BasetenCUARuntime:
             csv_path = run_dir / "leads.csv"
             _write_leads_csv(csv_path, leads)
             result["detached_csv_path"] = str(csv_path)
+        # #508: also write the schema-driven CSV / JSON next to leads.csv
+        # in the same run dir, and append file artifacts so the artifact
+        # endpoint (GET /v1/runs/{id}/artifacts/{name}) has stable
+        # download targets. ``persist_run_artifacts`` re-writes leads.csv
+        # too, which is harmless — same content, same path.
+        file_artifacts = persist_run_artifacts(result, run_dir, run_id=run_id)
+        if file_artifacts:
+            result["artifacts"] = list(result.get("artifacts") or []) + file_artifacts
         self._write_json_atomic(run_result_path, result)
 
     def _result_summary(self, result: dict[str, Any]) -> dict[str, Any]:
@@ -1465,12 +1474,21 @@ class BasetenCUARuntime:
 
             grounding = ClaudeGrounding(cache=self.grounding_cache)
             schema = None
-            objective_data = task_suite.get("_objective")
-            if objective_data:
-                from mantis_agent.graph.objective import ObjectiveSpec
-                from mantis_agent.extraction import ExtractionSchema
-                objective = ObjectiveSpec.from_dict(objective_data)
-                schema = ExtractionSchema.from_objective(objective)
+            # #508: payload-level ``extraction_schema`` wins over the
+            # plan-derived ObjectiveSpec schema. Callers that want a
+            # purpose-built schema (custom fields, different rejection
+            # vocabulary) used to be silently ignored — the dict was
+            # accepted via PredictRequest.extra='allow' but never read.
+            from mantis_agent.extraction import ExtractionSchema
+            payload_schema = payload.get("extraction_schema") if isinstance(payload, dict) else None
+            if isinstance(payload_schema, dict):
+                schema = ExtractionSchema.from_dict(payload_schema)
+            else:
+                objective_data = task_suite.get("_objective")
+                if objective_data:
+                    from mantis_agent.graph.objective import ObjectiveSpec
+                    objective = ObjectiveSpec.from_dict(objective_data)
+                    schema = ExtractionSchema.from_objective(objective)
             extractor = ClaudeExtractor(schema=schema)
             resume_state = bool(task_suite.get("_resume_state", False))
             checkpoint_path = task_suite.get("_checkpoint_path")

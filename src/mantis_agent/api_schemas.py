@@ -157,6 +157,15 @@ class PredictRequest(BaseModel):
     # ``perceptual_verify`` / ``loop_recovery`` / ``done_gate`` toggles).
     route_som_clicks: Optional[bool] = None
 
+    # #508 explicit payload-level ExtractionSchema. When set, the runtime
+    # passes this dict to :meth:`ExtractionSchema.from_dict` and uses
+    # the resulting schema for the run, taking precedence over any
+    # plan-derived ``ObjectiveSpec`` schema. Documented in
+    # ``docs/integrations/generic-cua.md``; previously accepted via the
+    # ``extra='allow'`` escape hatch but silently ignored by the
+    # runtime. Typing it makes the contract enforceable and discoverable.
+    extraction_schema: Optional[dict[str, Any]] = None
+
     @model_validator(mode="after")
     def _clamp_caps_and_validate_action(self) -> "PredictRequest":
         # Hard caps — caller cannot exceed

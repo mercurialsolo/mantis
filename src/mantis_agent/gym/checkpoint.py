@@ -136,10 +136,23 @@ class StepResult:
     final_url: str = ""
     page_title: str = ""
 
+    # #508 structured extraction passthrough. When the step ran a
+    # schema-driven ``extract_data`` and produced a viable row, the
+    # extractor's :attr:`ExtractionResult.extracted_fields` dict lands
+    # here verbatim — keyed by schema field name, values are strings.
+    # Empty on every other step type / on rejection / when no schema
+    # is configured. Round-tripped through the checkpoint so resumed
+    # runs keep the structured rows they already collected; the
+    # aggregator in :func:`server_utils.build_micro_result` collects
+    # these into the result-level ``artifacts`` array alongside the
+    # legacy ``leads`` string list.
+    extracted_fields: dict[str, str] = field(default_factory=dict)
+
     _PERSISTED: ClassVar[tuple[str, ...]] = (
         "step_index", "intent", "success", "data", "steps_used", "duration", "reversed",
         "skip", "skip_reason", "executor_backend",
         "failure_class", "final_url", "page_title",
+        "extracted_fields",
     )
 
     def to_dict(self) -> dict[str, Any]:

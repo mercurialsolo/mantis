@@ -296,6 +296,62 @@ def get_run_video(
     )
 
 
+# #508 artifact endpoint. Files we are willing to serve from a run dir.
+# Tight allowlist — every name corresponds to something
+# ``persist_run_artifacts`` actually writes. Adding a new artifact kind
+# means adding it here AND in the persistence helper; otherwise the
+# endpoint stays a 404 and we don't accidentally start streaming
+# arbitrary run-dir contents.
+_ARTIFACT_ALLOWLIST: dict[str, str] = {
+    "leads.csv": "text/csv",
+    "extracted_rows.csv": "text/csv",
+    "extracted_rows.json": "application/json",
+    "result.json": "application/json",
+}
+
+
+@app.get("/v1/runs/{run_id}/artifacts/{name}")
+def get_run_artifact(
+    run_id: str,
+    name: str,
+    tenant: TenantConfig = Depends(_require_mantis_token),
+) -> Any:
+    """Download a per-run artifact written by the runtime (#508).
+
+    Allowlists `name` against :data:`_ARTIFACT_ALLOWLIST` so we never
+    serve arbitrary files from the run dir. The path is resolved and
+    checked to stay within the run dir to block ``..`` traversal even
+    if the allowlist gains an entry that contains a slash later.
+
+    Returns 404 when the artifact was never written (no leads, no
+    structured rows, or the run hasn't completed yet). Auth requires a
+    valid token but not specifically the ``run`` scope, mirroring the
+    sibling ``/v1/runs/{run_id}/video`` handler.
+    """
+    from fastapi.responses import FileResponse
+
+    media_type = _ARTIFACT_ALLOWLIST.get(name)
+    if media_type is None:
+        raise HTTPException(status_code=404, detail=f"unknown artifact: {name}")
+
+    safe_run_id = safe_state_key(run_id)
+    tenant_dir = _data_root() / "tenants" / safe_state_key(tenant.tenant_id)
+    run_dir = (tenant_dir / "runs" / safe_run_id).resolve()
+    candidate = (run_dir / name).resolve()
+    try:
+        candidate.relative_to(run_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid artifact name")
+
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"artifact not available: {name}",
+        )
+
+    return FileResponse(candidate, media_type=media_type, filename=name)
+
+
 @app.get("/metrics")
 def metrics_endpoint() -> Any:
     """Prometheus scrape endpoint.

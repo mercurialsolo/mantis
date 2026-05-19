@@ -19,6 +19,7 @@ and the [any-agent integration playbook](integrations/any-agent.md).
 | `GET /v1/version` | open | Runtime version snapshot — `version`, `model`, `ready`, `git_sha`, `build_time`. Useful for pinning client behavior to a specific build. |
 | `GET /metrics` | open | Prometheus scrape endpoint. Returns 503 if `prometheus_client` not installed. |
 | `GET /v1/runs/{run_id}/video` | `X-Mantis-Token` | Download the screencast captured during a run. Returns 404 if `record_video` was not requested. |
+| `GET /v1/runs/{run_id}/artifacts/{name}` | `X-Mantis-Token` | Download a run artifact ([#508](https://github.com/mercurialsolo/mantis/issues/508)). Allowlisted names: `leads.csv`, `extracted_rows.csv`, `extracted_rows.json`, `result.json`. Returns 404 when the artifact wasn't produced (no leads, no structured rows). |
 | `GET /docs`, `GET /redoc` | open | Interactive Swagger UI / Redoc viewer over `/openapi.json`. Disable on production tenant fleets with `MANTIS_ENABLE_DOCS_UI=0`. |
 | `GET /openapi.json` | open | Machine-readable OpenAPI spec. Always served, even when the interactive UIs are disabled — this is what client SDKs and IDE plugins consume. |
 
@@ -161,6 +162,103 @@ Set `action` and `run_id` in the body:
 
 `result` returns the full lead list and per-step trace. `logs` returns the
 last `tail` events written by the runner (default 200, max 10000).
+
+### Structured extraction artifacts ([#508](https://github.com/mercurialsolo/mantis/issues/508))
+
+In addition to the legacy `leads` string list, every `result` carries an
+`artifacts` array describing structured extracted data and downloadable
+files. The legacy fields (`leads`, `csv_path`, `result_path`) are kept for
+back-compat — `artifacts` is the new contract for callers that want
+schema-keyed rows or want to fetch files over HTTP rather than read
+server-local paths.
+
+```jsonc
+{
+  "artifacts": [
+    {
+      "name": "extracted_rows",
+      "kind": "structured_data",
+      "mime_type": "application/json",
+      "schema": { "fields": ["title", "url", "department"] },
+      "row_count": 12,
+      "data": [
+        { "title": "ML Engineer", "url": "https://...", "department": "Eng" }
+      ]
+    },
+    {
+      "name": "leads.csv",
+      "kind": "file",
+      "mime_type": "text/csv",
+      "row_count": 12,
+      "download_url": "/v1/runs/<run_id>/artifacts/leads.csv"
+    },
+    {
+      "name": "extracted_rows.csv",
+      "kind": "file",
+      "mime_type": "text/csv",
+      "schema": { "fields": ["title", "url", "department"] },
+      "row_count": 12,
+      "download_url": "/v1/runs/<run_id>/artifacts/extracted_rows.csv"
+    },
+    {
+      "name": "extracted_rows.json",
+      "kind": "file",
+      "mime_type": "application/json",
+      "schema": { "fields": ["title", "url", "department"] },
+      "row_count": 12,
+      "download_url": "/v1/runs/<run_id>/artifacts/extracted_rows.json"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Stable identifier (`extracted_rows`, `leads.csv`, `extracted_rows.csv`, `extracted_rows.json`). |
+| `kind` | string | `structured_data` (inline rows) or `file` (downloadable via `download_url`). |
+| `mime_type` | string | Content type — for `structured_data`, always `application/json`; for `file`, the on-the-wire MIME of the served file. |
+| `schema.fields` | string[] | (where applicable) Column order matching the ExtractionSchema field names. `extracted_rows.csv` uses these names as the CSV header; `leads.csv` keeps the legacy fixed columns. |
+| `row_count` | int | Number of rows / lines the artifact contains. |
+| `data` | object[] | (`structured_data` only) The rows themselves, keyed by schema field name. |
+| `download_url` | string | (`file` only) Path to fetch the file from the artifact endpoint. Auth follows the standard `X-Mantis-Token` rules. |
+
+The `extracted_rows` structured artifact is the canonical form — it
+includes every schema field on every row even when a value is missing
+(empty string). `leads.csv` is preserved as a legacy file artifact with
+the historic fixed columns (`status`, `year`, `make`, ...) for callers
+that depend on that shape; new code should prefer `extracted_rows.csv`
+which uses the schema's actual columns.
+
+The `artifacts` array is empty when a run produces no leads and no
+schema-driven extraction rows, so consumers can always iterate it
+without a `KeyError` guard.
+
+### Custom extraction schemas ([#508](https://github.com/mercurialsolo/mantis/issues/508))
+
+`/v1/predict` accepts an optional top-level `extraction_schema` field
+describing the columns the run should extract. When set, this schema
+takes precedence over any plan-derived `ObjectiveSpec` schema and is
+the dict that drives `ClaudeExtractor`'s tool-use JSON schema.
+
+```jsonc
+{
+  "task_suite": { ... },
+  "extraction_schema": {
+    "entity_name": "job",
+    "fields": [
+      { "name": "title",      "type": "str", "required": true,  "example": "ML Engineer" },
+      { "name": "url",        "type": "str", "required": true,  "example": "https://..." },
+      { "name": "department", "type": "str", "required": false },
+      { "name": "location",   "type": "str", "required": false }
+    ],
+    "required_fields": ["title", "url"]
+  }
+}
+```
+
+Fields not listed here are not extracted. The schema's `fields` order
+becomes the column order in `extracted_rows.csv`; missing values show
+up as empty strings rather than absent keys.
 
 ### Wall-time breakdown
 

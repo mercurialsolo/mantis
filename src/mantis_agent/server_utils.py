@@ -443,6 +443,153 @@ def write_leads_csv(path: Path, leads: list[Any]) -> None:
             writer.writerow(parse_lead_row(lead))
 
 
+# ── Extraction artifacts (#508) ──────────────────────────────────────
+
+
+def _collect_extracted_rows(step_results: list[Any]) -> tuple[list[dict[str, str]], list[str]]:
+    """Pull schema-keyed rows from ``StepResult.extracted_fields``.
+
+    Returns ``(rows, fieldnames)`` where ``fieldnames`` is the union of
+    keys across all rows in first-seen order. Empty inputs yield
+    ``([], [])`` — callers branch on ``rows`` to decide whether to emit
+    a structured_data artifact.
+    """
+    rows: list[dict[str, str]] = []
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for r in step_results:
+        fields = getattr(r, "extracted_fields", None) or {}
+        if not fields:
+            continue
+        rows.append(dict(fields))
+        for k in fields:
+            if k not in seen:
+                fieldnames.append(k)
+                seen.add(k)
+    return rows, fieldnames
+
+
+def write_extracted_rows_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> None:
+    """Write schema-driven rows to CSV with the supplied column order.
+
+    Unlike :func:`write_leads_csv` this does NOT bake in the legacy
+    marketplace columns — header is exactly ``fieldnames`` and every row
+    is filtered to those keys. Missing values are emitted as the empty
+    string so the row count always equals ``len(rows)``.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(fieldnames))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({name: row.get(name, "") for name in fieldnames})
+
+
+def build_extraction_artifacts(
+    step_results: list[Any],
+    *,
+    run_id: str,  # noqa: ARG001 — kept for symmetry with persist_run_artifacts
+    leads: list[Any] | None = None,  # noqa: ARG001 — handled by persist_run_artifacts
+) -> list[dict[str, Any]]:
+    """Assemble the inline ``artifacts`` array on the run result (#508).
+
+    Today this emits at most one entry — a ``structured_data`` artifact
+    holding the schema-keyed rows from ``StepResult.extracted_fields``.
+    File artifacts (``leads.csv``, ``extracted_rows.csv``,
+    ``extracted_rows.json``) are appended later by
+    :func:`persist_run_artifacts` once the persistence layer has
+    actually written them to disk, so every ``download_url`` in the
+    final result points at a file that exists.
+
+    Returns an empty list when no step produced structured fields.
+    """
+    rows, fieldnames = _collect_extracted_rows(step_results)
+    if not rows:
+        return []
+    return [{
+        "name": "extracted_rows",
+        "kind": "structured_data",
+        "mime_type": "application/json",
+        "schema": {"fields": fieldnames},
+        "row_count": len(rows),
+        "data": rows,
+    }]
+
+
+def persist_run_artifacts(
+    result: dict[str, Any],
+    run_dir: Path,
+    *,
+    run_id: str,
+    url_prefix: str = "/v1/runs",
+) -> list[dict[str, Any]]:
+    """Write artifact files to ``run_dir`` and return ``file`` entries.
+
+    Materializes three on-disk artifacts (each written only when its
+    source data is present in ``result``):
+
+    * ``leads.csv`` — legacy fixed-column lead CSV (back-compat).
+    * ``extracted_rows.csv`` — dynamic-column CSV whose header is the
+      union of schema field names from the inline ``structured_data``
+      artifact.
+    * ``extracted_rows.json`` — JSON list of the same rows for callers
+      that want to parse rather than CSV-decode.
+
+    Each written file produces one ``{"kind": "file", ...}`` entry with
+    a ``download_url`` of ``{url_prefix}/{run_id}/artifacts/{name}``.
+    Callers merge the return value into ``result["artifacts"]``; the
+    helper deliberately does NOT mutate ``result`` so it can be reused
+    by both the embedded persistence path (:func:`save_result_json`)
+    and the detached one (Baseten runtime).
+    """
+    file_artifacts: list[dict[str, Any]] = []
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    leads = result.get("leads")
+    if isinstance(leads, list) and leads:
+        csv_path = run_dir / "leads.csv"
+        write_leads_csv(csv_path, leads)
+        file_artifacts.append({
+            "name": "leads.csv",
+            "kind": "file",
+            "mime_type": "text/csv",
+            "row_count": len(leads),
+            "download_url": f"{url_prefix}/{run_id}/artifacts/leads.csv",
+        })
+
+    inline = result.get("artifacts") or []
+    structured = next(
+        (a for a in inline if a.get("kind") == "structured_data" and a.get("name") == "extracted_rows"),
+        None,
+    )
+    if structured and structured.get("data"):
+        rows = structured["data"]
+        fieldnames = (structured.get("schema") or {}).get("fields") or []
+        if fieldnames:
+            csv_path = run_dir / "extracted_rows.csv"
+            write_extracted_rows_csv(csv_path, rows, fieldnames)
+            file_artifacts.append({
+                "name": "extracted_rows.csv",
+                "kind": "file",
+                "mime_type": "text/csv",
+                "schema": {"fields": fieldnames},
+                "row_count": len(rows),
+                "download_url": f"{url_prefix}/{run_id}/artifacts/extracted_rows.csv",
+            })
+            json_path = run_dir / "extracted_rows.json"
+            json_path.write_text(json.dumps(rows, indent=2))
+            file_artifacts.append({
+                "name": "extracted_rows.json",
+                "kind": "file",
+                "mime_type": "application/json",
+                "schema": {"fields": fieldnames},
+                "row_count": len(rows),
+                "download_url": f"{url_prefix}/{run_id}/artifacts/extracted_rows.json",
+            })
+
+    return file_artifacts
+
+
 # ── Micro-intent result builder ───────────────────────────────────
 
 
@@ -541,6 +688,13 @@ def build_micro_result(
         from .gym.time_meter import BUCKETS as _BUCKETS
         wall_time_breakdown = {b: 0.0 for b in _BUCKETS}
 
+    # #508 first-class extraction artifacts. ``leads`` (above) stays as
+    # the legacy pipe-delimited / dict view for back-compat; ``artifacts``
+    # is the new contract — structured rows keyed by the
+    # ExtractionSchema field name plus a pointer to the on-disk CSV that
+    # downstream consumers can fetch via the artifact endpoint.
+    artifacts = build_extraction_artifacts(step_results, run_id=run_id, leads=leads)
+
     return {
         "run_id": run_id,
         "provider": provider,
@@ -568,6 +722,7 @@ def build_micro_result(
         "dynamic_verification": dynamic_verification,
         "dynamic_verification_summary": dynamic_verification_summary,
         "leads": leads,
+        "artifacts": artifacts,
         "executor_backend_counts": executor_backend_counts,
         "step_details": [
             {
@@ -678,6 +833,15 @@ def save_result_json(
         csv_path = results_dir / f"{prefix}_leads_{result['run_id']}.csv"
         write_leads_csv(csv_path, leads)
         result["csv_path"] = str(csv_path)
+
+    # #508: also materialize the schema-driven CSV / JSON when the run
+    # produced structured rows. ``persist_run_artifacts`` writes them
+    # under a per-run subdir so the artifact endpoint can serve them
+    # by name; existing legacy CSV at the flat path above is untouched.
+    run_dir = results_dir / f"{prefix}_artifacts_{result['run_id']}"
+    file_artifacts = persist_run_artifacts(result, run_dir, run_id=result["run_id"])
+    if file_artifacts:
+        result["artifacts"] = list(result.get("artifacts") or []) + file_artifacts
 
     result_path.write_text(json.dumps(result, indent=2))
     return result_path

@@ -283,9 +283,15 @@ class ClaudeStepHandler:
                         success=True,
                         reason="cache_hit",
                     )
+                    # #508: cache stores `fields` alongside summary, so
+                    # cache-hit short-circuits still surface structured
+                    # rows. Older caches without fields → empty dict.
                     return StepResult(
                         step_index=index, intent=step.intent,
                         success=True, data=cached.summary,
+                        extracted_fields=dict(
+                            getattr(cached, "fields", {}) or {}
+                        ),
                     )
 
             data, _actions_used = self._extract_listing_data_deep(screenshot, ctx)
@@ -353,9 +359,16 @@ class ClaudeStepHandler:
                     success=True,
                     reason="viable_lead",
                 )
+                # #508: pass the schema-keyed dict through verbatim so the
+                # aggregator can emit structured rows. ``data=summary`` is
+                # the legacy pipe-delimited string (kept for back-compat);
+                # ``extracted_fields`` is the canonical structured copy.
                 return StepResult(
                     step_index=index, intent=step.intent,
                     success=True, data=summary,
+                    extracted_fields=dict(
+                        getattr(data, "extracted_fields", {}) or {}
+                    ),
                 )
             if data and data.dealer_reason():
                 reason = data.dealer_reason()
