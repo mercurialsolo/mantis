@@ -75,6 +75,66 @@ A flat JSON list of step objects executed by `MicroPlanRunner`. Best reliability
 
 Field reference is on the [Concepts](concepts.md#step-types-micro-plan-shape) page.
 
+### Declaring runtime defaults inside the plan
+
+A plan can carry a top-level `runtime` block so it's self-describing — no submitter has to remember the right proxy / cost / time flags. The bare-array form above stays valid; the wrapped form adds a sibling next to `steps`:
+
+```jsonc
+{
+  "runtime": {
+    "proxy_disabled": false,
+    "proxy_provider": "privateproxy",
+    "proxy_city": "miami",
+    "max_cost": 3.0,
+    "max_time_minutes": 10
+  },
+  "steps": [
+    { "intent": "Navigate to https://lu.ma/discover", "type": "navigate" }
+  ]
+}
+```
+
+| Field | Type | Effect |
+| --- | --- | --- |
+| `proxy_disabled` | bool | Skip proxy setup, connect direct. Use for CF-protected SaaS that whitelists the test environment's IP. |
+| `proxy_provider` | string | `privateproxy` (preferred residential), `oxylabs`, or `iproyal`. Defaults to the runtime's `MANTIS_PROXY_PROVIDER` env. |
+| `proxy_city` | string | Preferred proxy exit city (passed to the provider's session API). |
+| `proxy_state` | string | Preferred proxy exit state (US two-letter code). |
+| `max_cost` | number | Per-run cost ceiling in USD; runner halts when exceeded. |
+| `max_time_minutes` | integer | Per-run wall-clock ceiling in minutes. |
+
+**Override precedence.** Whenever the caller passes one of these fields explicitly (CLI flag, HTTP body, kwarg), the caller's value beats the plan default. Passing `None` (or omitting the field entirely) falls back to the plan's declaration. This is what lets `--proxy-disabled` on the command line override a `proxy_disabled: false` plan without breaking the plan-as-default contract.
+
+**Loader + merger** (Python — for embedded callers and one-shot submit scripts):
+
+```python
+from mantis_agent.server_utils import (
+    load_plan_file, merge_runtime, build_micro_suite,
+)
+
+steps, plan_runtime = load_plan_file("plans/luma-extract.json")
+
+# proxy_disabled=cli.proxy_disabled is None when the flag wasn't passed,
+# so the plan default wins; pass a real bool to override.
+runtime = merge_runtime(plan_runtime, proxy_disabled=cli.proxy_disabled)
+suite = build_micro_suite(steps, "luma", **runtime)
+```
+
+Both shipped plan shapes work — `load_plan_file` returns `(steps, {})` for the bare-array form, and `(steps, runtime)` for the wrapped form. Unknown `runtime` keys are dropped silently so future schema additions don't leak into `build_micro_suite` as `TypeError`-causing kwargs.
+
+**Reference plans** carried in this repo:
+
+* [`examples/form_fill_with_runtime.json`](https://github.com/mercurialsolo/mantis/blob/main/examples/form_fill_with_runtime.json) — minimal demo of the wrapped form (proxy off, $0.50 cap, 5 min cap).
+* `scripts/run_luma_extract.py` — submit helper that loads a wrapped plan, calls `merge_runtime`, splats into `build_micro_suite`, then POSTs `/v1/predict`. Use it as the template for new domain-specific submitters.
+
+**End-to-end verification** (against deployed Modal):
+
+| Plan | `runtime.proxy_provider` | Modal worker startup log |
+|---|---|---|
+| `plans/staff-crm-long.json` | unset (proxy disabled) | direct connection — no proxy line |
+| `plans/luma-extract.json` (proxy on, `iproyal`) | unset → env default | `Proxy: iproyal via http://geo.iproyal.com:12321` |
+| `plans/luma-extract.json` (proxy on, `privateproxy`) | `privateproxy` | `Proxy: privateproxy via http://edge1-us.privateproxy.me:8888` |
+
 ### Iterate on plan structure without GPU or API cost
 
 Use `MANTIS_BRAIN=mock` to point the runner at a deterministic stub

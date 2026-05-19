@@ -221,5 +221,10 @@ def test_validate_micro_steps_rejects_missing_fields():
         validate_micro_steps([{"intent": "go"}])
     with pytest.raises(ValueError, match="JSON object"):
         validate_micro_steps(["not a dict"])  # type: ignore[list-item]
-    with pytest.raises(ValueError, match="JSON array"):
+    # Dict-shaped plans without a 'steps' key are rejected with a
+    # message that points at the missing field — the validator now
+    # also accepts the wrapped ``{steps, runtime}`` form, so the
+    # bare-list "JSON array" path applies only to non-list, non-dict
+    # inputs.
+    with pytest.raises(ValueError, match="'steps' array"):
         validate_micro_steps({"not": "a list"})  # type: ignore[arg-type]

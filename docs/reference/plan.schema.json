@@ -2,12 +2,66 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mercurialsolo.github.io/mantis/reference/plan.schema.json",
   "title": "Mantis micro-plan",
-  "description": "Top-level shape of a Mantis micro-plan JSON file: a flat array of step objects executed by MicroPlanRunner. Each step must declare an 'intent' (one-sentence description for the brain) and a 'type' (the step kind). Step types accept additional optional fields documented in 'docs/getting-started/plan-formats.md' and 'docs/getting-started/concepts.md'. The schema is intentionally permissive (additionalProperties is true at every level) so plans can carry plan-specific fields without breaking validation — IDE autocomplete still covers the well-known fields.",
-  "type": "array",
-  "items": {
-    "$ref": "#/$defs/Step"
-  },
+  "description": "Top-level shape of a Mantis micro-plan JSON file. Two equivalent forms are accepted: (1) a flat array of step objects (the original shape), or (2) an object {steps, runtime} where the optional 'runtime' block declares plan-level defaults (proxy, cost cap, time cap) so the plan is self-describing instead of requiring every caller to remember the right submission flags. Step types accept additional optional fields documented in 'docs/getting-started/plan-formats.md' and 'docs/getting-started/concepts.md'. The schema is intentionally permissive (additionalProperties is true at every level) so plans can carry plan-specific fields without breaking validation — IDE autocomplete still covers the well-known fields.",
+  "oneOf": [
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Step"
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["steps"],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Step"
+          }
+        },
+        "runtime": {
+          "$ref": "#/$defs/Runtime"
+        }
+      }
+    }
+  ],
   "$defs": {
+    "Runtime": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Plan-level runtime defaults. Submission-time arguments (CLI flags, HTTP body fields) override these when set explicitly; absent submission args fall back to the plan's declared defaults.",
+      "properties": {
+        "proxy_disabled": {
+          "type": "boolean",
+          "description": "When true, the runner skips proxy setup and connects directly. Useful for plans whose target site is proxy-hostile (Cloudflare-protected SaaS that whitelists the test environment's IP)."
+        },
+        "proxy_provider": {
+          "type": "string",
+          "enum": ["privateproxy", "oxylabs", "iproyal"],
+          "description": "Which proxy backend to use when proxy is enabled. Defaults to the runtime's MANTIS_PROXY_PROVIDER env var (today: iproyal). Prefer ``privateproxy`` for residential exits — uses PRIVATEPROXY_* env vars."
+        },
+        "proxy_city": {
+          "type": "string",
+          "description": "Preferred proxy exit city — passed to the proxy provider's session API."
+        },
+        "proxy_state": {
+          "type": "string",
+          "description": "Preferred proxy exit state (US two-letter code)."
+        },
+        "max_cost": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Per-run cost ceiling in USD. The runner halts when exceeded."
+        },
+        "max_time_minutes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-run wall-clock ceiling in minutes. The runner halts when exceeded."
+        }
+      }
+    },
     "Step": {
       "type": "object",
       "additionalProperties": true,

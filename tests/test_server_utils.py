@@ -15,6 +15,8 @@ from mantis_agent.server_utils import (
     build_micro_suite,
     build_proxy_config,
     build_task_loop_result,
+    load_plan_file,
+    merge_runtime,
     micro_plan_steps_to_dicts,
     parse_lead_row,
     plan_signature_from_steps,
@@ -716,3 +718,142 @@ def test_build_task_loop_result():
     assert result["total"] == 3
     assert abs(result["score"] - 66.67) < 0.1
     assert result["mode"] == "tasks"
+
+
+# ── load_plan_file + merge_runtime ─────────────────────────────────
+
+
+def _write_plan(tmp_path: Path, body: object) -> Path:
+    p = tmp_path / "plan.json"
+    p.write_text(json.dumps(body))
+    return p
+
+
+def test_load_plan_file_bare_array(tmp_path: Path) -> None:
+    p = _write_plan(tmp_path, [{"intent": "go", "type": "navigate"}])
+    steps, runtime = load_plan_file(p)
+    assert steps == [{"intent": "go", "type": "navigate"}]
+    assert runtime == {}
+
+
+def test_load_plan_file_wrapped_with_runtime(tmp_path: Path) -> None:
+    p = _write_plan(tmp_path, {
+        "runtime": {"proxy_disabled": True, "max_cost": 2.5},
+        "steps": [{"intent": "go", "type": "navigate"}],
+    })
+    steps, runtime = load_plan_file(p)
+    assert steps == [{"intent": "go", "type": "navigate"}]
+    assert runtime == {"proxy_disabled": True, "max_cost": 2.5}
+
+
+def test_load_plan_file_wrapped_without_runtime(tmp_path: Path) -> None:
+    p = _write_plan(tmp_path, {"steps": [{"intent": "x", "type": "click"}]})
+    steps, runtime = load_plan_file(p)
+    assert steps == [{"intent": "x", "type": "click"}]
+    assert runtime == {}
+
+
+def test_load_plan_file_drops_unknown_runtime_keys(tmp_path: Path) -> None:
+    """Forward-compat: unknown ``runtime`` keys never leak through to
+    callers (who'd hit a ``build_micro_suite`` TypeError)."""
+    p = _write_plan(tmp_path, {
+        "runtime": {"proxy_disabled": True, "future_flag": "ignored"},
+        "steps": [],
+    })
+    _steps, runtime = load_plan_file(p)
+    assert runtime == {"proxy_disabled": True}
+    assert "future_flag" not in runtime
+
+
+def test_load_plan_file_rejects_non_list_steps(tmp_path: Path) -> None:
+    p = _write_plan(tmp_path, {"steps": "oops"})
+    with pytest.raises(ValueError, match="'steps' must be a list"):
+        load_plan_file(p)
+
+
+def test_load_plan_file_rejects_non_object_runtime(tmp_path: Path) -> None:
+    p = _write_plan(tmp_path, {"runtime": "no", "steps": []})
+    with pytest.raises(ValueError, match="'runtime' must be an object"):
+        load_plan_file(p)
+
+
+def test_load_plan_file_rejects_scalar(tmp_path: Path) -> None:
+    p = _write_plan(tmp_path, 42)
+    with pytest.raises(ValueError, match="expected array of steps"):
+        load_plan_file(p)
+
+
+def test_merge_runtime_plan_only() -> None:
+    out = merge_runtime({"proxy_disabled": True, "max_cost": 2.0})
+    assert out == {"proxy_disabled": True, "max_cost": 2.0}
+
+
+def test_merge_runtime_submission_override_wins() -> None:
+    """Explicit non-None overrides beat the plan's declared default."""
+    out = merge_runtime(
+        {"proxy_disabled": True, "max_cost": 2.0},
+        proxy_disabled=False,
+    )
+    assert out["proxy_disabled"] is False
+    assert out["max_cost"] == 2.0  # untouched override falls back to plan
+
+
+def test_merge_runtime_none_override_falls_back_to_plan() -> None:
+    """``None`` means 'caller didn't set this' — keep the plan default."""
+    out = merge_runtime(
+        {"proxy_disabled": True},
+        proxy_disabled=None,
+        max_cost=None,
+    )
+    assert out == {"proxy_disabled": True}
+
+
+def test_merge_runtime_empty_plan() -> None:
+    out = merge_runtime(None, proxy_disabled=True)
+    assert out == {"proxy_disabled": True}
+
+
+def test_merge_runtime_ignores_unknown_overrides() -> None:
+    """Unknown kwargs don't leak into the merge output (so the result
+    can be splatted into ``build_micro_suite(**runtime)`` safely)."""
+    out = merge_runtime({"proxy_disabled": True}, future_flag="x")
+    assert out == {"proxy_disabled": True}
+
+
+def test_merge_runtime_output_splats_into_build_micro_suite(tmp_path: Path) -> None:
+    """End-to-end: load → merge → build_micro_suite consumes without
+    TypeError. Pins the contract callers depend on."""
+    p = _write_plan(tmp_path, {
+        "runtime": {"proxy_disabled": True, "max_cost": 3.0, "max_time_minutes": 15},
+        "steps": [{"intent": "go", "type": "navigate"}],
+    })
+    steps, plan_runtime = load_plan_file(p)
+    runtime = merge_runtime(plan_runtime)
+    suite = build_micro_suite(steps, "test_domain", **runtime)
+    assert suite["_proxy_disabled"] is True
+    assert suite["_max_cost"] == 3.0
+    assert suite["_max_time_minutes"] == 15
+
+
+def test_runtime_proxy_provider_flows_to_suite(tmp_path: Path) -> None:
+    """``proxy_provider`` declared in the plan lands on
+    ``task_suite['_proxy_provider']`` which Modal executors read at
+    submission time."""
+    p = _write_plan(tmp_path, {
+        "runtime": {"proxy_provider": "privateproxy", "proxy_city": "miami"},
+        "steps": [{"intent": "go", "type": "navigate"}],
+    })
+    steps, plan_runtime = load_plan_file(p)
+    runtime = merge_runtime(plan_runtime)
+    suite = build_micro_suite(steps, "luma", **runtime)
+    assert suite["_proxy_provider"] == "privateproxy"
+    assert suite["_proxy_city"] == "miami"
+
+
+def test_runtime_provider_override_wins() -> None:
+    """Submission-time ``proxy_provider`` beats the plan's choice."""
+    out = merge_runtime(
+        {"proxy_provider": "privateproxy"},
+        proxy_provider="oxylabs",
+    )
+    assert out["proxy_provider"] == "oxylabs"

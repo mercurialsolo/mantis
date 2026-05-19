@@ -1,0 +1,23 @@
+{
+  "runtime": {
+    "proxy_disabled": true,
+    "max_cost": 0.5,
+    "max_time_minutes": 5
+  },
+  "steps": [
+    {
+      "intent": "Open httpbin's public test form.",
+      "type": "navigate",
+      "url": "https://httpbin.org/forms/post"
+    },
+    {
+      "intent": "Fill out the customer name field with 'Test User'.",
+      "type": "fill_field",
+      "params": { "label": "Customer name", "value": "Test User" }
+    },
+    {
+      "intent": "Submit the form.",
+      "type": "submit"
+    }
+  ]
+}

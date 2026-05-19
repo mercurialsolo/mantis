@@ -265,12 +265,27 @@ class PureCUARequest(BaseModel):
         return self
 
 
-def validate_micro_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def validate_micro_steps(
+    plan: list[dict[str, Any]] | dict[str, Any],
+) -> list[dict[str, Any]]:
     """Validate a parsed micro-plan against MAX_STEPS / MAX_LOOP_ITERATIONS.
+
+    Accepts both shipped plan shapes — a bare array of step objects, or
+    the wrapped ``{"steps": [...], "runtime": {...}}`` form. Unknown
+    wrapper keys are tolerated (forward-compat with future top-level
+    fields like ``runtime``); only the step list is validated here.
 
     Returns the (possibly clamped) step list. Raises ValueError on hard
     violations (e.g., step count exceeds MAX_STEPS_PER_PLAN).
     """
+    if isinstance(plan, dict):
+        steps = plan.get("steps")
+        if not isinstance(steps, list):
+            raise ValueError(
+                "micro plan object must contain a 'steps' array"
+            )
+    else:
+        steps = plan
     if not isinstance(steps, list):
         raise ValueError("micro plan must be a JSON array of step objects")
     if len(steps) > MAX_STEPS_PER_PLAN:

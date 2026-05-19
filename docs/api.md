@@ -360,6 +360,25 @@ Key fields:
 | `loop_target` | Step index to jump back to. |
 | `loop_count` | Max loop iterations (clamped to `MANTIS_MAX_LOOP_ITERATIONS`). |
 
+#### Plan-level `runtime` defaults
+
+Plans can wrap the step list in `{steps, runtime}` so they declare their own proxy / cost / time defaults without every caller remembering the right submission flags:
+
+```jsonc
+{
+  "runtime": {
+    "proxy_disabled": false,
+    "proxy_provider": "privateproxy",
+    "proxy_city": "miami",
+    "max_cost": 3.0,
+    "max_time_minutes": 10
+  },
+  "steps": [ /* … */ ]
+}
+```
+
+Submission overrides win — an explicit `proxy_disabled: true` in the HTTP body beats `proxy_disabled: false` in the plan, but omitting the body field falls back to the plan default. Schema and field reference: [Plan formats → Declaring runtime defaults](getting-started/plan-formats.md#declaring-runtime-defaults-inside-the-plan).
+
 ### `task_suite` — multi-task JSON
 
 For Claude-CUA-style autonomous-per-task workflows (the existing
