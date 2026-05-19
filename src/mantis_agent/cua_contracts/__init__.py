@@ -47,8 +47,10 @@ Public surface:
 from __future__ import annotations
 
 from .adapters import (
+    DEFAULT_RETRY_BUDGET,
     action_result_from_action,
     classify_legacy_reversibility,
+    decide_recovery,
     observation_from_screenshot_ref,
     step_from_micro_intent,
     verdict_from_step_result,
@@ -65,6 +67,7 @@ from .types import (
     GroundingTrace,
     Observation,
     Plan,
+    RecoveryDecision,
     ReversibilityClass,
     SCHEMA_VERSION,
     Step,
@@ -85,9 +88,11 @@ __all__ = [
     "ActionResult",
     "ActionTyped",
     "ContractValidationError",
+    "DEFAULT_RETRY_BUDGET",
     "GroundingTrace",
     "Observation",
     "Plan",
+    "RecoveryDecision",
     "ReversibilityClass",
     "SCHEMA_VERSION",
     "Step",
@@ -100,6 +105,7 @@ __all__ = [
     "action_result_from_action",
     "classify_action",
     "classify_legacy_reversibility",
+    "decide_recovery",
     "is_irreversible",
     "observation_from_screenshot_ref",
     "step_from_micro_intent",

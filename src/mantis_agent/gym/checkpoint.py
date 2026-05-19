@@ -31,7 +31,8 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from ..actions import Action
 
 if TYPE_CHECKING:
-    from ..cua_contracts.types import Verdict
+    from ..cua_contracts.types import RecoveryDecision, Verdict
+    from .preview_gate import PreviewResult
 
 
 # ── Step result ──────────────────────────────────────────────────────────
@@ -90,6 +91,30 @@ class StepResult:
     # normalised recovery decisions) read against. Not persisted in
     # the checkpoint — resume re-derives it from the legacy fields.
     verdict: Verdict | None = field(default=None, repr=False, compare=False)
+
+    # #483 normalised recovery decision. Typed
+    # :class:`~..cua_contracts.types.RecoveryDecision` (advance /
+    # retry / replan / rollback / terminate) derived from the verdict
+    # + attempt index + step.required. Stamped alongside the verdict
+    # in run_executor; the existing retry / halt branches keep
+    # driving control flow off ``success`` + ``failure_class`` for
+    # back-compat, but metrics / dashboards / future planner layers
+    # read this typed slot to group failures by next-action without
+    # re-deriving from prose. Not persisted (resume re-derives).
+    recovery_decision: RecoveryDecision | None = field(
+        default=None, repr=False, compare=False,
+    )
+
+    # #482 pre-execution gate result. When the reversibility gate
+    # runs (env-opted-in + action is IRREVERSIBLE + a verifier is
+    # wired), the gate's :class:`PreviewResult` lands here so
+    # downstream consumers (result.json, canonical events, future
+    # HITL approval flows) see the gate's decision + evidence.
+    # ``None`` means the gate was skipped (default in production
+    # until #482 rolls out) or wasn't applicable to this step type.
+    preview_result: PreviewResult | None = field(
+        default=None, repr=False, compare=False,
+    )
 
     # #300 follow-up: which dispatch path executed the *primary* click /
     # input action for this step. ``"som"`` = CDP-anchored

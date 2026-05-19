@@ -288,6 +288,10 @@ class TrajectoryEmitter:
         # the emit hook fires.
         stamped = getattr(result, "verdict", None)
         verdict = stamped if stamped is not None else verdict_from_step_result(result)
+        # #483: forward the runner-stamped recovery decision when
+        # present. Empty when callers bypass the executor's stamp
+        # path; the field is optional on TrajectoryEvent.
+        recovery_decision = getattr(result, "recovery_decision", None)
         return TrajectoryEvent(
             schema_version=SCHEMA_VERSION,
             run_id=self.run_id,
@@ -297,6 +301,7 @@ class TrajectoryEmitter:
             observation=observation,
             action_result=action_result,
             verdict=verdict,
+            recovery_decision=recovery_decision,
             versions=dict(self.versions),
             latency_seconds=float(getattr(result, "duration", 0.0) or 0.0),
             cost_usd=float(cost_usd),

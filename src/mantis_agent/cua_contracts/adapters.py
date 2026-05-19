@@ -22,12 +22,21 @@ from typing import TYPE_CHECKING, Any
 from .types import (
     ActionResult,
     Observation,
+    RecoveryDecision,
     ReversibilityClass,
     SCHEMA_VERSION,
     Step,
     Verdict,
     VerdictKind,
 )
+
+
+# Default retry budget per step. Mirrors the existing runner's
+# ``REQUIRED step failed after 2 retries — HALTING`` behaviour: the
+# first attempt + 2 retries = 3 total attempts before a required step
+# terminates. Non-required steps share the same budget for v1; future
+# work can route per step-type budgets here.
+DEFAULT_RETRY_BUDGET: int = 3
 
 if TYPE_CHECKING:
     from ..actions import Action
@@ -198,6 +207,59 @@ def verdict_from_step_result(r: "StepResult") -> Verdict:
         evidence=str(getattr(r, "data", "") or ""),
         confidence=0.5 if kind == VerdictKind.RECOVERABLE else 0.9,
     )
+
+
+def decide_recovery(
+    verdict: Verdict,
+    *,
+    attempt_index: int = 0,
+    required: bool = False,
+    retry_budget: int = DEFAULT_RETRY_BUDGET,
+) -> RecoveryDecision:
+    """Project a typed verdict (+ runtime context) onto a typed
+    :class:`RecoveryDecision` (#483).
+
+    Mapping rules:
+
+    * ``VerdictKind.OK`` → :class:`RecoveryDecision.ADVANCE`. Happy
+      path — cursor moves to the next step regardless of attempt
+      count.
+    * ``VerdictKind.NON_RECOVERABLE`` →
+      :class:`RecoveryDecision.TERMINATE`. The runner can't usefully
+      retry these (cf_challenge, http_4xx, extractor_error,
+      budget_exceeded — per
+      :data:`_NON_RECOVERABLE_FAILURE_CLASSES`).
+    * ``VerdictKind.RECOVERABLE`` + attempts still in budget →
+      :class:`RecoveryDecision.RETRY`. The IntentRewriter /
+      agentic_recovery / preview-gate hint layers get another shot.
+    * ``VerdictKind.RECOVERABLE`` + attempts exhausted + ``required``
+      → :class:`RecoveryDecision.TERMINATE`. Mirrors the existing
+      "REQUIRED step failed after N retries — HALTING" behaviour.
+    * ``VerdictKind.RECOVERABLE`` + attempts exhausted + not
+      required → :class:`RecoveryDecision.ADVANCE`. The existing
+      runner skips past non-required failures rather than halting;
+      the typed decision matches that.
+
+    The pure-function adapter doesn't yet drive control flow — it
+    stamps a typed decision the runner / metrics / dashboards can
+    read. Existing retry / halt branches keep operating on
+    ``StepResult.success`` + ``failure_class``; future PRs migrate
+    them to read this field.
+
+    ``attempt_index`` is 0-based (first attempt = 0). The budget
+    check is ``attempts_so_far >= retry_budget - 1`` because the
+    current call is itself the ``attempt_index + 1``-th attempt.
+    """
+    if verdict.kind is VerdictKind.OK:
+        return RecoveryDecision.ADVANCE
+    if verdict.kind is VerdictKind.NON_RECOVERABLE:
+        return RecoveryDecision.TERMINATE
+    # RECOVERABLE — branch on retry budget + required.
+    attempts_so_far = max(0, int(attempt_index)) + 1
+    if attempts_so_far < max(1, int(retry_budget)):
+        return RecoveryDecision.RETRY
+    # Budget exhausted.
+    return RecoveryDecision.TERMINATE if required else RecoveryDecision.ADVANCE
 
 
 def observation_from_screenshot_ref(
