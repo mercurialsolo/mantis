@@ -162,6 +162,7 @@ class TrajectoryEmitter:
         url: str = "",
         viewport: tuple[int, int] = (0, 0),
         cost_usd: float = 0.0,
+        snapshot_id: str = "",
     ) -> bool:
         """Build + validate + persist a canonical event.
 
@@ -220,6 +221,7 @@ class TrajectoryEmitter:
                 screenshot_ref=screenshot_ref,
                 url=url, viewport=viewport,
                 cost_usd=cost_usd,
+                snapshot_id=snapshot_id,
             )
             validate_trajectory_event(event)
         except ContractValidationError as exc:
@@ -280,6 +282,7 @@ class TrajectoryEmitter:
         url: str,
         viewport: tuple[int, int],
         cost_usd: float,
+        snapshot_id: str = "",
     ) -> TrajectoryEvent:
         step_index = int(getattr(result, "step_index", -1))
         ref = screenshot_ref or self._placeholder_screenshot_ref(step_index)
@@ -295,11 +298,19 @@ class TrajectoryEmitter:
         # the action that drove this step; fall back to the explicit
         # ``action`` kwarg when the caller has a better signal.
         legacy_action = action if action is not None else getattr(result, "last_action", None)
+        # #484: snapshot_id from caller wins; otherwise pick up
+        # the runner's last-recorded sandbox snapshot (handlers
+        # that gated an irreversible action stash the snapshot
+        # there).
+        effective_snapshot_id = snapshot_id or str(
+            getattr(result, "snapshot_id", "") or "",
+        )
         action_result = action_result_from_action(
             legacy_action,
             dispatched=dispatched,
             dispatch_error=dispatch_error,
             grounding_trace=grounding_trace,
+            snapshot_id=effective_snapshot_id,
         )
         # Deterministic handlers (navigate / paginate / gate /
         # fill_field) don't synthesise an ``Action`` — they execute
@@ -318,6 +329,7 @@ class TrajectoryEmitter:
                     grounding_trace=action_result.grounding_trace,
                     dispatched=action_result.dispatched,
                     dispatch_error=action_result.dispatch_error,
+                    snapshot_id=action_result.snapshot_id,
                 )
         # #480: prefer the runner-stamped verdict (the structural
         # contract — every committed step carries one). Fall back to

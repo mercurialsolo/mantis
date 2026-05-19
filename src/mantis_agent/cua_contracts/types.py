@@ -150,6 +150,15 @@ class ActionResult:
     grounding_trace: dict[str, Any] = field(default_factory=dict)
     dispatched: bool = False                    # did the dispatcher commit the action?
     dispatch_error: str = ""                    # empty when dispatched=True
+    # #484 sandbox snapshot taken BEFORE this action dispatched.
+    # When the runner gates an irreversible action behind a
+    # snapshot, the resulting ``SandboxSnapshot.snapshot_id`` lands
+    # here so a failed action can be replayed against the pre-
+    # action state. Empty string when no snapshot was taken
+    # (reversible actions, no sandbox runtime wired, runtime
+    # declined to snapshot this state). The runtime owns the
+    # ``snapshot_id`` format — readers treat it as opaque.
+    snapshot_id: str = ""
 
 
 class GroundingTrace(TypedDict, total=False):
