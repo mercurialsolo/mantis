@@ -112,6 +112,7 @@ class TrajectoryEmitter:
         store_dir: str,
         *,
         versions: dict[str, str] | None = None,
+        observation_store: Any | None = None,
     ) -> None:
         if not run_id:
             raise ValueError("TrajectoryEmitter requires a non-empty run_id")
@@ -130,6 +131,12 @@ class TrajectoryEmitter:
         self.versions: dict[str, str] = dict(collect_versions())
         if versions:
             self.versions.update(versions)
+        # #485: optional :class:`ObservationStore`. When configured,
+        # emit() persists the step's screenshot bytes here and uses
+        # the returned ref on the canonical event. When unset, falls
+        # back to the synthetic ``placeholder://`` ref so legacy
+        # callers / tests continue to work.
+        self.observation_store: Any | None = observation_store
         self._jsonl_path: str = os.path.join(store_dir, JSONL_FILENAME)
         # Per-step attempt counter. Incremented on every emit for a
         # given ``step_index``; the next attempt's event carries the
@@ -178,6 +185,31 @@ class TrajectoryEmitter:
         """
         step_index = int(getattr(result, "step_index", -1))
         attempt_index = self._attempt_counts.get(step_index, 0)
+
+        # #485: when an observation_store is wired AND the caller
+        # didn't pass an explicit ``screenshot_ref``, persist the
+        # step's screenshot bytes to the store and use the returned
+        # content-addressed ref on the canonical event. Falls back
+        # to the placeholder when no store / no bytes — preserves
+        # existing behaviour for tests + legacy callers.
+        if not screenshot_ref and self.observation_store is not None:
+            screenshot_bytes = getattr(result, "screenshot_png", None)
+            if isinstance(screenshot_bytes, (bytes, bytearray)) and screenshot_bytes:
+                try:
+                    screenshot_ref = self.observation_store.put(
+                        bytes(screenshot_bytes),
+                        metadata={
+                            "run_id": self.run_id,
+                            "step_index": step_index,
+                            "attempt_index": attempt_index,
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001 — never block emit on store
+                    logger.warning(
+                        "trajectory emit step %d attempt %d: observation_store.put "
+                        "failed (%s) — falling back to placeholder ref",
+                        step_index, attempt_index, exc,
+                    )
 
         try:
             event = self._build_event(

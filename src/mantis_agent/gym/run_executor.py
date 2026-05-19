@@ -1682,10 +1682,38 @@ def _emit_canonical_trajectory_event(
                 versions = dict(override)
             else:
                 versions = collect_versions(runner)
+            # #485: observation store — when the runner has one
+            # explicitly configured, use it. Otherwise, default to
+            # a :class:`DiskObservationStore` rooted at
+            # ``<store_dir>/observations/`` so every canonical
+            # event lands with a real content-addressed
+            # ``sha256:<hex>`` ref the operator can resolve later
+            # (vs the synthetic ``placeholder://`` fallback).
+            #
+            # Defaulting here keeps the screenshot store + event
+            # stream colocated on the same persistent volume the
+            # canonical-events env knob already points at. Skip
+            # the default + return None on construction failure so
+            # the emitter still works (falls back to placeholder
+            # refs); observability mustn't block a run.
+            observation_store = getattr(runner, "observation_store", None)
+            if observation_store is None:
+                try:
+                    from ..cua_contracts import DiskObservationStore
+                    observation_store = DiskObservationStore(
+                        os.path.join(store_dir, "observations"),
+                    )
+                except Exception as exc:  # noqa: BLE001 — never break a run
+                    logger.debug(
+                        "default observation store init failed (%s) — "
+                        "falling back to placeholder refs", exc,
+                    )
+                    observation_store = None
             emitter = TrajectoryEmitter(
                 run_id=run_id,
                 store_dir=store_dir,
                 versions=versions,
+                observation_store=observation_store,
             )
         except Exception as exc:  # noqa: BLE001 — never break a run
             logger.debug("canonical event emitter init failed: %s", exc)
