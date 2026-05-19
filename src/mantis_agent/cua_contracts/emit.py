@@ -120,9 +120,16 @@ class TrajectoryEmitter:
         self.run_id = run_id
         self.store_dir = store_dir
         # ``versions`` is the slot for #487 / #488 stamps (planner /
-        # grounding / browser / sandbox). Empty dict is fine in v1 —
-        # the validator only requires presence, not contents.
-        self.versions: dict[str, str] = dict(versions or {})
+        # grounding / browser / sandbox). The validator requires
+        # ``action_ontology`` + ``contracts_schema`` on every event,
+        # so the emitter ALWAYS merges in the static stamps from
+        # :func:`.versions.collect_versions` even when the caller
+        # passes ``versions=None`` or an empty dict. Caller-supplied
+        # entries take precedence so tests can pin specific values.
+        from .versions import collect_versions
+        self.versions: dict[str, str] = dict(collect_versions())
+        if versions:
+            self.versions.update(versions)
         self._jsonl_path: str = os.path.join(store_dir, JSONL_FILENAME)
         # Per-step attempt counter. Incremented on every emit for a
         # given ``step_index``; the next attempt's event carries the

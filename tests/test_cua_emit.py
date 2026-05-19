@@ -256,16 +256,24 @@ def test_emit_carries_explicit_action(tmp_path: Path) -> None:
 
 def test_emit_carries_versions_dict(tmp_path: Path) -> None:
     """The versions slot (#487 / #488) round-trips so model / prompt
-    / browser stamps surface in every event."""
+    / browser stamps surface in every event. Caller-supplied entries
+    take precedence; the static stamps (#488 action_ontology +
+    contracts_schema) are auto-merged in by the emitter so the
+    validator's required-set is always satisfied."""
     emitter = TrajectoryEmitter(
         run_id="r1", store_dir=str(tmp_path),
-        versions={"planner": "claude-opus-4-7", "grounding": "claude-haiku-4-5"},
+        versions={"planner_model": "claude-opus-4-7", "grounding_model": "claude-haiku-4-5"},
     )
     emitter.emit(_intent(), _ok_step_result())
     record = json.loads((tmp_path / JSONL_FILENAME).read_text().strip())
-    assert record["versions"] == {
-        "planner": "claude-opus-4-7", "grounding": "claude-haiku-4-5",
-    }
+    # User-supplied entries surface verbatim.
+    assert record["versions"]["planner_model"] == "claude-opus-4-7"
+    assert record["versions"]["grounding_model"] == "claude-haiku-4-5"
+    # Auto-merged static stamps are also present so the validator
+    # accepts the event without the caller having to know about
+    # them.
+    assert "action_ontology" in record["versions"]
+    assert "contracts_schema" in record["versions"]
 
 
 def test_emit_returns_false_when_validation_fails(tmp_path: Path, caplog) -> None:

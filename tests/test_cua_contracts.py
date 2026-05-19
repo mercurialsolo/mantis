@@ -152,7 +152,14 @@ def _valid_event(**overrides) -> TrajectoryEvent:
             action_type="click", params={"x": 1, "y": 2}, dispatched=True,
         ),
         "verdict": Verdict(kind=VerdictKind.OK),
-        "versions": {"planner": "claude-opus-4-7"},
+        # #488 requires action_ontology + contracts_schema on every
+        # event; tests pin specific values so the validator's
+        # required-set behaviour is exercised end-to-end.
+        "versions": {
+            "action_ontology": "v1.21",
+            "contracts_schema": "v1",
+            "planner_model": "claude-opus-4-7",
+        },
     }
     base.update(overrides)
     return TrajectoryEvent(**base)
@@ -200,10 +207,46 @@ def test_trajectory_event_missing_versions_dict_rejected() -> None:
         validate_trajectory_event(_valid_event(versions=None))  # type: ignore[arg-type]
 
 
-def test_trajectory_event_empty_versions_dict_accepted() -> None:
-    """Empty versions dict is fine in v1 — the shape isn't pinned until
-    the version-stamping work lands. Presence is what matters."""
-    validate_trajectory_event(_valid_event(versions={}))
+def test_trajectory_event_empty_versions_dict_rejected() -> None:
+    """#488: empty versions dict is no longer acceptable — the
+    canonical writer must stamp ``action_ontology`` +
+    ``contracts_schema`` on every event so regression attribution
+    can answer 'did the ontology bump?' / 'did the contracts
+    package bump?' without spelunking deploy history."""
+    with pytest.raises(ContractValidationError, match="missing required keys"):
+        validate_trajectory_event(_valid_event(versions={}))
+
+
+def test_trajectory_event_missing_required_version_key_rejected() -> None:
+    """Single missing required key fails — the error lists which
+    so the writer's bug is obvious."""
+    with pytest.raises(ContractValidationError, match="contracts_schema"):
+        validate_trajectory_event(_valid_event(versions={
+            "action_ontology": "v1.21",
+            "planner_model": "claude-opus-4-7",
+        }))
+
+
+def test_trajectory_event_empty_version_value_rejected() -> None:
+    """Empty / whitespace values are rejected — readers must be
+    able to distinguish 'not stamped' (key absent) from 'stamped
+    as blank' (key present but value empty). The latter is a
+    writer bug; reject it at the boundary."""
+    with pytest.raises(ContractValidationError, match="empty"):
+        validate_trajectory_event(_valid_event(versions={
+            "action_ontology": "v1.21",
+            "contracts_schema": "v1",
+            "planner_model": "",
+        }))
+
+
+def test_trajectory_event_non_string_version_value_rejected() -> None:
+    with pytest.raises(ContractValidationError, match="must be str"):
+        validate_trajectory_event(_valid_event(versions={
+            "action_ontology": "v1.21",
+            "contracts_schema": "v1",
+            "planner_model": 4,  # type: ignore[dict-item]
+        }))
 
 
 def test_observation_inline_base64_blob_rejected() -> None:
