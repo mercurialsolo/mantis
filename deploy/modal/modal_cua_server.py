@@ -33,6 +33,7 @@ from mantis_agent.server_utils import (
     build_micro_suite,
     build_proxy_config,
     micro_plan_steps_to_dicts,
+    persist_run_artifacts,
     plan_signature_from_steps,
     safe_state_key,
     save_result_json,
@@ -1515,6 +1516,16 @@ def _read_viewer_url(tenant_id: str, run_id: str) -> str | None:
 def _write_result(tenant_id: str, run_id: str, result: dict) -> None:
     run_dir = _run_dir(tenant_id, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
+    # #508: materialize leads.csv / extracted_rows.csv / extracted_rows.json
+    # alongside result.json so the artifact endpoint can serve them by name.
+    # Best-effort — if any one file write fails we still persist result.json.
+    try:
+        file_artifacts = persist_run_artifacts(result, run_dir, run_id=run_id)
+        if file_artifacts:
+            result["artifacts"] = list(result.get("artifacts") or []) + file_artifacts
+    except Exception as exc:  # noqa: BLE001 — artifact write must never block result.json
+        # Modal suppresses INFO; use warning so this stays visible in `modal app logs`.
+        print(f"WARNING: persist_run_artifacts failed for {run_id}: {exc}")
     (run_dir / "result.json").write_text(json.dumps(result, indent=2))
     _commit_volume()
 
@@ -2002,6 +2013,41 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         tenant: TenantConfig = Depends(require_run_scope),
     ) -> dict:
         return _do_action({"action": "cancel", "run_id": run_id}, tenant)
+
+    # #508 artifact download. Allowlisted filenames so we never stream
+    # arbitrary files from the run dir; path-traversal guard via
+    # Path.resolve() to block ``..`` even if a future allowlist entry
+    # carries a slash. Mirrors the Baseten-side handler in
+    # ``baseten_server/routes.py``.
+    _ARTIFACT_ALLOWLIST = {
+        "leads.csv": "text/csv",
+        "extracted_rows.csv": "text/csv",
+        "extracted_rows.json": "application/json",
+        "result.json": "application/json",
+    }
+
+    @fastapi_app.get("/v1/runs/{run_id}/artifacts/{name}")
+    def get_run_artifact(
+        run_id: str,
+        name: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ):
+        from fastapi.responses import FileResponse
+
+        media_type = _ARTIFACT_ALLOWLIST.get(name)
+        if media_type is None:
+            raise HTTPException(status_code=404, detail=f"unknown artifact: {name}")
+        run_dir = _run_dir(tenant.tenant_id, run_id).resolve()
+        candidate = (run_dir / name).resolve()
+        try:
+            candidate.relative_to(run_dir)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid artifact name")
+        if not candidate.exists() or not candidate.is_file():
+            raise HTTPException(
+                status_code=404, detail=f"artifact not available: {name}",
+            )
+        return FileResponse(candidate, media_type=media_type, filename=name)
 
     return fastapi_app
 
