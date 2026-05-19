@@ -80,10 +80,13 @@ curl -X POST "$ENDPOINT/v1/cua" \
 | `max_cost` | `25.0` | USD cap (mostly informational — pure CUA spends nothing on Claude) |
 | `max_time_minutes` | `60` | Wall-clock cap; clamped against tenant cap |
 | `proxy_city` / `proxy_state` | unset | Geo override (allowlist-gated) |
+| `proxy_provider` | unset | `privateproxy` / `oxylabs` / `iproyal` — defaults to `MANTIS_PROXY_PROVIDER` env |
 | `proxy_disabled` | `false` | Skip the residential proxy entirely |
 | `record_video` | `false` | Capture screencast; fetch via `GET /v1/runs/{run_id}/video` |
 | `video_format` | `"mp4"` | One of `mp4`, `webm`, `gif` |
 | `video_fps` | `5` | Capture rate `[1, 30]` |
+
+The `proxy_*` / `max_cost` / `max_time_minutes` fields can also be declared inside a wrapped plan via the [`runtime` block](../getting-started/plan-formats.md#declaring-runtime-defaults-inside-the-plan). When both are set the HTTP body wins.
 
 ### Sync response
 
