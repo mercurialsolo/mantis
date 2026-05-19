@@ -429,6 +429,11 @@ class RunExecutor:
         # steps remain. Without this the gate had no signal and
         # Holo3 could claim whole-plan completion mid-step.
         runner.pending_form_labels = _pending_form_labels(plan, state.step_index)
+        # #479: clear any grounding-trace stashes left over from the
+        # prior step before the handler starts, so a step that
+        # doesn't run a grounding call can't accidentally inherit
+        # the prior step's trace via the provider's per-instance stash.
+        reset_grounding_trace_stashes(runner)
         pre_snapshot = step_snapshot.capture(runner)
         runner._pre_step_snapshot = pre_snapshot
         # Epic #377 follow-up (#381): read the browser's URL directly
@@ -1532,14 +1537,24 @@ def _emit_canonical_trajectory_event(
         runner._trajectory_emitter = emitter  # type: ignore[attr-defined]
     if emitter is False:
         return
-    # #479: harvest the latest grounding trace from the runner if a
-    # handler stashed one for this step. ``_latest_grounding_trace``
-    # is a runner attribute set by grounding-aware handlers (form /
-    # click) right before they return — the executor clears it after
-    # the emit so traces don't bleed across steps. Free-form dict in
-    # ``GroundingTrace`` shape — keys are documented but providers
-    # populate any subset.
-    grounding_trace = getattr(runner, "_latest_grounding_trace", None) or None
+    # #479: harvest the latest grounding trace for this step.
+    # Resolution order:
+    #   1. ``runner._latest_grounding_trace`` — explicitly stashed by
+    #      a handler that wants to control the exact payload (future
+    #      multi-provider / cross-handler trace composition).
+    #   2. ``runner.form_target_provider.last_grounding_trace`` —
+    #      auto-populated by every ``find_form_target`` call (the
+    #      pilot integration). ``reset_grounding_trace_stashes()``
+    #      clears this at the START of each step so a residual trace
+    #      from the prior step can't leak into the current event.
+    grounding_trace = (
+        getattr(runner, "_latest_grounding_trace", None)
+        or getattr(
+            getattr(runner, "form_target_provider", None),
+            "last_grounding_trace", None,
+        )
+        or None
+    )
     try:
         emitter.emit(step, step_result, grounding_trace=grounding_trace)
     except Exception as exc:  # noqa: BLE001 — never break a run
@@ -1548,6 +1563,31 @@ def _emit_canonical_trajectory_event(
     if grounding_trace is not None:
         try:
             runner._latest_grounding_trace = None  # type: ignore[attr-defined]
+            provider = getattr(runner, "form_target_provider", None)
+            if provider is not None:
+                provider.last_grounding_trace = None
+        except Exception:  # noqa: BLE001 — observability, never fatal
+            pass
+
+
+def reset_grounding_trace_stashes(runner: Any) -> None:
+    """Clear any stashed grounding traces before a step starts (#479).
+
+    Called by the executor at the top of the per-step branch so the
+    canonical event for step N carries ONLY traces produced by step
+    N's handlers — never residual data from step N-1. A no-op when
+    the runner doesn't have the attributes (legacy GymRunner, test
+    hosts).
+    """
+    for attr in ("_latest_grounding_trace",):
+        try:
+            setattr(runner, attr, None)
+        except Exception:  # noqa: BLE001 — observability, never fatal
+            pass
+    provider = getattr(runner, "form_target_provider", None)
+    if provider is not None:
+        try:
+            provider.last_grounding_trace = None
         except Exception:  # noqa: BLE001 — observability, never fatal
             pass
 

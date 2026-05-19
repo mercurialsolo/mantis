@@ -317,6 +317,66 @@ def test_executor_hook_forwards_runner_stashed_trace(
     assert trace["dispatch_strategy"] == "som_click"
 
 
+def test_executor_hook_harvests_from_form_target_provider_stash(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Pilot path: when a handler called find_form_target, the
+    provider stashes the trace on itself. The executor's emit hook
+    auto-harvests from ``runner.form_target_provider.last_grounding_trace``
+    even when no explicit ``runner._latest_grounding_trace`` is set.
+    Confirms the wiring caught during PR #492's Modal verify (no
+    handler-side changes needed in form.py)."""
+    monkeypatch.setenv("MANTIS_CANONICAL_EVENTS_DIR", str(tmp_path))
+
+    class _Provider:
+        last_grounding_trace = {
+            "provider": "claude_form_target",
+            "model_version": "claude-haiku-4-5-20251001",
+            "target_label": "Login",
+            "coordinates": (753, 418),
+            "dispatch_strategy": "som_click",
+        }
+
+    class _Runner:
+        run_id = "provider_stash_test"
+        form_target_provider = _Provider()
+
+    runner = _Runner()
+    r = _ok_result(index=0)
+    _stamp_verdict(r)
+    _emit_canonical_trajectory_event(runner, _intent("submit"), r)
+
+    # Provider stash cleared after emit so step N+1 can't inherit it.
+    assert runner.form_target_provider.last_grounding_trace is None
+
+    record = json.loads(
+        (tmp_path / "provider_stash_test" / JSONL_FILENAME).read_text().strip(),
+    )
+    trace = record["action_result"]["grounding_trace"]
+    assert trace["provider"] == "claude_form_target"
+    assert trace["coordinates"] == [753, 418]
+    assert trace["target_label"] == "Login"
+
+
+def test_reset_grounding_trace_stashes_clears_both_stashes() -> None:
+    """The pre-step reset must clear both the explicit runner stash
+    and the per-provider stash so a leftover trace from step N-1
+    can't bleed into step N's canonical event."""
+    from mantis_agent.gym.run_executor import reset_grounding_trace_stashes
+
+    class _Provider:
+        last_grounding_trace = {"provider": "stale", "target_label": "old"}
+
+    class _Runner:
+        _latest_grounding_trace = {"provider": "also_stale"}
+        form_target_provider = _Provider()
+
+    runner = _Runner()
+    reset_grounding_trace_stashes(runner)
+    assert runner._latest_grounding_trace is None
+    assert runner.form_target_provider.last_grounding_trace is None
+
+
 def test_executor_hook_empty_trace_when_runner_did_not_stash(
     monkeypatch, tmp_path: Path,
 ) -> None:
