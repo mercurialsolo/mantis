@@ -1462,9 +1462,22 @@ def _emit_canonical_trajectory_event(
         return
     emitter = getattr(runner, "_trajectory_emitter", None)
     if emitter is None:
+        # Resolution order:
+        #  1. ``runner.run_id``       — explicit API path
+        #  2. ``runner._run_id``      — legacy/private alias
+        #  3. ``runner.run_key``      — MicroPlanRunner's primary
+        #     identifier (workflow_id or session_name, set by every
+        #     in-process construction in cli.py / modal_cua_server.py /
+        #     baseten runtime / graph learner). This is the right
+        #     fallback for the Modal holo3 path — its outer
+        #     ``run_id`` is only available inside the function scope,
+        #     not on the runner instance.
+        #  4. "local_run"             — last-resort placeholder so the
+        #     emitter constructor doesn't refuse a no-id local script.
         run_id = (
             str(getattr(runner, "run_id", "") or "")
             or str(getattr(runner, "_run_id", "") or "")
+            or str(getattr(runner, "run_key", "") or "")
             or "local_run"
         )
         # ``base_dir`` is the *root* across all runs; the per-run

@@ -353,6 +353,33 @@ def test_run_executor_hook_idempotent_across_retry(
     assert len(jsonl) == 1  # only the first emit landed
 
 
+def test_run_executor_hook_uses_run_key_when_run_id_absent(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """MicroPlanRunner exposes ``run_key`` (workflow_id or session_name)
+    but not ``run_id``. The hook's resolution order falls through to
+    ``run_key`` so Modal holo3 runs land under a meaningful directory
+    instead of the ``local_run`` placeholder."""
+    from mantis_agent.gym.run_executor import _emit_canonical_trajectory_event
+
+    monkeypatch.setenv("MANTIS_CANONICAL_EVENTS_DIR", str(tmp_path))
+
+    class _MicroRunnerLike:
+        # No ``run_id`` / ``_run_id`` — the holo3 modal path only
+        # exposes ``run_key``.
+        run_key = "pr491-staffcrm-1234567890"
+
+    runner = _MicroRunnerLike()
+    _emit_canonical_trajectory_event(runner, _intent(), _ok_step_result(index=0))
+
+    jsonl = (
+        tmp_path / "pr491-staffcrm-1234567890" / JSONL_FILENAME
+    ).read_text(encoding="utf-8").splitlines()
+    assert len(jsonl) == 1
+    record = json.loads(jsonl[0])
+    assert record["run_id"] == "pr491-staffcrm-1234567890"
+
+
 def test_run_executor_hook_falls_back_to_default_run_id(
     monkeypatch, tmp_path: Path,
 ) -> None:
