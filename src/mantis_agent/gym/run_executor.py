@@ -1682,10 +1682,17 @@ def _emit_canonical_trajectory_event(
                 versions = dict(override)
             else:
                 versions = collect_versions(runner)
+            # #485: optional observation store — when the runner
+            # has one configured, the emitter persists each step's
+            # screenshot bytes and stamps a content-addressed ref
+            # instead of the synthetic placeholder. Unset on the
+            # default path → existing behaviour preserved.
+            observation_store = getattr(runner, "observation_store", None)
             emitter = TrajectoryEmitter(
                 run_id=run_id,
                 store_dir=store_dir,
                 versions=versions,
+                observation_store=observation_store,
             )
         except Exception as exc:  # noqa: BLE001 — never break a run
             logger.debug("canonical event emitter init failed: %s", exc)
