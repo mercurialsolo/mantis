@@ -122,44 +122,71 @@ def test_emit_writes_one_validated_jsonl_line(tmp_path: Path) -> None:
     assert record["committed"] is True
 
 
-def test_emit_idempotent_on_same_step_index(tmp_path: Path) -> None:
-    """Acceptance criterion: every completed step emits exactly one
-    canonical event, even across retries."""
+def test_emit_per_attempt_with_incremented_attempt_index(tmp_path: Path) -> None:
+    """Each emit() call for the same step_index appends a fresh
+    record with attempt_index = 0, 1, 2, ... Readers reconstruct the
+    final outcome by taking the highest attempt_index per step."""
     emitter = TrajectoryEmitter(run_id="r1", store_dir=str(tmp_path))
     intent = _intent()
-    r0 = _ok_step_result(index=0)
 
-    assert emitter.emit(intent, r0) is True
-    # Same key — must not append a second line.
-    assert emitter.emit(intent, r0) is False
-    # Different StepResult instance, same step_index — also a no-op.
-    r0_retry = _ok_step_result(index=0, data="rerun-evidence")
-    assert emitter.emit(intent, r0_retry) is False
-
-    lines = (tmp_path / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-
-
-def test_emit_resume_loads_existing_indices(tmp_path: Path) -> None:
-    """Acceptance criterion: idempotent across restarts. A new
-    emitter pointed at an existing JSONL must pick up the prior
-    indices and refuse to re-emit them."""
-    first = TrajectoryEmitter(run_id="r1", store_dir=str(tmp_path))
-    intent = _intent()
-    first.emit(intent, _ok_step_result(index=0))
-    first.emit(intent, _ok_step_result(index=1))
-    assert first.emitted_indices() == {0, 1}
-
-    # Simulate a process restart — fresh emitter, same store_dir.
-    resumed = TrajectoryEmitter(run_id="r1", store_dir=str(tmp_path))
-    assert resumed.emitted_indices() == {0, 1}
-    # Trying to re-emit index 0 is a no-op.
-    assert resumed.emit(intent, _ok_step_result(index=0)) is False
-    # Index 2 is fresh — appends normally.
-    assert resumed.emit(intent, _ok_step_result(index=2)) is True
+    # Three attempts at step 0: fail → fail → ok.
+    assert emitter.emit(intent, _fail_step_result(index=0, failure_class="selector_miss")) is True
+    assert emitter.emit(intent, _fail_step_result(index=0, failure_class="no_state_change")) is True
+    assert emitter.emit(intent, _ok_step_result(index=0)) is True
 
     lines = (tmp_path / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
     assert len(lines) == 3
+    records = [json.loads(line) for line in lines]
+    # Same step_index across all three; attempt_index counts up.
+    assert [r["step_index"] for r in records] == [0, 0, 0]
+    assert [r["attempt_index"] for r in records] == [0, 1, 2]
+    # Final verdict (highest attempt) is OK; the retry path is fully
+    # captured for post-mortem.
+    assert records[-1]["verdict"]["kind"] == "ok"
+    assert records[0]["verdict"]["reason"] == "selector_miss"
+    assert records[1]["verdict"]["reason"] == "no_state_change"
+
+
+def test_emit_attempt_count_exposed_for_each_step(tmp_path: Path) -> None:
+    emitter = TrajectoryEmitter(run_id="r1", store_dir=str(tmp_path))
+    assert emitter.attempt_count(0) == 0
+    emitter.emit(_intent(), _fail_step_result(index=0))
+    emitter.emit(_intent(), _ok_step_result(index=0))
+    emitter.emit(_intent(), _ok_step_result(index=1))
+    assert emitter.attempt_count(0) == 2
+    assert emitter.attempt_count(1) == 1
+    # Unseen step_index: zero attempts.
+    assert emitter.attempt_count(99) == 0
+
+
+def test_emit_resume_continues_attempt_numbering(tmp_path: Path) -> None:
+    """Acceptance criterion: idempotent across restarts — but in
+    per-attempt semantics that means the resumed emitter continues
+    numbering past the prior process's last attempt, so readers see
+    one contiguous attempt sequence per step."""
+    first = TrajectoryEmitter(run_id="r1", store_dir=str(tmp_path))
+    intent = _intent()
+    first.emit(intent, _fail_step_result(index=0))   # attempt 0
+    first.emit(intent, _ok_step_result(index=0))     # attempt 1
+    first.emit(intent, _ok_step_result(index=1))     # attempt 0
+    assert first.attempt_count(0) == 2
+    assert first.attempt_count(1) == 1
+
+    # Simulate a process restart — fresh emitter, same store_dir.
+    resumed = TrajectoryEmitter(run_id="r1", store_dir=str(tmp_path))
+    assert resumed.attempt_count(0) == 2
+    assert resumed.attempt_count(1) == 1
+    # Resumed emits continue the count, not reset.
+    resumed.emit(intent, _ok_step_result(index=0))   # attempt 2
+    resumed.emit(intent, _ok_step_result(index=2))   # attempt 0
+
+    lines = (tmp_path / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 5
+    records = [json.loads(line) for line in lines]
+    step_zero_attempts = [
+        r["attempt_index"] for r in records if r["step_index"] == 0
+    ]
+    assert step_zero_attempts == [0, 1, 2]
 
 
 def test_emit_tolerates_partial_trailing_line(tmp_path: Path) -> None:
@@ -174,7 +201,7 @@ def test_emit_tolerates_partial_trailing_line(tmp_path: Path) -> None:
     jsonl.write_text(valid_line + "\n{ partial-broken-json", encoding="utf-8")
 
     emitter = TrajectoryEmitter(run_id="r1", store_dir=str(tmp_path))
-    assert emitter.emitted_indices() == {0}
+    assert emitter.attempt_count(0) == 1
     # The corrupt trailing line stopped resume scanning early; new
     # emits append past the partial without raising.
     assert emitter.emit(_intent(), _ok_step_result(index=1)) is True
@@ -333,11 +360,14 @@ def test_run_executor_hook_isolates_per_run_directories(
     assert (tmp_path / "run_b" / JSONL_FILENAME).exists()
 
 
-def test_run_executor_hook_idempotent_across_retry(
+def test_run_executor_hook_records_retry_as_separate_attempt(
     monkeypatch, tmp_path: Path,
 ) -> None:
-    """A retry / demote / recovery branch can run the executor helper
-    twice on the same logical step; the second emit must be a no-op."""
+    """A retry / demote / recovery branch runs the executor helper
+    twice on the same logical step. Both attempts must land in the
+    JSONL with distinct attempt_index values — readers take the
+    highest attempt as the final outcome (fixing the pre-fix bug
+    where the first FAIL hid a successful retry)."""
     from mantis_agent.gym.run_executor import _emit_canonical_trajectory_event
 
     monkeypatch.setenv("MANTIS_CANONICAL_EVENTS_DIR", str(tmp_path))
@@ -346,11 +376,19 @@ def test_run_executor_hook_idempotent_across_retry(
         run_id = "retry_test"
 
     runner = _Runner()
+    _emit_canonical_trajectory_event(
+        runner, _intent(), _fail_step_result(index=0, failure_class="no_state_change"),
+    )
     _emit_canonical_trajectory_event(runner, _intent(), _ok_step_result(index=0))
-    _emit_canonical_trajectory_event(runner, _intent(), _fail_step_result(index=0))
 
-    jsonl = (tmp_path / "retry_test" / JSONL_FILENAME).read_text(encoding="utf-8").splitlines()
-    assert len(jsonl) == 1  # only the first emit landed
+    jsonl = (
+        tmp_path / "retry_test" / JSONL_FILENAME
+    ).read_text(encoding="utf-8").splitlines()
+    records = [json.loads(line) for line in jsonl]
+    assert len(records) == 2
+    assert [r["attempt_index"] for r in records] == [0, 1]
+    assert records[0]["verdict"]["kind"] == "recoverable"
+    assert records[1]["verdict"]["kind"] == "ok"
 
 
 def test_run_executor_hook_uses_run_key_when_run_id_absent(

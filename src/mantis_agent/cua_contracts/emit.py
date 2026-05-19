@@ -124,7 +124,13 @@ class TrajectoryEmitter:
         # the validator only requires presence, not contents.
         self.versions: dict[str, str] = dict(versions or {})
         self._jsonl_path: str = os.path.join(store_dir, JSONL_FILENAME)
-        self._emitted_indices: set[int] = set()
+        # Per-step attempt counter. Incremented on every emit for a
+        # given ``step_index``; the next attempt's event carries the
+        # incremented value so readers can take the highest attempt
+        # per step as the final outcome. Populated from the existing
+        # JSONL on init so resumed runs continue numbering past the
+        # prior process's last attempt.
+        self._attempt_counts: dict[int, int] = {}
         self._load_existing()
 
     # ── Public API ─────────────────────────────────────────────────
@@ -145,28 +151,30 @@ class TrajectoryEmitter:
     ) -> bool:
         """Build + validate + persist a canonical event.
 
-        Returns ``True`` on a fresh emit, ``False`` on duplicate or
-        validation / IO failure. The runner treats the boolean as
-        diagnostic — emit is a side channel.
+        Returns ``True`` on a successful emit, ``False`` on validation
+        / IO failure. The runner treats the boolean as diagnostic —
+        emit is a side channel and never blocks.
 
-        Idempotency is keyed on ``(run_id, step.step_index)``; a
-        second call with the same index is a silent no-op so handlers
-        that retry / replan / demote a step don't double-record.
+        Per-attempt semantics: each call appends a fresh record with
+        an incremented ``attempt_index`` for that ``step_index``. A
+        step that fails → retries → succeeds produces two records
+        (attempt 0 = fail, attempt 1 = ok); readers reconstruct the
+        final outcome by taking the highest attempt per
+        ``(run_id, step_index)``.
 
         ``screenshot_ref`` defaults to a synthetic
-        ``step_<index>_<run_id>`` placeholder when the caller doesn't
-        have a real reference. The placeholder is short + non-base64,
-        so the validator accepts it; the placeholder makes the JSONL
-        self-contained pending the #479 grounding-trace integration
-        that will plumb real screenshot refs.
+        ``placeholder://<run_id>/step_<index>.png`` value when the
+        caller doesn't have a real reference. The placeholder is
+        short + non-base64 so the validator accepts it; the JSONL
+        stays self-contained pending the #479 grounding-trace
+        integration that will plumb real screenshot refs.
         """
         step_index = int(getattr(result, "step_index", -1))
-        if step_index in self._emitted_indices:
-            return False
+        attempt_index = self._attempt_counts.get(step_index, 0)
 
         try:
             event = self._build_event(
-                step, result,
+                step, result, attempt_index,
                 action=action, dispatched=dispatched,
                 dispatch_error=dispatch_error,
                 grounding_trace=grounding_trace,
@@ -177,14 +185,14 @@ class TrajectoryEmitter:
             validate_trajectory_event(event)
         except ContractValidationError as exc:
             logger.warning(
-                "trajectory emit step %d: validation failed: %s",
-                step_index, exc,
+                "trajectory emit step %d attempt %d: validation failed: %s",
+                step_index, attempt_index, exc,
             )
             return False
         except Exception as exc:  # noqa: BLE001 — never break a run
             logger.warning(
-                "trajectory emit step %d: build raised: %s",
-                step_index, exc,
+                "trajectory emit step %d attempt %d: build raised: %s",
+                step_index, attempt_index, exc,
             )
             return False
 
@@ -192,12 +200,12 @@ class TrajectoryEmitter:
             self._append(event)
         except OSError as exc:
             logger.warning(
-                "trajectory emit step %d: append failed (%s): %s",
-                step_index, self._jsonl_path, exc,
+                "trajectory emit step %d attempt %d: append failed (%s): %s",
+                step_index, attempt_index, self._jsonl_path, exc,
             )
             return False
 
-        self._emitted_indices.add(step_index)
+        self._attempt_counts[step_index] = attempt_index + 1
         return True
 
     @property
@@ -208,9 +216,14 @@ class TrajectoryEmitter:
 
     def emitted_indices(self) -> set[int]:
         """Snapshot of step indices already persisted for this run.
-        Useful for assertions in tests + for the runner to skip
-        re-emitting on resume."""
-        return set(self._emitted_indices)
+        Useful for assertions in tests + for the runner to know
+        which steps have been recorded at least once."""
+        return set(self._attempt_counts)
+
+    def attempt_count(self, step_index: int) -> int:
+        """How many attempts have been emitted for ``step_index``.
+        Includes attempts loaded from the existing JSONL on init."""
+        return self._attempt_counts.get(step_index, 0)
 
     # ── Internal helpers ───────────────────────────────────────────
 
@@ -218,6 +231,7 @@ class TrajectoryEmitter:
         self,
         step: "MicroIntent",
         result: "StepResult",
+        attempt_index: int,
         *,
         action: "Action | None",
         dispatched: bool,
@@ -270,6 +284,7 @@ class TrajectoryEmitter:
             schema_version=SCHEMA_VERSION,
             run_id=self.run_id,
             step_index=step_index,
+            attempt_index=attempt_index,
             step=step_from_micro_intent(step),
             observation=observation,
             action_result=action_result,
@@ -300,9 +315,14 @@ class TrajectoryEmitter:
             f.write(line + "\n")
 
     def _load_existing(self) -> None:
-        """Populate ``_emitted_indices`` from a prior run's JSONL.
+        """Populate ``_attempt_counts`` from a prior run's JSONL.
 
         Resume case (#478 acceptance: idempotent across restarts).
+        Counts the prior process's attempts per step_index so the
+        new process's emits continue numbering past them — readers
+        see one contiguous attempt sequence per step regardless of
+        how many process restarts produced it.
+
         A trailing partial line — possible if the writer crashed
         mid-flush — is tolerated: we read what JSON we can and ignore
         the rest. Subsequent emits will append clean records past
@@ -326,4 +346,6 @@ class TrajectoryEmitter:
                     break
                 idx = record.get("step_index")
                 if isinstance(idx, int) and idx >= 0:
-                    self._emitted_indices.add(idx)
+                    # Counting attempts here (not max+1) since the
+                    # next emit increments naturally from the count.
+                    self._attempt_counts[idx] = self._attempt_counts.get(idx, 0) + 1

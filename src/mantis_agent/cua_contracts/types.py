@@ -195,8 +195,12 @@ class TaskSpec:
 class TrajectoryEvent:
     """Canonical per-step event (#478).
 
-    Emitted exactly once per completed step, after the verdict is
-    recorded and before the cursor advances. The validator pins:
+    Emitted once per **attempt** (each StepResult the runner
+    produces) — including retries / recovery / demotion. Readers
+    reconstruct the "final outcome" for a step by taking the record
+    with the highest ``attempt_index`` per ``(run_id, step_index)``.
+
+    The validator pins:
 
     * non-zero ``schema_version`` + ``run_id`` + ``step_index`` —
       otherwise the event isn't addressable.
@@ -216,6 +220,12 @@ class TrajectoryEvent:
     schema_version: int = SCHEMA_VERSION
     run_id: str = ""
     step_index: int = -1
+    # 0 for the first attempt at this step_index; incremented per
+    # retry / recovery / demote re-emission. Readers take the record
+    # with the highest ``attempt_index`` per ``(run_id, step_index)``
+    # as the final outcome. Default 0 keeps the field additive-with-
+    # default so v1 consumers that don't know about it stay valid.
+    attempt_index: int = 0
     step: Step | None = None
     observation: Observation | None = None
     action_result: ActionResult | None = None
