@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from mantis_agent import task_loop
 from mantis_agent.gym import runner as runner_module
 from mantis_agent.gym import workflow_runner
@@ -219,3 +221,160 @@ def test_standard_task_uses_small_default_step_cap(monkeypatch, tmp_path) -> Non
     task_loop.run_task_loop([{"task_id": "submit", "intent": "click submit"}], config)
 
     assert captured == [15]
+
+
+# ── #350: per-task CostMeter snapshot/delta ─────────────────────────────
+
+
+def test_standard_task_attaches_per_task_costs(monkeypatch, tmp_path) -> None:
+    """Each standard task's detail dict carries a ``costs`` entry
+    summed across primary + fallback + resume runners."""
+    from mantis_agent.gym.cost_meter import CostMeter
+
+    class FakeEnv:
+        current_url = "https://example.test/"
+
+    class FakeGymRunner:
+        # Each instance starts with its own fresh meter, then we
+        # pre-seed it so the run() call returns a known cost shape.
+        def __init__(self, *, brain, **_kwargs):
+            self.brain = brain
+            self.cost_meter = CostMeter()
+            # 4 brain steps for primary, 2 for any non-primary runner.
+            self._seed_steps = 4 if brain == "holo3" else 2
+
+        def run(self, **_kwargs):
+            self.cost_meter.costs["gpu_steps"] += self._seed_steps
+            self.cost_meter.costs["gpu_seconds"] += float(self._seed_steps)
+            return SimpleNamespace(
+                success=True,
+                total_steps=self._seed_steps,
+                termination_reason="done",
+                trajectory=[],
+            )
+
+    monkeypatch.setattr(runner_module, "GymRunner", FakeGymRunner)
+
+    config = task_loop.TaskLoopConfig(
+        run_id="run",
+        session_name="session",
+        model_name="model",
+        results_prefix="test",
+        brain="holo3",
+        env=FakeEnv(),
+        results_dir=str(tmp_path),
+    )
+
+    scores, details = task_loop.run_task_loop(
+        [
+            {"task_id": "submit_1", "intent": "click submit"},
+            {"task_id": "submit_2", "intent": "click submit"},
+        ],
+        config,
+    )
+
+    assert scores == [1.0, 1.0]
+    # Each task gets its own cost dict — meters don't leak across tasks.
+    for d in details:
+        assert "costs" in d
+        assert d["costs"]["gpu_steps"] == 4
+        assert d["costs"]["gpu_seconds"] == pytest.approx(4.0)
+        assert d["costs"]["total"] == pytest.approx(d["costs"]["gpu"])
+        assert d["costs"]["gpu"] > 0
+
+
+def test_standard_task_costs_sum_fallback_and_resume_runners(
+    monkeypatch, tmp_path
+) -> None:
+    """Primary failure → micro-fallback + resume both bill into the
+    same per-task costs entry (no cost gets dropped on the floor)."""
+    from mantis_agent.gym.cost_meter import CostMeter
+
+    class FakeEnv:
+        current_url = "https://example.test/"
+
+    class FakeGymRunner:
+        def __init__(self, *, brain, **_kwargs):
+            self.brain = brain
+            self.cost_meter = CostMeter()
+            self._seed = {"holo3": 3, "claude": 5}.get(brain, 1)
+
+        def run(self, **kwargs):
+            self.cost_meter.costs["gpu_steps"] += self._seed
+            self.cost_meter.costs["gpu_seconds"] += float(self._seed)
+            success = self.brain == "claude" or "resume_after" in kwargs["task_id"]
+            return SimpleNamespace(
+                success=success,
+                total_steps=self._seed,
+                termination_reason="done" if success else "loop",
+                trajectory=[],
+            )
+
+    monkeypatch.setattr(runner_module, "GymRunner", FakeGymRunner)
+
+    config = task_loop.TaskLoopConfig(
+        run_id="run",
+        session_name="session",
+        model_name="model",
+        results_prefix="test",
+        brain="holo3",
+        fallback_brain="claude",
+        fallback_label="claude",
+        fallback_micro_retries=1,
+        fallback_micro_max_steps=5,
+        env=FakeEnv(),
+        results_dir=str(tmp_path),
+    )
+
+    _scores, details = task_loop.run_task_loop(
+        [{"task_id": "fill_filters", "intent": "fill filters"}],
+        config,
+    )
+
+    # primary holo3 (3) + claude micro-fallback (5) + resume holo3 (3) = 11
+    assert details[0]["costs"]["gpu_steps"] == 11
+    assert details[0]["costs"]["gpu_seconds"] == pytest.approx(11.0)
+
+
+def test_failed_task_still_carries_costs(monkeypatch, tmp_path) -> None:
+    """A primary-only failure must still attribute the spend it
+    incurred (failures cost real money too)."""
+    from mantis_agent.gym.cost_meter import CostMeter
+
+    class FakeEnv:
+        current_url = "https://example.test/"
+
+    class FakeGymRunner:
+        def __init__(self, **_kwargs):
+            self.cost_meter = CostMeter()
+
+        def run(self, **_kwargs):
+            self.cost_meter.costs["gpu_steps"] += 2
+            self.cost_meter.costs["gpu_seconds"] += 6.0
+            return SimpleNamespace(
+                success=False,
+                total_steps=2,
+                termination_reason="loop",
+                trajectory=[],
+            )
+
+    monkeypatch.setattr(runner_module, "GymRunner", FakeGymRunner)
+
+    config = task_loop.TaskLoopConfig(
+        run_id="run",
+        session_name="session",
+        model_name="model",
+        results_prefix="test",
+        brain="holo3",
+        env=FakeEnv(),
+        results_dir=str(tmp_path),
+    )
+
+    _scores, details = task_loop.run_task_loop(
+        [{"task_id": "submit", "intent": "click submit"}],
+        config,
+    )
+
+    assert details[0]["success"] is False
+    assert details[0]["costs"]["gpu_steps"] == 2
+    assert details[0]["costs"]["gpu_seconds"] == pytest.approx(6.0)

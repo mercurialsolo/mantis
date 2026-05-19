@@ -255,3 +255,73 @@ def test_brain_escalation_metric_increments_on_ladder_think():
         tenant_id="", from_brain="primary", to_brain="fallback",
     )
     assert after_fallback - before_fallback == pytest.approx(1.0)
+
+
+# ── #349: terminal RUN_COST_USD + RUN_DURATION_SECONDS histograms ─────
+
+
+def _histogram_count(histogram, **labels) -> float:
+    try:
+        sample = histogram.labels(**labels)
+        return sample._sum.get()
+    except Exception:
+        return 0.0
+
+
+def test_final_summary_emits_terminal_histograms_when_tenant_set():
+    """``final_summary`` must observe both histograms with the same
+    label set as the inflight gauge so dashboards align."""
+    import time as _time
+
+    from mantis_agent.gym._runner_helpers import final_summary
+    from mantis_agent.gym.cost_meter import CostMeter
+    from mantis_agent.metrics import RUN_COST_USD, RUN_DURATION_SECONDS
+
+    runner = MagicMock()
+    runner.tenant_id = "tenant-final-A"
+    runner.model_name = "holo3"
+    runner._final_status = "completed"
+    runner._run_start = _time.time() - 5.0
+    runner.checkpoint_path = ""
+    runner.cost_meter = CostMeter(tenant_id="tenant-final-A")
+    runner.cost_meter.costs["gpu_seconds"] = 60.0
+    runner.costs = runner.cost_meter.costs
+    runner.time_meter = None
+
+    labels = {"tenant_id": "tenant-final-A", "model": "holo3", "status": "completed"}
+    cost_before = _histogram_count(RUN_COST_USD, **labels)
+    dur_before = _histogram_count(RUN_DURATION_SECONDS, **labels)
+
+    final_summary(runner, results=[])
+
+    cost_after = _histogram_count(RUN_COST_USD, **labels)
+    dur_after = _histogram_count(RUN_DURATION_SECONDS, **labels)
+    # 60s at $3.25/hr = $0.0542 — observed exactly once.
+    assert cost_after - cost_before == pytest.approx(0.054166666, rel=1e-3)
+    assert dur_after - dur_before >= 5.0
+
+
+def test_final_summary_skips_histograms_without_tenant_id():
+    """Local / script runs (no tenant_id) must not pollute the
+    registry with default-label series."""
+    import time as _time
+
+    from mantis_agent.gym._runner_helpers import final_summary
+    from mantis_agent.gym.cost_meter import CostMeter
+    from mantis_agent.metrics import RUN_COST_USD
+
+    runner = MagicMock()
+    runner.tenant_id = ""  # explicit empty
+    runner.model_name = "holo3"
+    runner._final_status = "completed"
+    runner._run_start = _time.time() - 1.0
+    runner.checkpoint_path = ""
+    runner.cost_meter = CostMeter(tenant_id="")
+    runner.costs = runner.cost_meter.costs
+    runner.time_meter = None
+
+    labels = {"tenant_id": "", "model": "holo3", "status": "completed"}
+    before = _histogram_count(RUN_COST_USD, **labels)
+    final_summary(runner, results=[])
+    after = _histogram_count(RUN_COST_USD, **labels)
+    assert after == before

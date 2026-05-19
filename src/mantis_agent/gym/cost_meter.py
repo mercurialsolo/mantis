@@ -4,7 +4,11 @@ micro_runner.py (#115, step 3).
 Tracks four counters per run:
 
 * ``gpu_steps``       — number of brain-driven steps
-* ``gpu_seconds``     — derived from ``gpu_steps * cost_config.gpu_seconds_per_step``
+* ``gpu_seconds``     — actual brain-inference wall time from
+  :class:`~.time_meter.TimeMeter`'s ``think`` bucket when a meter
+  is wired (#351). Falls back to the legacy synthetic
+  ``gpu_steps * cost_config.gpu_seconds_per_step`` when no meter
+  is available (tests, legacy hosts).
 * ``claude_extract``  — Claude API calls for extraction / verification / grounding callthroughs
 * ``claude_grounding``— Claude API calls for click coordinate grounding
 * ``proxy_mb``        — estimated egress bandwidth in megabytes
@@ -30,6 +34,7 @@ from ..cost_config import CostConfig
 if TYPE_CHECKING:
     from ..plan_decomposer import MicroIntent
     from .checkpoint import StepResult
+    from .time_meter import TimeMeter
 
 logger = logging.getLogger(__name__)
 
@@ -86,18 +91,43 @@ class CostMeter:
 
     # ── Per-step accounting ─────────────────────────────────────────────
 
-    def record_step(self, step: "MicroIntent", step_result: "StepResult") -> None:
+    def record_step(
+        self,
+        step: "MicroIntent",
+        step_result: "StepResult",
+        *,
+        time_meter: "TimeMeter | None" = None,
+    ) -> None:
         """Apply a step's resource usage to the counters.
 
-        Mirrors the pre-#115 ``MicroPlanRunner._record_step_costs`` exactly:
-        GPU time scales with step count, Claude extraction is one call per
-        ``claude_only`` step, grounding is one call per click step,
-        navigation/scroll add proxy MB per the config rate.
+        Claude / proxy accounting unchanged. GPU accounting depends
+        on ``time_meter``:
+
+        * **With time_meter (production, since #351)** — bumps
+          ``gpu_steps`` only; ``gpu_seconds`` is owned by
+          :meth:`sync_gpu_seconds_from_time_meter` which sets it
+          from the meter's ``think`` bucket (actual brain-inference
+          wall time). Caller invokes the sync at terminal time +
+          optionally per-step for live dashboards.
+        * **Without time_meter (tests, legacy hosts)** — keeps the
+          pre-#351 synthetic ``steps × per-step`` accumulation so
+          existing callers see no behaviour change.
         """
         cfg = self.cost_config
         if step_result.steps_used > 0:
             self.costs["gpu_steps"] += step_result.steps_used
-            self.costs["gpu_seconds"] += step_result.steps_used * cfg.gpu_seconds_per_step
+            if time_meter is None:
+                # Legacy synthetic path — kept so tests / hosts that
+                # don't wire a TimeMeter see the pre-#351 numbers.
+                self.costs["gpu_seconds"] += (
+                    step_result.steps_used * cfg.gpu_seconds_per_step
+                )
+            else:
+                # Production path — gpu_seconds owned by
+                # sync_gpu_seconds_from_time_meter. We still sync
+                # here so per-step ``log_progress`` reads the real
+                # number instead of a stale value.
+                self.sync_gpu_seconds_from_time_meter(time_meter)
         if step.claude_only:
             self.costs["claude_extract"] += 1
         if step.grounding:
@@ -106,6 +136,69 @@ class CostMeter:
             self.costs["proxy_mb"] += cfg.proxy_mb_per_nav
         elif step.type == "scroll":
             self.costs["proxy_mb"] += cfg.proxy_mb_per_scroll
+
+    def totals_from(self, costs: dict[str, Any]) -> dict[str, float]:
+        """Compute the USD-cost breakdown for an arbitrary counters dict
+        (#350).
+
+        Used for per-task cost attribution in
+        :func:`mantis_agent.task_loop._run_loop` — callers snapshot
+        ``cost_meter.costs`` before / after each task and pass the
+        delta here to get a {gpu, claude, proxy, total} dict shaped
+        like the run-level ``_final_costs``. Missing keys default to
+        zero so partial dicts are safe.
+        """
+        cfg = self.cost_config
+        gpu = cfg.gpu_cost(float(costs.get("gpu_seconds", 0.0) or 0.0))
+        claude = cfg.claude_cost(
+            int(costs.get("claude_extract", 0) or 0)
+            + int(costs.get("claude_grounding", 0) or 0)
+        )
+        proxy = cfg.proxy_cost(float(costs.get("proxy_mb", 0.0) or 0.0))
+        return {
+            "gpu": gpu,
+            "claude": claude,
+            "proxy": proxy,
+            "total": gpu + claude + proxy,
+            "gpu_steps": int(costs.get("gpu_steps", 0) or 0),
+            "gpu_seconds": float(costs.get("gpu_seconds", 0.0) or 0.0),
+            "claude_extract": int(costs.get("claude_extract", 0) or 0),
+            "claude_grounding": int(costs.get("claude_grounding", 0) or 0),
+            "proxy_mb": float(costs.get("proxy_mb", 0.0) or 0.0),
+        }
+
+    def sync_gpu_seconds_from_time_meter(self, time_meter: "TimeMeter") -> None:
+        """Set ``costs["gpu_seconds"]`` from the meter's ``think``
+        bucket (#351).
+
+        ``think`` is the canonical brain-inference wall-time bucket
+        (see :data:`~.time_meter.BUCKETS`) — credited by the brain
+        ladder's ``publish_dispatch`` context whenever a Holo3 /
+        Gemma4 / Claude inference call runs. Using it directly means
+        per-run cost reflects what Modal actually billed for brain
+        compute, instead of ``steps × 3s`` (the pre-#351 fake).
+
+        Idempotent: sets (not increments) so calling repeatedly is
+        safe. Best-effort: a missing ``think`` bucket leaves
+        ``gpu_seconds`` alone — guards against monkey-patched
+        TimeMeters in tests.
+        """
+        try:
+            totals = time_meter.totals
+        except AttributeError:
+            return
+        if "think" not in (totals or {}):
+            # Missing bucket → no signal to sync from. Leave the
+            # caller's pre-existing (possibly legacy-synthetic) value
+            # intact rather than zeroing it.
+            return
+        try:
+            think_seconds = float(totals.get("think", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return
+        if think_seconds < 0:
+            return
+        self.costs["gpu_seconds"] = think_seconds
 
     # ── Restore from checkpoint ─────────────────────────────────────────
 

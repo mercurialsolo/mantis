@@ -497,7 +497,17 @@ class RunExecutor:
         state.results.append(step_result)
         runner._enforce_screenshot_cap(state.results)
         runner._invoke_step_callback(step_result)
-        runner._record_step_costs(effective_step, step_result)
+        # #351: pass the runner's TimeMeter so CostMeter uses real
+        # brain-inference wall time (the ``think`` bucket) instead
+        # of the pre-#351 ``steps × per-step`` synthetic. Bypasses
+        # the COLLAB_METHODS shim (which doesn't thread the kwarg)
+        # by calling cost_meter directly. Backward-compat: when
+        # ``time_meter`` is None (host without it wired), CostMeter
+        # falls back to the legacy synthetic accounting.
+        runner.cost_meter.record_step(
+            effective_step, step_result,
+            time_meter=getattr(runner, "time_meter", None),
+        )
         runner._log_progress(step_result, state.results)
         runner._log_step_diff(pre_snapshot, effective_step, step_result)
         _emit_action_metric(runner, effective_step, step_result)
