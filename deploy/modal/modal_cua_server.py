@@ -901,6 +901,12 @@ def _run_holo3_executor(
             # every non-exception result.
             "terminal_status": result.get("terminal_status", ""),
             "halt_reason": result.get("halt_reason", ""),
+            # #508: surface the legacy leads list AND the new artifacts
+            # array on the envelope so the API-container ``_write_result``
+            # call has data to feed ``persist_run_artifacts`` (which
+            # otherwise sees a stripped dict and writes nothing).
+            "leads": leads,
+            "artifacts": result.get("artifacts", []),
         }
         # #347: surface paused state to the Modal API container. The poll
         # path detects ``_paused`` on the FunctionCall result and writes
