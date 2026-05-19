@@ -461,6 +461,14 @@ class RunExecutor:
                 step_result.screenshot_png = runner._capture_screenshot_bytes()
         if not step_result.success:
             _stamp_failure_context(step_result, runner.env)
+        # #480: stamp the typed verdict BEFORE any post-step
+        # bookkeeping runs. The verdict is the structural contract
+        # downstream consumers (#478 emit hook, callback observers,
+        # future preview / recovery layers) read against. Stamped
+        # before the executor advances state.step_index so the
+        # invariant ``every committed step carries a verdict`` holds
+        # at the runner boundary.
+        _stamp_verdict(step_result)
         state.results.append(step_result)
         runner._enforce_screenshot_cap(state.results)
         runner._invoke_step_callback(step_result)
@@ -1434,6 +1442,31 @@ def _stamp_failure_context(step_result: StepResult, env: Any) -> None:
 _CANONICAL_EVENTS_DIR_ENV: str = "MANTIS_CANONICAL_EVENTS_DIR"
 
 
+def _stamp_verdict(step_result: StepResult) -> None:
+    """Populate the typed :class:`Verdict` (#480) from the legacy
+    ``success`` / ``failure_class`` / ``data`` fields.
+
+    Mandatory contract: every committed StepResult carries a verdict.
+    Without one, downstream consumers (the canonical event emitter,
+    the upcoming preview-gate, recovery normaliser) have no
+    structured outcome to read against and have to dig into prose
+    strings — exactly the brittle path #480 closes.
+
+    The projection lives in :func:`verdict_from_step_result` so
+    tests can exercise the mapping in isolation. A handler that
+    already stamped a verdict explicitly (e.g. a future verifier
+    layer with richer evidence) wins — we only fill in when the
+    field is None.
+    """
+    if step_result.verdict is not None:
+        return
+    try:
+        from ..cua_contracts.adapters import verdict_from_step_result
+        step_result.verdict = verdict_from_step_result(step_result)
+    except Exception as exc:  # noqa: BLE001 — never break a run
+        logger.debug("verdict stamp raised: %s", exc)
+
+
 def _emit_canonical_trajectory_event(
     runner: Any, step: MicroIntent, step_result: StepResult,
 ) -> None:
@@ -1499,10 +1532,24 @@ def _emit_canonical_trajectory_event(
         runner._trajectory_emitter = emitter  # type: ignore[attr-defined]
     if emitter is False:
         return
+    # #479: harvest the latest grounding trace from the runner if a
+    # handler stashed one for this step. ``_latest_grounding_trace``
+    # is a runner attribute set by grounding-aware handlers (form /
+    # click) right before they return — the executor clears it after
+    # the emit so traces don't bleed across steps. Free-form dict in
+    # ``GroundingTrace`` shape — keys are documented but providers
+    # populate any subset.
+    grounding_trace = getattr(runner, "_latest_grounding_trace", None) or None
     try:
-        emitter.emit(step, step_result)
+        emitter.emit(step, step_result, grounding_trace=grounding_trace)
     except Exception as exc:  # noqa: BLE001 — never break a run
         logger.debug("canonical event emit raised: %s", exc)
+    # Clear after emit so the next step doesn't inherit a stale trace.
+    if grounding_trace is not None:
+        try:
+            runner._latest_grounding_trace = None  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 — observability, never fatal
+            pass
 
 
 def _emit_action_metric(

@@ -66,6 +66,27 @@ def pack_step(r: Any, *, time_breakdown: dict[str, float] | None = None) -> dict
     if reasoning:
         payload["reasoning"] = reasoning
 
+    # #480 mandatory verdict: surface the typed verdict on every step
+    # (success or failure) so result.json carries the structured
+    # outcome alongside the legacy ``success`` / ``failure_class``
+    # fields. The executor stamps ``r.verdict`` before the cursor
+    # advances; only ad-hoc callers that bypass the executor (legacy
+    # hosts, sim-env halts) leave it None — those keep the legacy
+    # shape unchanged. ``isinstance`` check matches the established
+    # pattern (cf. ``last_action`` above) — defensive against
+    # MagicMock duck-types from test hosts that auto-create
+    # attributes that satisfy ``is not None``.
+    from ..cua_contracts.types import Verdict
+    verdict = getattr(r, "verdict", None)
+    if isinstance(verdict, Verdict):
+        kind = getattr(verdict.kind, "value", str(verdict.kind))
+        payload["verdict"] = {
+            "kind": kind,
+            "reason": getattr(verdict, "reason", "") or "",
+            "evidence": getattr(verdict, "evidence", "") or "",
+            "confidence": float(getattr(verdict, "confidence", 0.0) or 0.0),
+        }
+
     if payload["success"]:
         return payload
 

@@ -56,6 +56,7 @@ from .adapters import (
 from .emit import JSONL_FILENAME, TrajectoryEmitter
 from .types import (
     ActionResult,
+    GroundingTrace,
     Observation,
     Plan,
     ReversibilityClass,
@@ -77,6 +78,7 @@ from .validation import (
 __all__ = [
     "ActionResult",
     "ContractValidationError",
+    "GroundingTrace",
     "Observation",
     "Plan",
     "ReversibilityClass",

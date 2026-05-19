@@ -26,9 +26,12 @@ import json
 import os
 import time
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from ..actions import Action
+
+if TYPE_CHECKING:
+    from ..cua_contracts.types import Verdict
 
 
 # ── Step result ──────────────────────────────────────────────────────────
@@ -75,6 +78,18 @@ class StepResult:
     # not persisted in the checkpoint (resume doesn't need it) and not
     # used in equality (so dataclass-replace round-trips ignore it).
     reasoning: str = field(default="", repr=False, compare=False)
+
+    # #480 mandatory verdict: a typed :class:`~..cua_contracts.types.Verdict`
+    # recording the runner's decision about this step (ok / recoverable /
+    # non_recoverable + reason + evidence). Populated by the executor
+    # AFTER the handler returns and BEFORE the cursor advances; the
+    # runner refuses to advance if this field is None. Existing
+    # ``success`` / ``failure_class`` continue to drive runner control
+    # flow for now — the typed verdict is the structural contract
+    # downstream consumers (#478 emit, #481 preview gate, #483
+    # normalised recovery decisions) read against. Not persisted in
+    # the checkpoint — resume re-derives it from the legacy fields.
+    verdict: Verdict | None = field(default=None, repr=False, compare=False)
 
     # #300 follow-up: which dispatch path executed the *primary* click /
     # input action for this step. ``"som"`` = CDP-anchored
