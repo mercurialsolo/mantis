@@ -24,22 +24,32 @@ def _example_plans() -> list[Path]:
     return sorted(EXAMPLES_DIR.glob("*.json"))
 
 
+def _plan_step_count(plan: object) -> int:
+    """Number of steps the validator should pass through, supporting both
+    the bare-array and wrapped ``{steps, runtime}`` plan shapes."""
+    if isinstance(plan, list):
+        return len(plan)
+    if isinstance(plan, dict):
+        return len(plan.get("steps") or [])
+    return 0
+
+
 @pytest.mark.parametrize("plan_path", _example_plans(), ids=lambda p: p.name)
 def test_example_plan_validates(plan_path: Path) -> None:
     with plan_path.open() as f:
-        steps = json.load(f)
-    validated = validate_micro_steps(steps)
+        plan = json.load(f)
+    validated = validate_micro_steps(plan)
     assert isinstance(validated, list)
-    assert len(validated) == len(steps)
+    assert len(validated) == _plan_step_count(plan)
 
 
 @pytest.mark.parametrize("plan_path", RECIPE_PLANS, ids=lambda p: f"{p.parent.name}/plan")
 def test_recipe_plan_validates(plan_path: Path) -> None:
     with plan_path.open() as f:
-        steps = json.load(f)
-    validated = validate_micro_steps(steps)
+        plan = json.load(f)
+    validated = validate_micro_steps(plan)
     assert isinstance(validated, list)
-    assert len(validated) == len(steps)
+    assert len(validated) == _plan_step_count(plan)
 
 
 def test_examples_directory_is_not_empty() -> None:
