@@ -366,6 +366,7 @@ def run_task_loop(
 
     Returns (scores, task_details).
     """
+    from .gym.cost_meter import make_initial_costs
     from .gym.runner import GymRunner
 
     t0 = t0 or time.time()
@@ -384,6 +385,25 @@ def run_task_loop(
 
         print(f"\nTask {i + 1}/{len(tasks)}: {task_id}")
         task_start = time.time()
+        # #350: per-task cost attribution. Each standard task creates
+        # its own GymRunner with a fresh CostMeter; primary + micro
+        # fallback + resume runners each accumulate independently.
+        # We merge their counters here so detail["costs"] reflects
+        # the whole task's spend.
+        task_cost_acc: dict[str, Any] = make_initial_costs()
+        last_cost_meter: Any = None
+
+        def _merge_runner_costs(_runner: Any) -> None:
+            nonlocal last_cost_meter
+            meter = getattr(_runner, "cost_meter", None)
+            if meter is None:
+                return
+            last_cost_meter = meter
+            for k, v in (meter.costs or {}).items():
+                try:
+                    task_cost_acc[k] = task_cost_acc.get(k, 0) + v
+                except TypeError:
+                    pass
 
         try:
             if task_config.get("require_session") and config.env.has_session(
@@ -526,6 +546,7 @@ def run_task_loop(
                 task_id=task_id,
                 start_url=task_config.get("start_url", ""),
             )
+            _merge_runner_costs(runner)
 
             if not result.success and config.fallback_brain is not None:
                 fallback_retries = int(
@@ -577,6 +598,7 @@ def run_task_loop(
                         ),
                         start_url=task_config.get("fallback_start_url", ""),
                     )
+                    _merge_runner_costs(fallback_runner)
                     try:
                         setattr(micro_result, "fallback_used", config.fallback_label)
                     except (AttributeError, TypeError):
@@ -606,6 +628,7 @@ def run_task_loop(
                         ),
                         start_url="",
                     )
+                    _merge_runner_costs(resume_runner)
                     try:
                         setattr(result, "fallback_used", config.fallback_label)
                     except (AttributeError, TypeError):
@@ -627,16 +650,19 @@ def run_task_loop(
 
             success = result.success
             scores.append(1.0 if success else 0.0)
-            task_details.append(
-                {
-                    "task_id": task_id,
-                    "success": success,
-                    "steps": result.total_steps,
-                    "duration_s": round(time.time() - task_start),
-                    "termination_reason": result.termination_reason,
-                    "final_url": config.env.current_url,
-                }
-            )
+            detail_entry: dict[str, Any] = {
+                "task_id": task_id,
+                "success": success,
+                "steps": result.total_steps,
+                "duration_s": round(time.time() - task_start),
+                "termination_reason": result.termination_reason,
+                "final_url": config.env.current_url,
+            }
+            if last_cost_meter is not None:
+                detail_entry["costs"] = last_cost_meter.totals_from(
+                    task_cost_acc
+                )
+            task_details.append(detail_entry)
             print(f"  {'PASS' if success else 'FAIL'} ({result.total_steps} steps)")
 
             if (
@@ -656,14 +682,19 @@ def run_task_loop(
             traceback.print_exc()
             print(f"  ERROR: {e}")
             scores.append(0.0)
-            task_details.append(
-                {
-                    "task_id": task_id,
-                    "success": False,
-                    "error": str(e),
-                    "duration_s": round(time.time() - task_start),
-                }
-            )
+            error_detail: dict[str, Any] = {
+                "task_id": task_id,
+                "success": False,
+                "error": str(e),
+                "duration_s": round(time.time() - task_start),
+            }
+            # #350: even on exception, attribute whatever spend happened
+            # before the throw — partial runs still cost real money.
+            if last_cost_meter is not None:
+                error_detail["costs"] = last_cost_meter.totals_from(
+                    task_cost_acc
+                )
+            task_details.append(error_detail)
 
         save_progress()
         if (

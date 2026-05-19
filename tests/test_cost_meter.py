@@ -235,3 +235,122 @@ def test_runner_cost_totals_delegates_to_meter() -> None:
     assert claude == 0.0
     assert proxy == 0.0
     assert total == pytest.approx(1.625)
+
+
+# ── #351: sync_gpu_seconds_from_time_meter ───────────────────────────────
+
+
+class _FakeTimeMeter:
+    def __init__(self, think_seconds: float = 0.0, **extra) -> None:
+        self.totals: dict[str, float] = {"think": think_seconds, **extra}
+
+
+def test_sync_gpu_seconds_overwrites_with_think_bucket() -> None:
+    meter = CostMeter()
+    meter.costs["gpu_seconds"] = 999.0  # pre-existing synthetic value
+    meter.sync_gpu_seconds_from_time_meter(_FakeTimeMeter(think_seconds=42.5))
+    assert meter.costs["gpu_seconds"] == 42.5
+
+
+def test_sync_gpu_seconds_idempotent_on_repeated_calls() -> None:
+    meter = CostMeter()
+    tm = _FakeTimeMeter(think_seconds=10.0)
+    meter.sync_gpu_seconds_from_time_meter(tm)
+    meter.sync_gpu_seconds_from_time_meter(tm)
+    assert meter.costs["gpu_seconds"] == 10.0
+
+
+def test_sync_gpu_seconds_missing_think_bucket_leaves_value_alone() -> None:
+    meter = CostMeter()
+    meter.costs["gpu_seconds"] = 5.0
+
+    class _NoThink:
+        totals: dict[str, float] = {}
+
+    meter.sync_gpu_seconds_from_time_meter(_NoThink())
+    assert meter.costs["gpu_seconds"] == 5.0
+
+
+def test_sync_gpu_seconds_negative_value_rejected() -> None:
+    meter = CostMeter()
+    meter.costs["gpu_seconds"] = 7.0
+    meter.sync_gpu_seconds_from_time_meter(_FakeTimeMeter(think_seconds=-1.0))
+    assert meter.costs["gpu_seconds"] == 7.0
+
+
+def test_record_step_with_time_meter_syncs_gpu_seconds() -> None:
+    """When a TimeMeter is wired in, gpu_seconds comes from ``think``
+    rather than the legacy ``steps × per-step`` multiplier."""
+    meter = CostMeter(cost_config=CostConfig(gpu_seconds_per_step=99.0))
+    tm = _FakeTimeMeter(think_seconds=8.0)
+    meter.record_step(_FakeStep(), _FakeStepResult(steps_used=2), time_meter=tm)
+    assert meter.costs["gpu_steps"] == 2
+    # Real wall-time wins over the 99×2=198 synthetic value.
+    assert meter.costs["gpu_seconds"] == 8.0
+
+
+def test_record_step_without_time_meter_uses_legacy_multiplier() -> None:
+    """Tests / legacy callers without a TimeMeter keep the pre-#351 behaviour."""
+    meter = CostMeter(cost_config=CostConfig(gpu_seconds_per_step=4.0))
+    meter.record_step(_FakeStep(), _FakeStepResult(steps_used=3))
+    assert meter.costs["gpu_seconds"] == 12.0
+
+
+# ── #350: totals_from helper ─────────────────────────────────────────────
+
+
+def test_totals_from_returns_breakdown_dict() -> None:
+    cfg = CostConfig(
+        gpu_hourly_usd=3.6,  # → $0.001/sec
+        claude_call_usd=0.01,
+        proxy_per_gb_usd=10.0,
+    )
+    meter = CostMeter(cost_config=cfg)
+    delta = {
+        "gpu_steps": 5,
+        "gpu_seconds": 100.0,  # → $0.10
+        "claude_extract": 3,
+        "claude_grounding": 2,  # 5 calls × $0.01 = $0.05
+        "proxy_mb": 102.4,  # 0.1 GB × $10 = $1.00
+    }
+    out = meter.totals_from(delta)
+    assert out["gpu"] == pytest.approx(0.10)
+    assert out["claude"] == pytest.approx(0.05)
+    assert out["proxy"] == pytest.approx(1.00)
+    assert out["total"] == pytest.approx(1.15)
+    # Counters echo through for downstream reporters.
+    assert out["gpu_steps"] == 5
+    assert out["gpu_seconds"] == 100.0
+    assert out["claude_extract"] == 3
+    assert out["claude_grounding"] == 2
+    assert out["proxy_mb"] == 102.4
+
+
+def test_totals_from_tolerates_partial_dict() -> None:
+    meter = CostMeter()
+    out = meter.totals_from({"gpu_seconds": 3600})
+    assert out["gpu"] == pytest.approx(3.25)
+    assert out["claude"] == 0.0
+    assert out["proxy"] == 0.0
+    assert out["claude_grounding"] == 0
+    assert out["proxy_mb"] == 0.0
+
+
+def test_totals_from_matches_totals_for_full_dict() -> None:
+    """For a costs dict identical to meter.costs, totals_from() must
+    agree with totals() — the two helpers are the same arithmetic
+    seen from different angles."""
+    meter = CostMeter()
+    meter.costs.update({
+        "gpu_steps": 4,
+        "gpu_seconds": 12.0,
+        "claude_extract": 2,
+        "claude_grounding": 1,
+        "proxy_mb": 50.0,
+    })
+    gpu, claude, proxy, total = meter.totals()
+    out = meter.totals_from(meter.costs)
+    assert out["gpu"] == pytest.approx(gpu)
+    assert out["claude"] == pytest.approx(claude)
+    assert out["proxy"] == pytest.approx(proxy)
+    assert out["total"] == pytest.approx(total)

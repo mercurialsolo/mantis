@@ -1014,6 +1014,14 @@ def extract_listing_data_deep(runner, initial_screenshot):
 
 
 def final_summary(runner: "MicroPlanRunner", results: list[StepResult]) -> None:
+    # #351: sync gpu_seconds from the TimeMeter's ``think`` bucket
+    # at terminal time so totals() returns real brain-inference
+    # wall time (not the pre-#351 ``steps × per-step`` synthetic).
+    # No-op when the runner doesn't have a TimeMeter — CostMeter's
+    # sync helper guards.
+    _time_meter = getattr(runner, "time_meter", None)
+    if _time_meter is not None:
+        runner.cost_meter.sync_gpu_seconds_from_time_meter(_time_meter)
     gpu_cost, claude_cost, proxy_cost, total_cost = runner.cost_meter.totals()
     elapsed = time.time() - runner._run_start
     print()
@@ -1035,6 +1043,26 @@ def final_summary(runner: "MicroPlanRunner", results: list[StepResult]) -> None:
         final_status=runner._final_status,
         checkpoint_path=runner.checkpoint_path,
     )
+    # #349: emit the terminal cost + duration histograms so
+    # dashboards (docs/operations/cost.md PromQL examples) have
+    # real series to query. Mirrors the inflight gauge's label set
+    # so panels grouped by tenant_id / model / status align. Skip
+    # silently when no tenant_id is set so local / script runs
+    # don't pollute the registry with default-label series; same
+    # discipline as the inflight gauge.
+    tenant_id = str(getattr(runner, "tenant_id", "") or "")
+    if tenant_id:
+        try:
+            from .. import metrics as _metrics
+            labels = {
+                "tenant_id": tenant_id,
+                "model": str(getattr(runner, "model_name", "") or ""),
+                "status": str(getattr(runner, "_final_status", "") or "completed"),
+            }
+            _metrics.RUN_COST_USD.labels(**labels).observe(total_cost)
+            _metrics.RUN_DURATION_SECONDS.labels(**labels).observe(elapsed)
+        except Exception as exc:  # noqa: BLE001 — observability, never fatal
+            logger.debug("terminal cost/duration histogram emit failed: %s", exc)
 
 
 def _capture_browser_state_safe(runner: "MicroPlanRunner"):
