@@ -76,6 +76,13 @@ from .observation_store import (
     StoredObservation,
     identity_redaction,
 )
+from .registry import (
+    InMemoryModelRegistry,
+    ModelRegistry,
+    ModelRegistryError,
+    ModelRegistryRecord,
+    RolloutState,
+)
 from .serving import (
     ModelCallResult,
     ModelServingFacade,
@@ -83,6 +90,11 @@ from .serving import (
     Role,
     RoutingMode,
     stamp_runtime_versions,
+)
+from .shadow import (
+    ShadowRoutingError,
+    SplitFacade,
+    emit_shadow_disagreement,
 )
 from .versions import VERSION_KEYS, collect_versions
 from .types import (
@@ -115,10 +127,14 @@ __all__ = [
     "DEFAULT_RETRY_BUDGET",
     "DiskObservationStore",
     "GroundingTrace",
+    "InMemoryModelRegistry",
     "InMemoryObservationStore",
     "JSONL_FILENAME",
     "LifecyclePhase",
     "ModelCallResult",
+    "ModelRegistry",
+    "ModelRegistryError",
+    "ModelRegistryRecord",
     "ModelServingFacade",
     "Observation",
     "ObservationStore",
@@ -129,9 +145,12 @@ __all__ = [
     "RedactionPolicy",
     "ReversibilityClass",
     "Role",
+    "RolloutState",
     "RoutingMode",
     "SCHEMA_VERSION",
     "SIDE_EFFECTFUL_PHASES",
+    "ShadowRoutingError",
+    "SplitFacade",
     "Step",
     "StoredObservation",
     "TaskSpec",
@@ -145,6 +164,7 @@ __all__ = [
     "classify_legacy_reversibility",
     "collect_versions",
     "decide_recovery",
+    "emit_shadow_disagreement",
     "identity_redaction",
     "is_irreversible",
     "observation_from_screenshot_ref",
