@@ -69,6 +69,7 @@ from .lifecycle import (
     LifecyclePhase,
 )
 from .observation_store import (
+    DiskObservationStore,
     InMemoryObservationStore,
     ObservationStore,
     RedactionPolicy,
@@ -112,6 +113,7 @@ __all__ = [
     "Activity",
     "ContractValidationError",
     "DEFAULT_RETRY_BUDGET",
+    "DiskObservationStore",
     "GroundingTrace",
     "InMemoryObservationStore",
     "JSONL_FILENAME",
