@@ -37,6 +37,11 @@
           "type": "boolean",
           "description": "When true, the runner skips proxy setup and connects directly. Useful for plans whose target site is proxy-hostile (Cloudflare-protected SaaS that whitelists the test environment's IP)."
         },
+        "proxy_provider": {
+          "type": "string",
+          "enum": ["privateproxy", "oxylabs", "iproyal"],
+          "description": "Which proxy backend to use when proxy is enabled. Defaults to the runtime's MANTIS_PROXY_PROVIDER env var (today: iproyal). Prefer ``privateproxy`` for residential exits — uses PRIVATEPROXY_* env vars."
+        },
         "proxy_city": {
           "type": "string",
           "description": "Preferred proxy exit city — passed to the proxy provider's session API."

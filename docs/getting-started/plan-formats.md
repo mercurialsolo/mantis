@@ -96,6 +96,7 @@ A plan can carry a top-level `runtime` block so it's self-describing — no need
 | Field | Type | Effect |
 | --- | --- | --- |
 | `proxy_disabled` | bool | Skip proxy setup, connect direct. Use for CF-protected SaaS that whitelists the test environment's IP. |
+| `proxy_provider` | string | `privateproxy` (preferred residential), `oxylabs`, or `iproyal`. Defaults to the runtime's `MANTIS_PROXY_PROVIDER` env. |
 | `proxy_city` | string | Preferred proxy exit city (passed to the provider's session API). |
 | `proxy_state` | string | Preferred proxy exit state (US two-letter). |
 | `max_cost` | number | Per-run cost ceiling in USD; runner halts when exceeded. |

@@ -833,3 +833,27 @@ def test_merge_runtime_output_splats_into_build_micro_suite(tmp_path: Path) -> N
     assert suite["_proxy_disabled"] is True
     assert suite["_max_cost"] == 3.0
     assert suite["_max_time_minutes"] == 15
+
+
+def test_runtime_proxy_provider_flows_to_suite(tmp_path: Path) -> None:
+    """``proxy_provider`` declared in the plan lands on
+    ``task_suite['_proxy_provider']`` which Modal executors read at
+    submission time."""
+    p = _write_plan(tmp_path, {
+        "runtime": {"proxy_provider": "privateproxy", "proxy_city": "miami"},
+        "steps": [{"intent": "go", "type": "navigate"}],
+    })
+    steps, plan_runtime = load_plan_file(p)
+    runtime = merge_runtime(plan_runtime)
+    suite = build_micro_suite(steps, "luma", **runtime)
+    assert suite["_proxy_provider"] == "privateproxy"
+    assert suite["_proxy_city"] == "miami"
+
+
+def test_runtime_provider_override_wins() -> None:
+    """Submission-time ``proxy_provider`` beats the plan's choice."""
+    out = merge_runtime(
+        {"proxy_provider": "privateproxy"},
+        proxy_provider="oxylabs",
+    )
+    assert out["proxy_provider"] == "oxylabs"

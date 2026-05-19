@@ -723,6 +723,7 @@ def micro_plan_steps_to_dicts(steps: list[Any]) -> list[dict[str, Any]]:
 
 _RUNTIME_KEYS = (
     "proxy_disabled",
+    "proxy_provider",
     "proxy_city",
     "proxy_state",
     "max_cost",
@@ -808,6 +809,7 @@ def build_micro_suite(
     profile_id: str = "",
     workflow_id: str = "",
     checkpoint_dir: str = "/data/checkpoints",
+    proxy_provider: str = "",
     proxy_city: str = "",
     proxy_state: str = "",
     proxy_disabled: bool = False,
@@ -856,6 +858,7 @@ def build_micro_suite(
         "_state_key": resolved_workflow,
         "_checkpoint_path": checkpoint_path,
         "_plan_signature": signature,
+        "_proxy_provider": proxy_provider,
         "_proxy_city": proxy_city,
         "_proxy_state": proxy_state,
         "_proxy_disabled": bool(proxy_disabled),
