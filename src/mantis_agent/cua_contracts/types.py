@@ -66,6 +66,47 @@ class VerdictKind(str, Enum):
     NON_RECOVERABLE = "non_recoverable"
 
 
+class RecoveryDecision(str, Enum):
+    """Typed recovery decision the runner makes after each step (#483).
+
+    The :class:`VerdictKind` answers *what happened*; this answers
+    *what the runner should do next*. Today the decision is implicit
+    in the runner's branching (success → advance; failure +
+    REWRITE_TRIGGERING_CLASSES → retry via IntentRewriter; required
+    step exhausted → halt; etc). Pinning a typed decision makes the
+    next-action contract explicit so:
+
+    * downstream consumers (metrics, dashboards, eval) can group
+      failures by recovery class without re-deriving from prose;
+    * handler-specific fallback paths can feed into ONE decision
+      model rather than each implementing their own retry / halt
+      logic;
+    * the upcoming preview gate (#482) and rollback infrastructure
+      have a single typed slot to populate.
+
+    Values:
+
+    * ``advance`` — cursor moves to the next step. Default for OK
+      verdicts.
+    * ``retry`` — same step runs again (same intent, possibly with
+      a recovery hint from agentic_recovery / IntentRewriter).
+    * ``replan`` — escalate to the planner / decomposer to rewrite
+      this step or the remaining steps based on what was observed.
+    * ``rollback`` — undo the most recent action (alt+Left / Esc /
+      backspace per :data:`REVERSE_ACTIONS`) and retry from the
+      pre-action state. For RECOVERABLE verdicts where simple retry
+      would hit the same wrong target.
+    * ``terminate`` — halt the run. NON_RECOVERABLE verdicts or
+      RECOVERABLE on a ``required`` step past its retry budget.
+    """
+
+    ADVANCE = "advance"
+    RETRY = "retry"
+    REPLAN = "replan"
+    ROLLBACK = "rollback"
+    TERMINATE = "terminate"
+
+
 @dataclass(frozen=True)
 class Observation:
     """A reference to the screenshot + minimal context the brain saw
@@ -283,6 +324,12 @@ class TrajectoryEvent:
     observation: Observation | None = None
     action_result: ActionResult | None = None
     verdict: Verdict | None = None
+    # #483 normalised recovery decision — typed next-action signal
+    # alongside the verdict (which only says *what* happened, not
+    # *what to do*). Optional in v1 because callers that bypass the
+    # executor's stamp path may not have one; the validator doesn't
+    # require it.
+    recovery_decision: RecoveryDecision | None = None
     versions: dict[str, str] = field(default_factory=dict)
     latency_seconds: float = 0.0
     cost_usd: float = 0.0

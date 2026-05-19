@@ -434,6 +434,14 @@ class RunExecutor:
         # doesn't run a grounding call can't accidentally inherit
         # the prior step's trace via the provider's per-instance stash.
         reset_grounding_trace_stashes(runner)
+        # #482: run the reversibility gate BEFORE the handler
+        # dispatches. The gate is a no-op in production
+        # (MANTIS_PREVIEW_GATE unset) and for non-IRREVERSIBLE step
+        # types — it only fires for high-risk actions when an
+        # operator has explicitly opted the gate in. The result
+        # stashes on runner._latest_preview_result for the handler /
+        # post-step bookkeeping to read.
+        _maybe_run_reversibility_gate(runner, effective_step, state.step_index)
         pre_snapshot = step_snapshot.capture(runner)
         runner._pre_step_snapshot = pre_snapshot
         # Epic #377 follow-up (#381): read the browser's URL directly
@@ -474,6 +482,18 @@ class RunExecutor:
         # invariant ``every committed step carries a verdict`` holds
         # at the runner boundary.
         _stamp_verdict(step_result)
+        # #483: derive the typed recovery decision from the verdict +
+        # attempt history + step.required so result.json / canonical
+        # events / metrics see a normalised next-action signal. Does
+        # NOT drive control flow yet — the existing retry / halt
+        # branches still use success+failure_class. This is the
+        # substrate; future PRs migrate the branches.
+        _stamp_recovery_decision(runner, effective_step, step_result, state.step_index)
+        # #482: attach the pre-execution gate's PreviewResult onto
+        # this step's StepResult so result.json and canonical events
+        # carry the gate's decision + evidence. Stash on the runner
+        # is cleared after read so the next step doesn't inherit it.
+        _attach_preview_result(runner, step_result)
         state.results.append(step_result)
         runner._enforce_screenshot_cap(state.results)
         runner._invoke_step_callback(step_result)
@@ -1445,6 +1465,130 @@ def _stamp_failure_context(step_result: StepResult, env: Any) -> None:
 
 
 _CANONICAL_EVENTS_DIR_ENV: str = "MANTIS_CANONICAL_EVENTS_DIR"
+
+
+def _maybe_run_reversibility_gate(
+    runner: Any, step: MicroIntent, step_index: int,
+) -> None:
+    """Run the pre-execution reversibility gate (#482).
+
+    Hook fires BEFORE the handler dispatches. Only does anything
+    when:
+
+    * the gate is opted in via ``MANTIS_PREVIEW_GATE`` env;
+    * the step's action_type is :class:`ReversibilityClass.IRREVERSIBLE`
+      per the ontology;
+    * a verifier callable is wired on the runner
+      (``runner._preview_verifier``).
+
+    When all three hold, the gate runs and stashes the result on
+    ``runner._latest_preview_result``. The post-step bookkeeping
+    reads + clears the stash and attaches it to the StepResult.
+
+    For v1 (this PR) the gate is ADVISORY — it records its
+    decision but does NOT block dispatch. The hook signature +
+    storage are in place so a future PR can flip the block bit
+    behind a separate env (``MANTIS_PREVIEW_GATE_BLOCKING``).
+
+    No-op when any precondition fails — never raises, never blocks
+    a step that doesn't need gating.
+    """
+    try:
+        from .preview_gate import evaluate, is_enabled
+    except ImportError:
+        return
+    if not is_enabled():
+        return
+    verifier = getattr(runner, "_preview_verifier", None)
+    if verifier is None or not callable(verifier):
+        return
+    step_type = str(getattr(step, "type", "") or "")
+    if not step_type:
+        return
+    # Cheap pre-screenshot: skip if the env doesn't expose one.
+    env = getattr(runner, "env", None)
+    if env is None or not hasattr(env, "screenshot"):
+        return
+    try:
+        screenshot = env.screenshot()
+    except Exception as exc:  # noqa: BLE001 — never block a step on gate setup
+        logger.debug("preview gate: pre-screenshot raised: %s", exc)
+        return
+    params = dict(getattr(step, "params", {}) or {})
+    label = str(params.get("label", "") or "")
+    coords = params.get("coordinates") or (0, 0)
+    try:
+        result = evaluate(
+            action_type=step_type,
+            intent=str(getattr(step, "intent", "") or ""),
+            target_label=label,
+            target_coordinates=tuple(coords) if isinstance(coords, (list, tuple)) else (0, 0),
+            screenshot=screenshot,
+            verifier=verifier,
+        )
+    except Exception as exc:  # noqa: BLE001 — gate must never crash the runner
+        logger.debug("preview gate: evaluate raised: %s", exc)
+        return
+    runner._latest_preview_result = result  # type: ignore[attr-defined]
+    if not result.passed:
+        # Advisory log — the gate's decision is recorded but does NOT
+        # block dispatch in v1. Operators can grep this in production
+        # logs to assess what would have been blocked before enabling
+        # the blocking mode.
+        logger.warning(
+            "  [preview-gate] step %d ADVISORY: would block dispatch — "
+            "action=%s label=%r reason=%s confidence=%.2f evidence=%s",
+            step_index, step_type, label, result.reason, result.confidence,
+            (result.evidence or "")[:120],
+        )
+
+
+def _attach_preview_result(runner: Any, step_result: StepResult) -> None:
+    """Move the pre-step gate's stashed PreviewResult onto the
+    StepResult and clear the runner stash so it can't bleed into
+    the next step (#482).
+    """
+    stash = getattr(runner, "_latest_preview_result", None)
+    if stash is not None:
+        step_result.preview_result = stash
+        try:
+            runner._latest_preview_result = None  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _stamp_recovery_decision(
+    runner: Any, step: MicroIntent, step_result: StepResult, step_index: int,
+) -> None:
+    """Derive + stamp the typed :class:`RecoveryDecision` (#483).
+
+    Reads ``step_result.verdict`` (which :func:`_stamp_verdict` just
+    populated), the attempt history for this step (kept on
+    ``runner._step_failure_history`` by the existing retry layer),
+    and ``step.required`` to compute the typed decision.
+
+    A handler that already stamped a richer decision upstream wins —
+    same precedence rule as the verdict stamp. Best-effort: an
+    exception here logs at DEBUG and leaves the field None rather
+    than blocking the step.
+    """
+    if step_result.recovery_decision is not None:
+        return
+    verdict = step_result.verdict
+    if verdict is None:
+        return
+    try:
+        from ..cua_contracts.adapters import DEFAULT_RETRY_BUDGET, decide_recovery
+        history = getattr(runner, "_step_failure_history", {}) or {}
+        prior_attempts = len(history.get(step_index, []) or []) if isinstance(history, dict) else 0
+        step_result.recovery_decision = decide_recovery(
+            verdict,
+            attempt_index=prior_attempts,
+            required=bool(getattr(step, "required", False)),
+            retry_budget=DEFAULT_RETRY_BUDGET,
+        )
+    except Exception as exc:  # noqa: BLE001 — never break a run
+        logger.debug("recovery decision stamp raised: %s", exc)
 
 
 def _stamp_verdict(step_result: StepResult) -> None:

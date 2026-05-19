@@ -76,7 +76,7 @@ def pack_step(r: Any, *, time_breakdown: dict[str, float] | None = None) -> dict
     # pattern (cf. ``last_action`` above) — defensive against
     # MagicMock duck-types from test hosts that auto-create
     # attributes that satisfy ``is not None``.
-    from ..cua_contracts.types import Verdict
+    from ..cua_contracts.types import RecoveryDecision, Verdict
     verdict = getattr(r, "verdict", None)
     if isinstance(verdict, Verdict):
         kind = getattr(verdict.kind, "value", str(verdict.kind))
@@ -85,6 +85,28 @@ def pack_step(r: Any, *, time_breakdown: dict[str, float] | None = None) -> dict
             "reason": getattr(verdict, "reason", "") or "",
             "evidence": getattr(verdict, "evidence", "") or "",
             "confidence": float(getattr(verdict, "confidence", 0.0) or 0.0),
+        }
+
+    # #483 normalised recovery decision — surfaces alongside the
+    # verdict so dashboards / metrics consumers see both *what
+    # happened* (verdict) and *what the runner decided to do*
+    # (recovery_decision) without re-deriving either from prose.
+    recovery_decision = getattr(r, "recovery_decision", None)
+    if isinstance(recovery_decision, RecoveryDecision):
+        payload["recovery_decision"] = recovery_decision.value
+
+    # #482 pre-execution gate decision — surfaces the
+    # :class:`PreviewResult` when the gate ran. Skipped (no key in
+    # payload) when the gate was disabled / not applicable / no
+    # verifier wired, matching the substrate-stage rollout pattern.
+    from .preview_gate import PreviewResult as _PreviewResult
+    preview_result = getattr(r, "preview_result", None)
+    if isinstance(preview_result, _PreviewResult):
+        payload["preview_gate"] = {
+            "passed": bool(preview_result.passed),
+            "confidence": float(preview_result.confidence),
+            "reason": preview_result.reason,
+            "evidence": (preview_result.evidence or "")[:500],
         }
 
     if payload["success"]:
