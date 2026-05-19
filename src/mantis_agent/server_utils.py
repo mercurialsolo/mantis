@@ -721,6 +721,82 @@ def micro_plan_steps_to_dicts(steps: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+_RUNTIME_KEYS = (
+    "proxy_disabled",
+    "proxy_city",
+    "proxy_state",
+    "max_cost",
+    "max_time_minutes",
+)
+
+
+def load_plan_file(path: str | Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Load a plan JSON file and return ``(steps, runtime)``.
+
+    Supports both shipped plan shapes:
+
+    * **Bare-array** (``examples/*.json``) — ``[step, step, ...]`` — the
+      runtime dict comes back empty.
+    * **Wrapped** (``plans/staff-crm-long.json``) — ``{"steps": [...],
+      "runtime": {...}}`` — the optional ``runtime`` block declares
+      plan-level defaults (proxy_disabled, proxy_city, proxy_state,
+      max_cost, max_time_minutes).
+
+    Callers merge the returned ``runtime`` dict with their own explicit
+    submission flags via :func:`merge_runtime` so the plan is
+    self-describing without overriding caller intent.
+    """
+    import json
+    with open(path) as fh:
+        raw = json.load(fh)
+    if isinstance(raw, list):
+        return raw, {}
+    if isinstance(raw, dict):
+        steps = raw.get("steps", [])
+        if not isinstance(steps, list):
+            raise ValueError(
+                f"plan {path}: 'steps' must be a list, got {type(steps).__name__}"
+            )
+        runtime = raw.get("runtime") or {}
+        if not isinstance(runtime, dict):
+            raise ValueError(
+                f"plan {path}: 'runtime' must be an object, got {type(runtime).__name__}"
+            )
+        return steps, {
+            k: v for k, v in runtime.items() if k in _RUNTIME_KEYS
+        }
+    raise ValueError(
+        f"plan {path}: expected array of steps or object with 'steps', "
+        f"got {type(raw).__name__}"
+    )
+
+
+def merge_runtime(
+    plan_runtime: dict[str, Any] | None,
+    /,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Merge plan-level runtime defaults with submission-time overrides.
+
+    Submission overrides win when set explicitly (not ``None``); ``None``
+    means "fall back to the plan's declared default". Lets callers pass
+    ``merge_runtime(plan_runtime, proxy_disabled=cli_args.proxy_disabled)``
+    without losing the plan's preference when the CLI flag is absent.
+
+    Unknown keys in ``plan_runtime`` are dropped (defensive: forward-
+    compat with future schema additions doesn't leak unrecognised kwargs
+    into :func:`build_micro_suite`).
+    """
+    merged: dict[str, Any] = {}
+    plan_runtime = plan_runtime or {}
+    for k in _RUNTIME_KEYS:
+        if k in plan_runtime:
+            merged[k] = plan_runtime[k]
+        if k in overrides and overrides[k] is not None:
+            merged[k] = overrides[k]
+    return merged
+
+
 def build_micro_suite(
     micro_plan_steps: list[dict[str, Any]],
     domain: str,
