@@ -83,6 +83,13 @@ from .registry import (
     ModelRegistryRecord,
     RolloutState,
 )
+from .sandbox import (
+    LocalProfileSandbox,
+    NoopSandboxRuntime,
+    SandboxRestoreError,
+    SandboxRuntime,
+    SandboxSnapshot,
+)
 from .serving import (
     ModelCallResult,
     ModelServingFacade,
@@ -129,6 +136,7 @@ __all__ = [
     "GroundingTrace",
     "InMemoryModelRegistry",
     "InMemoryObservationStore",
+    "LocalProfileSandbox",
     "JSONL_FILENAME",
     "LifecyclePhase",
     "ModelCallResult",
@@ -136,6 +144,7 @@ __all__ = [
     "ModelRegistryError",
     "ModelRegistryRecord",
     "ModelServingFacade",
+    "NoopSandboxRuntime",
     "Observation",
     "ObservationStore",
     "PURE_PHASES",
@@ -149,6 +158,9 @@ __all__ = [
     "RoutingMode",
     "SCHEMA_VERSION",
     "SIDE_EFFECTFUL_PHASES",
+    "SandboxRestoreError",
+    "SandboxRuntime",
+    "SandboxSnapshot",
     "ShadowRoutingError",
     "SplitFacade",
     "Step",

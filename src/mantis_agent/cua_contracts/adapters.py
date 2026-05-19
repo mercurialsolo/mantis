@@ -131,6 +131,7 @@ def action_result_from_action(
     dispatched: bool,
     dispatch_error: str = "",
     grounding_trace: dict[str, Any] | None = None,
+    snapshot_id: str = "",
 ) -> ActionResult:
     """Project a legacy :class:`Action` (+ dispatcher outcome) onto
     :class:`ActionResult`.
@@ -143,6 +144,11 @@ def action_result_from_action(
     AND ``dispatched=False`` AND no ``dispatch_error`` — that
     combination means "nothing happened and nobody knows why", which
     isn't useful to record.
+
+    ``snapshot_id`` (#484) carries the sandbox snapshot taken before
+    this action dispatched. Empty when no snapshot was gated
+    (reversible actions, no sandbox runtime wired). The runtime
+    owns the format; readers treat as opaque.
     """
     if action is None:
         return ActionResult(
@@ -152,6 +158,7 @@ def action_result_from_action(
             grounding_trace=grounding_trace or {},
             dispatched=dispatched,
             dispatch_error=dispatch_error,
+            snapshot_id=snapshot_id,
         )
     action_type_value = getattr(action.action_type, "value", str(action.action_type))
     return ActionResult(
@@ -161,6 +168,7 @@ def action_result_from_action(
         grounding_trace=grounding_trace or {},
         dispatched=dispatched,
         dispatch_error=dispatch_error,
+        snapshot_id=snapshot_id,
     )
 
 
