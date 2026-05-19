@@ -280,6 +280,14 @@ class TrajectoryEmitter:
                     dispatched=action_result.dispatched,
                     dispatch_error=action_result.dispatch_error,
                 )
+        # #480: prefer the runner-stamped verdict (the structural
+        # contract — every committed step carries one). Fall back to
+        # the legacy projection only when a caller wires the emitter
+        # without going through ``_stamp_verdict`` (tests + ad-hoc
+        # callers). In production the executor always stamps before
+        # the emit hook fires.
+        stamped = getattr(result, "verdict", None)
+        verdict = stamped if stamped is not None else verdict_from_step_result(result)
         return TrajectoryEvent(
             schema_version=SCHEMA_VERSION,
             run_id=self.run_id,
@@ -288,7 +296,7 @@ class TrajectoryEmitter:
             step=step_from_micro_intent(step),
             observation=observation,
             action_result=action_result,
-            verdict=verdict_from_step_result(result),
+            verdict=verdict,
             versions=dict(self.versions),
             latency_seconds=float(getattr(result, "duration", 0.0) or 0.0),
             cost_usd=float(cost_usd),

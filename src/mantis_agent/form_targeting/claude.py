@@ -81,6 +81,14 @@ class ClaudeFormTargetProvider(FormTargetProvider):
         self.debug_dir = os.environ.get(
             "MANTIS_DEBUG_DIR", "/data/screenshots/claude_debug",
         )
+        # #479: most-recent grounding trace produced by this provider.
+        # Overwritten on every ``find_form_target`` call (success or
+        # not-found). The form / click handler reads this immediately
+        # after the call and forwards onto ``runner._latest_grounding_trace``
+        # so the executor's emit hook can attach it to the canonical
+        # event. Per-provider stash (single-threaded per runner) is
+        # cheaper than threading a sink callable through every method.
+        self.last_grounding_trace: dict | None = None
 
     @classmethod
     def from_extractor(cls, extractor: Any) -> "ClaudeFormTargetProvider":
@@ -209,14 +217,30 @@ class ClaudeFormTargetProvider(FormTargetProvider):
         except Exception:
             pass
 
+        # #479 grounding trace: provider + model_version are stable
+        # facts about THIS call. Confidence / coordinates / target_label
+        # are filled in below when the parse succeeds. The trace gets
+        # stashed in every exit branch so failure paths (no tool_use,
+        # not_found, bad coords) also produce an audit record — they're
+        # the ones operators need most when debugging a HALT.
+        trace: dict[str, Any] = {
+            "provider": "claude_form_target",
+            "model_version": self._client.model,
+            "target_label": target_label,
+        }
+
         if not parsed:
             logger.warning("  [claude-form] tool_use returned no usable result")
+            trace["confirmation_evidence"] = "tool_use_empty"
+            self.last_grounding_trace = trace
             return None
 
         if parsed.get("action") == "not_found":
             label = parsed.get("label", "unknown")
             logger.info(f"  [claude-form] target not visible: {intent[:60]}")
             logger.info(f"  [claude-form] What Claude sees: {label[:120]}")
+            trace["confirmation_evidence"] = f"not_found: {label[:80]}"
+            self.last_grounding_trace = trace
             return None
 
         x = _coerce_coord(parsed.get("x"))
@@ -227,9 +251,15 @@ class ClaudeFormTargetProvider(FormTargetProvider):
                 "x=%r y=%r — treating as not found",
                 parsed.get("x"), parsed.get("y"),
             )
+            trace["confirmation_evidence"] = (
+                f"non_integer_coords x={parsed.get('x')!r} y={parsed.get('y')!r}"
+            )
+            self.last_grounding_trace = trace
             return None
         if x == 0 and y == 0:
             logger.warning("  [claude-form] zero coordinates")
+            trace["confirmation_evidence"] = "zero_coords"
+            self.last_grounding_trace = trace
             return None
 
         result: FormTargetResult = {
@@ -254,6 +284,16 @@ class ClaudeFormTargetProvider(FormTargetProvider):
                 if crop_offset != (0, 0) else ""
             )
         )
+        # Successful grounding — record what we landed on. ``confidence``
+        # left absent: Claude's tool_use schema doesn't surface a
+        # per-call confidence today (#479 follow-up: extend the schema
+        # to include one; v1 ships without).
+        trace["coordinates"] = (int(result["x"]), int(result["y"]))
+        trace["target_label"] = result["label"]
+        trace["dispatch_strategy"] = (
+            "som_click" if result["action"] in ("click", "right_click") else "keyboard_type"
+        )
+        self.last_grounding_trace = trace
         return result
 
     def find_target_by_affordance(

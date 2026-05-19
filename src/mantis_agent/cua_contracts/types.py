@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, TypedDict
 
 
 SCHEMA_VERSION: int = 1
@@ -96,11 +96,11 @@ class Observation:
 class ActionResult:
     """The action that was dispatched + the dispatcher's local outcome.
 
-    ``grounding_trace`` is the structured payload from :issue:`479`:
-    how the target was localized, model/prompt version, confidence,
-    selected dispatch strategy, confirmation evidence. v1 keeps it as
-    a free-form dict so the grounding side can iterate without a
-    schema bump; v2 will pin the shape.
+    ``grounding_trace`` carries the structured payload from
+    :issue:`479` documenting how the target was localized. v1 stays a
+    free-form dict (TypedDict-shaped, see :class:`GroundingTrace`) so
+    grounding providers can populate any subset without a schema
+    bump; readers should treat unknown keys as forward-compatible.
     """
 
     schema_version: int = SCHEMA_VERSION
@@ -109,6 +109,59 @@ class ActionResult:
     grounding_trace: dict[str, Any] = field(default_factory=dict)
     dispatched: bool = False                    # did the dispatcher commit the action?
     dispatch_error: str = ""                    # empty when dispatched=True
+
+
+class GroundingTrace(TypedDict, total=False):
+    """Structured grounding-trace shape (#479).
+
+    Lives as a :class:`TypedDict` rather than a frozen dataclass so:
+
+    * the field on :class:`ActionResult` stays a plain dict — no
+      adapter / converter on the emit path;
+    * grounding providers can populate any subset (the form-target
+      path emits ``provider`` / ``confidence`` / ``model_version`` /
+      ``label_match``; the click handler's fallback path emits
+      ``fallback_chain`` instead);
+    * readers can ``.get(...)`` with the same idiom as today's
+      free-form dict consumers.
+
+    Field semantics:
+
+    * ``provider`` — which grounding implementation produced this
+      result (``"claude_form_target"``, ``"holo3_som"``,
+      ``"claude_filter"``, ``"affordance_fallback"``).
+    * ``model_version`` — the model id / version actually called
+      (``"claude-haiku-4-5-20251001"``, ``"holo3-35b-a3b"``).
+    * ``prompt_version`` — short hash / tag of the prompt template
+      that produced the result, when known (the
+      :mod:`mantis_agent.prompts` infra emits this).
+    * ``confidence`` — provider's self-reported confidence, 0.0–1.0.
+      0 means "no signal" — readers should not infer "low" vs "no".
+    * ``dispatch_strategy`` — how the located target was actually
+      acted on: ``"som_click"``, ``"xdotool_click"``,
+      ``"keyboard_type"``, ``"cdp_navigate"``.
+    * ``target_label`` — the canonical label the provider matched
+      against (typically the plan's ``params.label`` after alias
+      resolution).
+    * ``coordinates`` — final (x, y) the dispatcher acted on, after
+      any post-grounding refinement (e.g. element centering).
+    * ``fallback_chain`` — ordered list of probe names that were
+      tried before the final match (``["initial", "End→bottom",
+      "Home→top"]``). Empty when the first attempt landed.
+    * ``confirmation_evidence`` — post-action verification signal
+      that supports / refutes the grounding (e.g. ``"elementFromPoint=INPUT"``
+      from the form handler's #404 tag guard).
+    """
+
+    provider: str
+    model_version: str
+    prompt_version: str
+    confidence: float
+    dispatch_strategy: str
+    target_label: str
+    coordinates: tuple[int, int]
+    fallback_chain: list[str]
+    confirmation_evidence: str
 
 
 @dataclass(frozen=True)
