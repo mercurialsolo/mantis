@@ -54,6 +54,12 @@ from .adapters import (
     verdict_from_step_result,
 )
 from .emit import JSONL_FILENAME, TrajectoryEmitter
+from .ontology import (
+    ActionTyped,
+    classify_action,
+    is_irreversible,
+    validate_action_type,
+)
 from .types import (
     ActionResult,
     GroundingTrace,
@@ -77,6 +83,7 @@ from .validation import (
 
 __all__ = [
     "ActionResult",
+    "ActionTyped",
     "ContractValidationError",
     "GroundingTrace",
     "Observation",
@@ -91,9 +98,12 @@ __all__ = [
     "JSONL_FILENAME",
     "TrajectoryEmitter",
     "action_result_from_action",
+    "classify_action",
     "classify_legacy_reversibility",
+    "is_irreversible",
     "observation_from_screenshot_ref",
     "step_from_micro_intent",
+    "validate_action_type",
     "validate_step",
     "validate_task_spec",
     "validate_trajectory_event",

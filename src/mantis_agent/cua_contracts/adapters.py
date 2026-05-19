@@ -53,41 +53,27 @@ _NON_RECOVERABLE_FAILURE_CLASSES: frozenset[str] = frozenset({
 })
 
 
-# Mapping from legacy MicroIntent.type strings to a coarse
-# reversibility class. The list of step types lives in
-# ``MicroIntent``'s docstring; we preserve the runtime behaviour the
-# step-recovery / preview-gate code already implements implicitly.
-# Anything not listed defaults to REVERSIBLE so unknown step types
-# fail safe rather than fail open (the preview gate will run, not
-# the auto-dispatch path). #477 will refine this with a proper
-# action ontology.
-_LEGACY_TYPE_TO_REVERSIBILITY: dict[str, ReversibilityClass] = {
-    # Read-only — no side effects.
-    "scroll": ReversibilityClass.READ_ONLY,
-    "extract_data": ReversibilityClass.READ_ONLY,
-    "extract_url": ReversibilityClass.READ_ONLY,
-    # Reversible by alt+Left / Escape / Backspace.
-    "click": ReversibilityClass.REVERSIBLE,
-    "navigate": ReversibilityClass.REVERSIBLE,
-    "navigate_back": ReversibilityClass.REVERSIBLE,
-    "fill_field": ReversibilityClass.REVERSIBLE,
-    "select_option": ReversibilityClass.REVERSIBLE,
-    "right_click": ReversibilityClass.REVERSIBLE,
-    "filter": ReversibilityClass.REVERSIBLE,
-    "paginate": ReversibilityClass.REVERSIBLE,
-    "loop": ReversibilityClass.READ_ONLY,
-    # Irreversible — pre-dispatch preview gate should always run.
-    # ``submit`` is the canonical write action; the rest are aliases
-    # plans use for the same semantic (#477 will collapse them).
-    "submit": ReversibilityClass.IRREVERSIBLE,
-}
-
-
 def classify_legacy_reversibility(step_type: str) -> ReversibilityClass:
-    """Public helper — also useful from tests / safety gates."""
-    return _LEGACY_TYPE_TO_REVERSIBILITY.get(
-        step_type, ReversibilityClass.REVERSIBLE,
-    )
+    """Project a legacy ``MicroIntent.type`` string onto the
+    reversibility class registered in :mod:`.ontology`.
+
+    Public helper — also useful from tests / safety gates that
+    operate on the legacy string vocabulary.
+
+    Failure mode: unknown step types default to
+    :class:`ReversibilityClass.REVERSIBLE` rather than raising.
+    Rationale — the adapter is a back-compat shim and the runner
+    has long tolerated unrecognised plan step types (the executor
+    falls through to the Holo3 step handler). Failing closed here
+    would regress that tolerance. Callers that want strict
+    validation should use :func:`.ontology.classify_action` directly,
+    which raises :class:`ContractValidationError` on unknown.
+    """
+    from .ontology import _REVERSIBILITY_MAP, ActionTyped
+    try:
+        return _REVERSIBILITY_MAP[ActionTyped(step_type)]
+    except (ValueError, KeyError):
+        return ReversibilityClass.REVERSIBLE
 
 
 def step_from_micro_intent(mi: "MicroIntent") -> Step:
