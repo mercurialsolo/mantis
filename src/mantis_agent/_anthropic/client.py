@@ -212,6 +212,7 @@ class AnthropicToolUseClient:
         input_schema: dict[str, Any],
         max_tokens: int = 500,
         time_bucket: str = "claude_extract",
+        cache_tools: bool = False,
     ) -> dict | None:
         """Send one screenshot + prompt, return the parsed tool_use dict.
 
@@ -237,6 +238,14 @@ class AnthropicToolUseClient:
         ``time_bucket`` flows into :func:`_credit_claude_time` so per-
         step accounting in the TimeMeter still distinguishes extraction
         from grounding when both share this client.
+
+        ``cache_tools`` opts the tool spec into Anthropic's ephemeral
+        prompt cache (#421). The cache breakpoint sits on the last
+        tool definition so the entire ``tools`` block — name +
+        description + input schema — counts as cached input on hits.
+        Worth it for callers that fire the same tool repeatedly with a
+        stable schema (verify_gate is the canonical case); not worth
+        the per-request overhead for one-off calls.
         """
         if not self.api_key:
             logger.warning("%s: no API key", self._log_prefix)
@@ -246,14 +255,18 @@ class AnthropicToolUseClient:
         screenshot.save(buf, format="PNG")
         b64 = base64.b64encode(buf.getvalue()).decode()
 
+        tool_def: dict[str, Any] = {
+            "name": tool_name,
+            "description": tool_description,
+            "input_schema": input_schema,
+        }
+        if cache_tools:
+            tool_def["cache_control"] = {"type": "ephemeral"}
+
         payload = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "tools": [{
-                "name": tool_name,
-                "description": tool_description,
-                "input_schema": input_schema,
-            }],
+            "tools": [tool_def],
             "tool_choice": {"type": "tool", "name": tool_name},
             "messages": [{
                 "role": "user",

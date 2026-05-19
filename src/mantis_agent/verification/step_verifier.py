@@ -98,16 +98,23 @@ Output ONLY valid JSON:
 """
 
 
+_DEFAULT_VERIFY_MODEL = os.environ.get(
+    "MANTIS_VERIFY_MODEL", "claude-haiku-4-5-20251001",
+)
+
+
 class StepVerifier:
     """Verifies CUA step outcomes using before/after screenshots.
 
-    Uses Claude Sonnet API — same pattern as ClaudeGrounding.
-    Cheap (~$0.003/call), fast, vision-capable.
+    Uses Claude Haiku 4.5 by default — same pattern as ClaudeGrounding
+    but on a cheaper verifier-grade model. Cheap (~$0.0003/call), fast,
+    vision-capable. Operators that want the heavier model can pin it
+    via ``MANTIS_VERIFY_MODEL`` (#421).
     """
 
-    def __init__(self, api_key: str = "", model: str = "claude-opus-4-7"):
+    def __init__(self, api_key: str = "", model: str = ""):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-        self.model = model
+        self.model = model or _DEFAULT_VERIFY_MODEL
 
     def _call_claude(self, messages_content: list, max_tokens: int = 200) -> str:
         """Call Claude API with vision content. Returns response text."""

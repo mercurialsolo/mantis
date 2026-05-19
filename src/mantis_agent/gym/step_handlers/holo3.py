@@ -248,6 +248,18 @@ class Holo3StepHandler:
         failure_class = ""
         if not success and result.termination_reason in ("max_steps", "loop"):
             failure_class = "brain_loop_exhausted"
+        # #419 audit-triple: surface the brain's articulated reasoning
+        # for the action that drove this StepResult. The inner GymRunner
+        # ran some number of think→act iterations; the FINAL trajectory
+        # step's thinking is what produced the committed action — that's
+        # the reasoning that matters for post-mortem triage. Earlier
+        # iterations are visible per-step in the inner trajectory dump.
+        # Empty string when the trajectory is empty (paused immediately,
+        # no brain inference happened) so pack_step's truthiness check
+        # cleanly omits the field.
+        reasoning = ""
+        if result.trajectory:
+            reasoning = result.trajectory[-1].thinking or ""
         return StepResult(
             step_index=index,
             intent=step.intent,
@@ -255,4 +267,5 @@ class Holo3StepHandler:
             steps_used=result.total_steps,
             duration=result.total_time,
             failure_class=failure_class,
+            reasoning=reasoning,
         )

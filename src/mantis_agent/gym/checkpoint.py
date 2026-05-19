@@ -65,6 +65,17 @@ class StepResult:
     screenshot_png: bytes | None = field(default=None, repr=False, compare=False)
     last_action: Action | None = field(default=None, repr=False, compare=False)
 
+    # #419 audit-triple: the brain's articulated reasoning ("thinking" /
+    # extended-thinking blocks) that produced THIS step's action. Stamped
+    # by handlers that drive a brain (Holo3StepHandler pulls from the
+    # trajectory's final ``thinking`` field); handlers that don't run a
+    # brain (deterministic navigate / paginate / form fill / gate) leave
+    # it empty. Surfaced on every step in ``result.json`` so post-mortems
+    # see the *chain* of thought, not just the last step's. Deliberately
+    # not persisted in the checkpoint (resume doesn't need it) and not
+    # used in equality (so dataclass-replace round-trips ignore it).
+    reasoning: str = field(default="", repr=False, compare=False)
+
     # #300 follow-up: which dispatch path executed the *primary* click /
     # input action for this step. ``"som"`` = CDP-anchored
     # :meth:`~.xdotool_env.XdotoolGymEnv.cdp_click_at_point` (Set-of-Mark

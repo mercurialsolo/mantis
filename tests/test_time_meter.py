@@ -25,10 +25,16 @@ from mantis_agent.gym.time_meter import (
 
 def test_buckets_vocabulary_is_stable() -> None:
     """A widening of the bucket vocabulary should be deliberate — pinned
-    here so a stealth rename / drop forces a docs + dashboard update."""
+    here so a stealth rename / drop forces a docs + dashboard update.
+
+    #421 added ``claude_verify_haiku`` + ``claude_verify_opus_escalation``
+    so the cost report can show the Haiku/Opus split per run.
+    """
     assert BUCKETS == (
         "perceive", "think", "act", "settle", "claude_ground",
-        "claude_extract", "claude_verify", "load", "overhead",
+        "claude_extract", "claude_verify",
+        "claude_verify_haiku", "claude_verify_opus_escalation",
+        "load", "overhead",
     )
 
 
@@ -412,10 +418,11 @@ def test_claude_extractor_call_credits_claude_extract_by_default() -> None:
     assert meter.per_step[0]["claude_extract"] >= 0.01
 
 
-def test_claude_extractor_verify_calls_credit_claude_verify() -> None:
-    """``ClaudeExtractor.verify_gate`` routes through ``_call_with_tool_schema``
-    with ``_bucket="claude_verify"``, so the elapsed time lands in the
-    verify bucket rather than ``claude_extract``."""
+def test_claude_extractor_verify_calls_credit_claude_verify_haiku() -> None:
+    """``ClaudeExtractor.verify_gate`` routes through the Haiku verify
+    client with ``time_bucket="claude_verify_haiku"`` so cost reports
+    can split Haiku-default verify time from Opus escalation time
+    (#421). Neither bucket should leak into ``claude_extract``."""
     from unittest.mock import MagicMock, patch
 
     from PIL import Image
@@ -442,7 +449,10 @@ def test_claude_extractor_verify_calls_credit_claude_verify() -> None:
     with publish_dispatch(meter, step_idx=0):
         with patch("requests.post", _post):
             extractor.verify_gate(img, "filters visible")
-    assert meter.totals["claude_verify"] >= 0.01
+    # Haiku PASS — no escalation fires, so only the haiku bucket
+    # should accrue time.
+    assert meter.totals["claude_verify_haiku"] >= 0.01
+    assert meter.totals["claude_verify_opus_escalation"] == 0.0
     assert meter.totals["claude_extract"] == 0.0
 
 
