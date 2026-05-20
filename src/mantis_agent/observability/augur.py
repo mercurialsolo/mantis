@@ -43,6 +43,70 @@ except Exception:  # noqa: BLE001 — any import-time failure → disabled
     _AUGUR_AVAILABLE = False
 
 
+def _patch_streaming_for_visibility() -> None:
+    """Temporary diagnostic — elevate SDK streaming errors to WARN.
+
+    augur-sdk's ``StreamingSink._post_json`` / ``_post_multipart`` /
+    ``_safe_call`` log at DEBUG when the server returns >=400 or when a
+    background-thread HTTP call raises. Modal suppresses DEBUG, so a
+    server rejection on per-step PUT (the exact #509 verification gap)
+    is invisible in ``modal app logs``. Patch the three methods to
+    emit at WARN instead. Remove once #509 is operationally stable.
+    """
+    if not _AUGUR_AVAILABLE:
+        return
+    try:
+        import augur_sdk.streaming as _stream  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001
+        return
+    if getattr(_stream, "_mantis_patched", False):
+        return
+    sink_cls = _stream.StreamingSink
+
+    def _verbose_post_json(self, path, payload, *, method="POST"):  # noqa: ANN001
+        import json
+        url = self.dsn.base_url + path
+        body = json.dumps(payload).encode("utf-8")
+        resp = self._http.request(
+            method, url, body=body, headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.dsn.token}",
+            },
+        )
+        if resp.status >= 400:
+            logger.warning(
+                "augur stream %s %s -> %s %s",
+                method, path, resp.status, resp.data[:200],
+            )
+
+    def _verbose_post_multipart(self, path, payload):  # noqa: ANN001
+        url = self.dsn.base_url + path
+        resp = self._http.request(
+            "POST", url,
+            fields={"image": ("shot.png", payload, "image/png")},
+            headers={"Authorization": f"Bearer {self.dsn.token}"},
+        )
+        if resp.status >= 400:
+            logger.warning(
+                "augur stream upload %s -> %s %s",
+                path, resp.status, resp.data[:200],
+            )
+
+    def _verbose_safe_call(self, fn):  # noqa: ANN001
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("augur stream background error: %r", exc)
+
+    sink_cls._post_json = _verbose_post_json
+    sink_cls._post_multipart = _verbose_post_multipart
+    sink_cls._safe_call = _verbose_safe_call
+    _stream._mantis_patched = True
+
+
+_patch_streaming_for_visibility()
+
+
 # ── Mantis → Augur vocabulary maps ───────────────────────────────────
 
 # Mantis ``_healing_events`` carry the per-step reasoning trail with
@@ -282,15 +346,19 @@ class AugurAdapter:
         """Stage a screenshot. Returns the bundle-relative path or None.
 
         ``kind`` is ``"pre"`` or ``"post"`` per the SDK convention.
-        Returns the relative path the SDK assigned (which the caller
-        passes back as ``observation_pre`` / ``observation_post`` on
-        the StepTrace) or None on any failure / no PNG.
+        Callers pass Mantis's 0-based ``StepResult.step_index``; the
+        adapter bumps to 1-based on the way into the SDK so the path
+        / URL match :meth:`_build_step_trace`'s 1-based numbering
+        (Augur's schema requires ``step_index >= 1``). Returns the
+        relative path the SDK assigned (which the caller passes back
+        as ``observation_pre`` / ``observation_post`` on the StepTrace)
+        or None on any failure / no PNG.
         """
         if not self.active or not png:
             return None
         try:
             return self._session.attach_observation(
-                step_index=step_index, kind=kind, png_bytes=png,
+                step_index=step_index + 1, kind=kind, png_bytes=png,
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("AugurAdapter.attach_observation failed: %s", exc)
@@ -315,7 +383,11 @@ class AugurAdapter:
             )
             self._session.record_step(trace)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("AugurAdapter.record_step failed: %s", exc)
+            # Temporarily elevated from debug → warning to surface
+            # silent put_step failures in Modal logs while #509 is
+            # being verified end-to-end. Revert to ``debug`` once
+            # the workspace timeline reliably populates.
+            logger.warning("AugurAdapter.record_step failed: %r", exc)
 
     def drain_healing_events(self, healing_events: list[dict[str, Any]]) -> None:
         """Emit any healing events accumulated past the last cursor.
@@ -445,9 +517,18 @@ class AugurAdapter:
         # All optional TypedDict fields (total=False) must be either
         # absent or non-empty for the schema validator. Build the
         # required-only base, then conditionally add the optionals.
+        #
+        # Augur's step_index schema requires ``>= 1`` (1-based), but
+        # Mantis's StepResult.step_index is 0-based. Bump by 1 on the
+        # way out so server-side validation passes — the server returns
+        # 422 ``"step: 0 is less than the minimum of 1"`` otherwise,
+        # silently dropping every per-step PUT. The ``step_id`` string
+        # uses the 1-based index too so it lines up with the URL path.
+        raw_index = int(getattr(sr, "step_index", 0))
+        augur_index = raw_index + 1
         trace: dict[str, Any] = {
-            "step_id": f"step-{int(getattr(sr, 'step_index', 0)):04d}",
-            "step_index": int(getattr(sr, "step_index", 0)),
+            "step_id": f"step-{augur_index:04d}",
+            "step_index": augur_index,
             "intent": str(getattr(sr, "intent", "") or "")[:500] or "(no intent)",
             "step_type": action_type or "unknown",
             "required": True,
@@ -479,9 +560,13 @@ class AugurAdapter:
         detail = ev.get("detail")
         if not isinstance(detail, dict):
             detail = {"raw": detail} if detail is not None else {}
+        # Match the 1-based ``step_index`` convention used by
+        # :meth:`_build_step_trace` so DecisionEvents line up with
+        # StepTraces in the workspace timeline.
+        raw_index = int(ev.get("step_index") or 0)
         event: dict[str, Any] = {
             "ts": str(ev.get("ts") or ""),
-            "step_index": int(ev.get("step_index") or 0),
+            "step_index": raw_index + 1,
             "layer": layer,
             "kind": kind,
             "summary": str(ev.get("summary") or "")[:200],

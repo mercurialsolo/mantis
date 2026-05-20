@@ -264,10 +264,21 @@ class RunExecutor:
         augur: AugurAdapter | None = getattr(runner, "_augur", None)
         if augur is None or not augur.active:
             return
+        step_index = int(getattr(step_result, "step_index", 0))
+        png = getattr(step_result, "screenshot_png", None)
+        png_size = len(png) if png else 0
+        # WARN-level so the per-step emission is visible in Modal logs.
+        # Helps diagnose "workspace shows the run but no timeline" type
+        # bugs where the SDK swallows put_step errors silently.
+        # Remove once #509 is operationally stable.
+        logger.warning(
+            "AugurAdapter._emit_augur_step: step=%d png_bytes=%d success=%s",
+            step_index, png_size, getattr(step_result, "success", False),
+        )
         observation_post = augur.attach_observation(
-            step_index=int(getattr(step_result, "step_index", 0)),
+            step_index=step_index,
             kind="post",
-            png=getattr(step_result, "screenshot_png", None),
+            png=png,
         )
         augur.record_step(
             step_result=step_result,

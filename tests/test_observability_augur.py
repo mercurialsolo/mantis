@@ -134,7 +134,8 @@ def test_bundle_writes_and_validates(monkeypatch, tmp_path: Path):
     assert manifest is not None
     assert (tmp_path / "manifest.json").exists()
     assert (tmp_path / "trace.json").exists()
-    assert (tmp_path / "screenshots" / "0002_post.png").exists()
+    # Mantis step_index=2 → Augur 1-based step_index=3 → screenshots/0003_post.png
+    assert (tmp_path / "screenshots" / "0003_post.png").exists()
 
     issues = validate_bundle(tmp_path)
     assert issues == [], f"bundle failed validation: {issues}"
@@ -158,7 +159,8 @@ def test_three_augur_layers_land(monkeypatch, tmp_path: Path):
     ])
     a.close(status="completed")
 
-    events_file = tmp_path / "events" / "0001.jsonl"
+    # Mantis step_index=1 → Augur 1-based → events/0002.jsonl
+    events_file = tmp_path / "events" / "0002.jsonl"
     assert events_file.exists()
     layers = {
         json.loads(line)["layer"]
@@ -180,7 +182,8 @@ def test_unknown_layer_falls_back_to_runner(monkeypatch, tmp_path: Path):
          "summary": "should not crash", "detail": {}},
     ])
     a.close(status="completed")
-    events_file = tmp_path / "events" / "0001.jsonl"
+    # Mantis step_index=1 → Augur 1-based → events/0002.jsonl
+    events_file = tmp_path / "events" / "0002.jsonl"
     layers = [json.loads(line)["layer"] for line in events_file.read_text().splitlines() if line.strip()]
     assert layers == ["runner"]
 
