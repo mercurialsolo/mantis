@@ -241,3 +241,26 @@ def test_non_fatal_on_emit_error(monkeypatch, tmp_path: Path):
     # set_status path swallowed too:
     a._session.set_status = boom  # type: ignore[assignment]
     assert a.close(status="halted") is None
+
+
+def test_step_index_and_attempt_are_clamped_to_augur_minimums(monkeypatch, tmp_path: Path):
+    """Augur's StepTrace schema requires step_index>=1 and
+    recovery_decision.attempt>=1. Mantis is 0-based for both; the
+    adapter must bump on the way out so per-step PUTs aren't silently
+    rejected with HTTP 422 ``"step: 0 is less than the minimum of 1"``
+    (the actual symptom from the #509 verification cycle).
+    """
+    from types import SimpleNamespace
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="bump_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    # 0-based attempt — typical Mantis RecoveryDecision shape
+    sr = _FakeStepResult(step_index=0)
+    sr.recovery_decision = SimpleNamespace(type="retry", reason="x", attempt=0)
+    trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
+    assert trace["step_index"] == 1, "Mantis 0 → Augur 1"
+    assert trace["step_id"] == "step-0001"
+    assert trace["recovery_decision"]["attempt"] == 1, "0 clamped to schema minimum"
+
+    # Observation paths should also be 1-based (line up with step_id)
+    post = a.attach_observation(step_index=0, kind="post", png=_PNG)
+    assert post == "screenshots/0001_post.png"

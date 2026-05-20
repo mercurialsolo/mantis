@@ -508,10 +508,19 @@ class AugurAdapter:
             rd_type = (
                 rd_type.value if hasattr(rd_type, "value") else str(rd_type)
             )
+            # Augur's schema requires ``attempt >= 1``. Mantis's
+            # RecoveryDecision.attempt convention isn't strictly
+            # 0-based or 1-based across handlers — clamp to >=1 on
+            # the way out so server-side validation passes without
+            # us guessing semantics. The server's error message for
+            # a violation is the misleading
+            # ``"step: 0 is less than the minimum of 1"`` (it reports
+            # the field VALUE, not the field PATH), which is what
+            # actually surfaced during the #509 verification cycle.
             recovery_decision = {
                 "type": _RECOVERY_TYPE_MAP.get(rd_type, "none"),
                 "reason": getattr(rd_obj, "reason", "") or "",
-                "attempt": int(getattr(rd_obj, "attempt", 0) or 0),
+                "attempt": max(1, int(getattr(rd_obj, "attempt", 0) or 0)),
             }
 
         # All optional TypedDict fields (total=False) must be either
