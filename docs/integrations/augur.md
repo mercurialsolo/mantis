@@ -123,6 +123,27 @@ Mantis runner status maps onto `RunStatus`:
 | `MANTIS_VERSION` | Surfaced as `client.version` on the manifest — useful when bisecting which build produced a bundle. |
 | `MANTIS_GIT_SHA` | Surfaced as `client.git_sha` on the manifest. |
 
+## Log streaming (augur-sdk 0.1.3+)
+
+`AugurAdapter.append_log(text, *, step_index=None, name="run")` is a
+thin wrapper over `DebugSession.append_log` (added upstream in 0.1.3).
+When streaming is enabled, it POSTs the chunk to
+`/api/v1/runs/<run_id>/logs` — the server appends it to
+`logs/<name>.log` (or `logs/step-<idx>.log` when `step_index` is set),
+bounded at 1 MB per file. Workspace surfaces these in the per-step
+**logs** panel.
+
+The wrapper is a clean no-op when:
+- The runtime ships an older `augur-sdk` install without `append_log`
+- No `AUGUR_DSN` is set (no server to stream to)
+
+Mantis does not auto-pipe `logger.*` output into this surface today —
+callers explicitly call `runner._augur.append_log(...)` when they have
+text worth showing in the viewer. Per-step structured data already
+goes through `record_step` / `record_event`; `append_log` is for
+free-text additions (e.g. raw model output dumps, recovery rationale
+prose, long verifier explanations).
+
 ## Coexistence with `TraceExporter`
 
 `mantis_agent.gym.trace_exporter.TraceExporter` keeps writing one JSON
