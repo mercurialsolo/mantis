@@ -77,6 +77,21 @@ See [operations/cost.md](../operations/cost.md) for the full rate-tuning workflo
 | `MANTIS_TRACE_EXPORT_DIR` | unset | Enable per-run trace export. When set, every completed / halted / cancelled / paused run writes `<dir>/<tenant_id>/<run_id>.json` with the full step list, costs, status, and predicted/observed outcomes. Empty `tenant_id` falls back to `__shared__/`. Off by default — feature flag for the continual-fine-tuning pipeline. |
 | `MANTIS_TRACE_INCLUDE_SCREENSHOTS` | unset | When truthy (`1`/`true`/`yes`/`on`) and trace export is enabled, also persists per-step PNG screenshots to `<dir>/<tenant_id>/<run_id>_screens/<step:04d>.png`. Default off because screenshot bytes ~100× the on-disk trace size. |
 
+## Augur observability (#509)
+
+Active only when the `augur-sdk` package is importable; install via
+`pip install 'mantis-agent[observability]'`. See
+[Augur integration](../integrations/augur.md) for the full contract.
+
+| Var | Default | Effect |
+|---|---|---|
+| `AUGUR_DSN` | unset | Sentry-style DSN. When set, the SDK opens a streaming sink to the workspace alongside the on-disk bundle. When unset, only the bundle is written. |
+| `AUGUR_CAPTURE_MODE` | `screenshots` | One of `off` / `metadata` / `trace` / `screenshots` / `video` / `model_io` / `dispatch` / `replay` / `full`. Controls what the SDK captures. |
+| `MANTIS_AUGUR_DIR` | unset | Override the root directory where bundles are written. Run id is still appended. Falls back to `<MANTIS_DATA_DIR>/augur/`. |
+| `MANTIS_AUGUR_DISABLED` | unset | Truthy (`1`/`true`/`yes`/`on`) → adapter is a no-op even with the SDK installed. Useful for tests / CI. |
+| `MANTIS_VERSION` | unset | Surfaced as `client.version` on the bundle manifest — useful for bisecting which build produced a bundle. |
+| `MANTIS_GIT_SHA` | unset | Surfaced as `client.git_sha` on the bundle manifest. |
+
 ## Logging
 
 | Var | Default | Effect |

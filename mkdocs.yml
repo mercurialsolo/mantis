@@ -128,6 +128,7 @@ nav:
       - Recipes (jobs, e-commerce, news, real-estate): integrations/recipes.md
       - Embedding MicroPlanRunner: integrations/embedding-microplanrunner.md
       - Integrating any agent: integrations/any-agent.md
+      - Augur observability: integrations/augur.md
   - Reference:
       - reference/index.md
       - HTTP API: api.md

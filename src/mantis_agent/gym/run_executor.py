@@ -39,13 +39,20 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from ..actions import Action, ActionType
+from ..observability.augur import AugurAdapter
 from ..plan_decomposer import MicroIntent
 from . import failure_class as failure_class_mod
 from . import step_snapshot
 from .checkpoint import RunCheckpoint, StepResult
+
+
+def _utc_iso_now() -> str:
+    """ISO-8601 UTC timestamp matching the Augur schema's ``YYYY-MM-DDThh:mm:ssZ``."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 if TYPE_CHECKING:
     from ..plan_decomposer import MicroPlan
@@ -171,6 +178,26 @@ class RunExecutor:
                 )
                 return state.results
 
+        # #509 Augur observability — open a DebugSession for the whole run.
+        # No-op when ``augur-sdk`` isn't installed or
+        # ``MANTIS_AUGUR_DISABLED`` is set. The adapter is stashed on the
+        # runner so the per-step loop below and ``_finalize`` can reach it
+        # without an extra parameter on every helper signature.
+        # ``model`` tag populates the workspace's MODEL column. Read the
+        # brain's ``model_name`` (Holo3-35B-A3B / Claude (claude-3.5-…) /
+        # etc.); blank string when the brain doesn't expose one.
+        brain = getattr(runner, "brain", None)
+        model_name = str(getattr(brain, "model_name", "") or "") if brain is not None else ""
+        runner._augur = AugurAdapter(
+            run_id=str(getattr(runner, "run_key", "") or runner.plan_signature or "run"),
+            tenant_id=str(getattr(runner, "tenant_id", "") or ""),
+            session_name=str(getattr(runner, "session_name", "") or ""),
+            extra_tags={
+                "plan_signature": runner.plan_signature or "",
+                "model": model_name,
+            },
+        )
+
         if not runner._results_base_url and plan.steps:
             runner._results_base_url = runner._extract_url_from_intent(
                 plan.steps[0].intent
@@ -202,6 +229,7 @@ class RunExecutor:
                 self._handle_loop_step(plan, step, state)
                 continue
 
+            step_started_at = _utc_iso_now()
             pre_snapshot = self._dispatch_step(plan, state, effective_step)
 
             self._maybe_demote_form_no_change(state, effective_step, pre_snapshot)
@@ -228,8 +256,58 @@ class RunExecutor:
             # plug in via the same hook.
             self._consult_critic(plan, state, step, step_result, continued)
 
+            # #509: emit the step + any healing events accumulated on
+            # this iteration to Augur. Runs after _consult_critic so
+            # critic-emitted healing events are picked up too. Any
+            # adapter failure is swallowed internally — never breaks
+            # the run.
+            self._emit_augur_step(step_result, step_started_at)
+
         self._finalize(plan, state)
         return state.results
+
+    def _emit_augur_step(self, step_result: StepResult, started_at: str) -> None:
+        """Per-step Augur emission — observation, trace, decision events."""
+        runner = self.parent
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is None or not augur.active:
+            return
+        step_index = int(getattr(step_result, "step_index", 0))
+        png = getattr(step_result, "screenshot_png", None)
+        # Verbose diagnostic — gated by MANTIS_AUGUR_VERBOSE so production
+        # runs stay quiet but deploy verification can confirm the wedge
+        # fires per-step in Modal logs (Modal suppresses INFO/DEBUG).
+        from ..observability.augur import is_verbose as _augur_verbose
+        if _augur_verbose():
+            logger.warning(
+                "AugurAdapter._emit_augur_step: step=%d png_bytes=%d success=%s",
+                step_index, len(png) if png else 0,
+                getattr(step_result, "success", False),
+            )
+        observation_post = augur.attach_observation(
+            step_index=step_index,
+            kind="post",
+            png=png,
+        )
+        augur.record_step(
+            step_result=step_result,
+            started_at=started_at,
+            ended_at=_utc_iso_now(),
+            observation_post=observation_post,
+        )
+        # #509: surface the brain's planner reasoning as an Augur
+        # planner-layer DecisionEvent. The workspace's "PLANNER REASONING"
+        # panel reads from these — without it the panel falls back to
+        # demo placeholder text. Only fires when the step has reasoning
+        # attached (deterministic handlers like ``navigate`` / ``gate``
+        # don't have any, so they get the panel's normal empty state).
+        reasoning = getattr(step_result, "reasoning", "") or ""
+        if reasoning.strip():
+            augur.record_planner_reasoning(
+                step_index=step_index, reasoning=reasoning,
+            )
+        healing = getattr(runner, "_healing_events", None) or []
+        augur.drain_healing_events(healing)
 
     def _consult_critic(
         self,
@@ -1364,6 +1442,87 @@ class RunExecutor:
             )
         except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
             logger.debug("trace export failed: %s", exc)
+
+        # #509 close the Augur DebugSession (flush the on-disk bundle +
+        # finalize the streaming sink). Status mirrors the runner's
+        # terminal verdict so the Augur workspace shows the same outcome
+        # as ``status.json``. Adapter swallows internal errors.
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is not None:
+            # Surface run-aggregate fields the per-step PUTs don't carry
+            # so the Runs-list columns populate: cost metrics + the
+            # canonical failure class for the first failing step (Augur
+            # uses this as the run-level failure class chip).
+            self._emit_augur_aggregate_metrics(state.results)
+            self._emit_augur_failure_class_tag(state.results)
+            augur.close(status=runner._final_status or None)
+            runner._augur = None
+
+    def _emit_augur_aggregate_metrics(self, results: list[StepResult]) -> None:
+        """Send cost-meter totals as both session tags and metric
+        DecisionEvents (#509).
+
+        The Augur workspace's Cost column reads from session tags
+        (parallel to MODEL — which we already tag). The metric
+        DecisionEvent is the secondary surface for time-series cost
+        analysis. Sending both means the column populates AND the
+        analyst-side query layer has structured data.
+        """
+        runner = self.parent
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is None or not augur.active:
+            return
+        meter = getattr(runner, "cost_meter", None)
+        if meter is None:
+            return
+        try:
+            gpu, claude, proxy, total = meter.totals()
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug("augur cost-meter totals() failed: %s", exc)
+            return
+        elapsed = 0.0
+        try:
+            elapsed = float(meter.elapsed_seconds() or 0.0)
+        except Exception:  # noqa: BLE001
+            pass
+        # Tags are what the Run identity panel + run-list COST column
+        # read. Keep them as plain strings (the SDK serializes them
+        # verbatim) — Augur parses ``cost_usd`` as the canonical total.
+        augur.add_tag("cost_usd", f"{total:.4f}")
+        augur.add_tag("cost_gpu_usd", f"{gpu:.4f}")
+        augur.add_tag("cost_claude_usd", f"{claude:.4f}")
+        augur.add_tag("cost_proxy_usd", f"{proxy:.4f}")
+        augur.add_tag("elapsed_seconds", f"{elapsed:.2f}")
+        # The metric event is the structured/query-able surface — keeps
+        # the same data shape as other Augur ``kind="metric"`` events.
+        augur.record_cost_metric(
+            name="cost_total_usd",
+            value=round(total, 4),
+            detail={
+                "gpu_usd": round(gpu, 4),
+                "claude_usd": round(claude, 4),
+                "proxy_usd": round(proxy, 4),
+                "elapsed_seconds": round(elapsed, 2),
+                "steps_executed": len(results),
+            },
+        )
+
+    def _emit_augur_failure_class_tag(self, results: list[StepResult]) -> None:
+        """Tag the session with the first non-empty failure class (#509)."""
+        runner = self.parent
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is None or not augur.active:
+            return
+        for r in results:
+            fc = str(getattr(r, "failure_class", "") or "").strip()
+            if fc:
+                augur.add_tag("failure_class", fc)
+                return
+        # Also surface the runner's terminal status so any downstream
+        # filtering ("show me halted runs") can read it as a tag.
+        halt_reason = str(getattr(runner, "_final_halt_reason", "") or "").strip()
+        if halt_reason:
+            augur.add_tag("halt_reason", halt_reason)
 
     # ── Helpers ─────────────────────────────────────────────────────────
 

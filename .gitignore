@@ -42,6 +42,11 @@ outputs/
 reports/
 screenshots/
 
+# Local MANTIS_DATA_DIR fallback. Without explicit override, the runner
+# (and the Augur adapter from #509) writes per-run state under ./data/.
+# Always machine-local; never committed.
+data/
+
 # Run output artifacts (CSVs at repo root); CSVs under tasks/ and plans/ stay tracked
 /leads_*.csv
 /boattrader_leads*.csv
