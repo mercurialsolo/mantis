@@ -10,7 +10,7 @@ def test_setup_env_proxy_disabled_ignores_proxy_env(monkeypatch) -> None:
     monkeypatch.setenv("PROXY_USER", "user")
     monkeypatch.setenv("PROXY_PASS", "pass")
 
-    env, proxy_proc = setup_env(
+    env, proxy_proc, _proxy_diag = setup_env(
         base_url="https://news.ycombinator.com",
         run_id="20260507_000000",
         session_name="hn_smoke",
