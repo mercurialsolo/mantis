@@ -181,13 +181,39 @@ names — `prompt_tokens` / `completion_tokens` — with
 construct a modelio record by hand from an Anthropic response or
 the SDK's Draft 2020-12 validation will reject it.
 
-**Status (PR #525..#528 chain):** the plumbing landed in PR B-1
-(#526) and the **planner** layer is wired in PR B-2 (#527 →
-`plan_decomposer.decompose_text`). The remaining four layers
-(grounder, verifier, step_recovery, judge) are pending PRs in the
-#523 multi-PR campaign and capture nothing today. Default behavior
-when no layer is wired: the entire `modelio/` directory is absent
-from the bundle, exactly as it was before the plumbing landed.
+**Status (#523 multi-PR campaign — closed):** all four LLM layers
+Mantis actually has are wired. The fifth layer the SDK enum lists
+(`judge`) is N/A for Mantis — no dedicated judge LLM call site
+exists in the codebase.
+
+| Layer | Where it's wired | PR |
+|---|---|---|
+| `planner` | `plan_decomposer.decompose_text` — inline `record_anthropic_modelio` call after the `requests.post` | #527 |
+| `grounding` | `gym/step_handlers/form.py:ClaudeGuidedFormHandler.execute` — wraps the dispatch via `_dispatch(...)` helper; covers all ~10 `target_provider.find_*` calls | #531 |
+| `verifier` | `gym/_runner_helpers.py:ensure_results_filters` (visual filter gate) + `gym/_runner_helpers.py:execute_step` (plan-author `step.gate=true` branch) | #532 |
+| `step_recovery` | `agentic_recovery._call_recovery_tool` (inline wire) + `gym/step_recovery.StepRecoveryPolicy._try_agentic_recovery` (caller wrap) | #533 |
+| `judge` | N/A — no judge layer in Mantis | — |
+
+Each wire is a no-op when augur is None or inactive — the default
+control path is unchanged from before any of this landed. When
+augur is active, an entire run with all four layers exercising
+Anthropic will produce something like:
+
+```
+modelio/
+├── 0000-planner-001.json       # plan_decomposer (run-scoped)
+├── 0003-grounding-001.json     # ClaudeGuidedFormHandler on step 2
+├── 0003-grounding-002.json     # second find_form_target on same step
+├── 0004-verifier-001.json      # step.gate=true verify
+├── 0005-step_recovery-001.json # agentic recovery analysis
+└── ...
+```
+
+Open #523 acceptance items not addressed by this campaign (filed
+as separate follow-ups when scheduled): `references` field on
+each StepTrace pointing at its modelio files, redaction policy
+tightening, `capture_mode`-gated emission (skip on
+`metadata`-only runs), 50 MB modelio bundle-size budget warning.
 
 ## Continuous verdict score (augur-sdk 0.1.7+)
 
