@@ -228,16 +228,16 @@ wheels = [
 
 [[package]]
 name = "augur-sdk"
-version = "0.1.4"
+version = "0.1.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
     { name = "referencing" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a9/00/162dd7201ad692ac1c801184c3ab6bfd203989fc585e69fd15035853d1b2/augur_sdk-0.1.4.tar.gz", hash = "sha256:fbf04d1ff95e6e14f1e33cad11cada08414ac9f819fd703a0b08eaeee95fe211", size = 47675, upload-time = "2026-05-20T05:24:56.854Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/1f/2d904199e2600ea1aee6a316f2698364abc735cbef22f7049619f910af4a/augur_sdk-0.1.7.tar.gz", hash = "sha256:47fa32bcec8e9cb462a3bc87e4d2021bc07c432a2d6fe2f54bf083f4dd1816bc", size = 58357, upload-time = "2026-05-20T10:59:42.808Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f0/e2/89ef53017c8949971c3913004fab1f554e1c14b48706517558c715eacd64/augur_sdk-0.1.4-py3-none-any.whl", hash = "sha256:98f6e3f8ca3983dee683be59337f302b1d060d907b6e57825fec42789a4ab761", size = 51935, upload-time = "2026-05-20T05:24:54.946Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/f9/297fbcccf509d698a4dee0ceae935721a3e985444ad961c9c5401e6c7b57/augur_sdk-0.1.7-py3-none-any.whl", hash = "sha256:fde3b8674bd00ec6c5ed10f2dccb076e2bc1456b2ab7eee3dd67b667dfeaba0e", size = 61149, upload-time = "2026-05-20T10:59:41.371Z" },
 ]
 
 [[package]]
@@ -1537,7 +1537,7 @@ viewer = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", marker = "extra == 'gpu'", specifier = ">=0.30" },
-    { name = "augur-sdk", marker = "extra == 'observability'", specifier = ">=0.1.4" },
+    { name = "augur-sdk", marker = "extra == 'observability'", specifier = ">=0.1.7" },
     { name = "bitsandbytes", marker = "extra == 'gpu'", specifier = ">=0.43" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.100" },
     { name = "fastapi", marker = "extra == 'viewer'", specifier = ">=0.100" },

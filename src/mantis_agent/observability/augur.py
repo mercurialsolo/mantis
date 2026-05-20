@@ -404,6 +404,8 @@ class AugurAdapter:
         observation_pre: str | None = None,
         observation_post: str | None = None,
         step_type: str = "",
+        costs: dict[str, Any] | None = None,
+        latency: dict[str, Any] | None = None,
     ) -> None:
         """Emit a StepTrace for a completed step.
 
@@ -414,6 +416,21 @@ class AugurAdapter:
         the runner doesn't stamp ``StepResult.last_action`` (which is
         the common case today — Mantis's runner sets ``last_action``
         only on a few code paths).
+
+        ``costs`` (#518) populates the augur-sdk 0.1.6+
+        :ref:`StepTrace.costs` field — a typed object the workspace
+        uses to render the per-step COST in the step inspector.
+        Schema keys: ``total_usd``, ``model_usd``, ``gpu_usd``,
+        ``proxy_usd``, ``tokens_in``, ``tokens_out``,
+        ``cache_hit_tokens``. Pass ``None`` (or omit) when the
+        step didn't track cost.
+
+        ``latency`` (also augur-sdk 0.1.6+) populates
+        :ref:`StepTrace.latency` — per-layer ms breakdown
+        (``planner_ms`` / ``grounding_ms`` / ``dispatch_ms`` /
+        ``verifier_ms`` / ``recovery_ms`` / ``total_ms``) the
+        workspace renders alongside costs. Same conventions:
+        pass ``None`` to omit; zero-value keys are stripped.
         """
         if not self.active:
             return
@@ -422,6 +439,8 @@ class AugurAdapter:
                 step_result, started_at, ended_at,
                 observation_pre, observation_post,
                 step_type=step_type,
+                costs=costs,
+                latency=latency,
             )
             self._session.record_step(trace)
         except Exception as exc:  # noqa: BLE001
@@ -491,24 +510,33 @@ class AugurAdapter:
         name: str,
         value: float,
         detail: dict[str, Any] | None = None,
+        step_index: int | None = None,
     ) -> None:
-        """Emit a run-level metric DecisionEvent (#509).
+        """Emit a metric DecisionEvent on the open session (#509 / #518).
 
         Mantis's :class:`gym.cost_meter.CostMeter` tracks per-bucket
         and total USD spend. Surfacing them as Augur ``kind="metric"``
         events lets the workspace's COST column populate and gives
         cost-vs-time analyses something to query against. Layer is
-        ``runner`` (the Mantis runner owns the meter); step_index=0
-        because cost is run-aggregate, not per-step.
+        ``runner`` (the Mantis runner owns the meter).
+
+        ``step_index=None`` (default) treats the metric as run-level
+        and parks it at the minimum allowed index (``1``). Pass an
+        explicit 0-based Mantis step index for per-step cost deltas
+        (#518) — the adapter bumps to 1-based for the Augur schema
+        the same way :meth:`_build_step_trace` does.
         """
         if not self.active:
             return
         payload = {"name": str(name), "value": float(value)}
         if detail:
             payload.update(detail)
+        augur_step_index = (
+            int(step_index) + 1 if step_index is not None else 1
+        )
         event: dict[str, Any] = {
             "ts": _utc_now_iso(),
-            "step_index": 1,  # Augur requires >=1; run-level uses min
+            "step_index": augur_step_index,
             "layer": "runner",
             "kind": "metric",
             "summary": f"{name}={value}",
@@ -628,6 +656,8 @@ class AugurAdapter:
         observation_post: str | None,
         *,
         step_type: str = "",
+        costs: dict[str, Any] | None = None,
+        latency: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         last_action = getattr(sr, "last_action", None)
         action_type = ""
@@ -736,8 +766,22 @@ class AugurAdapter:
             "events": [],
             "logs": [],
         }
+        # Run the canonical classifier when the StepResult didn't carry
+        # a class (or carried the placeholder "unknown"). Closes
+        # mercurialsolo/augur#49 — without this, every halt streamed
+        # via DSN landed as failure_class="unknown" because the SDK
+        # streaming path didn't run classify() the way the file-export
+        # path does.
         failure_class = str(getattr(sr, "failure_class", "") or "")
-        if failure_class:
+        if not failure_class or failure_class == "unknown":
+            from ..gym.failure_class import classify
+
+            page_title = str(getattr(sr, "page_title", "") or "")
+            data = str(getattr(sr, "data", "") or "")
+            derived = classify(data, page_title)
+            if derived and derived != "unknown":
+                failure_class = derived
+        if failure_class and failure_class != "unknown":
             trace["failure_class"] = failure_class
         if grounding is not None:
             trace["grounding"] = grounding
@@ -747,6 +791,26 @@ class AugurAdapter:
             trace["observation_post"] = observation_post
         if recovery_decision is not None:
             trace["recovery_decision"] = recovery_decision
+        # #518 — populate the augur-sdk 0.1.6+ ``StepTrace.costs`` field
+        # so the workspace step-inspector renders per-step USD spend
+        # next to its intent + verdict. Only emit when the producer
+        # captured non-zero numbers (avoid noisy zero-cost entries
+        # for deterministic navigate / verify steps).
+        if costs and any(float(v or 0) > 0 for v in costs.values()):
+            trace["costs"] = {
+                k: (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+                for k, v in costs.items()
+                if v not in (None, 0, 0.0)
+            }
+        # #518 — same shape as ``costs`` but for the 0.1.6+
+        # ``StepTrace.latency`` field. Per-layer ms breakdown derived
+        # from Mantis's TimeMeter buckets.
+        if latency and any(float(v or 0) > 0 for v in latency.values()):
+            trace["latency"] = {
+                k: int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+                for k, v in latency.items()
+                if v not in (None, 0, 0.0)
+            }
         return trace
 
     def _record_decision_event(self, ev: dict[str, Any]) -> None:

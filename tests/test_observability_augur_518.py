@@ -1,0 +1,312 @@
+"""Tests for the #518 cost-reduction sweep additions to the Augur wedge.
+
+Kept in a separate file from ``test_observability_augur.py`` because that
+file already runs ~22 cases and is the canonical home for #509's
+acceptance criteria — keeping the sweep tests grouped makes it easy to
+revert in isolation if a regression surfaces.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+from pathlib import Path
+from random import Random
+
+import pytest
+
+pytest.importorskip("augur_sdk")
+
+from PIL import Image
+
+from mantis_agent._anthropic.client import (
+    _resolve_image_quality,
+    encode_screenshot_for_claude,
+)
+from mantis_agent.observability.augur import AugurAdapter
+
+
+_PNG = (
+    b"\x89PNG\r\n\x1a\n"
+    + b"\x00\x00\x00\rIHDR"
+    + b"\x00" * 13
+    + b"\x00\x00\x00\x00IEND\xaeB\x60\x82"
+)
+
+
+class _FakeStepResult:
+    def __init__(self, *, step_index: int = 0, intent: str = "x"):
+        self.step_index = step_index
+        self.intent = intent
+        self.success = True
+        self.skip = False
+        self.reversed = False
+        self.duration = 0.1
+        self.failure_class = ""
+        self.executor_backend = ""
+        self.last_action = None
+        self.verdict = None
+        self.recovery_decision = None
+        self.screenshot_png = _PNG
+
+
+# ── Item 1: image encoder ───────────────────────────────────────────────
+
+
+def test_encode_screenshot_jpeg_default_smaller_than_png(monkeypatch):
+    """JPEG q=85 default should beat PNG by >50% on realistic
+    screenshot data (UI noise + text). PNG wins on flat-color images,
+    so we test on a noisy one closer to real browser output."""
+    monkeypatch.delenv("MANTIS_CLAUDE_IMAGE_FORMAT", raising=False)
+    monkeypatch.delenv("MANTIS_CLAUDE_IMAGE_QUALITY", raising=False)
+    rnd = Random(0)
+    img = Image.new("RGB", (1440, 900))
+    px = img.load()
+    for y in range(900):
+        for x in range(1440):
+            px[x, y] = (
+                rnd.randint(200, 255),
+                rnd.randint(200, 255),
+                rnd.randint(200, 255),
+            )
+    jpeg_b64, jpeg_mt = encode_screenshot_for_claude(img)
+    png_b64, png_mt = encode_screenshot_for_claude(img, format="png")
+    assert jpeg_mt == "image/jpeg"
+    assert png_mt == "image/png"
+    jpeg_size = len(jpeg_b64) * 3 // 4
+    png_size = len(png_b64) * 3 // 4
+    assert jpeg_size < png_size * 0.5, (
+        f"JPEG ({jpeg_size}B) should be <50% of PNG ({png_size}B) on noisy data"
+    )
+
+
+def test_encode_screenshot_preserves_dimensions_for_grounding(monkeypatch):
+    """Critical: encoder must NOT downsample. Claude returns click
+    coords in input-pixel space and the runner dispatches them against
+    the original viewport — any dimension change silently mis-places
+    every click."""
+    monkeypatch.delenv("MANTIS_CLAUDE_IMAGE_FORMAT", raising=False)
+    img = Image.new("RGB", (1440, 900), color="white")
+    b64, _ = encode_screenshot_for_claude(img)
+    decoded = Image.open(io.BytesIO(base64.b64decode(b64)))
+    assert decoded.size == (1440, 900), (
+        f"Encoder must preserve dimensions; got {decoded.size}"
+    )
+
+
+def test_encode_screenshot_format_env_override(monkeypatch):
+    """``MANTIS_CLAUDE_IMAGE_FORMAT`` opts back into PNG or WEBP when
+    callers need different encoding."""
+    img = Image.new("RGB", (100, 100), color="white")
+    monkeypatch.setenv("MANTIS_CLAUDE_IMAGE_FORMAT", "png")
+    _, mt = encode_screenshot_for_claude(img)
+    assert mt == "image/png"
+    monkeypatch.setenv("MANTIS_CLAUDE_IMAGE_FORMAT", "webp")
+    _, mt = encode_screenshot_for_claude(img)
+    assert mt == "image/webp"
+    # Garbage value falls back to JPEG default
+    monkeypatch.setenv("MANTIS_CLAUDE_IMAGE_FORMAT", "tiff")
+    _, mt = encode_screenshot_for_claude(img)
+    assert mt == "image/jpeg"
+
+
+def test_encode_screenshot_quality_env_clamped(monkeypatch):
+    """Quality is clamped to 1-95; garbage values fall back to 85."""
+    monkeypatch.setenv("MANTIS_CLAUDE_IMAGE_QUALITY", "92")
+    assert _resolve_image_quality() == 92
+    monkeypatch.setenv("MANTIS_CLAUDE_IMAGE_QUALITY", "200")
+    assert _resolve_image_quality() == 95
+    monkeypatch.setenv("MANTIS_CLAUDE_IMAGE_QUALITY", "0")
+    assert _resolve_image_quality() == 1
+    monkeypatch.setenv("MANTIS_CLAUDE_IMAGE_QUALITY", "garbage")
+    assert _resolve_image_quality() == 85
+
+
+def test_encode_screenshot_rgba_converts_to_rgb_for_jpeg():
+    """JPEG can't carry an alpha channel; the encoder must convert
+    RGBA→RGB rather than raising. Xvfb captures land as RGBA on
+    some paths."""
+    img = Image.new("RGBA", (100, 100), color=(128, 64, 32, 200))
+    b64, mt = encode_screenshot_for_claude(img, format="jpeg")
+    assert mt == "image/jpeg"
+    decoded = Image.open(io.BytesIO(base64.b64decode(b64)))
+    assert decoded.size == (100, 100)
+    assert decoded.mode == "RGB"
+
+
+# ── Item 2: per-step costs on StepTrace ────────────────────────────────
+
+
+def test_step_trace_costs_field_lands_when_passed(monkeypatch, tmp_path: Path):
+    """When ``record_step`` is called with a ``costs`` dict, the
+    augur-sdk 0.1.6+ ``StepTrace.costs`` field lands on the trace so
+    the workspace step-inspector renders per-step USD spend."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="costs_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    trace = a._build_step_trace(
+        _FakeStepResult(step_index=0),
+        "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None,
+        costs={
+            "total_usd": 0.123, "model_usd": 0.09, "gpu_usd": 0.03,
+            "proxy_usd": 0.003,
+            "tokens_in": 30_000, "tokens_out": 2_000, "cache_hit_tokens": 0,
+        },
+    )
+    assert trace["costs"]["total_usd"] == 0.123
+    assert trace["costs"]["tokens_in"] == 30_000
+    # Zero-value keys stripped to keep the bundle compact.
+    assert "cache_hit_tokens" not in trace["costs"]
+
+
+def test_step_trace_latency_field_lands_when_passed(monkeypatch, tmp_path: Path):
+    """augur-sdk 0.1.6 added ``StepTrace.latency`` alongside
+    ``costs``. Same shape conventions — typed dict with per-layer ms,
+    zero-value keys stripped."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="lat_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    trace = a._build_step_trace(
+        _FakeStepResult(step_index=0),
+        "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None,
+        latency={
+            "planner_ms": 1200,
+            "grounding_ms": 800,
+            "dispatch_ms": 350,
+            "verifier_ms": 0,  # stripped
+            "total_ms": 2350,
+        },
+    )
+    assert trace["latency"]["planner_ms"] == 1200
+    assert trace["latency"]["total_ms"] == 2350
+    assert "verifier_ms" not in trace["latency"]
+
+
+def test_step_trace_costs_omitted_for_all_zero_step(monkeypatch, tmp_path: Path):
+    """Steps with no cost activity (deterministic navigate / verify)
+    shouldn't carry a noisy zero-cost block on the trace."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="costs_v2", tenant_id="t", session_name="s", out_dir=tmp_path)
+    trace = a._build_step_trace(
+        _FakeStepResult(step_index=0),
+        "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None,
+        costs={"total_usd": 0.0, "tokens_in": 0, "tokens_out": 0},
+    )
+    assert "costs" not in trace
+    trace2 = a._build_step_trace(
+        _FakeStepResult(step_index=0),
+        "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None,
+        costs=None,
+    )
+    assert "costs" not in trace2
+
+
+def test_record_cost_metric_supports_per_step_index(monkeypatch, tmp_path: Path):
+    """``record_cost_metric`` now accepts a 0-based step_index and bumps
+    to Augur's 1-based convention. Defaulting to None still parks the
+    event at the run-level minimum (1)."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="cm_step_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    # Run-level (default)
+    a.record_cost_metric(name="cost_total_usd", value=0.5)
+    # Per-step (Mantis step 2 → Augur step 3)
+    a.record_cost_metric(name="cost_step_delta_usd", value=0.06, step_index=2)
+    a.close(status="completed")
+    # Run-level events land in events/0001.jsonl
+    run_evs = (tmp_path / "events" / "0001.jsonl").read_text().splitlines()
+    assert any('"cost_total_usd"' in ln for ln in run_evs)
+    # Per-step lands in events/0003.jsonl
+    step_evs = (tmp_path / "events" / "0003.jsonl").read_text().splitlines()
+    assert any('"cost_step_delta_usd"' in ln for ln in step_evs)
+
+
+# ── #519: streaming path runs failure_class.classify() ───────────────────
+
+
+def test_failure_class_classified_when_step_result_is_unknown(
+    monkeypatch, tmp_path: Path,
+):
+    """#519: ``StepResult.failure_class=""`` or ``"unknown"`` must
+    NOT silently ship as ``"unknown"``. Adapter runs the same
+    ``failure_class.classify(data, page_title)`` the trace-exporter
+    path uses — derives the canonical class (selector_miss /
+    no_state_change / etc.) when the symptoms match a known rule.
+    Leaving the field absent when classify also returns "unknown"
+    lets the Augur viewer render a muted ``?`` chip instead of a
+    misleading ``unknown`` literal."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="fc_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+
+    # A step whose ``data`` blob matches the ``selector_miss`` rule
+    # (substring "not found" / "click_error" / "som-click" etc.)
+    # should derive that class even though StepResult left the field
+    # blank. ``data`` shape mirrors what real handlers emit.
+    sr = _FakeStepResult(step_index=0)
+    sr.success = False
+    sr.failure_class = ""
+    sr.data = "click_error: target not found"
+    sr.page_title = "Login | Example"
+    trace = a._build_step_trace(
+        sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None,
+    )
+    assert trace.get("failure_class") == "selector_miss", (
+        f"Expected classify() to derive selector_miss, got {trace.get('failure_class')!r}"
+    )
+
+    # And a Cloudflare-titled page should classify even with empty data —
+    # documented behaviour of classify() when page_title is set.
+    sr_cf = _FakeStepResult(step_index=0)
+    sr_cf.success = False
+    sr_cf.failure_class = "unknown"  # placeholder string, NOT a real class
+    sr_cf.data = ""
+    sr_cf.page_title = "Cloudflare | Verify you are human"
+    trace_cf = a._build_step_trace(
+        sr_cf, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None,
+    )
+    assert trace_cf.get("failure_class") == "cf_challenge"
+
+    # When the StepResult already has a class, the adapter MUST NOT
+    # overwrite it — the producer is the source of truth.
+    sr2 = _FakeStepResult(step_index=0)
+    sr2.success = False
+    sr2.failure_class = "cf_challenge"
+    sr2.data = "selector not_found"  # would classify to something else
+    sr2.page_title = ""
+    trace2 = a._build_step_trace(
+        sr2, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None,
+    )
+    assert trace2["failure_class"] == "cf_challenge"
+
+    # When BOTH StepResult AND classify return unknown, the field is
+    # absent from the trace — Augur viewer renders a muted "?" chip
+    # instead of a misleading "unknown" literal.
+    sr3 = _FakeStepResult(step_index=0)
+    sr3.success = False
+    sr3.failure_class = "unknown"
+    sr3.data = "ambiguous nothing useful here"
+    sr3.page_title = ""
+    trace3 = a._build_step_trace(
+        sr3, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None,
+    )
+    # Either absent OR a non-"unknown" class is acceptable
+    assert trace3.get("failure_class") not in ("unknown",)
+
+
+# ── Item 3: cache_tools on grounding ───────────────────────────────────
+
+
+def test_grounding_call_sites_pass_cache_tools():
+    """Light AST-ish grep: all three ``call_with_tool_schema`` invocations
+    in ``form_targeting/claude.py`` should pass ``cache_tools=True``.
+    Catches regressions where someone copies one of the calls without
+    the prompt-cache flag."""
+    import inspect
+    import mantis_agent.form_targeting.claude as ftc
+    src = inspect.getsource(ftc)
+    # Each invocation block ends with a closing paren on its own line.
+    # Easiest reliable check: count opens vs cache_tools=True occurrences.
+    opens = src.count("call_with_tool_schema(")
+    cache_tokens = src.count("cache_tools=True")
+    assert opens >= 3, f"Expected ≥3 grounding call sites, found {opens}"
+    assert cache_tokens >= opens, (
+        f"Each call_with_tool_schema in form_targeting/claude.py must "
+        f"pass cache_tools=True ({opens} calls, {cache_tokens} cache flags)"
+    )

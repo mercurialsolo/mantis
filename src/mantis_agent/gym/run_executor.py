@@ -246,6 +246,11 @@ class RunExecutor:
                 continue
 
             step_started_at = _utc_iso_now()
+            # #518 — snapshot the cost counters BEFORE dispatch so we
+            # can emit per-step deltas after the handler returns. The
+            # delta covers everything dispatch caused: Claude calls
+            # (extract / ground), GPU brain inference, proxy bytes.
+            costs_before_step = self._snapshot_cost_counters()
             pre_snapshot = self._dispatch_step(plan, state, effective_step)
 
             self._maybe_demote_form_no_change(state, effective_step, pre_snapshot)
@@ -277,10 +282,34 @@ class RunExecutor:
             # critic-emitted healing events are picked up too. Any
             # adapter failure is swallowed internally — never breaks
             # the run.
-            self._emit_augur_step(step_result, step_started_at, step_type=step.type)
+            self._emit_augur_step(
+                step_result, step_started_at,
+                step_type=step.type,
+                costs_before=costs_before_step,
+            )
 
         self._finalize(plan, state)
         return state.results
+
+    _COST_KEYS_FOR_DELTA: tuple[str, ...] = (
+        "gpu_seconds",
+        "claude_input_tokens",
+        "claude_output_tokens",
+        "claude_cached_input_tokens",
+        "claude_extract",
+        "claude_grounding",
+        "proxy_mb",
+    )
+
+    def _snapshot_cost_counters(self) -> dict[str, float]:
+        """Capture a flat dict of the counters that drive per-step deltas
+        (#518). Returns zeros when no meter is wired (tests / hosts)."""
+        runner = self.parent
+        meter = getattr(runner, "cost_meter", None)
+        if meter is None:
+            return {k: 0.0 for k in self._COST_KEYS_FOR_DELTA}
+        costs = getattr(meter, "costs", {}) or {}
+        return {k: float(costs.get(k, 0) or 0) for k in self._COST_KEYS_FOR_DELTA}
 
     def _emit_augur_step(
         self,
@@ -288,6 +317,7 @@ class RunExecutor:
         started_at: str,
         *,
         step_type: str = "",
+        costs_before: dict[str, float] | None = None,
     ) -> None:
         """Per-step Augur emission — observation, trace, decision events.
 
@@ -296,6 +326,13 @@ class RunExecutor:
         adapter can populate ``action.type`` even when the runner
         doesn't stamp ``StepResult.last_action`` (which is the common
         case). Optional for compatibility with non-runner callers.
+
+        ``costs_before`` is the snapshot of cost counters captured at
+        the top of the loop iteration; the wedge diffs against the
+        post-dispatch state to emit per-step cost deltas as a
+        ``layer="runner"`` / ``kind="metric"`` DecisionEvent (#518).
+        Without per-step deltas the workspace can only show run totals,
+        which hides cost-spike attribution.
         """
         runner = self.parent
         augur: AugurAdapter | None = getattr(runner, "_augur", None)
@@ -318,12 +355,22 @@ class RunExecutor:
             kind="post",
             png=png,
         )
+        # #518 — compute the per-step cost delta in the augur-sdk
+        # 0.1.6+ ``StepTrace.costs`` schema shape so it lands on
+        # the step record (per-step COST attribution in the
+        # workspace inspector) without a separate DecisionEvent.
+        per_step_costs = self._compute_step_costs(costs_before) if costs_before is not None else None
+        # #518 — same shape, for the 0.1.6+ ``StepTrace.latency``
+        # field; per-layer ms from this step's TimeMeter buckets.
+        per_step_latency = self._compute_step_latency(step_index)
         augur.record_step(
             step_result=step_result,
             started_at=started_at,
             ended_at=_utc_iso_now(),
             observation_post=observation_post,
             step_type=step_type,
+            costs=per_step_costs,
+            latency=per_step_latency,
         )
         # #509: surface the brain's planner reasoning as an Augur
         # planner-layer DecisionEvent. The workspace's "PLANNER REASONING"
@@ -338,6 +385,78 @@ class RunExecutor:
             )
         healing = getattr(runner, "_healing_events", None) or []
         augur.drain_healing_events(healing)
+
+    # Mantis TimeMeter bucket → Augur ``StepTrace.latency`` slot
+    # (augur-sdk 0.1.6+ schema). The Augur slots are intentionally
+    # coarser than Mantis's 11 buckets — we sum within a category.
+    _LATENCY_BUCKET_MAP: dict[str, tuple[str, ...]] = {
+        "planner_ms":   ("think",),
+        "grounding_ms": ("claude_ground",),
+        "dispatch_ms":  ("act", "settle"),
+        "verifier_ms":  ("claude_verify", "claude_verify_haiku",
+                          "claude_verify_opus_escalation"),
+        # Mantis has no dedicated "recovery" bucket today — the
+        # recovery loop's wall time gets attributed to whichever
+        # bucket its inner work charged to (think / act / etc.).
+        # Leave ``recovery_ms`` unset rather than mis-attribute.
+    }
+
+    def _compute_step_latency(self, step_index: int) -> dict[str, int] | None:
+        """Build a per-step ``StepTrace.latency`` dict from TimeMeter
+        buckets (#518). Returns ``None`` when no meter is wired or when
+        the step recorded zero across all buckets."""
+        runner = self.parent
+        meter = getattr(runner, "time_meter", None)
+        if meter is None:
+            return None
+        try:
+            breakdown = meter.step_breakdown(step_index)
+        except Exception:  # noqa: BLE001 — telemetry never breaks runs
+            return None
+        out: dict[str, int] = {}
+        total = 0
+        for slot, buckets in self._LATENCY_BUCKET_MAP.items():
+            ms = sum(float(breakdown.get(b, 0.0) or 0.0) for b in buckets) * 1000.0
+            if ms > 0:
+                out[slot] = int(ms)
+                total += int(ms)
+        if not out:
+            return None
+        out["total_ms"] = total
+        return out
+
+    def _compute_step_costs(
+        self, costs_before: dict[str, float],
+    ) -> dict[str, float] | None:
+        """Build a per-step ``StepTrace.costs`` dict from counter deltas.
+
+        Mirrors augur-sdk 0.1.6's ``step_trace.schema.json`` ``costs``
+        shape: ``{total_usd, model_usd, gpu_usd, proxy_usd,
+        tokens_in, tokens_out, cache_hit_tokens}`` — all optional, all
+        non-negative. Returns ``None`` when no meter is wired or when
+        the delta is all-zero (lets the adapter skip emitting the
+        field for deterministic no-cost steps).
+        """
+        runner = self.parent
+        meter = getattr(runner, "cost_meter", None)
+        if meter is None:
+            return None
+        costs_after = self._snapshot_cost_counters()
+        delta = {k: costs_after[k] - costs_before.get(k, 0.0) for k in costs_after}
+        if not any(v > 0 for v in delta.values()):
+            return None
+        # Re-key delta as a counters dict so totals_from() computes USD
+        # subtotals using the same rates the run total uses.
+        usd = meter.totals_from(delta)
+        return {
+            "total_usd": round(float(usd.get("total", 0.0)), 6),
+            "model_usd": round(float(usd.get("claude", 0.0)), 6),
+            "gpu_usd": round(float(usd.get("gpu", 0.0)), 6),
+            "proxy_usd": round(float(usd.get("proxy", 0.0)), 6),
+            "tokens_in": int(delta.get("claude_input_tokens", 0) or 0),
+            "tokens_out": int(delta.get("claude_output_tokens", 0) or 0),
+            "cache_hit_tokens": int(delta.get("claude_cached_input_tokens", 0) or 0),
+        }
 
     def _consult_critic(
         self,

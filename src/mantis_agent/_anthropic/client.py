@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import random
 import time
 from io import BytesIO
@@ -45,6 +46,94 @@ from typing import Any
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+
+
+# ── Image encoding for /v1/messages (#518) ─────────────────────────────
+
+
+_SUPPORTED_IMAGE_FORMATS = {
+    "jpeg": ("JPEG", "image/jpeg"),
+    "jpg":  ("JPEG", "image/jpeg"),
+    "png":  ("PNG",  "image/png"),
+    "webp": ("WEBP", "image/webp"),
+}
+
+
+def _resolve_image_format() -> tuple[str, str]:
+    """Read ``MANTIS_CLAUDE_IMAGE_FORMAT`` and return ``(pil_format, mime)``.
+
+    Defaults to ``jpeg`` (~30% smaller than PNG at q=85 for typical
+    browser screenshots, no impact on Claude vision recognition of
+    text / buttons / form labels). Operators pin back to PNG via
+    ``MANTIS_CLAUDE_IMAGE_FORMAT=png`` when they need pixel-perfect
+    encoding (e.g. evaluating against a reference bundle).
+    """
+    raw = (os.environ.get("MANTIS_CLAUDE_IMAGE_FORMAT") or "jpeg").strip().lower()
+    return _SUPPORTED_IMAGE_FORMATS.get(raw, _SUPPORTED_IMAGE_FORMATS["jpeg"])
+
+
+def _resolve_image_quality() -> int:
+    """Read ``MANTIS_CLAUDE_IMAGE_QUALITY`` (default 85, clamped to 1-95).
+
+    JPEG q=85 is the standard sweet-spot for screenshot OCR; q>95 loses
+    the size advantage; q<70 starts to blur small text.
+    """
+    raw = os.environ.get("MANTIS_CLAUDE_IMAGE_QUALITY")
+    if not raw:
+        return 85
+    try:
+        return max(1, min(95, int(raw)))
+    except (TypeError, ValueError):
+        return 85
+
+
+def encode_screenshot_for_claude(
+    screenshot: "Image.Image",
+    *,
+    format: str | None = None,  # noqa: A002 — matches PIL's kw
+    quality: int | None = None,
+) -> tuple[str, str]:
+    """Encode a PIL screenshot for the Anthropic ``/v1/messages`` API (#518).
+
+    Returns ``(base64_data, media_type)`` ready to plug into the request
+    body's ``{"type": "image", "source": {"type": "base64", "media_type": ..., "data": ...}}``
+    block. Image dimensions are preserved exactly — only the encoding
+    (lossy JPEG by default) changes. This matters because grounding
+    callers dispatch clicks at the x/y coordinates Claude returns,
+    which are in input-pixel space — any downsample would silently
+    mis-place every click.
+
+    Caller may override ``format`` ("jpeg" / "png" / "webp") and
+    ``quality`` (1-95, JPEG only); otherwise honours the
+    ``MANTIS_CLAUDE_IMAGE_FORMAT`` + ``MANTIS_CLAUDE_IMAGE_QUALITY``
+    env knobs.
+
+    Defaults: JPEG q=85 — typically ~30-40% smaller than PNG for
+    browser screenshots, no impact on Claude vision recognition.
+    """
+    if format is not None:
+        pil_format, media_type = _SUPPORTED_IMAGE_FORMATS.get(
+            format.lower(), _SUPPORTED_IMAGE_FORMATS["jpeg"],
+        )
+    else:
+        pil_format, media_type = _resolve_image_format()
+    q = quality if quality is not None else _resolve_image_quality()
+
+    # JPEG / WEBP don't carry an alpha channel; PIL raises if you save
+    # an RGBA image as JPEG. Browser screenshots from PIL.ImageGrab
+    # are usually RGB but Xvfb captures land as RGBA in some paths.
+    img = screenshot
+    if pil_format in {"JPEG", "WEBP"} and img.mode not in {"RGB", "L"}:
+        img = img.convert("RGB")
+
+    buf = BytesIO()
+    if pil_format == "JPEG":
+        img.save(buf, format=pil_format, quality=q, optimize=True)
+    elif pil_format == "PNG":
+        img.save(buf, format=pil_format, optimize=True)
+    else:
+        img.save(buf, format=pil_format, quality=q)
+    return base64.b64encode(buf.getvalue()).decode(), media_type
 
 
 # HTTP status codes treated as transient (worth retrying with backoff).
@@ -297,9 +386,10 @@ class AnthropicToolUseClient:
             logger.warning("%s: no API key", self._log_prefix)
             return None
 
-        buf = BytesIO()
-        screenshot.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
+        # #518 — encode at MANTIS_CLAUDE_IMAGE_QUALITY / _FORMAT. Same
+        # dimensions as the source screenshot (grounding coords must
+        # match pixel space); only the byte encoding changes.
+        b64, media_type = encode_screenshot_for_claude(screenshot)
 
         tool_def: dict[str, Any] = {
             "name": tool_name,
@@ -317,7 +407,7 @@ class AnthropicToolUseClient:
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
                     {"type": "text", "text": prompt},
                 ],
             }],
@@ -385,13 +475,12 @@ class AnthropicToolUseClient:
         content: list[dict] = [{"type": "text", "text": prompt}]
         for i, screenshot in enumerate(screenshots, 1):
             label = labels[i - 1] if i - 1 < len(labels) else f"screenshot {i}"
-            buf = BytesIO()
-            screenshot.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode()
+            # #518 — same encoding helper as the single-shot path.
+            b64, media_type = encode_screenshot_for_claude(screenshot)
             content.append({"type": "text", "text": f"Screenshot {i}: {label}"})
             content.append({
                 "type": "image",
-                "source": {"type": "base64", "media_type": "image/png", "data": b64},
+                "source": {"type": "base64", "media_type": media_type, "data": b64},
             })
 
         payload = {
@@ -442,4 +531,5 @@ __all__ = [
     "_retry_delay",
     "_credit_claude_time",
     "credit_claude_tokens_from_response",
+    "encode_screenshot_for_claude",
 ]

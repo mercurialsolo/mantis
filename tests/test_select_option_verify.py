@@ -360,7 +360,7 @@ def test_verify_dropdown_value_prompt_does_not_leak_expected_value(monkeypatch):
 
     captured: dict = {}
 
-    def fake_call(screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens):
+    def fake_call(screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens, **_kwargs):
         captured["prompt"] = prompt
         return {"observed": "High"}
 
@@ -405,7 +405,7 @@ def test_verify_dropdown_value_passes_correct_tool_schema(monkeypatch):
 
     captured: dict = {}
 
-    def fake_call(screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens):
+    def fake_call(screenshot, prompt, *, tool_name, tool_description, input_schema, max_tokens, **_kwargs):
         captured["tool_name"] = tool_name
         captured["input_schema"] = input_schema
         return {"observed": "High"}
