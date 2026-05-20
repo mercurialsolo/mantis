@@ -25,8 +25,11 @@ sites to ``meter.add_*()`` helpers; this PR keeps the diff minimal.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
 import time
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from ..cost_config import CostConfig
@@ -42,8 +45,15 @@ logger = logging.getLogger(__name__)
 _INITIAL_COSTS: dict[str, Any] = {
     "gpu_steps": 0,        # Total Holo3 steps
     "gpu_seconds": 0.0,    # Approx GPU time
-    "claude_extract": 0,   # Claude extraction calls
-    "claude_grounding": 0, # Claude grounding calls
+    "claude_extract": 0,   # Claude extraction calls (legacy call counter)
+    "claude_grounding": 0, # Claude grounding calls  (legacy call counter)
+    # Per-token usage from the Anthropic API responses (#514). These
+    # are the canonical Claude billing surface — call-count counters
+    # above stay for compatibility but stop being used in cost math
+    # once tokens are populated.
+    "claude_input_tokens": 0,
+    "claude_output_tokens": 0,
+    "claude_cached_input_tokens": 0,
     "proxy_mb": 0.0,       # Estimated proxy bandwidth
 }
 
@@ -77,14 +87,65 @@ class CostMeter:
     # ── Pure cost computation ───────────────────────────────────────────
 
     def totals(self) -> tuple[float, float, float, float]:
-        """Return (gpu, claude, proxy, total) USD for the current counters."""
+        """Return (gpu, claude, proxy, total) USD for the current counters.
+
+        Claude cost prefers per-token billing (#514) when token
+        counters are populated by the Anthropic client. Falls back to
+        the legacy per-call count × ``claude_call_usd`` when no
+        tokens were recorded (tests, callers that bypass the shared
+        client, hosts that haven't deployed the token-credit hook).
+        """
         cfg = self.cost_config
         gpu_cost = cfg.gpu_cost(self.costs["gpu_seconds"])
-        claude_cost = cfg.claude_cost(
-            self.costs["claude_extract"] + self.costs["claude_grounding"]
-        )
+        input_tokens = int(self.costs.get("claude_input_tokens", 0) or 0)
+        output_tokens = int(self.costs.get("claude_output_tokens", 0) or 0)
+        cached_tokens = int(self.costs.get("claude_cached_input_tokens", 0) or 0)
+        if input_tokens or output_tokens:
+            claude_cost = cfg.claude_token_cost(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_tokens=cached_tokens,
+            )
+        else:
+            claude_cost = cfg.claude_cost(
+                self.costs["claude_extract"] + self.costs["claude_grounding"]
+            )
         proxy_cost = cfg.proxy_cost(self.costs["proxy_mb"])
         return gpu_cost, claude_cost, proxy_cost, gpu_cost + claude_cost + proxy_cost
+
+    # ── Claude token accounting (#514) ──────────────────────────────────
+
+    def record_claude_tokens(
+        self,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_input_tokens: int = 0,
+    ) -> None:
+        """Credit the per-call token usage to the meter (#514).
+
+        Called from the Anthropic-client wrappers right after each
+        ``messages.create`` response lands. ``cached_input_tokens``
+        counts INSIDE ``input_tokens`` on Anthropic responses — pass
+        both fields exactly as the API reports them; the cost math
+        in :meth:`CostConfig.claude_token_cost` subtracts cached from
+        plain input so the same byte isn't billed twice.
+        """
+        ii = max(0, int(input_tokens or 0))
+        oo = max(0, int(output_tokens or 0))
+        ci = max(0, int(cached_input_tokens or 0))
+        if ii:
+            self.costs["claude_input_tokens"] = int(
+                self.costs.get("claude_input_tokens", 0) or 0
+            ) + ii
+        if oo:
+            self.costs["claude_output_tokens"] = int(
+                self.costs.get("claude_output_tokens", 0) or 0
+            ) + oo
+        if ci:
+            self.costs["claude_cached_input_tokens"] = int(
+                self.costs.get("claude_cached_input_tokens", 0) or 0
+            ) + ci
 
     def elapsed_seconds(self) -> float:
         return time.time() - self.run_start
@@ -150,10 +211,20 @@ class CostMeter:
         """
         cfg = self.cost_config
         gpu = cfg.gpu_cost(float(costs.get("gpu_seconds", 0.0) or 0.0))
-        claude = cfg.claude_cost(
-            int(costs.get("claude_extract", 0) or 0)
-            + int(costs.get("claude_grounding", 0) or 0)
-        )
+        input_tokens = int(costs.get("claude_input_tokens", 0) or 0)
+        output_tokens = int(costs.get("claude_output_tokens", 0) or 0)
+        cached_tokens = int(costs.get("claude_cached_input_tokens", 0) or 0)
+        if input_tokens or output_tokens:
+            claude = cfg.claude_token_cost(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_tokens=cached_tokens,
+            )
+        else:
+            claude = cfg.claude_cost(
+                int(costs.get("claude_extract", 0) or 0)
+                + int(costs.get("claude_grounding", 0) or 0)
+            )
         proxy = cfg.proxy_cost(float(costs.get("proxy_mb", 0.0) or 0.0))
         return {
             "gpu": gpu,
@@ -164,6 +235,9 @@ class CostMeter:
             "gpu_seconds": float(costs.get("gpu_seconds", 0.0) or 0.0),
             "claude_extract": int(costs.get("claude_extract", 0) or 0),
             "claude_grounding": int(costs.get("claude_grounding", 0) or 0),
+            "claude_input_tokens": input_tokens,
+            "claude_output_tokens": output_tokens,
+            "claude_cached_input_tokens": cached_tokens,
             "proxy_mb": float(costs.get("proxy_mb", 0.0) or 0.0),
         }
 
@@ -242,4 +316,72 @@ class CostMeter:
             logger.debug("inflight cost gauge update failed: %s", exc)
 
 
-__all__ = ["CostMeter", "make_initial_costs"]
+# ── Cost meter context publisher (#514) ────────────────────────────────
+
+
+# Mirrors :data:`gym.time_meter._CURRENT_DISPATCH` — the runner
+# publishes its CostMeter for the duration of an execution scope so
+# deep helpers (the shared Anthropic client; future cost-emitting
+# subsystems) can credit tokens without being passed the meter as an
+# argument. PEP 567 contextvars keep this scope-correct for asyncio +
+# threaded callers.
+_CURRENT_COST_METER: contextvars.ContextVar["CostMeter | None"] = (
+    contextvars.ContextVar("mantis_cost_meter_current", default=None)
+)
+
+
+def current_cost_meter() -> "CostMeter | None":
+    """Return the runner's :class:`CostMeter` if one was published,
+    else ``None``. Helpers that opportunistically credit costs bail
+    out cleanly when this returns ``None`` — useful for tests +
+    standalone-script runs of the Anthropic client.
+    """
+    return _CURRENT_COST_METER.get()
+
+
+@contextlib.contextmanager
+def publish_cost_meter(meter: "CostMeter | None") -> Iterator[None]:
+    """Publish ``meter`` to the contextvar for the wrapped block.
+
+    ``meter=None`` clears the context — used by tests that exercise
+    Anthropic-client helpers in isolation without a runner present.
+    Always resets on exit, including on exceptions, so a crashed
+    scope can't leak the meter into the next one.
+    """
+    token = _CURRENT_COST_METER.set(meter)
+    try:
+        yield
+    finally:
+        _CURRENT_COST_METER.reset(token)
+
+
+def record_claude_tokens_to_current(
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cached_input_tokens: int = 0,
+) -> None:
+    """Credit per-call token usage to the currently-published meter (#514).
+
+    Called by the Anthropic-client wrappers right after each
+    ``messages.create`` response lands. No-op when no meter is
+    published — protects test runs + standalone helpers that
+    construct the client outside a runner context.
+    """
+    meter = _CURRENT_COST_METER.get()
+    if meter is None:
+        return
+    meter.record_claude_tokens(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_input_tokens=cached_input_tokens,
+    )
+
+
+__all__ = [
+    "CostMeter",
+    "current_cost_meter",
+    "make_initial_costs",
+    "publish_cost_meter",
+    "record_claude_tokens_to_current",
+]

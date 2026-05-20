@@ -95,6 +95,52 @@ def _credit_claude_time(bucket: str, t0: float) -> None:
         logger.debug("anthropic time_meter credit failed: %s", exc)
 
 
+def credit_claude_tokens_from_response(response: Any) -> None:
+    """Read ``usage.{input_tokens,output_tokens,...}`` off an Anthropic
+    response and credit them to the currently-published CostMeter (#514).
+
+    Accepts the parsed JSON dict OR a ``requests.Response`` object —
+    callers that already have the dict can pass it directly; raw
+    response objects get parsed here. Best-effort: a missing usage
+    block, malformed JSON, or no published meter all silently no-op.
+
+    The Anthropic API returns:
+
+    * ``usage.input_tokens`` — total input tokens (includes cached)
+    * ``usage.output_tokens`` — generated tokens
+    * ``usage.cache_read_input_tokens`` — subset of input that hit cache
+    * ``usage.cache_creation_input_tokens`` — input written to cache
+      (billed at higher rate than standard input; for now we treat as
+      ``input_tokens`` and let the standard rate apply)
+
+    Source of truth for the surface:
+    https://docs.anthropic.com/en/api/messages#response-usage
+    """
+    try:
+        if response is None:
+            return
+        if hasattr(response, "json") and callable(response.json):
+            try:
+                payload = response.json()
+            except Exception:  # noqa: BLE001
+                return
+        else:
+            payload = response
+        if not isinstance(payload, dict):
+            return
+        usage = payload.get("usage") or {}
+        if not isinstance(usage, dict):
+            return
+        from ..gym.cost_meter import record_claude_tokens_to_current
+        record_claude_tokens_to_current(
+            input_tokens=int(usage.get("input_tokens", 0) or 0),
+            output_tokens=int(usage.get("output_tokens", 0) or 0),
+            cached_input_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
+        )
+    except Exception as exc:  # noqa: BLE001 — observability never fatal
+        logger.debug("anthropic cost_meter token credit failed: %s", exc)
+
+
 class AnthropicToolUseClient:
     """Anthropic ``/v1/messages`` client tuned for schema-validated tool_use.
 
@@ -289,7 +335,9 @@ class AnthropicToolUseClient:
                     resp.text[:500],
                 )
                 return None
-            for block in resp.json().get("content", []):
+            payload_json = resp.json()
+            credit_claude_tokens_from_response(payload_json)
+            for block in payload_json.get("content", []):
                 if block.get("type") == "tool_use" and block.get("name") == tool_name:
                     tool_input = block.get("input")
                     if isinstance(tool_input, dict):
@@ -370,7 +418,9 @@ class AnthropicToolUseClient:
                     resp.text[:500],
                 )
                 return None
-            for block in resp.json().get("content", []):
+            payload_json = resp.json()
+            credit_claude_tokens_from_response(payload_json)
+            for block in payload_json.get("content", []):
                 if block.get("type") == "tool_use" and block.get("name") == tool_name:
                     tool_input = block.get("input")
                     if isinstance(tool_input, dict):
@@ -391,4 +441,5 @@ __all__ = [
     "_TRANSIENT_STATUS_CODES",
     "_retry_delay",
     "_credit_claude_time",
+    "credit_claude_tokens_from_response",
 ]

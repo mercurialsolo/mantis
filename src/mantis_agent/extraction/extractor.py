@@ -43,6 +43,7 @@ from .._anthropic.client import (
     AnthropicToolUseClient,
     _credit_claude_time,
     _retry_delay,
+    credit_claude_tokens_from_response,
 )
 from .result import ExtractionResult
 from .schema import ExtractionSchema
@@ -405,7 +406,9 @@ class ClaudeExtractor:
                     resp.text[:500],
                 )
                 return ""
-            for block in resp.json().get("content", []):
+            payload_json = resp.json()
+            credit_claude_tokens_from_response(payload_json)
+            for block in payload_json.get("content", []):
                 if block.get("type") == "text":
                     return block["text"].strip()
         except Exception as e:
@@ -543,7 +546,9 @@ class ClaudeExtractor:
                     resp.text[:500],
                 )
                 return ""
-            for block in resp.json().get("content", []):
+            payload_json = resp.json()
+            credit_claude_tokens_from_response(payload_json)
+            for block in payload_json.get("content", []):
                 if block.get("type") == "text":
                     return block["text"].strip()
         except Exception as e:
