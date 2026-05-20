@@ -115,7 +115,7 @@ runner_image = (
         # #509: per-run Augur DebugSession bundle + optional live streaming.
         # 0.1.2+ fires an immediate session-opened heartbeat for faster
         # workspace badge updates.
-        "augur-sdk>=0.1.3",
+        "augur-sdk>=0.1.4",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(

@@ -123,6 +123,21 @@ Mantis runner status maps onto `RunStatus`:
 | `MANTIS_VERSION` | Surfaced as `client.version` on the manifest — useful when bisecting which build produced a bundle. |
 | `MANTIS_GIT_SHA` | Surfaced as `client.git_sha` on the manifest. |
 
+## Failure-class hygiene diagnostic (augur-sdk 0.1.4+)
+
+0.1.4 added a server-side rule, **`cua.uncategorized_failure`**, that
+flags any step landing with `status: "failed"` but an empty or literal-
+`"unknown"` `failure_class`. The rule surfaces in the per-run
+**Diagnostics** panel with severity `low` and recommends tightening
+the producer's classifier.
+
+No code change on the Mantis side — purely a server-side surface that
+audits the bundles we already ship. Practical impact: a few Mantis
+recovery paths emit `failure_class="unknown"` (most visibly on
+halted click steps); after the 0.1.4 bump those will start showing
+up as `low`-severity diagnostics. Addressing them is hygiene work
+for a follow-up, not a regression in the wedge.
+
 ## Log streaming (augur-sdk 0.1.3+)
 
 `AugurAdapter.append_log(text, *, step_index=None, name="run")` is a
