@@ -243,6 +243,59 @@ def test_non_fatal_on_emit_error(monkeypatch, tmp_path: Path):
     assert a.close(status="halted") is None
 
 
+def test_planner_reasoning_becomes_planner_decision_event(monkeypatch, tmp_path: Path):
+    """``record_planner_reasoning`` emits a DecisionEvent with
+    layer='planner' / kind='info' / summary=text-prefix / detail.text
+    so the workspace's PLANNER REASONING panel populates instead of
+    showing demo placeholder text."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="reasoning_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    a.record_step(
+        step_result=_FakeStepResult(step_index=0),
+        started_at="2026-05-20T10:00:00Z",
+        ended_at="2026-05-20T10:00:01Z",
+    )
+    a.record_planner_reasoning(
+        step_index=0,
+        reasoning="I should click the Login button to authenticate.",
+    )
+    # Empty / whitespace reasoning is silently dropped
+    a.record_planner_reasoning(step_index=0, reasoning="   ")
+    a.close(status="completed")
+
+    # Mantis step_index=0 → Augur 1-based → events/0001.jsonl
+    events_file = tmp_path / "events" / "0001.jsonl"
+    assert events_file.exists()
+    lines = [json.loads(ln) for ln in events_file.read_text().splitlines() if ln.strip()]
+    planner = [e for e in lines if e.get("layer") == "planner"]
+    assert len(planner) == 1, "exactly one planner event from non-empty reasoning"
+    assert planner[0]["kind"] == "info"
+    assert planner[0]["step_index"] == 1
+    assert "Login button" in planner[0]["summary"]
+    assert planner[0]["detail"]["text"].startswith("I should")
+
+
+def test_verbose_flag_gates_diagnostic_logging(monkeypatch, tmp_path: Path, caplog):
+    """MANTIS_AUGUR_VERBOSE=1 elevates diagnostics to WARN; default-off
+    keeps the log quiet so production runs stay un-noisy."""
+    import logging
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+
+    # Default: quiet
+    monkeypatch.delenv("MANTIS_AUGUR_VERBOSE", raising=False)
+    caplog.set_level(logging.WARNING, logger="mantis_agent.observability.augur")
+    AugurAdapter(run_id="quiet_v1", tenant_id="t", session_name="s", out_dir=tmp_path / "quiet")
+    init_warnings_quiet = [r for r in caplog.records if "AugurAdapter init" in r.message]
+    assert init_warnings_quiet == [], "default-off → no AugurAdapter init WARN lines"
+
+    # Verbose: chatty
+    caplog.clear()
+    monkeypatch.setenv("MANTIS_AUGUR_VERBOSE", "1")
+    AugurAdapter(run_id="loud_v1", tenant_id="t", session_name="s", out_dir=tmp_path / "loud")
+    init_warnings_loud = [r for r in caplog.records if "AugurAdapter init" in r.message]
+    assert init_warnings_loud, "verbose=on → init WARN line emitted"
+
+
 def test_step_index_and_attempt_are_clamped_to_augur_minimums(monkeypatch, tmp_path: Path):
     """Augur's StepTrace schema requires step_index>=1 and
     recovery_decision.attempt>=1. Mantis is 0-based for both; the

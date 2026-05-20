@@ -28,10 +28,18 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now_iso() -> str:
+    """ISO-8601 UTC timestamp matching the Augur schema's
+    ``YYYY-MM-DDThh:mm:ssZ`` shape. Used as the default ``ts`` on
+    DecisionEvents the SDK requires the field on every event."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 # Lazy import — module must load even without augur-sdk installed.
 try:
@@ -140,6 +148,90 @@ def is_enabled() -> bool:
     return flag not in {"1", "true", "yes", "on"}
 
 
+def is_verbose() -> bool:
+    """Whether to surface adapter + SDK errors at WARN (else DEBUG).
+
+    Gated by ``MANTIS_AUGUR_VERBOSE`` — opt-in because:
+
+    * Modal suppresses INFO/DEBUG. WARN is the only level reliably
+      visible in ``modal app logs``. For deploy verification we WANT
+      the per-step emission noise and SDK-side rejections elevated.
+    * For steady-state production we don't want a WARN line per step.
+
+    Set ``MANTIS_AUGUR_VERBOSE=1`` on the runtime to enable. The flag
+    also drives :func:`_patch_streaming_for_visibility` — when on, the
+    monkey-patch elevates ``StreamingSink._post_json`` / ``_post_multipart``
+    / ``_safe_call`` errors from DEBUG → WARN.
+    """
+    flag = os.environ.get("MANTIS_AUGUR_VERBOSE", "").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
+def _patch_streaming_for_visibility() -> None:
+    """When :func:`is_verbose` is true, replace SDK streaming methods
+    with WARN-logging variants.
+
+    augur-sdk's ``StreamingSink._post_json`` / ``_post_multipart`` /
+    ``_safe_call`` log at DEBUG when the server returns >=400 or when a
+    background-thread HTTP call raises. Modal suppresses DEBUG, so
+    silent rejections (the exact #509 verification gap) are invisible.
+    This monkey-patch elevates the same logs to WARN — kept gated so
+    production runs stay quiet.
+
+    Idempotent: re-running has no effect (uses ``_mantis_patched``
+    sentinel on the module).
+    """
+    if not _AUGUR_AVAILABLE or not is_verbose():
+        return
+    try:
+        import augur_sdk.streaming as _stream  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001
+        return
+    if getattr(_stream, "_mantis_patched", False):
+        return
+    sink_cls = _stream.StreamingSink
+
+    def _verbose_post_json(self, path, payload, *, method="POST"):  # noqa: ANN001
+        import json
+        url = self.dsn.base_url + path
+        body = json.dumps(payload).encode("utf-8")
+        resp = self._http.request(
+            method, url, body=body, headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.dsn.token}",
+            },
+        )
+        if resp.status >= 400:
+            logger.warning(
+                "augur stream %s %s -> %s %s",
+                method, path, resp.status, resp.data[:200],
+            )
+
+    def _verbose_post_multipart(self, path, payload):  # noqa: ANN001
+        url = self.dsn.base_url + path
+        resp = self._http.request(
+            "POST", url,
+            fields={"image": ("shot.png", payload, "image/png")},
+            headers={"Authorization": f"Bearer {self.dsn.token}"},
+        )
+        if resp.status >= 400:
+            logger.warning(
+                "augur stream upload %s -> %s %s",
+                path, resp.status, resp.data[:200],
+            )
+
+    def _verbose_safe_call(self, fn):  # noqa: ANN001
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("augur stream background error: %r", exc)
+
+    sink_cls._post_json = _verbose_post_json
+    sink_cls._post_multipart = _verbose_post_multipart
+    sink_cls._safe_call = _verbose_safe_call
+    _stream._mantis_patched = True
+
+
 def default_out_dir(run_id: str) -> Path:
     """Resolve the per-run bundle directory.
 
@@ -208,13 +300,33 @@ class AugurAdapter:
     ) -> None:
         self._session: Any = None
         self._emitted_event_count: int = 0
+        # Verbose diagnostic — gated by ``MANTIS_AUGUR_VERBOSE``. WARN
+        # is the only level that survives Modal's INFO/DEBUG suppression,
+        # so when verifying a deploy operators flip the flag and get one
+        # line per adapter open + per-step emission.
+        _verbose = is_verbose()
+        if _verbose:
+            dsn_env = os.environ.get("AUGUR_DSN", "")
+            logger.warning(
+                "AugurAdapter init: sdk_available=%s disabled_env=%r dsn_set=%s run_id=%s",
+                _AUGUR_AVAILABLE,
+                os.environ.get("MANTIS_AUGUR_DISABLED", ""),
+                bool(dsn_env),
+                run_id,
+            )
         if not is_enabled():
+            if _verbose:
+                logger.warning("AugurAdapter init: disabled — adapter is a no-op")
             return
         try:
             tags = {"tenant": tenant_id or "", "session": session_name or ""}
             if extra_tags:
                 tags.update({str(k): str(v) for k, v in extra_tags.items()})
             target_dir = Path(out_dir) if out_dir is not None else default_out_dir(run_id)
+            # Refresh the streaming-error patch if verbose flipped on
+            # after module import (env var set later in the process).
+            if _verbose:
+                _patch_streaming_for_visibility()
             session = DebugSession(
                 run_id=run_id,
                 client_name="mantis",
@@ -232,8 +344,13 @@ class AugurAdapter:
             # (close), neither of which is a ``with`` block.
             session.__enter__()
             self._session = session
+            if _verbose:
+                logger.warning(
+                    "AugurAdapter init: opened successfully streaming=%s out_dir=%s",
+                    session._stream is not None, target_dir,
+                )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("AugurAdapter: failed to open DebugSession: %s", exc)
+            logger.warning("AugurAdapter: failed to open DebugSession: %s", exc)
             self._session = None
 
     @property
@@ -298,7 +415,44 @@ class AugurAdapter:
             )
             self._session.record_step(trace)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("AugurAdapter.record_step failed: %s", exc)
+            # Verbose deploys want this visible; production stays at debug.
+            if is_verbose():
+                logger.warning("AugurAdapter.record_step failed: %r", exc)
+            else:
+                logger.debug("AugurAdapter.record_step failed: %s", exc)
+
+    def record_planner_reasoning(
+        self, *, step_index: int, reasoning: str,
+    ) -> None:
+        """Emit the brain's reasoning for one step as a planner-layer
+        DecisionEvent (#509).
+
+        Mantis's :attr:`StepResult.reasoning` carries the planner /
+        brain text that produced this step. The Augur workspace shows
+        it in the per-step "PLANNER REASONING" panel — without this
+        method it falls back to demo placeholder text. The ``summary``
+        is a short prefix (≤200 chars); the full text lands on
+        ``detail.text`` so the workspace can render long reasoning
+        without truncation.
+        """
+        if not self.active or not reasoning.strip():
+            return
+        text = reasoning.strip()
+        event: dict[str, Any] = {
+            "ts": _utc_now_iso(),
+            "step_index": step_index + 1,
+            "layer": "planner",
+            "kind": "info",
+            "summary": text[:200],
+            "detail": {"text": text},
+        }
+        try:
+            self._session.record_event(event)
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning("AugurAdapter.record_planner_reasoning failed: %r", exc)
+            else:
+                logger.debug("AugurAdapter.record_planner_reasoning failed: %s", exc)
 
     def drain_healing_events(self, healing_events: list[dict[str, Any]]) -> None:
         """Emit any healing events accumulated past the last cursor.
@@ -482,10 +636,12 @@ class AugurAdapter:
             detail = {"raw": detail} if detail is not None else {}
         # Match the 1-based ``step_index`` convention used by
         # :meth:`_build_step_trace` so DecisionEvents line up with
-        # StepTraces in the workspace timeline.
+        # StepTraces in the workspace timeline. ``ts`` is required by
+        # the SDK's EventRecorder; default to UTC-now if the upstream
+        # Mantis healing event didn't carry a timestamp.
         raw_index = int(ev.get("step_index") or 0)
         event: dict[str, Any] = {
-            "ts": str(ev.get("ts") or ""),
+            "ts": str(ev.get("ts") or "") or _utc_now_iso(),
             "step_index": raw_index + 1,
             "layer": layer,
             "kind": kind,

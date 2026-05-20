@@ -264,10 +264,22 @@ class RunExecutor:
         augur: AugurAdapter | None = getattr(runner, "_augur", None)
         if augur is None or not augur.active:
             return
+        step_index = int(getattr(step_result, "step_index", 0))
+        png = getattr(step_result, "screenshot_png", None)
+        # Verbose diagnostic — gated by MANTIS_AUGUR_VERBOSE so production
+        # runs stay quiet but deploy verification can confirm the wedge
+        # fires per-step in Modal logs (Modal suppresses INFO/DEBUG).
+        from ..observability.augur import is_verbose as _augur_verbose
+        if _augur_verbose():
+            logger.warning(
+                "AugurAdapter._emit_augur_step: step=%d png_bytes=%d success=%s",
+                step_index, len(png) if png else 0,
+                getattr(step_result, "success", False),
+            )
         observation_post = augur.attach_observation(
-            step_index=int(getattr(step_result, "step_index", 0)),
+            step_index=step_index,
             kind="post",
-            png=getattr(step_result, "screenshot_png", None),
+            png=png,
         )
         augur.record_step(
             step_result=step_result,
@@ -275,6 +287,17 @@ class RunExecutor:
             ended_at=_utc_iso_now(),
             observation_post=observation_post,
         )
+        # #509: surface the brain's planner reasoning as an Augur
+        # planner-layer DecisionEvent. The workspace's "PLANNER REASONING"
+        # panel reads from these — without it the panel falls back to
+        # demo placeholder text. Only fires when the step has reasoning
+        # attached (deterministic handlers like ``navigate`` / ``gate``
+        # don't have any, so they get the panel's normal empty state).
+        reasoning = getattr(step_result, "reasoning", "") or ""
+        if reasoning.strip():
+            augur.record_planner_reasoning(
+                step_index=step_index, reasoning=reasoning,
+            )
         healing = getattr(runner, "_healing_events", None) or []
         augur.drain_healing_events(healing)
 
