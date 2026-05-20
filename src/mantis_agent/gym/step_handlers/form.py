@@ -607,6 +607,22 @@ class ClaudeGuidedFormHandler:
         self.parent = runner
 
     def execute(self, step: "MicroIntent", ctx: StepContext) -> StepResult:
+        # #523 PR B-3 — wrap the dispatch in a ``grounding`` modelio
+        # context so every grounding call this handler makes (the
+        # ~10 ``target_provider.find_*`` invocations across the form
+        # branches) is captured at the AnthropicToolUseClient layer.
+        # ``publish_modelio_context`` is a no-op when augur is None or
+        # inactive (telemetry never breaks runs).
+        from ...observability.modelio import publish_modelio_context
+        runner = self.parent
+        index = int(ctx.state.get("index", 0))
+        with publish_modelio_context(
+            getattr(runner, "_augur", None),
+            layer="grounding", step_index=index,
+        ):
+            return self._dispatch(step, ctx)
+
+    def _dispatch(self, step: "MicroIntent", ctx: StepContext) -> StepResult:
         runner = self.parent
         env = ctx.env
         extractor = ctx.extractor
