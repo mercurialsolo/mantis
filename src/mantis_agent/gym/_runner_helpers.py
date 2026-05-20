@@ -541,7 +541,14 @@ def ensure_results_filters(
         )
         requirement = gate_prefix + ", ".join(runner._required_filter_tokens)
         try:
-            passed, reason = runner.extractor.verify_gate(screenshot, requirement)
+            # #523 PR B-4 — capture the verify_gate LLM call as a
+            # ``verifier`` modelio record. No-op when augur is None.
+            from ..observability.modelio import publish_modelio_context
+            with publish_modelio_context(
+                getattr(runner, "_augur", None),
+                layer="verifier", step_index=index,
+            ):
+                passed, reason = runner.extractor.verify_gate(screenshot, requirement)
             runner.costs["claude_extract"] += 1
             if passed:
                 logger.info(
@@ -870,9 +877,16 @@ def execute_step(
         print(f"  [gate] Verifying: {(step.verify or step.intent)[:80]}")
         time.sleep(2)
         screenshot = runner.env.screenshot()
-        passed, reason = runner.extractor.verify_gate(
-            screenshot, step.verify or step.intent,
-        )
+        # #523 PR B-4 — capture the gate verify_gate call as a
+        # ``verifier`` modelio record. No-op when augur is None.
+        from ..observability.modelio import publish_modelio_context
+        with publish_modelio_context(
+            getattr(runner, "_augur", None),
+            layer="verifier", step_index=index,
+        ):
+            passed, reason = runner.extractor.verify_gate(
+                screenshot, step.verify or step.intent,
+            )
         runner.costs["claude_extract"] += 1
         print(f"  [gate] Result: {'PASS' if passed else 'FAIL'} — {reason[:80]}")
         return StepResult(
