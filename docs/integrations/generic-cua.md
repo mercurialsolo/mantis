@@ -139,9 +139,11 @@ JSON
 
 Notes on the schema:
 
-- **`extraction_schema`** is read by `ClaudeExtractor` to drive the
-  per-listing JSON output and the spam detector. Field shape mirrors
-  `mantis_agent.extraction.ExtractionSchema`.
+- **`extraction_schema`** is a top-level [`PredictRequest`](../api.md#post-v1predict) field.
+  It is read by `ClaudeExtractor` to drive the per-listing JSON output
+  and the spam detector. Field shape mirrors
+  `mantis_agent.extraction.ExtractionSchema`. When set, it takes
+  precedence over any `_objective`-derived schema in the plan ([#508](https://github.com/mercurialsolo/mantis/issues/508)).
 - **`required_fields`** controls viability — listings missing any of these
   are dropped from the result. `["title", "url"]` is the minimum useful
   shape; relax it for noisier sites.
@@ -150,6 +152,34 @@ Notes on the schema:
 - The plan uses `re-navigate` (a fresh `navigate` step) instead of
   `navigate_back` to return to the results page — this is more reliable
   than the browser back button when the model isn't sure.
+
+After the run completes, the structured rows are reachable as a
+first-class artifact on the result envelope, keyed by the schema field
+names — not flattened into the legacy pipe-delimited summary string:
+
+```jsonc
+{
+  "artifacts": [
+    {
+      "name": "extracted_rows",
+      "kind": "structured_data",
+      "schema": { "fields": ["title", "team", "location", "url", "department"] },
+      "data": [
+        { "title": "ML Engineer", "team": "Search & Ranking", "location": "SF",
+          "url": "https://boards.greenhouse.io/...", "department": "Engineering" }
+      ]
+    },
+    {
+      "name": "extracted_rows.csv",
+      "kind": "file",
+      "download_url": "/v1/runs/<run_id>/artifacts/extracted_rows.csv"
+    }
+  ]
+}
+```
+
+See [Structured extraction artifacts](../api.md#structured-extraction-artifacts-508)
+for the full artifact contract.
 
 ---
 

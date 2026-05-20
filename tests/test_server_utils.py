@@ -857,3 +857,228 @@ def test_runtime_provider_override_wins() -> None:
         proxy_provider="oxylabs",
     )
     assert out["proxy_provider"] == "oxylabs"
+
+
+# ── #508 extraction artifacts ─────────────────────────────────────
+
+
+class FakeStepResultWithFields(FakeStepResult):
+    """FakeStepResult that also exposes ``extracted_fields`` so the
+    aggregator can pick up structured rows."""
+
+    def __init__(self, *args, extracted_fields=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.extracted_fields = dict(extracted_fields or {})
+
+
+def test_build_micro_result_emits_artifacts_for_extracted_fields():
+    """Schema-keyed rows on StepResult land in result['artifacts'] as a
+    structured_data entry. The legacy ``leads`` string list is
+    untouched so existing callers keep working."""
+    from mantis_agent.server_utils import build_micro_result
+
+    runner = FakeMicroRunner(leads=["VIABLE|Title: ML | URL: https://a"])
+    steps = [
+        FakeStepResultWithFields(
+            0, "extract row 1", True, data="VIABLE|...",
+            extracted_fields={"title": "ML Engineer", "url": "https://a", "department": "Eng"},
+        ),
+        FakeStepResultWithFields(
+            1, "extract row 2", True, data="VIABLE|...",
+            extracted_fields={"title": "Designer", "url": "https://b", "location": "NY"},
+        ),
+    ]
+    result = build_micro_result(
+        runner, steps,
+        run_id="r1", provider="modal", session_name="t",
+        model_name="claude", elapsed_seconds=1.0,
+    )
+
+    assert "artifacts" in result
+    arts = result["artifacts"]
+    assert len(arts) == 1, arts
+    structured = arts[0]
+    assert structured["kind"] == "structured_data"
+    assert structured["name"] == "extracted_rows"
+    assert structured["mime_type"] == "application/json"
+    # First-seen field order preserved across rows
+    assert structured["schema"]["fields"] == ["title", "url", "department", "location"]
+    assert structured["row_count"] == 2
+    assert structured["data"][0] == {
+        "title": "ML Engineer", "url": "https://a", "department": "Eng",
+    }
+    # Legacy leads list untouched
+    assert result["leads"] == ["VIABLE|Title: ML | URL: https://a"]
+
+
+def test_build_micro_result_artifacts_empty_when_no_structured_rows():
+    """Runs that produce no extract_data rows yield artifacts=[]
+    rather than an artifact with empty data — keeps the result schema
+    predictable for callers that always iterate ``artifacts``."""
+    from mantis_agent.server_utils import build_micro_result
+
+    runner = FakeMicroRunner(leads=[])
+    steps = [FakeStepResult(0, "navigate", True)]
+    result = build_micro_result(
+        runner, steps,
+        run_id="r1", provider="modal", session_name="t",
+        model_name="claude", elapsed_seconds=1.0,
+    )
+    assert result["artifacts"] == []
+
+
+def test_persist_run_artifacts_writes_dynamic_csv_and_json(tmp_path: Path):
+    """``extracted_rows.csv`` header matches the schema fields exactly —
+    no marketplace columns leak in, missing values are empty strings."""
+    from mantis_agent.server_utils import persist_run_artifacts
+
+    result = {
+        "run_id": "r1",
+        "leads": [{"url": "https://a"}, {"url": "https://b"}],
+        "artifacts": [{
+            "name": "extracted_rows",
+            "kind": "structured_data",
+            "mime_type": "application/json",
+            "schema": {"fields": ["title", "url", "department"]},
+            "row_count": 2,
+            "data": [
+                {"title": "ML Engineer", "url": "https://a", "department": "Eng"},
+                {"title": "Designer", "url": "https://b"},  # missing department
+            ],
+        }],
+    }
+    file_arts = persist_run_artifacts(result, tmp_path, run_id="r1")
+
+    names = [a["name"] for a in file_arts]
+    assert names == ["leads.csv", "extracted_rows.csv", "extracted_rows.json"]
+
+    rows_csv = (tmp_path / "extracted_rows.csv").read_text().splitlines()
+    assert rows_csv[0] == "title,url,department"
+    assert rows_csv[1] == "ML Engineer,https://a,Eng"
+    assert rows_csv[2] == "Designer,https://b,"
+
+    rows_json = json.loads((tmp_path / "extracted_rows.json").read_text())
+    assert rows_json[0]["title"] == "ML Engineer"
+    assert rows_json[1].get("department", "") == ""
+
+    # Legacy leads.csv still uses fixed columns — back-compat guard
+    legacy_header = (tmp_path / "leads.csv").read_text().splitlines()[0]
+    assert legacy_header == "status,year,make,model,price,phone,seller,url,raw"
+
+    # download_url shape
+    by_name = {a["name"]: a for a in file_arts}
+    assert by_name["leads.csv"]["download_url"] == "/v1/runs/r1/artifacts/leads.csv"
+    assert by_name["extracted_rows.csv"]["download_url"] == "/v1/runs/r1/artifacts/extracted_rows.csv"
+    assert by_name["extracted_rows.json"]["download_url"] == "/v1/runs/r1/artifacts/extracted_rows.json"
+
+
+def test_persist_run_artifacts_skips_when_no_data(tmp_path: Path):
+    """No leads + no structured rows → no files written, empty list."""
+    from mantis_agent.server_utils import persist_run_artifacts
+
+    file_arts = persist_run_artifacts(
+        {"run_id": "r1", "leads": [], "artifacts": []}, tmp_path, run_id="r1",
+    )
+    assert file_arts == []
+    assert not (tmp_path / "leads.csv").exists()
+    assert not (tmp_path / "extracted_rows.csv").exists()
+
+
+def test_save_result_json_writes_dynamic_csv_in_artifacts_dir(tmp_path: Path):
+    """End-to-end: ``save_result_json`` writes the schema CSV alongside
+    the legacy one and the result envelope advertises both."""
+    result = {
+        "run_id": "r9",
+        "leads": [{"url": "https://a"}],
+        "artifacts": [{
+            "name": "extracted_rows",
+            "kind": "structured_data",
+            "mime_type": "application/json",
+            "schema": {"fields": ["title", "url"]},
+            "row_count": 1,
+            "data": [{"title": "T", "url": "https://a"}],
+        }],
+    }
+    save_result_json(result, tmp_path, "session")
+
+    legacy_csv = tmp_path / "session_leads_r9.csv"
+    assert legacy_csv.exists()
+    assert legacy_csv.read_text().splitlines()[0].startswith("status,year,make,model")
+
+    arts_dir = tmp_path / "session_artifacts_r9"
+    assert (arts_dir / "extracted_rows.csv").exists()
+    assert (arts_dir / "extracted_rows.json").exists()
+    assert (arts_dir / "extracted_rows.csv").read_text().splitlines()[0] == "title,url"
+
+    # File artifacts merged into result["artifacts"]
+    kinds = [(a["name"], a["kind"]) for a in result["artifacts"]]
+    assert ("extracted_rows", "structured_data") in kinds
+    assert ("leads.csv", "file") in kinds
+    assert ("extracted_rows.csv", "file") in kinds
+    assert ("extracted_rows.json", "file") in kinds
+
+
+def test_extraction_schema_from_dict_round_trips_custom_fields():
+    """Non-marketplace schema (title/department/location/url) survives
+    through ``ExtractionSchema.from_dict`` with the right required set
+    and entity name — proves payload-level extraction_schema is honored."""
+    from mantis_agent.extraction.schema import ExtractionSchema
+
+    s = ExtractionSchema.from_dict({
+        "entity_name": "job",
+        "fields": [
+            {"name": "title", "required": True},
+            {"name": "department", "required": False},
+            {"name": "location", "required": False},
+            {"name": "url", "required": True},
+        ],
+    })
+    assert s.entity_name == "job"
+    assert s.field_names() == ["title", "department", "location", "url"]
+    assert sorted(s.required_fields) == ["title", "url"]
+
+
+def test_extraction_schema_from_dict_validates_shape():
+    """Missing / malformed inputs raise ValueError so callers fail fast
+    instead of silently producing an empty-fields schema."""
+    from mantis_agent.extraction.schema import ExtractionSchema
+
+    with pytest.raises(ValueError):
+        ExtractionSchema.from_dict({})
+    with pytest.raises(ValueError):
+        ExtractionSchema.from_dict({"fields": []})
+    with pytest.raises(ValueError):
+        ExtractionSchema.from_dict({"fields": [{"missing_name": "x"}]})
+
+
+def test_predict_request_accepts_typed_extraction_schema():
+    """The schema dict is a first-class typed PredictRequest field —
+    previously accepted via extra='allow' but silently ignored."""
+    from mantis_agent.api_schemas import PredictRequest
+
+    req = PredictRequest(
+        task_suite={"steps": []},
+        extraction_schema={
+            "fields": [{"name": "title", "required": True}],
+            "entity_name": "post",
+        },
+    )
+    assert req.extraction_schema is not None
+    assert req.extraction_schema["entity_name"] == "post"
+
+
+def test_extracted_rows_csv_omits_legacy_marketplace_columns(tmp_path: Path):
+    """Regression guard: the dynamic CSV must NOT include
+    ``status``/``year``/``make`` etc. when the schema doesn't ask for
+    them. That's the whole point of #508."""
+    from mantis_agent.server_utils import write_extracted_rows_csv
+
+    write_extracted_rows_csv(
+        tmp_path / "out.csv",
+        rows=[{"title": "ML", "url": "https://a"}],
+        fieldnames=["title", "url"],
+    )
+    header = (tmp_path / "out.csv").read_text().splitlines()[0]
+    assert header == "title,url"
+    for legacy in ("status", "year", "make", "model", "price", "phone", "seller", "raw"):
+        assert legacy not in header

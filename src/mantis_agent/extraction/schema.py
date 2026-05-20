@@ -86,6 +86,53 @@ class ExtractionSchema:
     rejection_intents: dict[str, str] = field(default_factory=dict)
 
     @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> ExtractionSchema:
+        """Build from a raw dict payload (#508).
+
+        Accepts the shape documented for the HTTP ``extraction_schema``
+        request param — every key matches a dataclass field. Unknown
+        keys are tolerated (forward-compat). ``fields`` is required and
+        must be a non-empty list of ``{"name": str, ...}`` dicts;
+        ``required_fields`` defaults to every field with
+        ``required=True``, matching :meth:`from_objective`.
+        """
+        if not isinstance(payload, dict):
+            raise TypeError("extraction_schema must be a dict")
+        raw_fields = payload.get("fields")
+        if not isinstance(raw_fields, list) or not raw_fields:
+            raise ValueError("extraction_schema.fields must be a non-empty list")
+        fields_list: list[dict[str, Any]] = []
+        for f in raw_fields:
+            if not isinstance(f, dict) or not f.get("name"):
+                raise ValueError("each extraction_schema field needs a 'name'")
+            fields_list.append({
+                "name": str(f["name"]),
+                "type": str(f.get("type", "str")),
+                "required": bool(f.get("required", True)),
+                "example": str(f.get("example", "") or ""),
+            })
+        required = payload.get("required_fields")
+        if not isinstance(required, list):
+            required = [f["name"] for f in fields_list if f.get("required")]
+        return cls(
+            entity_name=str(payload.get("entity_name", "item") or "item"),
+            fields=fields_list,
+            required_fields=[str(n) for n in required],
+            tile_required_fields=[str(n) for n in (payload.get("tile_required_fields") or [])],
+            tile_carry_fields=[str(n) for n in (payload.get("tile_carry_fields") or [])],
+            spam_indicators=[str(s) for s in (payload.get("spam_indicators") or [])],
+            spam_seller_indicators=[
+                str(s) for s in (payload.get("spam_seller_indicators") or [])
+            ],
+            spam_label=str(payload.get("spam_label", "non-organic") or "non-organic"),
+            forbidden_controls=[str(s) for s in (payload.get("forbidden_controls") or [])],
+            allowed_controls=[str(s) for s in (payload.get("allowed_controls") or [])],
+            rejection_intents={
+                str(k): str(v) for k, v in (payload.get("rejection_intents") or {}).items()
+            },
+        )
+
+    @classmethod
     def from_objective(cls, objective: Any) -> ExtractionSchema:
         """Build from an ObjectiveSpec.
 
