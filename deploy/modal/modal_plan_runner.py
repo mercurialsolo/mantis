@@ -112,6 +112,8 @@ runner_image = (
         "anthropic>=0.34",
         "mss>=9.0",
         "python-dotenv",
+        # #509: per-run Augur DebugSession bundle + optional live streaming.
+        "augur-sdk>=0.1.0",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(

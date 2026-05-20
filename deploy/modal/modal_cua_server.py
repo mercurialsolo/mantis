@@ -167,6 +167,11 @@ executor_image = (
         "openai", "requests", "pillow", "mss",
         "huggingface-hub", "transformers", "torch",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
+        # #509: per-run Augur DebugSession bundle + optional live streaming.
+        # Pip-installed unconditionally so the wedge in
+        # src/mantis_agent/observability/augur.py activates on every
+        # executor container. Run-time gate via MANTIS_AUGUR_DISABLED.
+        "augur-sdk>=0.1.0",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -1369,6 +1374,12 @@ api_image = (
         "pydantic>=2.0",
         "requests",
         "anthropic",
+        # #509: api container imports ``mantis_agent.gym.run_executor``
+        # transitively (via the persist + dispatch paths). The adapter
+        # is lazy-imported but if augur_sdk is missing it falls back
+        # silently — keeping the dep here makes the import succeed and
+        # lets future API-side bundle reads work without a redeploy.
+        "augur-sdk>=0.1.0",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
