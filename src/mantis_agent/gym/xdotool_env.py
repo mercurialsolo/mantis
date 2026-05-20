@@ -311,6 +311,20 @@ class XdotoolGymEnv(GymEnvironment):
         time.sleep(3)
         logger.info(f"Browser started: {self._browser_cmd} → {url}")
 
+        # #539: register CDP stealth patches BEFORE any runner-triggered
+        # navigate. The browser opens to ``url`` (default about:blank)
+        # which isn't a real page — the first navigate from the runner
+        # is the first document that picks up the patches via
+        # ``Page.addScriptToEvaluateOnNewDocument``. Gated by
+        # ``MANTIS_CDP_STEALTH`` env var (default-on); no-op when
+        # disabled or when the CDP call fails (stealth setup never
+        # blocks a run).
+        try:
+            from .cdp_stealth import inject_stealth_patches
+            inject_stealth_patches(self._cdp_call)
+        except Exception as exc:  # noqa: BLE001 — never fatal
+            logger.debug("CDP stealth inject raised at startup: %s", exc)
+
     # ── Screenshot ──────────────────────────────────────────────────
 
     def screenshot(self) -> Image.Image:
