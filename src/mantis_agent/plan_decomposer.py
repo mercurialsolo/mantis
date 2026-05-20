@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field, fields
 from typing import Any, ClassVar
 
@@ -758,6 +759,12 @@ class PlanDecomposer:
         # JSON examples (params={"label": ...}) that confuse str.format.
         prompt = DECOMPOSE_PROMPT.replace("{plan_text}", plan_text)
 
+        request_body = {
+            "model": self.model,
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        t0 = time.monotonic()
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -765,16 +772,33 @@ class PlanDecomposer:
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
-            json={
-                "model": self.model,
-                "max_tokens": 4096,
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            json=request_body,
             timeout=60,
         )
 
         if resp.status_code != 200:
             raise RuntimeError(f"Decompose API error: {resp.status_code} {resp.text[:200]}")
+
+        # #523 PR B-2 — capture this call as a modelio record when an
+        # upstream caller has published a layer context (planner). Silent
+        # no-op otherwise (default path until the wrap fires in PR B-2-
+        # integration or later). Best-effort: telemetry never breaks
+        # decomposition.
+        try:
+            from .observability.modelio import (
+                current_modelio_context,
+                record_anthropic_modelio,
+            )
+            ctx = current_modelio_context()
+            if ctx is not None:
+                record_anthropic_modelio(
+                    request_payload=request_body,
+                    response_json=resp.json(),
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    ctx=ctx,
+                )
+        except Exception as exc:  # noqa: BLE001 — observability never fatal
+            logger.debug("plan_decomposer modelio capture failed: %s", exc)
 
         text = ""
         for block in resp.json().get("content", []):
