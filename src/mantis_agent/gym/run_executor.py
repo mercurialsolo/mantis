@@ -372,18 +372,33 @@ class RunExecutor:
             costs=per_step_costs,
             latency=per_step_latency,
         )
-        # #524 — continuous verdict score. The verifier's confidence is
-        # already on the Verdict; pass it through so RLHF/DPO consumers
-        # see the finer-grained signal instead of the binary verdict→
-        # score mapping.
+        # #524 + #530 — continuous verdict score. Derive primarily
+        # from ``sr.success`` (the canonical runner-side truth), then
+        # blend with ``verdict.confidence`` only when the two agree.
+        # Why not use ``verdict.confidence`` directly: a handler may
+        # have optimistically pre-stamped ``Verdict(kind=OK,
+        # confidence=1.0)`` before the runner detected failure;
+        # passing 1.0 through to ``set_score`` on a failed step
+        # produces the surfaced #530 bug (score=1.0 on
+        # status=failed). Trust sr.success first.
         verdict = getattr(step_result, "verdict", None)
         verdict_confidence = float(getattr(verdict, "confidence", 0.0) or 0.0)
-        if verdict_confidence > 0.0:
-            # ``comparator`` must be one of the SDK's canonical values
-            # (verifier / model-judge / exact-match / human) — Mantis's
-            # verifier confidence rolls up under "verifier".
+        if getattr(step_result, "skip", False):
+            score_value: float | None = None  # don't stamp on skipped steps
+        elif getattr(step_result, "success", False):
+            # Success: use verifier confidence if non-zero, else 1.0.
+            score_value = verdict_confidence if verdict_confidence > 0.0 else 1.0
+        else:
+            # Failure: ignore any pre-stamped optimistic confidence —
+            # the runner says the step failed, so the score must
+            # reflect that. Use 0.0 unless the verdict explicitly
+            # marks the failure as recoverable (a partial signal).
+            v_kind = getattr(verdict, "kind", "") if verdict is not None else ""
+            v_kind = v_kind.value if hasattr(v_kind, "value") else str(v_kind)
+            score_value = 0.5 if v_kind == "recoverable" else 0.0
+        if score_value is not None:
             augur.set_score(
-                step_index, verdict_confidence, comparator="verifier",
+                step_index, score_value, comparator="verifier",
             )
         # #524 — upgrade capture mode on first failure. Healthy runs
         # stay cheap (metadata only); failing runs auto-collect

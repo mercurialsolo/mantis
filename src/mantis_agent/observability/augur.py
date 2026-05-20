@@ -890,24 +890,58 @@ class AugurAdapter:
 
         grounding = _build_grounding(sr, last_action, action_type or step_type, action_params)
 
-        # Verdict: prefer the typed slot, fall back to success boolean.
+        # Verdict (#530): derive status from ``sr.success`` as the
+        # canonical truth, then refine with ``verdict.kind`` only to
+        # distinguish ``recoverable`` from ``failed`` on the failure
+        # branch.
+        #
+        # Why not trust ``verdict.kind`` directly: the Mantis
+        # ``Verdict`` dataclass field is ``kind`` (not ``status``,
+        # which the prior code mistakenly read — that typo defaulted
+        # every step to ``"unknown"``). Even after fixing the typo,
+        # handlers that optimistically stamp ``Verdict(kind=OK,
+        # confidence=1.0)`` before failure is detected leave a
+        # misleading verdict on a step the runner later marks
+        # ``success=False``. ``_stamp_verdict`` (run_executor.py:1947)
+        # honors pre-stamped verdicts and won't recompute. Using
+        # ``sr.success`` here closes the gap on the emit side.
         v_obj = getattr(sr, "verdict", None)
-        if v_obj is not None:
-            v_status = getattr(v_obj, "status", "")
-            v_status = (
-                v_status.value if hasattr(v_status, "value") else str(v_status)
-            )
-            verdict: dict[str, Any] = {
-                "status": _VERDICT_STATUS_MAP.get(v_status, "unknown"),
-                "reason": getattr(v_obj, "reason", "") or "",
-                "evidence_refs": [],
-            }
+        if getattr(sr, "skip", False):
+            v_status_mapped = "skipped"
+        elif getattr(sr, "success", False):
+            v_status_mapped = "passed"
         else:
-            verdict = {
-                "status": "passed" if getattr(sr, "success", False) else "failed",
-                "reason": getattr(sr, "failure_class", "") or "",
-                "evidence_refs": [],
-            }
+            # Failed branch: prefer the verdict.kind distinction
+            # (recoverable vs non_recoverable) when present; otherwise
+            # fall through to "failed".
+            v_status_mapped = "failed"
+            if v_obj is not None:
+                v_kind = getattr(v_obj, "kind", "")
+                v_kind = (
+                    v_kind.value if hasattr(v_kind, "value") else str(v_kind)
+                )
+                if v_kind == "recoverable":
+                    v_status_mapped = "recoverable"
+        v_reason = (
+            getattr(v_obj, "reason", "") or ""
+            if v_obj is not None
+            else (getattr(sr, "failure_class", "") or "")
+        )
+        # #530 — surface the verifier's textual evidence as a
+        # reference when set. ``evidence`` is a free-form string on
+        # the Verdict; record it as a single evidence_ref so
+        # downstream consumers can attribute the verdict back to its
+        # rationale.
+        v_evidence_refs: list[str] = []
+        if v_obj is not None:
+            ev = (getattr(v_obj, "evidence", "") or "").strip()
+            if ev:
+                v_evidence_refs = [ev[:500]]
+        verdict: dict[str, Any] = {
+            "status": v_status_mapped,
+            "reason": v_reason,
+            "evidence_refs": v_evidence_refs,
+        }
 
         rd_obj = getattr(sr, "recovery_decision", None)
         recovery_decision: dict[str, Any] | None = None
