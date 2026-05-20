@@ -320,10 +320,15 @@ class XdotoolGymEnv(GymEnvironment):
         # disabled or when the CDP call fails (stealth setup never
         # blocks a run).
         try:
-            from .cdp_stealth import inject_stealth_patches
+            from .cdp_stealth import apply_ua_override, inject_stealth_patches
             inject_stealth_patches(self._cdp_call)
+            # #539 follow-up: also spoof UA + sec-ch-ua-platform via CDP
+            # so the request-layer headers match the JS-side patches.
+            # Linux sec-ch-ua-platform is a strong bot tell on
+            # consumer-facing sites; Windows + Chrome 132 blends in.
+            apply_ua_override(self._cdp_call)
         except Exception as exc:  # noqa: BLE001 — never fatal
-            logger.debug("CDP stealth inject raised at startup: %s", exc)
+            logger.debug("CDP stealth inject/UA-override raised at startup: %s", exc)
 
     # ── Screenshot ──────────────────────────────────────────────────
 

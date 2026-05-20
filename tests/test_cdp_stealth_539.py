@@ -203,3 +203,96 @@ def test_xdotool_env_import_module_clean(monkeypatch):
     importlib.reload(mod)
     monkeypatch.setenv("MANTIS_CDP_STEALTH", "0")
     importlib.reload(mod)
+
+
+# ── Layer-2 patches (canvas/audio/font/platform) ─────────────────────────
+
+
+def test_stealth_js_patches_canvas_fingerprint():
+    """Canvas toDataURL is the #1 CF fingerprint surface after
+    navigator.* — must inject per-pixel noise to break the hash."""
+    assert "HTMLCanvasElement" in cdp_stealth.STEALTH_JS
+    assert "toDataURL" in cdp_stealth.STEALTH_JS
+    assert "getImageData" in cdp_stealth.STEALTH_JS
+
+
+def test_stealth_js_patches_audio_fingerprint():
+    """OfflineAudioContext rendering is the #2 fingerprint surface
+    — patch AudioBuffer.getChannelData with imperceptible noise."""
+    assert "AudioContext" in cdp_stealth.STEALTH_JS
+    assert "getChannelData" in cdp_stealth.STEALTH_JS
+
+
+def test_stealth_js_patches_font_enumeration():
+    """document.fonts.check must return true for the canonical
+    Windows/macOS fonts that CF probes — sparse availability is
+    a strong Linux/headless tell."""
+    assert "document.fonts" in cdp_stealth.STEALTH_JS
+    # Must whitelist Segoe UI (Windows) and Helvetica Neue (macOS)
+    # — the two most-probed canary fonts.
+    assert "Segoe UI" in cdp_stealth.STEALTH_JS
+    assert "Helvetica Neue" in cdp_stealth.STEALTH_JS
+
+
+def test_stealth_js_patches_platform_spoofing():
+    """navigator.platform + navigator.userAgentData must claim
+    Windows so the JS-observable surface matches the request-
+    layer UA override applied via CDP."""
+    assert "navigator" in cdp_stealth.STEALTH_JS
+    assert "platform" in cdp_stealth.STEALTH_JS
+    assert "Win32" in cdp_stealth.STEALTH_JS
+    assert "userAgentData" in cdp_stealth.STEALTH_JS
+    assert "Windows" in cdp_stealth.STEALTH_JS
+
+
+# ── UA override (sec-ch-ua headers) ──────────────────────────────────────
+
+
+def test_apply_ua_override_calls_network_setuseragent(monkeypatch):
+    """The single observable side-effect: a CDP call to
+    ``Network.setUserAgentOverride`` with a Windows Chrome UA +
+    full UA-CH metadata so both request-layer and JS-layer
+    fingerprints match."""
+    monkeypatch.delenv("MANTIS_CDP_STEALTH", raising=False)
+    cdp_call = MagicMock(return_value=(True, {}))
+    ok = cdp_stealth.apply_ua_override(cdp_call)
+    assert ok is True
+    cdp_call.assert_called_once()
+    method, params = cdp_call.call_args.args
+    assert method == "Network.setUserAgentOverride"
+    # Must spoof a Windows + Chrome 132 UA string.
+    assert "Windows NT 10.0" in params["userAgent"]
+    assert "Chrome/132" in params["userAgent"]
+    # Must include userAgentMetadata for the sec-ch-ua-* headers.
+    md = params["userAgentMetadata"]
+    assert md["platform"] == "Windows"
+    assert md["mobile"] is False
+    assert any(b["brand"] == "Google Chrome" for b in md["brands"])
+
+
+def test_apply_ua_override_noop_when_disabled(monkeypatch):
+    monkeypatch.setenv("MANTIS_CDP_STEALTH", "0")
+    cdp_call = MagicMock()
+    ok = cdp_stealth.apply_ua_override(cdp_call)
+    assert ok is False
+    cdp_call.assert_not_called()
+
+
+def test_apply_ua_override_swallows_exception(monkeypatch):
+    """CDP raise → swallowed; never breaks browser startup."""
+    monkeypatch.delenv("MANTIS_CDP_STEALTH", raising=False)
+    cdp_call = MagicMock(side_effect=RuntimeError("CDP unreachable"))
+    ok = cdp_stealth.apply_ua_override(cdp_call)
+    assert ok is False
+
+
+def test_xdotool_env_start_browser_calls_ua_override():
+    """``_start_browser`` must call both inject_stealth_patches AND
+    apply_ua_override — they cover orthogonal layers (JS-side vs
+    request-layer)."""
+    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+    src = inspect.getsource(XdotoolGymEnv._start_browser)
+    assert "apply_ua_override" in src, (
+        "_start_browser must call apply_ua_override alongside "
+        "inject_stealth_patches"
+    )

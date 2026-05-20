@@ -145,13 +145,9 @@ STEALTH_JS: str = r"""
     }
   } catch (e) {}
 
-  // [8] iframe.contentWindow — bare iframes injected by some CF
-  // probes throw "uncaught (in promise) TypeError" on real Chrome
-  // because contentWindow is null cross-origin; headless Chrome
-  // returns a usable proxy that fails the probe. Patch contentWindow
-  // to mirror real Chrome's null-on-cross-origin behavior.
-  // (Light touch — heavier patches sometimes regress legitimate
-  // iframes. This one is conservative.)
+  // [8] Function.prototype.toString proxy — the patched
+  // permissions.query must still serialize as ``[native code]``
+  // (some CF probes Function.toString to detect monkey-patches).
   try {
     const proxyToString = Function.prototype.toString;
     Function.prototype.toString = new Proxy(proxyToString, {
@@ -163,8 +159,152 @@ STEALTH_JS: str = r"""
       },
     });
   } catch (e) {}
+
+  // [9] Canvas fingerprint noise — CF reads <canvas>.toDataURL() and
+  // hashes the result. Linux Chrome + SwiftShader produces a hash
+  // that's on CF's known-bot list. Add per-pixel ±1 noise so each
+  // session's hash is unique but text/UI still renders legibly.
+  try {
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function (...args) {
+      try {
+        const ctx = this.getContext('2d');
+        if (ctx) {
+          const img = ctx.getImageData(0, 0, this.width, this.height);
+          for (let i = 0; i < img.data.length; i += 4) {
+            // ±1 noise on R/G/B; skip alpha. Imperceptible to humans,
+            // changes the dataURL hash.
+            img.data[i] = (img.data[i] + ((Math.random() < 0.5) ? -1 : 1)) & 0xff;
+            img.data[i + 1] = (img.data[i + 1] + ((Math.random() < 0.5) ? -1 : 1)) & 0xff;
+            img.data[i + 2] = (img.data[i + 2] + ((Math.random() < 0.5) ? -1 : 1)) & 0xff;
+          }
+          ctx.putImageData(img, 0, 0);
+        }
+      } catch (e) {}
+      return origToDataURL.apply(this, args);
+    };
+  } catch (e) {}
+
+  // [10] AudioContext fingerprint noise — OfflineAudioContext
+  // renderings differ between real hardware and virtualized; CF
+  // hashes the output. Add tiny gain perturbation to break the hash.
+  try {
+    if (typeof OfflineAudioContext !== 'undefined') {
+      const origGetChannelData = AudioBuffer.prototype.getChannelData;
+      AudioBuffer.prototype.getChannelData = function (channel) {
+        const data = origGetChannelData.call(this, channel);
+        // Perturb the first sample by an imperceptible amount —
+        // enough to change the hash but not the audible output.
+        if (data.length > 0) {
+          const noise = (Math.random() - 0.5) * 1e-7;
+          data[0] = data[0] + noise;
+        }
+        return data;
+      };
+    }
+  } catch (e) {}
+
+  // [11] Font enumeration — patch document.fonts.check so a wider
+  // set of fonts appears available. Real Windows/macOS have
+  // 100-300 fonts; Linux Chrome image has ~30. CF probes specific
+  // fonts ("Helvetica Neue", "Segoe UI", etc.) and a sparse hit
+  // ratio is a tell.
+  try {
+    if (window.document && document.fonts && document.fonts.check) {
+      const origCheck = document.fonts.check.bind(document.fonts);
+      const FAKE_AVAILABLE = new Set([
+        'Helvetica', 'Helvetica Neue', 'Arial', 'Arial Black',
+        'Segoe UI', 'Tahoma', 'Verdana', 'Georgia',
+        'Times', 'Times New Roman', 'Courier', 'Courier New',
+        'Calibri', 'Cambria', 'Consolas', 'Trebuchet MS',
+        'Comic Sans MS', 'Impact', 'Lucida Console', 'Lucida Sans',
+      ]);
+      document.fonts.check = function (font, ...rest) {
+        try {
+          // Extract font family from the CSS shorthand.
+          const m = String(font).match(/['"]?([A-Za-z][A-Za-z0-9 ]+)['"]?$/);
+          const family = m ? m[1].trim() : '';
+          if (family && FAKE_AVAILABLE.has(family)) return true;
+        } catch (e) {}
+        return origCheck(font, ...rest);
+      };
+    }
+  } catch (e) {}
+
+  // [12] Platform spoofing — sec-ch-ua-platform = "Linux" leaks
+  // that we're on a server. Boattrader audience is ~95% Windows
+  // or macOS. Patch navigator.platform AND navigator.userAgentData
+  // to claim Windows. The UA header itself is overridden via CDP
+  // Network.setUserAgentOverride (see apply_ua_override).
+  try {
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    if (navigator.userAgentData) {
+      const origUaData = navigator.userAgentData;
+      const fakeBrands = [
+        { brand: 'Not_A Brand', version: '8' },
+        { brand: 'Chromium', version: '132' },
+        { brand: 'Google Chrome', version: '132' },
+      ];
+      Object.defineProperty(navigator, 'userAgentData', {
+        get: () => ({
+          brands: fakeBrands,
+          mobile: false,
+          platform: 'Windows',
+          getHighEntropyValues: (hints) =>
+            Promise.resolve({
+              architecture: 'x86',
+              bitness: '64',
+              brands: fakeBrands,
+              fullVersionList: fakeBrands,
+              mobile: false,
+              model: '',
+              platform: 'Windows',
+              platformVersion: '15.0.0',
+              uaFullVersion: '132.0.6834.110',
+              wow64: false,
+            }),
+          toJSON: () => ({
+            brands: fakeBrands,
+            mobile: false,
+            platform: 'Windows',
+          }),
+        }),
+      });
+    }
+  } catch (e) {}
 })();
 """
+
+# Spoofed UA + UA-CH metadata to claim Windows 10 / Chrome 132.
+# Applied via CDP ``Network.setUserAgentOverride`` so the sec-ch-ua-*
+# request headers also align (the bare ``--user-agent`` Chrome flag
+# only sets User-Agent, not the metadata headers — CF reads both).
+_SPOOF_UA: str = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/132.0.0.0 Safari/537.36"
+)
+
+_SPOOF_UA_METADATA: dict[str, Any] = {
+    "brands": [
+        {"brand": "Not_A Brand", "version": "8"},
+        {"brand": "Chromium", "version": "132"},
+        {"brand": "Google Chrome", "version": "132"},
+    ],
+    "fullVersion": "132.0.6834.110",
+    "fullVersionList": [
+        {"brand": "Not_A Brand", "version": "8.0.0.0"},
+        {"brand": "Chromium", "version": "132.0.6834.110"},
+        {"brand": "Google Chrome", "version": "132.0.6834.110"},
+    ],
+    "platform": "Windows",
+    "platformVersion": "15.0.0",
+    "architecture": "x86",
+    "model": "",
+    "mobile": False,
+    "bitness": "64",
+    "wow64": False,
+}
 
 
 def is_enabled() -> bool:
@@ -222,8 +362,55 @@ def inject_stealth_patches(cdp_call: Callable[[str, dict[str, Any]], tuple[bool,
         return False
 
 
+def apply_ua_override(
+    cdp_call: Callable[[str, dict[str, Any]], tuple[bool, dict[str, Any]]],
+) -> bool:
+    """Spoof User-Agent + sec-ch-ua-* request headers via CDP (#539).
+
+    Linux Chrome ships ``sec-ch-ua-platform: "Linux"`` which is a strong
+    bot tell for sites whose audience is overwhelmingly Windows/macOS
+    (boats, cars, real estate). The `--user-agent` Chrome flag only
+    sets the User-Agent header; the UA Client Hints (``sec-ch-ua-*``)
+    are computed from the runtime build and need the CDP override.
+
+    ``Network.setUserAgentOverride`` with both ``userAgent`` and
+    ``userAgentMetadata`` aligns all three surfaces (UA, sec-ch-ua,
+    sec-ch-ua-platform) at the request layer. Combined with the
+    ``navigator.userAgentData`` patch in :data:`STEALTH_JS`, the JS-
+    side observable surfaces also match.
+
+    Returns ``True`` on successful CDP call, ``False`` on any failure.
+    No-op when :func:`is_enabled` returns False — gated by the same
+    ``MANTIS_CDP_STEALTH`` env var as :func:`inject_stealth_patches`.
+    """
+    if not is_enabled():
+        return False
+    try:
+        ok, payload = cdp_call(
+            "Network.setUserAgentOverride",
+            {
+                "userAgent": _SPOOF_UA,
+                "platform": "Windows",
+                "userAgentMetadata": _SPOOF_UA_METADATA,
+            },
+        )
+        if ok:
+            logger.warning(
+                "CDP stealth: UA override applied (platform=Windows, chrome=132)",
+            )
+        else:
+            logger.warning(
+                "CDP stealth: UA override returned not-ok: %r", payload,
+            )
+        return bool(ok)
+    except Exception as exc:  # noqa: BLE001 — telemetry-style; never fatal
+        logger.debug("CDP stealth: UA override failed: %s", exc)
+        return False
+
+
 __all__ = [
     "STEALTH_JS",
+    "apply_ua_override",
     "inject_stealth_patches",
     "is_enabled",
 ]
