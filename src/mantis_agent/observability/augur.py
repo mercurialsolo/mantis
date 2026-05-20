@@ -149,87 +149,21 @@ def is_enabled() -> bool:
 
 
 def is_verbose() -> bool:
-    """Whether to surface adapter + SDK errors at WARN (else DEBUG).
+    """Whether to surface adapter diagnostics at WARN (else DEBUG).
 
     Gated by ``MANTIS_AUGUR_VERBOSE`` — opt-in because:
 
     * Modal suppresses INFO/DEBUG. WARN is the only level reliably
       visible in ``modal app logs``. For deploy verification we WANT
-      the per-step emission noise and SDK-side rejections elevated.
+      the per-step emission noise elevated.
     * For steady-state production we don't want a WARN line per step.
 
-    Set ``MANTIS_AUGUR_VERBOSE=1`` on the runtime to enable. The flag
-    also drives :func:`_patch_streaming_for_visibility` — when on, the
-    monkey-patch elevates ``StreamingSink._post_json`` / ``_post_multipart``
-    / ``_safe_call`` errors from DEBUG → WARN.
+    Set ``MANTIS_AUGUR_VERBOSE=1`` on the runtime to enable. Gates
+    the adapter's ``__init__`` / ``_emit_augur_step`` / ``record_step``
+    exception-path WARN lines.
     """
     flag = os.environ.get("MANTIS_AUGUR_VERBOSE", "").strip().lower()
     return flag in {"1", "true", "yes", "on"}
-
-
-def _patch_streaming_for_visibility() -> None:
-    """When :func:`is_verbose` is true, replace SDK streaming methods
-    with WARN-logging variants.
-
-    augur-sdk's ``StreamingSink._post_json`` / ``_post_multipart`` /
-    ``_safe_call`` log at DEBUG when the server returns >=400 or when a
-    background-thread HTTP call raises. Modal suppresses DEBUG, so
-    silent rejections (the exact #509 verification gap) are invisible.
-    This monkey-patch elevates the same logs to WARN — kept gated so
-    production runs stay quiet.
-
-    Idempotent: re-running has no effect (uses ``_mantis_patched``
-    sentinel on the module).
-    """
-    if not _AUGUR_AVAILABLE or not is_verbose():
-        return
-    try:
-        import augur_sdk.streaming as _stream  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001
-        return
-    if getattr(_stream, "_mantis_patched", False):
-        return
-    sink_cls = _stream.StreamingSink
-
-    def _verbose_post_json(self, path, payload, *, method="POST"):  # noqa: ANN001
-        import json
-        url = self.dsn.base_url + path
-        body = json.dumps(payload).encode("utf-8")
-        resp = self._http.request(
-            method, url, body=body, headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.dsn.token}",
-            },
-        )
-        if resp.status >= 400:
-            logger.warning(
-                "augur stream %s %s -> %s %s",
-                method, path, resp.status, resp.data[:200],
-            )
-
-    def _verbose_post_multipart(self, path, payload):  # noqa: ANN001
-        url = self.dsn.base_url + path
-        resp = self._http.request(
-            "POST", url,
-            fields={"image": ("shot.png", payload, "image/png")},
-            headers={"Authorization": f"Bearer {self.dsn.token}"},
-        )
-        if resp.status >= 400:
-            logger.warning(
-                "augur stream upload %s -> %s %s",
-                path, resp.status, resp.data[:200],
-            )
-
-    def _verbose_safe_call(self, fn):  # noqa: ANN001
-        try:
-            fn()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("augur stream background error: %r", exc)
-
-    sink_cls._post_json = _verbose_post_json
-    sink_cls._post_multipart = _verbose_post_multipart
-    sink_cls._safe_call = _verbose_safe_call
-    _stream._mantis_patched = True
 
 
 def default_out_dir(run_id: str) -> Path:
@@ -255,6 +189,75 @@ def _map_step_status(step_result: Any) -> str:
     if getattr(step_result, "reversed", False):
         return "recovered"
     return "failed"
+
+
+# Mantis executor backend → Augur Grounding.provider chip text.
+# ``provider`` is a free-form string the workspace surfaces in the
+# GROUNDING panel; pick names that read well in the UI.
+_GROUNDING_PROVIDER_MAP: dict[str, str] = {
+    "som": "mantis-som-cdp",
+    "vision": "mantis-xdotool-vision",
+    "plan": "mantis-plan-executor",
+}
+
+
+def _build_grounding(
+    sr: Any,
+    last_action: Any,
+    action_type: str,
+    action_params: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Derive an Augur Grounding dict from a Mantis StepResult (#509 fu).
+
+    Mantis is screenshot-grounded by design — every dispatched click /
+    type / scroll resolves either through the SoM CDP pipeline
+    (``executor_backend="som"``) or the brain's vision grounding
+    (``executor_backend="vision"`` / xdotool). Surface that on the
+    trace so the per-step ``GROUNDING`` panel populates instead of
+    saying "No grounding for this step."
+
+    The Mantis runner doesn't currently stamp ``last_action`` on
+    StepResult (the field exists with ``default=None`` for resume
+    handling but no handler populates it). So we key grounding
+    emission off ``executor_backend`` — the field that IS reliably
+    set when a dispatch happens — and treat coordinates as optional.
+
+    Returns ``None`` for steps that didn't dispatch a grounded action
+    (navigate, verify, gate, extract_data, ...): keeping the Grounding
+    field absent matches the SDK's ``total=False`` semantics so the
+    schema validator stays happy.
+    """
+    backend = (getattr(sr, "executor_backend", "") or "").lower()
+    # ``som`` / ``vision`` are the two backends that actually anchor a
+    # coordinate on the screenshot. Empty backend = no dispatch =
+    # nothing to ground (extract_data, verify, navigate, ...).
+    if backend not in {"som", "vision", "plan"}:
+        return None
+    provider = _GROUNDING_PROVIDER_MAP.get(backend, "mantis")
+    # SoM-anchored clicks resolve through a CDP element check, so they
+    # carry near-certainty by construction (the element existed and
+    # accepted the synthetic event); vision-grounded coordinates are
+    # the brain's best guess and warrant lower confidence. Plan
+    # executor (deterministic Playwright) → 1.0.
+    confidence = {"som": 0.99, "vision": 0.7, "plan": 1.0}[backend]
+    target_label = str(getattr(sr, "intent", "") or "")[:120] or "(no intent)"
+    grounding: dict[str, Any] = {
+        "provider": provider,
+        "target_label": target_label,
+        "confidence": confidence,
+        "evidence": f"backend={backend}",
+        "provenance": "screenshot",
+    }
+    # Coordinates are best-effort. Mantis's StepResult.last_action is
+    # rarely populated today; when it is (e.g. tests, future runner
+    # work) we include them so the workspace can render the click
+    # overlay. Omit cleanly when absent — ``coordinates`` is optional
+    # on the Augur Grounding TypedDict (total=False).
+    x = action_params.get("x")
+    y = action_params.get("y")
+    if x is not None and y is not None:
+        grounding["coordinates"] = {"x": float(x), "y": float(y)}
+    return grounding
 
 
 def _resolve_capture_mode(value: str | None) -> Any:
@@ -323,10 +326,6 @@ class AugurAdapter:
             if extra_tags:
                 tags.update({str(k): str(v) for k, v in extra_tags.items()})
             target_dir = Path(out_dir) if out_dir is not None else default_out_dir(run_id)
-            # Refresh the streaming-error patch if verbose flipped on
-            # after module import (env var set later in the process).
-            if _verbose:
-                _patch_streaming_for_visibility()
             session = DebugSession(
                 run_id=run_id,
                 client_name="mantis",
@@ -404,14 +403,25 @@ class AugurAdapter:
         ended_at: str = "",
         observation_pre: str | None = None,
         observation_post: str | None = None,
+        step_type: str = "",
     ) -> None:
-        """Emit a StepTrace for a completed step."""
+        """Emit a StepTrace for a completed step.
+
+        ``step_type`` is the originating ``MicroIntent.type`` (the kind
+        of step the plan dispatched — ``click``, ``navigate``,
+        ``extract_data``, ...). Surfacing it as ``action.type`` keeps
+        the workspace's ACTION DISPATCHED panel meaningful even when
+        the runner doesn't stamp ``StepResult.last_action`` (which is
+        the common case today — Mantis's runner sets ``last_action``
+        only on a few code paths).
+        """
         if not self.active:
             return
         try:
             trace = self._build_step_trace(
                 step_result, started_at, ended_at,
                 observation_pre, observation_post,
+                step_type=step_type,
             )
             self._session.record_step(trace)
         except Exception as exc:  # noqa: BLE001
@@ -579,6 +589,8 @@ class AugurAdapter:
         ended_at: str,
         observation_pre: str | None,
         observation_post: str | None,
+        *,
+        step_type: str = "",
     ) -> dict[str, Any]:
         last_action = getattr(sr, "last_action", None)
         action_type = ""
@@ -589,17 +601,35 @@ class AugurAdapter:
                 at.value if hasattr(at, "value")
                 else (str(at) if at is not None else "")
             )
+            # Mantis's :class:`actions.Action` is a dataclass with a
+            # ``params`` dict — click coords / type text / scroll
+            # deltas live inside ``params``, NOT as top-level attrs.
+            # Earlier the wedge used ``getattr(last_action, "x", None)``
+            # which always returned None, so grounding never fired
+            # because no x/y reached the workspace. Read params first;
+            # fall back to top-level attrs for compatibility with any
+            # adapter test fixture that uses a plain SimpleNamespace.
+            la_params = getattr(last_action, "params", None) or {}
             for attr in ("text", "selector", "key", "x", "y", "dx", "dy", "url"):
+                if isinstance(la_params, dict) and la_params.get(attr) not in (None, ""):
+                    action_params[attr] = la_params[attr]
+                    continue
                 v = getattr(last_action, attr, None)
                 if v not in (None, ""):
                     action_params[attr] = v
 
+        # Prefer the MicroIntent's ``step.type`` when ``last_action``
+        # isn't stamped (the common case) so the workspace's ACTION
+        # DISPATCHED panel shows ``click`` / ``navigate`` / etc.
+        # instead of ``unknown``.
         action: dict[str, Any] = {
-            "type": action_type or "unknown",
+            "type": action_type or step_type or "unknown",
             "params": action_params,
             "coordinate_space": "screenshot_px",
             "dispatch_backend": getattr(sr, "executor_backend", "") or "",
         }
+
+        grounding = _build_grounding(sr, last_action, action_type or step_type, action_params)
 
         # Verdict: prefer the typed slot, fall back to success boolean.
         v_obj = getattr(sr, "verdict", None)
@@ -658,7 +688,7 @@ class AugurAdapter:
             "step_id": f"step-{augur_index:04d}",
             "step_index": augur_index,
             "intent": str(getattr(sr, "intent", "") or "")[:500] or "(no intent)",
-            "step_type": action_type or "unknown",
+            "step_type": action_type or step_type or "unknown",
             "required": True,
             "status": _map_step_status(sr),
             "started_at": started_at or "",
@@ -672,6 +702,8 @@ class AugurAdapter:
         failure_class = str(getattr(sr, "failure_class", "") or "")
         if failure_class:
             trace["failure_class"] = failure_class
+        if grounding is not None:
+            trace["grounding"] = grounding
         if observation_pre:
             trace["observation_pre"] = observation_pre
         if observation_post:

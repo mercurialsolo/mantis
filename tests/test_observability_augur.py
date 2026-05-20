@@ -296,6 +296,121 @@ def test_verbose_flag_gates_diagnostic_logging(monkeypatch, tmp_path: Path, capl
     assert init_warnings_loud, "verbose=on → init WARN line emitted"
 
 
+def test_grounding_emitted_for_click_with_coords(monkeypatch, tmp_path: Path):
+    """Click action with x/y coords + executor_backend='som' lands a
+    Grounding dict on the StepTrace so the workspace's per-step
+    GROUNDING panel populates instead of saying 'No grounding'."""
+    from types import SimpleNamespace
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Click the Send button")
+    sr.executor_backend = "som"
+    sr.last_action = SimpleNamespace(action_type="click", x=300, y=420)
+    trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
+    assert "grounding" in trace
+    g = trace["grounding"]
+    assert g["provider"] == "mantis-som-cdp"
+    assert g["coordinates"] == {"x": 300.0, "y": 420.0}
+    assert g["confidence"] == 0.99  # SoM = near-certain
+    assert g["provenance"] == "screenshot"
+    assert "Send button" in g["target_label"]
+
+
+def test_grounding_omitted_for_nav_step(monkeypatch, tmp_path: Path):
+    """Navigate / verify / extract steps shouldn't carry grounding —
+    they're not coordinate-anchored. Omitting the field keeps the
+    SDK's TypedDict ``total=False`` semantics happy."""
+    from types import SimpleNamespace
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_nav_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Navigate to https://example.com")
+    sr.executor_backend = ""
+    sr.last_action = SimpleNamespace(action_type="navigate", url="https://example.com")
+    trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
+    assert "grounding" not in trace
+
+
+def test_grounding_fires_when_backend_set_even_without_last_action(monkeypatch, tmp_path: Path):
+    """The Mantis runner doesn't stamp ``StepResult.last_action`` on
+    most code paths — only ``executor_backend`` is reliable. Adapter
+    must emit Grounding whenever the backend is set; coordinates are
+    optional (omitted cleanly when missing)."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_no_last_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Click the Sign In button")
+    sr.executor_backend = "som"
+    sr.last_action = None  # Mantis's common case
+    trace = a._build_step_trace(
+        sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z",
+        None, None, step_type="click",
+    )
+    assert "grounding" in trace, "backend=som should emit grounding even without last_action"
+    g = trace["grounding"]
+    assert g["provider"] == "mantis-som-cdp"
+    assert "Sign In" in g["target_label"]
+    assert g["confidence"] == 0.99
+    # Coordinates omitted when last_action isn't populated — schema is total=False
+    assert "coordinates" not in g
+    # action.type falls back to step_type when last_action.action_type isn't there
+    assert trace["action"]["type"] == "click"
+    assert trace["step_type"] == "click"
+
+
+def test_step_type_fallback_when_no_last_action(monkeypatch, tmp_path: Path):
+    """Without ``step_type`` AND without ``last_action.action_type``,
+    action.type defaults to 'unknown'. That's the empty-state behaviour
+    — workspace renders ``unknown`` for that, but we don't crash."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="step_type_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0)
+    sr.executor_backend = ""
+    sr.last_action = None
+    trace = a._build_step_trace(
+        sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z",
+        None, None,  # no step_type kw
+    )
+    assert trace["action"]["type"] == "unknown"
+    assert trace["step_type"] == "unknown"
+    assert "grounding" not in trace  # no backend = no grounding
+
+
+def test_grounding_reads_from_real_action_params_dict(monkeypatch, tmp_path: Path):
+    """Mantis ``actions.Action`` is a dataclass with a ``params`` dict
+    — x/y/text/etc. live INSIDE ``params``, not as top-level attrs.
+    The wedge must read from there or grounding silently drops to
+    None (the bug that hid behind the empty workspace GROUNDING
+    panel through one verify cycle)."""
+    from mantis_agent.actions import Action, ActionType
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_real_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Click submit")
+    sr.executor_backend = "som"
+    # Real Mantis Action shape: coords go in ``params``, not on the
+    # dataclass directly. The wedge MUST surface these for grounding
+    # to fire on production click steps.
+    sr.last_action = Action(action_type=ActionType.CLICK, params={"x": 512, "y": 320})
+    trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
+    assert "grounding" in trace, "real Action.params dict must surface coords"
+    assert trace["grounding"]["coordinates"] == {"x": 512.0, "y": 320.0}
+    # action.params on the trace should also have the coords echoed
+    assert trace["action"]["params"]["x"] == 512
+    assert trace["action"]["params"]["y"] == 320
+
+
+def test_grounding_vision_backend_marks_lower_confidence(monkeypatch, tmp_path: Path):
+    """Vision-grounded clicks (brain's best guess) should report
+    lower confidence than SoM-anchored (CDP-verified) ones."""
+    from types import SimpleNamespace
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_v2_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Click submit")
+    sr.executor_backend = "vision"
+    sr.last_action = SimpleNamespace(action_type="click", x=100, y=200)
+    trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
+    assert trace["grounding"]["provider"] == "mantis-xdotool-vision"
+    assert trace["grounding"]["confidence"] == 0.7
+
+
 def test_add_tag_surfaces_on_session(monkeypatch, tmp_path: Path):
     """``add_tag`` writes to the session so the workspace can render
     chips like MODEL in the Runs list."""
