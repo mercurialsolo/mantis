@@ -48,6 +48,12 @@ CLIENT_TOKENS: tuple[str, ...] = (
     # Internal product / tenant strings sprinkled through old examples.
     "robotcrm",
     "vision_claude_prod",
+    # Seed lead identifiers from the staff-crm fixture — these
+    # accumulated in adhoc submit scripts and burned into git history
+    # before the pre-commit gate caught them (2026-05-20).
+    "Sentinel Prime",
+    "Pinnacle Robotics",
+    "jordan.reyes@pinnacle",
 )
 
 
@@ -56,6 +62,12 @@ CLIENT_TOKENS: tuple[str, ...] = (
 # fixtures don't carry meaningful prose so they get skipped too.
 ALLOWLIST_PATHS: frozenset[str] = frozenset({
     "tests/test_docs_client_isolation.py",
+    # The pre-commit lint + its tests + config legitimately contain
+    # the banned tokens as patterns to detect (#543). Same self-
+    # allowlist rationale as this file.
+    "scripts/lint_no_customer_info.py",
+    "tests/test_lint_no_customer_info.py",
+    ".pre-commit-config.yaml",
 })
 
 
