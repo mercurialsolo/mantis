@@ -736,8 +736,22 @@ class AugurAdapter:
             "events": [],
             "logs": [],
         }
+        # Run the canonical classifier when the StepResult didn't carry
+        # a class (or carried the placeholder "unknown"). Closes
+        # mercurialsolo/augur#49 — without this, every halt streamed
+        # via DSN landed as failure_class="unknown" because the SDK
+        # streaming path didn't run classify() the way the file-export
+        # path does.
         failure_class = str(getattr(sr, "failure_class", "") or "")
-        if failure_class:
+        if not failure_class or failure_class == "unknown":
+            from ..gym.failure_class import classify
+
+            page_title = str(getattr(sr, "page_title", "") or "")
+            data = str(getattr(sr, "data", "") or "")
+            derived = classify(data, page_title)
+            if derived and derived != "unknown":
+                failure_class = derived
+        if failure_class and failure_class != "unknown":
             trace["failure_class"] = failure_class
         if grounding is not None:
             trace["grounding"] = grounding
