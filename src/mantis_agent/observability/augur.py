@@ -450,6 +450,72 @@ class AugurAdapter:
             else:
                 logger.debug("AugurAdapter.record_step failed: %s", exc)
 
+    def set_score(
+        self,
+        step_index: int,
+        score: float,
+        *,
+        comparator: str | None = None,
+        components: dict[str, float] | None = None,
+    ) -> None:
+        """Attach a continuous reward score to a step's verdict (#524, SDK 0.1.7+).
+
+        Augur's default verdict→score mapping is binary (passed=1.0 /
+        failed=0.0); passing the verifier's actual numeric confidence
+        gives downstream RLHF / DPO pipelines a finer-grained signal.
+
+        Callers pass Mantis's 0-based ``StepResult.step_index``; we
+        bump to Augur's 1-based at the boundary (same convention as
+        :meth:`record_step`). Score is clamped to [0.0, 1.0] by the
+        SDK — out-of-band values surface as ValueError there, which we
+        swallow (telemetry never breaks the run).
+        """
+        if not self.active or not hasattr(self._session, "set_score"):
+            return
+        try:
+            self._session.set_score(
+                int(step_index) + 1,
+                float(score),
+                comparator=comparator,
+                components=components,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning(
+                    "AugurAdapter.set_score(step=%s, score=%s) failed: %r",
+                    step_index, score, exc,
+                )
+            else:
+                logger.debug(
+                    "AugurAdapter.set_score(step=%s) failed: %s", step_index, exc,
+                )
+
+    def set_capture_mode(self, mode: str) -> None:
+        """Switch the active capture mode mid-run (#524, SDK 0.1.3+).
+
+        Used to upgrade from ``metadata`` to ``screenshots`` on first
+        failure — keeps healthy runs cheap while auto-collecting
+        evidence on failing ones.
+
+        Accepts the literal capture-mode string (``metadata`` /
+        ``screenshots`` / ``model_io`` / ``full`` / ...). Resolves via
+        the SDK's CaptureMode enum at the boundary; unknown values
+        surface as ValueError there, which we swallow.
+        """
+        if not self.active or not hasattr(self._session, "set_capture_mode"):
+            return
+        try:
+            self._session.set_capture_mode(mode)
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning(
+                    "AugurAdapter.set_capture_mode(%s) failed: %r", mode, exc,
+                )
+            else:
+                logger.debug(
+                    "AugurAdapter.set_capture_mode(%s) failed: %s", mode, exc,
+                )
+
     def add_tag(self, key: str, value: str) -> None:
         """Attach a tag to the open DebugSession (#509).
 

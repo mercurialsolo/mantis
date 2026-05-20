@@ -372,6 +372,28 @@ class RunExecutor:
             costs=per_step_costs,
             latency=per_step_latency,
         )
+        # #524 — continuous verdict score. The verifier's confidence is
+        # already on the Verdict; pass it through so RLHF/DPO consumers
+        # see the finer-grained signal instead of the binary verdict→
+        # score mapping.
+        verdict = getattr(step_result, "verdict", None)
+        verdict_confidence = float(getattr(verdict, "confidence", 0.0) or 0.0)
+        if verdict_confidence > 0.0:
+            # ``comparator`` must be one of the SDK's canonical values
+            # (verifier / model-judge / exact-match / human) — Mantis's
+            # verifier confidence rolls up under "verifier".
+            augur.set_score(
+                step_index, verdict_confidence, comparator="verifier",
+            )
+        # #524 — upgrade capture mode on first failure. Healthy runs
+        # stay cheap (metadata only); failing runs auto-collect
+        # screenshot evidence. Idempotent — the runner flag below
+        # ensures we only upgrade once per run.
+        if not getattr(step_result, "success", True) and not getattr(
+            runner, "_augur_capture_upgraded", False,
+        ):
+            augur.set_capture_mode("screenshots")
+            runner._augur_capture_upgraded = True
         # #509: surface the brain's planner reasoning as an Augur
         # planner-layer DecisionEvent. The workspace's "PLANNER REASONING"
         # panel reads from these — without it the panel falls back to
