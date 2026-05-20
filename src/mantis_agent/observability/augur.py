@@ -149,87 +149,21 @@ def is_enabled() -> bool:
 
 
 def is_verbose() -> bool:
-    """Whether to surface adapter + SDK errors at WARN (else DEBUG).
+    """Whether to surface adapter diagnostics at WARN (else DEBUG).
 
     Gated by ``MANTIS_AUGUR_VERBOSE`` — opt-in because:
 
     * Modal suppresses INFO/DEBUG. WARN is the only level reliably
       visible in ``modal app logs``. For deploy verification we WANT
-      the per-step emission noise and SDK-side rejections elevated.
+      the per-step emission noise elevated.
     * For steady-state production we don't want a WARN line per step.
 
-    Set ``MANTIS_AUGUR_VERBOSE=1`` on the runtime to enable. The flag
-    also drives :func:`_patch_streaming_for_visibility` — when on, the
-    monkey-patch elevates ``StreamingSink._post_json`` / ``_post_multipart``
-    / ``_safe_call`` errors from DEBUG → WARN.
+    Set ``MANTIS_AUGUR_VERBOSE=1`` on the runtime to enable. Gates
+    the adapter's ``__init__`` / ``_emit_augur_step`` / ``record_step``
+    exception-path WARN lines.
     """
     flag = os.environ.get("MANTIS_AUGUR_VERBOSE", "").strip().lower()
     return flag in {"1", "true", "yes", "on"}
-
-
-def _patch_streaming_for_visibility() -> None:
-    """When :func:`is_verbose` is true, replace SDK streaming methods
-    with WARN-logging variants.
-
-    augur-sdk's ``StreamingSink._post_json`` / ``_post_multipart`` /
-    ``_safe_call`` log at DEBUG when the server returns >=400 or when a
-    background-thread HTTP call raises. Modal suppresses DEBUG, so
-    silent rejections (the exact #509 verification gap) are invisible.
-    This monkey-patch elevates the same logs to WARN — kept gated so
-    production runs stay quiet.
-
-    Idempotent: re-running has no effect (uses ``_mantis_patched``
-    sentinel on the module).
-    """
-    if not _AUGUR_AVAILABLE or not is_verbose():
-        return
-    try:
-        import augur_sdk.streaming as _stream  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001
-        return
-    if getattr(_stream, "_mantis_patched", False):
-        return
-    sink_cls = _stream.StreamingSink
-
-    def _verbose_post_json(self, path, payload, *, method="POST"):  # noqa: ANN001
-        import json
-        url = self.dsn.base_url + path
-        body = json.dumps(payload).encode("utf-8")
-        resp = self._http.request(
-            method, url, body=body, headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.dsn.token}",
-            },
-        )
-        if resp.status >= 400:
-            logger.warning(
-                "augur stream %s %s -> %s %s",
-                method, path, resp.status, resp.data[:200],
-            )
-
-    def _verbose_post_multipart(self, path, payload):  # noqa: ANN001
-        url = self.dsn.base_url + path
-        resp = self._http.request(
-            "POST", url,
-            fields={"image": ("shot.png", payload, "image/png")},
-            headers={"Authorization": f"Bearer {self.dsn.token}"},
-        )
-        if resp.status >= 400:
-            logger.warning(
-                "augur stream upload %s -> %s %s",
-                path, resp.status, resp.data[:200],
-            )
-
-    def _verbose_safe_call(self, fn):  # noqa: ANN001
-        try:
-            fn()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("augur stream background error: %r", exc)
-
-    sink_cls._post_json = _verbose_post_json
-    sink_cls._post_multipart = _verbose_post_multipart
-    sink_cls._safe_call = _verbose_safe_call
-    _stream._mantis_patched = True
 
 
 def default_out_dir(run_id: str) -> Path:
@@ -255,6 +189,75 @@ def _map_step_status(step_result: Any) -> str:
     if getattr(step_result, "reversed", False):
         return "recovered"
     return "failed"
+
+
+# Mantis executor backend → Augur Grounding.provider chip text.
+# ``provider`` is a free-form string the workspace surfaces in the
+# GROUNDING panel; pick names that read well in the UI.
+_GROUNDING_PROVIDER_MAP: dict[str, str] = {
+    "som": "mantis-som-cdp",
+    "vision": "mantis-xdotool-vision",
+    "plan": "mantis-plan-executor",
+}
+
+
+def _build_grounding(
+    sr: Any,
+    last_action: Any,
+    action_type: str,
+    action_params: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Derive an Augur Grounding dict from a Mantis StepResult (#509 fu).
+
+    Mantis is screenshot-grounded by design — every dispatched click /
+    type / scroll has coordinates that came from either the SoM CDP
+    pipeline (``executor_backend="som"``) or the brain's vision grounding
+    (``executor_backend="vision"`` / xdotool). Surface that data on the
+    Augur trace so the per-step ``GROUNDING`` panel populates instead
+    of saying "No grounding for this step."
+
+    Returns ``None`` for steps that don't have a grounded action
+    (navigate, scroll, verify, gate, extract_data, ...): keeping the
+    Grounding field absent matches the SDK's ``total=False`` semantics
+    so the schema validator is happy.
+    """
+    if last_action is None:
+        return None
+    # Only action types that resolve to a coordinate on the screenshot
+    # carry meaningful grounding. Skip pure keyboard / nav / verify
+    # actions where x/y don't apply.
+    grounded_actions = {"click", "double_click", "right_click", "drag", "scroll", "type"}
+    norm_action = (action_type or "").lower()
+    if norm_action not in grounded_actions:
+        return None
+    backend = (getattr(sr, "executor_backend", "") or "").lower()
+    x = action_params.get("x")
+    y = action_params.get("y")
+    if x is None and y is None:
+        # No screenshot-anchored coordinates → can't ground meaningfully.
+        return None
+    provider = _GROUNDING_PROVIDER_MAP.get(backend, "mantis")
+    # SoM-anchored clicks resolve through a CDP element check, so they
+    # carry near-certainty by construction (the element existed and
+    # accepted the synthetic event); vision-grounded coordinates are
+    # the brain's best guess and warrant lower confidence. Empty
+    # backend (deterministic plan executor) → 1.0.
+    confidence = {"som": 0.99, "vision": 0.7}.get(backend, 1.0)
+    target_label = str(getattr(sr, "intent", "") or "")[:120] or "(no intent)"
+    # ``provenance`` is a literal: ``"screenshot" | "dom" | …``.
+    # SoM CDP path mixes the two (it checks the DOM element at the
+    # vision coords); call it ``screenshot`` because the COORDINATE
+    # came from the screenshot — DOM is the verification, not the
+    # source. ``"dom"`` would imply the coordinate itself was DOM-
+    # derived, which would violate the screenshot-grounded invariant.
+    return {
+        "provider": provider,
+        "target_label": target_label,
+        "coordinates": {"x": float(x or 0), "y": float(y or 0)},
+        "confidence": confidence,
+        "evidence": f"backend={backend or 'deterministic'}",
+        "provenance": "screenshot",
+    }
 
 
 def _resolve_capture_mode(value: str | None) -> Any:
@@ -323,10 +326,6 @@ class AugurAdapter:
             if extra_tags:
                 tags.update({str(k): str(v) for k, v in extra_tags.items()})
             target_dir = Path(out_dir) if out_dir is not None else default_out_dir(run_id)
-            # Refresh the streaming-error patch if verbose flipped on
-            # after module import (env var set later in the process).
-            if _verbose:
-                _patch_streaming_for_visibility()
             session = DebugSession(
                 run_id=run_id,
                 client_name="mantis",
@@ -601,6 +600,8 @@ class AugurAdapter:
             "dispatch_backend": getattr(sr, "executor_backend", "") or "",
         }
 
+        grounding = _build_grounding(sr, last_action, action_type, action_params)
+
         # Verdict: prefer the typed slot, fall back to success boolean.
         v_obj = getattr(sr, "verdict", None)
         if v_obj is not None:
@@ -672,6 +673,8 @@ class AugurAdapter:
         failure_class = str(getattr(sr, "failure_class", "") or "")
         if failure_class:
             trace["failure_class"] = failure_class
+        if grounding is not None:
+            trace["grounding"] = grounding
         if observation_pre:
             trace["observation_pre"] = observation_pre
         if observation_post:

@@ -296,6 +296,54 @@ def test_verbose_flag_gates_diagnostic_logging(monkeypatch, tmp_path: Path, capl
     assert init_warnings_loud, "verbose=on → init WARN line emitted"
 
 
+def test_grounding_emitted_for_click_with_coords(monkeypatch, tmp_path: Path):
+    """Click action with x/y coords + executor_backend='som' lands a
+    Grounding dict on the StepTrace so the workspace's per-step
+    GROUNDING panel populates instead of saying 'No grounding'."""
+    from types import SimpleNamespace
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Click the Send button")
+    sr.executor_backend = "som"
+    sr.last_action = SimpleNamespace(action_type="click", x=300, y=420)
+    trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
+    assert "grounding" in trace
+    g = trace["grounding"]
+    assert g["provider"] == "mantis-som-cdp"
+    assert g["coordinates"] == {"x": 300.0, "y": 420.0}
+    assert g["confidence"] == 0.99  # SoM = near-certain
+    assert g["provenance"] == "screenshot"
+    assert "Send button" in g["target_label"]
+
+
+def test_grounding_omitted_for_nav_step(monkeypatch, tmp_path: Path):
+    """Navigate / verify / extract steps shouldn't carry grounding —
+    they're not coordinate-anchored. Omitting the field keeps the
+    SDK's TypedDict ``total=False`` semantics happy."""
+    from types import SimpleNamespace
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_nav_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Navigate to https://example.com")
+    sr.executor_backend = ""
+    sr.last_action = SimpleNamespace(action_type="navigate", url="https://example.com")
+    trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
+    assert "grounding" not in trace
+
+
+def test_grounding_vision_backend_marks_lower_confidence(monkeypatch, tmp_path: Path):
+    """Vision-grounded clicks (brain's best guess) should report
+    lower confidence than SoM-anchored (CDP-verified) ones."""
+    from types import SimpleNamespace
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_v2_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Click submit")
+    sr.executor_backend = "vision"
+    sr.last_action = SimpleNamespace(action_type="click", x=100, y=200)
+    trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
+    assert trace["grounding"]["provider"] == "mantis-xdotool-vision"
+    assert trace["grounding"]["confidence"] == 0.7
+
+
 def test_add_tag_surfaces_on_session(monkeypatch, tmp_path: Path):
     """``add_tag`` writes to the session so the workspace can render
     chips like MODEL in the Runs list."""
