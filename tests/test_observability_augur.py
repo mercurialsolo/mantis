@@ -330,6 +330,29 @@ def test_grounding_omitted_for_nav_step(monkeypatch, tmp_path: Path):
     assert "grounding" not in trace
 
 
+def test_grounding_reads_from_real_action_params_dict(monkeypatch, tmp_path: Path):
+    """Mantis ``actions.Action`` is a dataclass with a ``params`` dict
+    — x/y/text/etc. live INSIDE ``params``, not as top-level attrs.
+    The wedge must read from there or grounding silently drops to
+    None (the bug that hid behind the empty workspace GROUNDING
+    panel through one verify cycle)."""
+    from mantis_agent.actions import Action, ActionType
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_real_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Click submit")
+    sr.executor_backend = "som"
+    # Real Mantis Action shape: coords go in ``params``, not on the
+    # dataclass directly. The wedge MUST surface these for grounding
+    # to fire on production click steps.
+    sr.last_action = Action(action_type=ActionType.CLICK, params={"x": 512, "y": 320})
+    trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
+    assert "grounding" in trace, "real Action.params dict must surface coords"
+    assert trace["grounding"]["coordinates"] == {"x": 512.0, "y": 320.0}
+    # action.params on the trace should also have the coords echoed
+    assert trace["action"]["params"]["x"] == 512
+    assert trace["action"]["params"]["y"] == 320
+
+
 def test_grounding_vision_backend_marks_lower_confidence(monkeypatch, tmp_path: Path):
     """Vision-grounded clicks (brain's best guess) should report
     lower confidence than SoM-anchored (CDP-verified) ones."""

@@ -588,7 +588,19 @@ class AugurAdapter:
                 at.value if hasattr(at, "value")
                 else (str(at) if at is not None else "")
             )
+            # Mantis's :class:`actions.Action` is a dataclass with a
+            # ``params`` dict — click coords / type text / scroll
+            # deltas live inside ``params``, NOT as top-level attrs.
+            # Earlier the wedge used ``getattr(last_action, "x", None)``
+            # which always returned None, so grounding never fired
+            # because no x/y reached the workspace. Read params first;
+            # fall back to top-level attrs for compatibility with any
+            # adapter test fixture that uses a plain SimpleNamespace.
+            la_params = getattr(last_action, "params", None) or {}
             for attr in ("text", "selector", "key", "x", "y", "dx", "dy", "url"):
+                if isinstance(la_params, dict) and la_params.get(attr) not in (None, ""):
+                    action_params[attr] = la_params[attr]
+                    continue
                 v = getattr(last_action, attr, None)
                 if v not in (None, ""):
                     action_params[attr] = v
