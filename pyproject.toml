@@ -61,7 +61,7 @@ metrics = [
 # augur_sdk lazily and no-ops when the package isn't installed, so
 # this extra is purely opt-in — no base-install footprint change.
 observability = [
-    "augur-sdk>=0.1.3",
+    "augur-sdk>=0.1.4",
 ]
 # Self-host the FastAPI server that fronts /predict and /v1/chat/completions.
 # Used by the Baseten / EKS / GKE deployments.
