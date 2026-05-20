@@ -186,7 +186,7 @@ def test_setup_env_threads_reuse_session_through_kwargs(
     monkeypatch.setattr("mantis_agent.gym.xdotool_env.XdotoolGymEnv", _StubEnv)
 
     from mantis_agent.task_loop import setup_env
-    env, _ = setup_env(
+    env, _, _ = setup_env(
         base_url="https://example.com",
         run_id="r1",
         session_name="s",

@@ -461,7 +461,7 @@ def _run_executor(
     brain.load()
 
     # ── Env + viewer ──
-    env, proxy_proc = setup_env(
+    env, proxy_proc, proxy_diag = setup_env(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name, settle_time=2.0,
         proxy_city=str(task_suite.get("_proxy_city") or ""),
@@ -470,7 +470,7 @@ def _run_executor(
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
         profile_dir=profile_dir,
     )
-    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
+    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer, proxy_diag=proxy_diag)
 
     # ── Delegate to shared lifecycle ──
     config = TaskLoopConfig(
@@ -658,7 +658,7 @@ def _run_holo3_executor(
     grounding = ClaudeGrounding()
 
     # Env + viewer via shared helpers
-    env, proxy_proc = setup_env(
+    env, proxy_proc, proxy_diag = setup_env(
         base_url=base_url, run_id=run_id, session_name=session_name,
         settle_time=4.0,  # Holo3 needs longer settle — sees black screen with 2s
         proxy_city=str(task_suite.get("_proxy_city") or ""),
@@ -690,7 +690,12 @@ def _run_holo3_executor(
                 os.environ["DISPLAY"] = display
         except Exception as exc:  # noqa: BLE001 — best-effort
             print(f"  WARNING: ensure_display_ready before viewer failed: {exc}")
-    viewer_ctx, viewer_event_bus, viewer_url = setup_viewer(viewer)
+    viewer_ctx, viewer_event_bus, viewer_url = setup_viewer(
+        viewer,
+        proxy_diag=proxy_diag,
+        api_run_id=api_run_id or "",
+        api_tenant_id=api_tenant_id or "",
+    )
     # #416: persist the tunnel URL so a caller polling ``action=status``
     # gets a hot-link to the live screen. We write to a side-channel
     # ``viewer.json`` rather than merging into the API-owned
@@ -1200,7 +1205,7 @@ def _run_gemma4_cua_executor(
     # ── Env + viewer ──
     task_suite = json.loads(task_file_contents)
     session_name = task_suite.get("session_name", "gemma4_cua")
-    env, proxy_proc = setup_env(
+    env, proxy_proc, proxy_diag = setup_env(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name,
         settle_time=2.0, display=":99", start_xvfb=True,
@@ -1210,7 +1215,7 @@ def _run_gemma4_cua_executor(
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
         profile_dir=profile_dir,
     )
-    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
+    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer, proxy_diag=proxy_diag)
 
     # ── Delegate to shared lifecycle ──
     config = TaskLoopConfig(
@@ -1337,7 +1342,7 @@ def _run_claude_executor(
             f.write(json.dumps(traj_entry) + "\n")
 
     # ── Env + viewer ──
-    env, proxy_proc = setup_env(
+    env, proxy_proc, proxy_diag = setup_env(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name,
         settle_time=2.0, display=":99", start_xvfb=True,
@@ -1347,7 +1352,7 @@ def _run_claude_executor(
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
         profile_dir=profile_dir,
     )
-    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer)
+    viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer, proxy_diag=proxy_diag)
 
     # ── Delegate to shared lifecycle ──
     config = TaskLoopConfig(
