@@ -348,9 +348,65 @@ class AugurAdapter:
                     "AugurAdapter init: opened successfully streaming=%s out_dir=%s",
                     session._stream is not None, target_dir,
                 )
+            # #536 — flush a session-only trace.json immediately so the
+            # Augur workspace's Runs-list ``Model`` column populates
+            # live (within one poll cycle ~5s) instead of waiting
+            # until the run halts. Tags (including ``model``) are
+            # already on the session record at this point because
+            # ``DebugSession(tags=...)`` carried them in.
+            self._flush_session_metadata_to_stream()
         except Exception as exc:  # noqa: BLE001
             logger.warning("AugurAdapter: failed to open DebugSession: %s", exc)
             self._session = None
+
+    def _flush_session_metadata_to_stream(self) -> None:
+        """Send a session-only ``trace.json`` PUT to the streaming sink
+        right after session open (#536).
+
+        Workspace's Runs-list ``Model`` column reads
+        ``session.tags.model`` off ``trace.json``. The SDK only writes
+        the full trace.json at session ``close()`` (when steps are
+        finalized), so during a live run the column would stay null
+        until the run halts. A session-only payload with empty
+        ``steps: []`` is enough to land the session block (including
+        tags) on the server immediately.
+
+        Reaches into the SDK's private ``_stream`` because there's no
+        public ``flush_session_metadata`` helper today. No-op when
+        streaming isn't configured (``AUGUR_DSN`` unset → on-disk
+        bundle only, no live-poll behavior to fix).
+        """
+        sess = self._session
+        if sess is None:
+            return
+        stream = getattr(sess, "_stream", None)
+        if stream is None:
+            return
+        try:
+            record_fn = getattr(sess, "_session_record", None)
+            if record_fn is None:
+                return
+            payload = {"session": dict(record_fn()), "steps": []}
+            redaction = getattr(sess, "redaction_policy", None)
+            if redaction is not None:
+                payload = redaction.apply(payload)
+            stream.put_trace(payload)
+            if is_verbose():
+                logger.warning(
+                    "AugurAdapter._flush_session_metadata_to_stream: "
+                    "session-only trace flushed",
+                )
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning(
+                    "AugurAdapter._flush_session_metadata_to_stream failed: %r",
+                    exc,
+                )
+            else:
+                logger.debug(
+                    "AugurAdapter._flush_session_metadata_to_stream failed: %s",
+                    exc,
+                )
 
     @property
     def active(self) -> bool:
