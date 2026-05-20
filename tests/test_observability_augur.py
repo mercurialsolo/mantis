@@ -296,6 +296,51 @@ def test_verbose_flag_gates_diagnostic_logging(monkeypatch, tmp_path: Path, capl
     assert init_warnings_loud, "verbose=on → init WARN line emitted"
 
 
+def test_add_tag_surfaces_on_session(monkeypatch, tmp_path: Path):
+    """``add_tag`` writes to the session so the workspace can render
+    chips like MODEL in the Runs list."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="tag_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    a.add_tag("model", "Holo3-35B-A3B")
+    a.add_tag("failure_class", "selector_miss")
+    # Empty key is silently dropped
+    a.add_tag("", "ignored")
+    a.close(status="completed")
+
+    manifest = json.loads((tmp_path / "trace.json").read_text())
+    tags = manifest.get("session", {}).get("tags", {})
+    assert tags.get("model") == "Holo3-35B-A3B"
+    assert tags.get("failure_class") == "selector_miss"
+
+
+def test_cost_metric_emits_runner_metric_decision_event(monkeypatch, tmp_path: Path):
+    """``record_cost_metric`` emits a layer='runner' / kind='metric'
+    DecisionEvent so the workspace's COST column can derive totals
+    from the standard SDK surface (no custom server-side parsing)."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="cost_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    a.record_cost_metric(
+        name="cost_total_usd",
+        value=2.345,
+        detail={"gpu_usd": 0.5, "claude_usd": 1.8, "proxy_usd": 0.045,
+                "elapsed_seconds": 120.5, "steps_executed": 9},
+    )
+    a.close(status="completed")
+
+    # step_index=1 is the synthetic run-level slot
+    events_file = tmp_path / "events" / "0001.jsonl"
+    assert events_file.exists()
+    lines = [json.loads(ln) for ln in events_file.read_text().splitlines() if ln.strip()]
+    metrics = [e for e in lines if e.get("kind") == "metric"]
+    assert len(metrics) == 1
+    m = metrics[0]
+    assert m["layer"] == "runner"
+    assert m["detail"]["name"] == "cost_total_usd"
+    assert m["detail"]["value"] == 2.345
+    assert m["detail"]["claude_usd"] == 1.8
+    assert m["detail"]["steps_executed"] == 9
+
+
 def test_step_index_and_attempt_are_clamped_to_augur_minimums(monkeypatch, tmp_path: Path):
     """Augur's StepTrace schema requires step_index>=1 and
     recovery_decision.attempt>=1. Mantis is 0-based for both; the

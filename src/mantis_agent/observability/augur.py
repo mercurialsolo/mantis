@@ -421,6 +421,60 @@ class AugurAdapter:
             else:
                 logger.debug("AugurAdapter.record_step failed: %s", exc)
 
+    def add_tag(self, key: str, value: str) -> None:
+        """Attach a tag to the open DebugSession (#509).
+
+        The Augur workspace's Runs-list ``MODEL`` column and similar
+        derived chips read from session tags. Idempotent + safe to
+        call multiple times — last write wins per key.
+        """
+        if not self.active or not key:
+            return
+        try:
+            self._session.add_tag(str(key), str(value))
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning("AugurAdapter.add_tag(%s) failed: %r", key, exc)
+            else:
+                logger.debug("AugurAdapter.add_tag(%s) failed: %s", key, exc)
+
+    def record_cost_metric(
+        self,
+        *,
+        name: str,
+        value: float,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """Emit a run-level metric DecisionEvent (#509).
+
+        Mantis's :class:`gym.cost_meter.CostMeter` tracks per-bucket
+        and total USD spend. Surfacing them as Augur ``kind="metric"``
+        events lets the workspace's COST column populate and gives
+        cost-vs-time analyses something to query against. Layer is
+        ``runner`` (the Mantis runner owns the meter); step_index=0
+        because cost is run-aggregate, not per-step.
+        """
+        if not self.active:
+            return
+        payload = {"name": str(name), "value": float(value)}
+        if detail:
+            payload.update(detail)
+        event: dict[str, Any] = {
+            "ts": _utc_now_iso(),
+            "step_index": 1,  # Augur requires >=1; run-level uses min
+            "layer": "runner",
+            "kind": "metric",
+            "summary": f"{name}={value}",
+            "detail": payload,
+        }
+        try:
+            self._session.record_event(event)
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning("AugurAdapter.record_cost_metric failed: %r", exc)
+            else:
+                logger.debug("AugurAdapter.record_cost_metric failed: %s", exc)
+
     def record_planner_reasoning(
         self, *, step_index: int, reasoning: str,
     ) -> None:

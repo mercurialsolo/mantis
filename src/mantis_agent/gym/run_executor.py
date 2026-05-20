@@ -183,11 +183,19 @@ class RunExecutor:
         # ``MANTIS_AUGUR_DISABLED`` is set. The adapter is stashed on the
         # runner so the per-step loop below and ``_finalize`` can reach it
         # without an extra parameter on every helper signature.
+        # ``model`` tag populates the workspace's MODEL column. Read the
+        # brain's ``model_name`` (Holo3-35B-A3B / Claude (claude-3.5-…) /
+        # etc.); blank string when the brain doesn't expose one.
+        brain = getattr(runner, "brain", None)
+        model_name = str(getattr(brain, "model_name", "") or "") if brain is not None else ""
         runner._augur = AugurAdapter(
             run_id=str(getattr(runner, "run_key", "") or runner.plan_signature or "run"),
             tenant_id=str(getattr(runner, "tenant_id", "") or ""),
             session_name=str(getattr(runner, "session_name", "") or ""),
-            extra_tags={"plan_signature": runner.plan_signature or ""},
+            extra_tags={
+                "plan_signature": runner.plan_signature or "",
+                "model": model_name,
+            },
         )
 
         if not runner._results_base_url and plan.steps:
@@ -1441,8 +1449,62 @@ class RunExecutor:
         # as ``status.json``. Adapter swallows internal errors.
         augur: AugurAdapter | None = getattr(runner, "_augur", None)
         if augur is not None:
+            # Surface run-aggregate fields the per-step PUTs don't carry
+            # so the Runs-list columns populate: cost metrics + the
+            # canonical failure class for the first failing step (Augur
+            # uses this as the run-level failure class chip).
+            self._emit_augur_aggregate_metrics(state.results)
+            self._emit_augur_failure_class_tag(state.results)
             augur.close(status=runner._final_status or None)
             runner._augur = None
+
+    def _emit_augur_aggregate_metrics(self, results: list[StepResult]) -> None:
+        """Send cost-meter totals as run-level metric DecisionEvents (#509)."""
+        runner = self.parent
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is None or not augur.active:
+            return
+        meter = getattr(runner, "cost_meter", None)
+        if meter is None:
+            return
+        try:
+            gpu, claude, proxy, total = meter.totals()
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug("augur cost-meter totals() failed: %s", exc)
+            return
+        elapsed = 0.0
+        try:
+            elapsed = float(meter.elapsed_seconds() or 0.0)
+        except Exception:  # noqa: BLE001
+            pass
+        augur.record_cost_metric(
+            name="cost_total_usd",
+            value=round(total, 4),
+            detail={
+                "gpu_usd": round(gpu, 4),
+                "claude_usd": round(claude, 4),
+                "proxy_usd": round(proxy, 4),
+                "elapsed_seconds": round(elapsed, 2),
+                "steps_executed": len(results),
+            },
+        )
+
+    def _emit_augur_failure_class_tag(self, results: list[StepResult]) -> None:
+        """Tag the session with the first non-empty failure class (#509)."""
+        runner = self.parent
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is None or not augur.active:
+            return
+        for r in results:
+            fc = str(getattr(r, "failure_class", "") or "").strip()
+            if fc:
+                augur.add_tag("failure_class", fc)
+                return
+        # Also surface the runner's terminal status so any downstream
+        # filtering ("show me halted runs") can read it as a tag.
+        halt_reason = str(getattr(runner, "_final_halt_reason", "") or "").strip()
+        if halt_reason:
+            augur.add_tag("halt_reason", halt_reason)
 
     # ── Helpers ─────────────────────────────────────────────────────────
 
