@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING
 
 from PIL import Image
 
+from ._anthropic.client import encode_screenshot_for_claude
+
 if TYPE_CHECKING:
     from .grounding_cache import GroundingCache
 
@@ -202,9 +204,7 @@ Nothing else."""
                 logger.debug("claude_ground time_meter credit failed: %s", exc)
 
     def _ground_remote(self, screenshot, description, initial_x=None, initial_y=None):
-        import base64
         import re
-        from io import BytesIO
 
         import requests
 
@@ -216,9 +216,10 @@ Nothing else."""
                 description="no api key or description",
             )
 
-        buf = BytesIO()
-        screenshot.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
+        # #518 — encode at the configured JPEG/PNG/WEBP setting; same
+        # dimensions as the source so the coordinates Claude returns
+        # are still in the screenshot's pixel space.
+        b64, media_type = encode_screenshot_for_claude(screenshot)
 
         ix = initial_x or screenshot.width // 2
         iy = initial_y or screenshot.height // 2
@@ -245,7 +246,7 @@ Nothing else."""
                     "messages": [{
                         "role": "user",
                         "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
                             {"type": "text", "text": prompt},
                         ],
                     }],
@@ -340,9 +341,6 @@ Nothing else."""
         return self._ground_remote(screenshot, description, initial_x, initial_y)
 
     def _ground_remote(self, screenshot, description, initial_x=None, initial_y=None):
-        import base64
-        from io import BytesIO
-
         import requests
 
         if not description:
@@ -353,10 +351,12 @@ Nothing else."""
                 description="no description for grounding",
             )
 
-        # Encode screenshot
-        buf = BytesIO()
-        screenshot.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
+        # #518 — encode at the configured format/quality. This path
+        # talks to a vLLM /chat/completions endpoint (OpenAI-compat,
+        # NOT Anthropic) so the env knobs still apply for network-
+        # payload reduction even though the per-token cost isn't
+        # billed against an Anthropic invoice.
+        b64, media_type = encode_screenshot_for_claude(screenshot)
 
         prompt = self.GROUNDING_PROMPT.format(
             description=description,
@@ -377,7 +377,7 @@ Nothing else."""
                         "messages": [{
                             "role": "user",
                             "content": [
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                                {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{b64}"}},
                                 {"type": "text", "text": prompt},
                             ],
                         }],

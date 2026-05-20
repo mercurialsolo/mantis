@@ -27,13 +27,11 @@ schema, result, and spam helpers were split out under :mod:`.schema`,
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
 import re
 import time
-from io import BytesIO
 from typing import Any, ClassVar
 
 from PIL import Image
@@ -44,6 +42,7 @@ from .._anthropic.client import (
     _credit_claude_time,
     _retry_delay,
     credit_claude_tokens_from_response,
+    encode_screenshot_for_claude,
 )
 from .result import ExtractionResult
 from .schema import ExtractionSchema
@@ -373,9 +372,8 @@ class ClaudeExtractor:
             logger.warning("ClaudeExtractor: no API key")
             return ""
 
-        buf = BytesIO()
-        screenshot.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
+        # #518 — JPEG/PNG/WEBP per env; same dimensions as source.
+        b64, media_type = encode_screenshot_for_claude(screenshot)
 
         t0 = time.monotonic()
         try:
@@ -392,7 +390,7 @@ class ClaudeExtractor:
                     "messages": [{
                         "role": "user",
                         "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+                            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
                             {"type": "text", "text": prompt},
                         ],
                     }],
@@ -507,15 +505,14 @@ class ClaudeExtractor:
         content: list[dict] = [{"type": "text", "text": prompt}]
         for i, screenshot in enumerate(screenshots, 1):
             label = labels[i - 1] if i - 1 < len(labels) else f"screenshot {i}"
-            buf = BytesIO()
-            screenshot.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode()
+            # #518 — JPEG/PNG/WEBP per env; same dimensions as source.
+            b64, media_type = encode_screenshot_for_claude(screenshot)
             content.append({"type": "text", "text": f"Screenshot {i}: {label}"})
             content.append({
                 "type": "image",
                 "source": {
                     "type": "base64",
-                    "media_type": "image/png",
+                    "media_type": media_type,
                     "data": b64,
                 },
             })

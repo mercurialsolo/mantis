@@ -209,6 +209,11 @@ class ClaudeFormTargetProvider(FormTargetProvider):
                 },
                 "required": ["x", "y", "action", "value", "label"],
             },
+            # #518 — same tool def every call; the cache breakpoint
+            # makes the tool block bill at the cached input rate
+            # ($0.30/M for Sonnet 4 vs $3/M standard). Worth ~10% of
+            # Claude input cost on grounding-heavy plans.
+            cache_tools=True,
         )
 
         try:
@@ -398,6 +403,8 @@ class ClaudeFormTargetProvider(FormTargetProvider):
                 "required": ["action", "label"],
             },
             max_tokens=500,
+            # #518 — see report_form_target above for the rationale.
+            cache_tools=True,
         )
         if not parsed:
             logger.warning(
@@ -475,6 +482,8 @@ class ClaudeFormTargetProvider(FormTargetProvider):
                 "required": ["observed"],
             },
             max_tokens=200,
+            # #518 — see report_form_target above for the rationale.
+            cache_tools=True,
         )
         if not parsed:
             return None
