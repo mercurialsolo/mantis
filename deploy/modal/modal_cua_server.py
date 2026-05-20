@@ -171,7 +171,10 @@ executor_image = (
         # Pip-installed unconditionally so the wedge in
         # src/mantis_agent/observability/augur.py activates on every
         # executor container. Run-time gate via MANTIS_AUGUR_DISABLED.
-        "augur-sdk>=0.1.0",
+        # 0.1.2+ fires an immediate session-opened heartbeat so the
+        # workspace's connection badge updates the moment the SDK is
+        # wired up, before the first step lands.
+        "augur-sdk>=0.1.2",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -1379,7 +1382,7 @@ api_image = (
         # is lazy-imported but if augur_sdk is missing it falls back
         # silently — keeping the dep here makes the import succeed and
         # lets future API-side bundle reads work without a redeploy.
-        "augur-sdk>=0.1.0",
+        "augur-sdk>=0.1.2",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)

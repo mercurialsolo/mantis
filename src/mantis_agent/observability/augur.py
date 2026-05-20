@@ -208,13 +208,30 @@ class AugurAdapter:
     ) -> None:
         self._session: Any = None
         self._emitted_event_count: int = 0
+        # WARNING-level so it survives Modal log suppression — one line per
+        # run, gates downstream production debugging when the workspace
+        # shows no client. Remove once #509 is operationally stable.
+        dsn_env = os.environ.get("AUGUR_DSN", "")
+        logger.warning(
+            "AugurAdapter init: sdk_available=%s disabled_env=%r dsn_set=%s run_id=%s",
+            _AUGUR_AVAILABLE,
+            os.environ.get("MANTIS_AUGUR_DISABLED", ""),
+            bool(dsn_env),
+            run_id,
+        )
         if not is_enabled():
+            logger.warning("AugurAdapter init: disabled — adapter is a no-op")
             return
         try:
             tags = {"tenant": tenant_id or "", "session": session_name or ""}
             if extra_tags:
                 tags.update({str(k): str(v) for k, v in extra_tags.items()})
             target_dir = Path(out_dir) if out_dir is not None else default_out_dir(run_id)
+            logger.warning(
+                "AugurAdapter init: opening DebugSession out_dir=%s dsn_host=%s",
+                target_dir,
+                dsn_env.split("@")[-1].split("/")[0] if "@" in dsn_env else "(no dsn)",
+            )
             session = DebugSession(
                 run_id=run_id,
                 client_name="mantis",
@@ -232,8 +249,12 @@ class AugurAdapter:
             # (close), neither of which is a ``with`` block.
             session.__enter__()
             self._session = session
+            logger.warning(
+                "AugurAdapter init: opened successfully streaming=%s",
+                session._stream is not None,
+            )
         except Exception as exc:  # noqa: BLE001
-            logger.debug("AugurAdapter: failed to open DebugSession: %s", exc)
+            logger.warning("AugurAdapter init: failed to open DebugSession: %s", exc)
             self._session = None
 
     @property
