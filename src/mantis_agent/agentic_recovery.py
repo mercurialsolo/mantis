@@ -49,6 +49,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any
@@ -309,6 +310,21 @@ def _call_recovery_tool(
             logger.debug("recovery: screenshot encode failed: %s", exc)
 
     try:
+        request_body = {
+            "model": model,
+            "max_tokens": 1500,
+            "tools": [{
+                "name": "record_recovery",
+                "description": (
+                    "Record the recovery decision for the failed "
+                    "step."
+                ),
+                "input_schema": _ANALYSIS_TOOL_INPUT_SCHEMA,
+            }],
+            "tool_choice": {"type": "tool", "name": "record_recovery"},
+            "messages": [{"role": "user", "content": content}],
+        }
+        t0 = time.monotonic()
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -316,20 +332,7 @@ def _call_recovery_tool(
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
-            json={
-                "model": model,
-                "max_tokens": 1500,
-                "tools": [{
-                    "name": "record_recovery",
-                    "description": (
-                        "Record the recovery decision for the failed "
-                        "step."
-                    ),
-                    "input_schema": _ANALYSIS_TOOL_INPUT_SCHEMA,
-                }],
-                "tool_choice": {"type": "tool", "name": "record_recovery"},
-                "messages": [{"role": "user", "content": content}],
-            },
+            json=request_body,
             timeout=30,
         )
         if resp.status_code != 200:
@@ -338,6 +341,26 @@ def _call_recovery_tool(
                 resp.status_code, resp.text[:300],
             )
             return None
+        # #523 PR B-5 — capture this call as a ``step_recovery`` modelio
+        # record when an upstream caller (step_recovery._try_agentic_
+        # recovery via publish_modelio_context) has set the context.
+        # Silent no-op otherwise. Best-effort — telemetry never breaks
+        # recovery analysis.
+        try:
+            from .observability.modelio import (
+                current_modelio_context,
+                record_anthropic_modelio,
+            )
+            ctx = current_modelio_context()
+            if ctx is not None:
+                record_anthropic_modelio(
+                    request_payload=request_body,
+                    response_json=resp.json(),
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    ctx=ctx,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("agentic_recovery modelio capture failed: %s", exc)
         for block in resp.json().get("content", []):
             if (
                 block.get("type") == "tool_use"

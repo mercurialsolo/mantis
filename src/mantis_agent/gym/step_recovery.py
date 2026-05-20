@@ -977,15 +977,26 @@ class StepRecoveryPolicy:
             stored = hint_map.get(step_index, [])
             if isinstance(stored, list):
                 prior_hints = [str(h) for h in stored if str(h).strip()]
-        decision = analyse_failure_and_recover(
-            step=step,
-            failure_data=str(getattr(step_result, "data", "") or ""),
-            screenshot=screenshot,
-            plan_context=plan_context,
-            attempts=attempts,
-            model=recovery_model,
-            prior_hints=prior_hints,
-        )
+        # #523 PR B-5 — wrap the recovery call in a ``step_recovery``
+        # modelio context. The raw requests.post inside
+        # analyse_failure_and_recover (-> _call_recovery_tool) checks
+        # this contextvar at the boundary and emits one
+        # modelio/<step>-step_recovery-<seq>.json record on success.
+        # No-op when augur is None or inactive.
+        from ..observability.modelio import publish_modelio_context
+        with publish_modelio_context(
+            getattr(runner, "_augur", None),
+            layer="step_recovery", step_index=step_index,
+        ):
+            decision = analyse_failure_and_recover(
+                step=step,
+                failure_data=str(getattr(step_result, "data", "") or ""),
+                screenshot=screenshot,
+                plan_context=plan_context,
+                attempts=attempts,
+                model=recovery_model,
+                prior_hints=prior_hints,
+            )
         if decision is None:
             # #431: even though analyse_failure_and_recover already logs
             # its own warnings for the api-key / api-error / no-tool-use
