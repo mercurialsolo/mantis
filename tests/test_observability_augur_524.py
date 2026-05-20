@@ -212,11 +212,15 @@ def test_run_executor_passes_verdict_confidence_through_set_score(
     augur.close(status="completed")
 
 
-def test_run_executor_skips_set_score_when_confidence_zero(
+def test_run_executor_falls_back_to_one_on_success_when_confidence_zero(
     monkeypatch, tmp_path: Path,
 ):
-    """When verdict.confidence is 0.0 (default / unset), don't pollute
-    Augur with bogus scores — let the SDK's binary mapping apply."""
+    """When verdict.confidence is 0.0 on a successful step, use the
+    derived score 1.0 (canonical from sr.success). Updated from the
+    prior #524-only contract per #530's emission-side defense: the
+    score must always reflect sr.success so downstream RLHF/DPO
+    consumers get a usable signal even when the verifier didn't
+    publish a confidence value."""
     from mantis_agent.gym.run_executor import RunExecutor
 
     monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
@@ -249,7 +253,12 @@ def test_run_executor_skips_set_score_when_confidence_zero(
     executor = RunExecutor.__new__(RunExecutor)
     executor.parent = runner
     executor._emit_augur_step(step_result, "2026-05-20T10:00:00Z")
-    augur_spy.set_score.assert_not_called()
+    augur_spy.set_score.assert_called_once()
+    score = augur_spy.set_score.call_args.args[1]
+    assert score == 1.0, (
+        "Successful step with no confidence must default to score=1.0 "
+        f"(got {score}). Per #530's emission-side defense."
+    )
     augur.close(status="completed")
 
 
