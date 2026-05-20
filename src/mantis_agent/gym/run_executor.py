@@ -48,6 +48,7 @@ from ..plan_decomposer import MicroIntent
 from . import failure_class as failure_class_mod
 from . import step_snapshot
 from .checkpoint import RunCheckpoint, StepResult
+from .cost_meter import publish_cost_meter
 
 
 def _utc_iso_now() -> str:
@@ -164,6 +165,21 @@ class RunExecutor:
         ``state.loop_counters`` / ``state.listings_on_page`` /
         ``state.step_index`` from it before the loop starts.
         """
+        runner = self.parent
+        # #514 publish the cost meter so deep helpers (the shared
+        # Anthropic client; future cost-emitting subsystems) can credit
+        # tokens to this run without being passed the meter as an arg.
+        # Mirrors the dispatch-context publish for ``TimeMeter``.
+        with publish_cost_meter(getattr(runner, "cost_meter", None)):
+            return self._execute_inner(plan, state, resume=resume)
+
+    def _execute_inner(
+        self,
+        plan: "MicroPlan",
+        state: RunState,
+        *,
+        resume: bool = False,
+    ) -> list[StepResult]:
         runner = self.parent
         runner._final_status = "running"
         if not runner.plan_signature:
@@ -1507,6 +1523,17 @@ class RunExecutor:
         augur.add_tag("cost_claude_usd", f"{claude:.4f}")
         augur.add_tag("cost_proxy_usd", f"{proxy:.4f}")
         augur.add_tag("elapsed_seconds", f"{elapsed:.2f}")
+        # #514: also surface token counts on the metric event so the
+        # Augur workspace's query layer can compute per-token spend or
+        # spot model regressions without re-deriving the rate.
+        claude_input = int(meter.costs.get("claude_input_tokens", 0) or 0)
+        claude_output = int(meter.costs.get("claude_output_tokens", 0) or 0)
+        claude_cached_input = int(meter.costs.get("claude_cached_input_tokens", 0) or 0)
+        if claude_input or claude_output:
+            augur.add_tag("claude_input_tokens", str(claude_input))
+            augur.add_tag("claude_output_tokens", str(claude_output))
+            if claude_cached_input:
+                augur.add_tag("claude_cached_input_tokens", str(claude_cached_input))
         # The metric event is the structured/query-able surface — keeps
         # the same data shape as other Augur ``kind="metric"`` events.
         augur.record_cost_metric(
@@ -1518,6 +1545,9 @@ class RunExecutor:
                 "proxy_usd": round(proxy, 4),
                 "elapsed_seconds": round(elapsed, 2),
                 "steps_executed": len(results),
+                "claude_input_tokens": claude_input,
+                "claude_output_tokens": claude_output,
+                "claude_cached_input_tokens": claude_cached_input,
             },
         )
 

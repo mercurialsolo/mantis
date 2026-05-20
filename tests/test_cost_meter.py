@@ -36,6 +36,10 @@ def test_make_initial_costs_returns_zeros() -> None:
         "gpu_seconds": 0.0,
         "claude_extract": 0,
         "claude_grounding": 0,
+        # #514 token counters (Anthropic's per-call usage block)
+        "claude_input_tokens": 0,
+        "claude_output_tokens": 0,
+        "claude_cached_input_tokens": 0,
         "proxy_mb": 0.0,
     }
 
@@ -354,3 +358,124 @@ def test_totals_from_matches_totals_for_full_dict() -> None:
     assert out["claude"] == pytest.approx(claude)
     assert out["proxy"] == pytest.approx(proxy)
     assert out["total"] == pytest.approx(total)
+
+
+# ── #514 Claude token cost ──────────────────────────────────────────────
+
+
+def test_record_claude_tokens_accumulates() -> None:
+    """``record_claude_tokens`` adds to existing counters (per-call
+    increment, not set). Three calls of 10k input + 1k output should
+    leave 30k input + 3k output on the meter."""
+    meter = CostMeter()
+    for _ in range(3):
+        meter.record_claude_tokens(input_tokens=10_000, output_tokens=1_000)
+    assert meter.costs["claude_input_tokens"] == 30_000
+    assert meter.costs["claude_output_tokens"] == 3_000
+    assert meter.costs["claude_cached_input_tokens"] == 0
+
+
+def test_totals_prefers_token_billing_when_populated() -> None:
+    """When ``claude_input_tokens`` / ``output_tokens`` are set, the
+    Claude component is computed from per-token rates, NOT from the
+    legacy call counters. The default Sonnet 4 rates make a 30k/2k
+    call land at ~$0.12."""
+    meter = CostMeter()
+    # Also set the legacy call counter to a high value to prove tokens
+    # take precedence — without #514 this'd produce $0.003 × 5 = $0.015.
+    meter.costs["claude_extract"] = 5
+    meter.record_claude_tokens(input_tokens=30_000, output_tokens=2_000)
+    _, claude_cost, _, _ = meter.totals()
+    # 30k × $3/M + 2k × $15/M = $0.09 + $0.030 = $0.12
+    assert claude_cost == pytest.approx(0.12, abs=1e-6)
+
+
+def test_totals_falls_back_to_call_count_when_no_tokens() -> None:
+    """Legacy callers that don't go through the Anthropic-client
+    token-credit hook still get a Claude cost via the per-call counter.
+    This keeps the surface backwards compatible while #514 is rolling
+    out across all call sites."""
+    meter = CostMeter()
+    meter.costs["claude_extract"] = 4
+    meter.costs["claude_grounding"] = 2
+    _, claude_cost, _, _ = meter.totals()
+    # 6 calls × $0.003/call default
+    assert claude_cost == pytest.approx(0.018, abs=1e-6)
+
+
+def test_cached_input_tokens_billed_at_lower_rate() -> None:
+    """Anthropic's cached input is ~10% of the standard input rate
+    (Sonnet 4: $0.30/M vs $3/M). 10k input with 5k cached should bill
+    the cached portion at the discount rate."""
+    meter = CostMeter()
+    meter.record_claude_tokens(
+        input_tokens=10_000, output_tokens=0, cached_input_tokens=5_000,
+    )
+    _, claude_cost, _, _ = meter.totals()
+    # 5k plain × $3/M + 5k cached × $0.30/M = $0.015 + $0.0015 = $0.0165
+    assert claude_cost == pytest.approx(0.0165, abs=1e-6)
+
+
+def test_env_override_changes_per_token_rate(monkeypatch) -> None:
+    """Per-mtok rates honour env-var overrides so operators can pin
+    to whatever model their deployment actually targets."""
+    from mantis_agent.cost_config import CostConfig
+    monkeypatch.setenv("MANTIS_COST_CLAUDE_INPUT_PER_MTOK", "5.0")
+    monkeypatch.setenv("MANTIS_COST_CLAUDE_OUTPUT_PER_MTOK", "25.0")
+    cfg = CostConfig.from_env()
+    cost = cfg.claude_token_cost(input_tokens=1_000_000, output_tokens=100_000)
+    assert cost == pytest.approx(5.0 + 2.5, abs=1e-6)
+
+
+def test_publish_cost_meter_scoping() -> None:
+    """``publish_cost_meter`` makes the meter visible to
+    ``record_claude_tokens_to_current`` for the wrapped block, and
+    cleanly clears on exit."""
+    from mantis_agent.gym import cost_meter as cm
+    assert cm.current_cost_meter() is None
+    meter = cm.CostMeter()
+    with cm.publish_cost_meter(meter):
+        assert cm.current_cost_meter() is meter
+        cm.record_claude_tokens_to_current(input_tokens=2_000, output_tokens=500)
+    # Context popped — no leakage into the next scope.
+    assert cm.current_cost_meter() is None
+    assert meter.costs["claude_input_tokens"] == 2_000
+    assert meter.costs["claude_output_tokens"] == 500
+    # No published meter → silent no-op.
+    cm.record_claude_tokens_to_current(input_tokens=99_999, output_tokens=99_999)
+    assert meter.costs["claude_input_tokens"] == 2_000
+
+
+def test_credit_helper_parses_anthropic_response() -> None:
+    """``credit_claude_tokens_from_response`` reads the standard
+    Anthropic ``usage`` block (``input_tokens``, ``output_tokens``,
+    ``cache_read_input_tokens``) off a response dict and credits the
+    currently-published meter."""
+    from mantis_agent._anthropic.client import credit_claude_tokens_from_response
+    from mantis_agent.gym import cost_meter as cm
+    meter = cm.CostMeter()
+    response_json = {
+        "id": "msg_abc",
+        "model": "claude-sonnet-4-5",
+        "usage": {
+            "input_tokens": 25_000,
+            "output_tokens": 1_500,
+            "cache_read_input_tokens": 3_000,
+        },
+    }
+    with cm.publish_cost_meter(meter):
+        credit_claude_tokens_from_response(response_json)
+    assert meter.costs["claude_input_tokens"] == 25_000
+    assert meter.costs["claude_output_tokens"] == 1_500
+    assert meter.costs["claude_cached_input_tokens"] == 3_000
+
+
+def test_credit_helper_is_noop_without_published_meter() -> None:
+    """Tests + scripts that run the Anthropic client outside a runner
+    context shouldn't crash on missing meter — the helper silently
+    drops the credit."""
+    from mantis_agent._anthropic.client import credit_claude_tokens_from_response
+    # No meter published → no-op (no exception)
+    credit_claude_tokens_from_response({"usage": {"input_tokens": 100, "output_tokens": 50}})
+    credit_claude_tokens_from_response(None)
+    credit_claude_tokens_from_response({"no_usage_block": True})
