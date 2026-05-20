@@ -43,70 +43,6 @@ except Exception:  # noqa: BLE001 — any import-time failure → disabled
     _AUGUR_AVAILABLE = False
 
 
-def _patch_streaming_for_visibility() -> None:
-    """Temporary diagnostic — elevate SDK streaming errors to WARN.
-
-    augur-sdk's ``StreamingSink._post_json`` / ``_post_multipart`` /
-    ``_safe_call`` log at DEBUG when the server returns >=400 or when a
-    background-thread HTTP call raises. Modal suppresses DEBUG, so a
-    server rejection on per-step PUT (the exact #509 verification gap)
-    is invisible in ``modal app logs``. Patch the three methods to
-    emit at WARN instead. Remove once #509 is operationally stable.
-    """
-    if not _AUGUR_AVAILABLE:
-        return
-    try:
-        import augur_sdk.streaming as _stream  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001
-        return
-    if getattr(_stream, "_mantis_patched", False):
-        return
-    sink_cls = _stream.StreamingSink
-
-    def _verbose_post_json(self, path, payload, *, method="POST"):  # noqa: ANN001
-        import json
-        url = self.dsn.base_url + path
-        body = json.dumps(payload).encode("utf-8")
-        resp = self._http.request(
-            method, url, body=body, headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.dsn.token}",
-            },
-        )
-        if resp.status >= 400:
-            logger.warning(
-                "augur stream %s %s -> %s %s",
-                method, path, resp.status, resp.data[:200],
-            )
-
-    def _verbose_post_multipart(self, path, payload):  # noqa: ANN001
-        url = self.dsn.base_url + path
-        resp = self._http.request(
-            "POST", url,
-            fields={"image": ("shot.png", payload, "image/png")},
-            headers={"Authorization": f"Bearer {self.dsn.token}"},
-        )
-        if resp.status >= 400:
-            logger.warning(
-                "augur stream upload %s -> %s %s",
-                path, resp.status, resp.data[:200],
-            )
-
-    def _verbose_safe_call(self, fn):  # noqa: ANN001
-        try:
-            fn()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("augur stream background error: %r", exc)
-
-    sink_cls._post_json = _verbose_post_json
-    sink_cls._post_multipart = _verbose_post_multipart
-    sink_cls._safe_call = _verbose_safe_call
-    _stream._mantis_patched = True
-
-
-_patch_streaming_for_visibility()
-
-
 # ── Mantis → Augur vocabulary maps ───────────────────────────────────
 
 # Mantis ``_healing_events`` carry the per-step reasoning trail with
@@ -272,30 +208,13 @@ class AugurAdapter:
     ) -> None:
         self._session: Any = None
         self._emitted_event_count: int = 0
-        # WARNING-level so it survives Modal log suppression — one line per
-        # run, gates downstream production debugging when the workspace
-        # shows no client. Remove once #509 is operationally stable.
-        dsn_env = os.environ.get("AUGUR_DSN", "")
-        logger.warning(
-            "AugurAdapter init: sdk_available=%s disabled_env=%r dsn_set=%s run_id=%s",
-            _AUGUR_AVAILABLE,
-            os.environ.get("MANTIS_AUGUR_DISABLED", ""),
-            bool(dsn_env),
-            run_id,
-        )
         if not is_enabled():
-            logger.warning("AugurAdapter init: disabled — adapter is a no-op")
             return
         try:
             tags = {"tenant": tenant_id or "", "session": session_name or ""}
             if extra_tags:
                 tags.update({str(k): str(v) for k, v in extra_tags.items()})
             target_dir = Path(out_dir) if out_dir is not None else default_out_dir(run_id)
-            logger.warning(
-                "AugurAdapter init: opening DebugSession out_dir=%s dsn_host=%s",
-                target_dir,
-                dsn_env.split("@")[-1].split("/")[0] if "@" in dsn_env else "(no dsn)",
-            )
             session = DebugSession(
                 run_id=run_id,
                 client_name="mantis",
@@ -313,12 +232,8 @@ class AugurAdapter:
             # (close), neither of which is a ``with`` block.
             session.__enter__()
             self._session = session
-            logger.warning(
-                "AugurAdapter init: opened successfully streaming=%s",
-                session._stream is not None,
-            )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("AugurAdapter init: failed to open DebugSession: %s", exc)
+            logger.debug("AugurAdapter: failed to open DebugSession: %s", exc)
             self._session = None
 
     @property
@@ -383,11 +298,7 @@ class AugurAdapter:
             )
             self._session.record_step(trace)
         except Exception as exc:  # noqa: BLE001
-            # Temporarily elevated from debug → warning to surface
-            # silent put_step failures in Modal logs while #509 is
-            # being verified end-to-end. Revert to ``debug`` once
-            # the workspace timeline reliably populates.
-            logger.warning("AugurAdapter.record_step failed: %r", exc)
+            logger.debug("AugurAdapter.record_step failed: %s", exc)
 
     def drain_healing_events(self, healing_events: list[dict[str, Any]]) -> None:
         """Emit any healing events accumulated past the last cursor.
