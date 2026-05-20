@@ -36,3 +36,22 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+
+  - repo: local
+    hooks:
+      # Block customer brand names / target domains / seed lead IDs
+      # from ever landing in the repo. See
+      # ``scripts/lint_no_customer_info.py`` for the banned-term list
+      # and the allowlist (tests/, the lint script itself, .gitignore,
+      # this config). Standing rule:
+      # https://github.com/mercurialsolo/mantis/blob/main/AGENTS.md
+      # (auto-memory: feedback_no_customer_names_in_tracked_files).
+      - id: no-customer-info
+        name: no customer-named content (brands / domains / seed IDs)
+        entry: python scripts/lint_no_customer_info.py
+        language: python
+        pass_filenames: true
+        # Run on every file type — banned terms could appear in MD,
+        # YAML, JSON, Python, plain text, etc. Excluded paths are
+        # handled inside the script (tests/, the lint files).
+        types: [text]
