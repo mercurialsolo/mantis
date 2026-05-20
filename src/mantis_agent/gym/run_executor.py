@@ -1459,7 +1459,15 @@ class RunExecutor:
             runner._augur = None
 
     def _emit_augur_aggregate_metrics(self, results: list[StepResult]) -> None:
-        """Send cost-meter totals as run-level metric DecisionEvents (#509)."""
+        """Send cost-meter totals as both session tags and metric
+        DecisionEvents (#509).
+
+        The Augur workspace's Cost column reads from session tags
+        (parallel to MODEL — which we already tag). The metric
+        DecisionEvent is the secondary surface for time-series cost
+        analysis. Sending both means the column populates AND the
+        analyst-side query layer has structured data.
+        """
         runner = self.parent
         augur: AugurAdapter | None = getattr(runner, "_augur", None)
         if augur is None or not augur.active:
@@ -1477,6 +1485,16 @@ class RunExecutor:
             elapsed = float(meter.elapsed_seconds() or 0.0)
         except Exception:  # noqa: BLE001
             pass
+        # Tags are what the Run identity panel + run-list COST column
+        # read. Keep them as plain strings (the SDK serializes them
+        # verbatim) — Augur parses ``cost_usd`` as the canonical total.
+        augur.add_tag("cost_usd", f"{total:.4f}")
+        augur.add_tag("cost_gpu_usd", f"{gpu:.4f}")
+        augur.add_tag("cost_claude_usd", f"{claude:.4f}")
+        augur.add_tag("cost_proxy_usd", f"{proxy:.4f}")
+        augur.add_tag("elapsed_seconds", f"{elapsed:.2f}")
+        # The metric event is the structured/query-able surface — keeps
+        # the same data shape as other Augur ``kind="metric"`` events.
         augur.record_cost_metric(
             name="cost_total_usd",
             value=round(total, 4),
