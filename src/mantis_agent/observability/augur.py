@@ -467,6 +467,89 @@ class AugurAdapter:
             else:
                 logger.debug("AugurAdapter.add_tag(%s) failed: %s", key, exc)
 
+    def set_costs(
+        self,
+        *,
+        total_usd: float | None = None,
+        model_usd: float | None = None,
+        gpu_usd: float | None = None,
+        proxy_usd: float | None = None,
+        tokens_in: int | None = None,
+        tokens_out: int | None = None,
+        cache_hit_tokens: int | None = None,
+    ) -> None:
+        """Stamp the structured ``session.costs`` rollup (#521, SDK 0.1.8).
+
+        Replaces the prior ``add_tag('cost_usd', ...)`` chain — Augur's
+        Runs list now reads from ``session.costs`` directly, avoiding
+        two-source-of-truth drift between tags and the canonical
+        cost record.
+        """
+        if not self.active or not hasattr(self._session, "set_costs"):
+            return
+        try:
+            self._session.set_costs(
+                total_usd=total_usd,
+                model_usd=model_usd,
+                gpu_usd=gpu_usd,
+                proxy_usd=proxy_usd,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cache_hit_tokens=cache_hit_tokens,
+            )
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            if is_verbose():
+                logger.warning("AugurAdapter.set_costs failed: %r", exc)
+            else:
+                logger.debug("AugurAdapter.set_costs failed: %s", exc)
+
+    def set_step_costs(
+        self,
+        step_index: int,
+        *,
+        total_usd: float | None = None,
+        model_usd: float | None = None,
+        tokens_in: int | None = None,
+        tokens_out: int | None = None,
+        cache_hit_tokens: int | None = None,
+    ) -> None:
+        """Patch a recorded step's ``costs`` block (#522, SDK 0.1.8).
+
+        Callers pass Mantis's 0-based ``StepResult.step_index``; we
+        bump to Augur's 1-based convention at the boundary (same
+        convention as :meth:`record_step` / :meth:`attach_observation`
+        / :meth:`record_cost_metric`).
+
+        The in-trace ``trace['costs']`` path (set during
+        ``_build_step_trace`` when cost_meter snapshots are available)
+        is the preferred surface; this helper is the after-the-fact
+        patch for callers that don't know costs at record_step time.
+        """
+        if not self.active or not hasattr(self._session, "set_step_costs"):
+            return
+        try:
+            self._session.set_step_costs(
+                int(step_index) + 1,
+                total_usd=total_usd,
+                model_usd=model_usd,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                cache_hit_tokens=cache_hit_tokens,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning(
+                    "AugurAdapter.set_step_costs(step=%s) failed: %r",
+                    step_index,
+                    exc,
+                )
+            else:
+                logger.debug(
+                    "AugurAdapter.set_step_costs(step=%s) failed: %s",
+                    step_index,
+                    exc,
+                )
+
     def append_log(
         self,
         text: str,

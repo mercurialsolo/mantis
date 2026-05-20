@@ -310,3 +310,148 @@ def test_grounding_call_sites_pass_cache_tools():
         f"Each call_with_tool_schema in form_targeting/claude.py must "
         f"pass cache_tools=True ({opens} calls, {cache_tokens} cache flags)"
     )
+
+
+# ── #521 + #522: structured cost surfaces (augur-sdk 0.1.8) ─────────────
+
+
+def _record_step_minimal(adapter: AugurAdapter, step_index: int = 0) -> None:
+    """Test helper — drives ``record_step`` with just enough fields so the
+    SDK accepts it. Tests below use this to give ``set_step_costs`` a
+    target to patch."""
+    sr = _FakeStepResult(step_index=step_index)
+    sr.success = True
+    sr.failure_class = ""
+    sr.data = ""
+    sr.page_title = ""
+    adapter.record_step(
+        step_result=sr,
+        started_at="2026-05-20T10:00:00Z",
+        ended_at="2026-05-20T10:00:01Z",
+    )
+
+
+def test_set_costs_lands_on_manifest_and_trace(monkeypatch, tmp_path: Path):
+    """#521: ``set_costs`` writes the structured cost rollup to
+    ``manifest.json.costs`` and mirrors it on ``trace.json.session.costs``
+    — the canonical surface for Augur's Runs-list COST column as of
+    SDK 0.1.8."""
+    import json
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(
+        run_id="set_costs_v1", tenant_id="t", session_name="s", out_dir=tmp_path,
+    )
+    a.set_costs(
+        total_usd=0.92, model_usd=0.74, gpu_usd=0.15, proxy_usd=0.03,
+        tokens_in=42_000, tokens_out=3_500, cache_hit_tokens=8_000,
+    )
+    a.close(status="completed")
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["costs"]["total_usd"] == 0.92
+    assert manifest["costs"]["model_usd"] == 0.74
+    assert manifest["costs"]["gpu_usd"] == 0.15
+    assert manifest["costs"]["proxy_usd"] == 0.03
+    assert manifest["costs"]["tokens_in"] == 42_000
+    assert manifest["costs"]["tokens_out"] == 3_500
+    assert manifest["costs"]["cache_hit_tokens"] == 8_000
+    trace = json.loads((tmp_path / "trace.json").read_text())
+    assert trace["session"]["costs"] == manifest["costs"]
+
+
+def test_set_step_costs_patches_recorded_step_with_index_bump(
+    monkeypatch, tmp_path: Path,
+):
+    """#522: ``set_step_costs`` patches an existing recorded step's
+    ``costs`` block. Confirms the adapter bumps Mantis's 0-based step
+    index to Augur's 1-based convention at the boundary — passing
+    ``step_index=0`` must patch ``steps/0001.json``, not 0000."""
+    import json
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(
+        run_id="step_costs_v1", tenant_id="t", session_name="s", out_dir=tmp_path,
+    )
+    _record_step_minimal(a, step_index=0)
+    a.set_step_costs(
+        0,  # Mantis 0-based — adapter bumps to Augur 1
+        total_usd=0.12, model_usd=0.10, tokens_in=2_400, tokens_out=180,
+        cache_hit_tokens=600,
+    )
+    a.close(status="completed")
+    step = json.loads((tmp_path / "steps" / "0001.json").read_text())
+    assert step["costs"]["total_usd"] == 0.12
+    assert step["costs"]["model_usd"] == 0.10
+    assert step["costs"]["tokens_in"] == 2_400
+    assert step["costs"]["cache_hit_tokens"] == 600
+
+
+def test_set_costs_and_set_step_costs_noop_when_disabled(
+    monkeypatch, tmp_path: Path,
+):
+    """Both wrappers must be no-ops when the adapter is disabled —
+    telemetry never breaks a run. Idempotent across repeat calls."""
+    monkeypatch.setenv("MANTIS_AUGUR_DISABLED", "1")
+    a = AugurAdapter(
+        run_id="noop_v1", tenant_id="t", session_name="s", out_dir=tmp_path,
+    )
+    assert not a.active
+    # Neither call should raise even with adapter disabled.
+    a.set_costs(total_usd=0.5, model_usd=0.4)
+    a.set_step_costs(0, total_usd=0.1, model_usd=0.08)
+    a.set_costs()  # all-None permitted
+    # No bundle written.
+    assert not (tmp_path / "manifest.json").exists()
+
+
+def test_run_executor_emits_set_costs_with_token_counts(
+    monkeypatch, tmp_path: Path,
+):
+    """End-to-end-ish: the executor's ``_emit_augur_aggregate_metrics``
+    should call ``set_costs`` (not the legacy tag block) with the
+    cost-meter snapshot's token counts. Catches regressions where the
+    tag-write returns by accident."""
+    from unittest.mock import MagicMock
+
+    from mantis_agent.gym.run_executor import RunExecutor
+
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    augur = AugurAdapter(
+        run_id="exec_set_costs", tenant_id="t", session_name="s", out_dir=tmp_path,
+    )
+    augur_spy = MagicMock(wraps=augur)
+    runner = MagicMock()
+    runner._augur = augur_spy
+    meter = MagicMock()
+    meter.totals.return_value = (0.05, 0.40, 0.02, 0.47)
+    meter.elapsed_seconds.return_value = 42.5
+    meter.costs = {
+        "claude_input_tokens": 12_000,
+        "claude_output_tokens": 900,
+        "claude_cached_input_tokens": 3_400,
+    }
+    runner.cost_meter = meter
+    executor = RunExecutor.__new__(RunExecutor)
+    executor.parent = runner
+    executor._emit_augur_aggregate_metrics([])  # results unused for totals
+    # Asserts: set_costs was called with the snapshot, NOT the old tag block.
+    augur_spy.set_costs.assert_called_once()
+    kwargs = augur_spy.set_costs.call_args.kwargs
+    assert kwargs["total_usd"] == 0.47
+    assert kwargs["model_usd"] == 0.40
+    assert kwargs["gpu_usd"] == 0.05
+    assert kwargs["proxy_usd"] == 0.02
+    assert kwargs["tokens_in"] == 12_000
+    assert kwargs["tokens_out"] == 900
+    assert kwargs["cache_hit_tokens"] == 3_400
+    # No legacy cost_* tags fired — pre-#521 code wrote cost_usd /
+    # cost_gpu_usd / cost_claude_usd / cost_proxy_usd / claude_*_tokens.
+    tag_keys = {c.args[0] for c in augur_spy.add_tag.call_args_list if c.args}
+    legacy_keys = {
+        "cost_usd", "cost_gpu_usd", "cost_claude_usd", "cost_proxy_usd",
+        "claude_input_tokens", "claude_output_tokens",
+        "claude_cached_input_tokens",
+    }
+    assert tag_keys.isdisjoint(legacy_keys), (
+        f"Legacy cost-tag emission re-introduced: {tag_keys & legacy_keys}"
+    )
+    # elapsed_seconds is still a tag (no schema slot for wallclock).
+    assert "elapsed_seconds" in tag_keys
