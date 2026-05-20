@@ -1634,25 +1634,24 @@ class RunExecutor:
             elapsed = float(meter.elapsed_seconds() or 0.0)
         except Exception:  # noqa: BLE001
             pass
-        # Tags are what the Run identity panel + run-list COST column
-        # read. Keep them as plain strings (the SDK serializes them
-        # verbatim) — Augur parses ``cost_usd`` as the canonical total.
-        augur.add_tag("cost_usd", f"{total:.4f}")
-        augur.add_tag("cost_gpu_usd", f"{gpu:.4f}")
-        augur.add_tag("cost_claude_usd", f"{claude:.4f}")
-        augur.add_tag("cost_proxy_usd", f"{proxy:.4f}")
-        augur.add_tag("elapsed_seconds", f"{elapsed:.2f}")
-        # #514: also surface token counts on the metric event so the
-        # Augur workspace's query layer can compute per-token spend or
-        # spot model regressions without re-deriving the rate.
+        # #521: structured ``session.costs`` is the canonical surface
+        # as of augur-sdk 0.1.8. The workspace's Runs-list COST column
+        # now reads from here, not from tags — one source of truth.
         claude_input = int(meter.costs.get("claude_input_tokens", 0) or 0)
         claude_output = int(meter.costs.get("claude_output_tokens", 0) or 0)
         claude_cached_input = int(meter.costs.get("claude_cached_input_tokens", 0) or 0)
-        if claude_input or claude_output:
-            augur.add_tag("claude_input_tokens", str(claude_input))
-            augur.add_tag("claude_output_tokens", str(claude_output))
-            if claude_cached_input:
-                augur.add_tag("claude_cached_input_tokens", str(claude_cached_input))
+        augur.set_costs(
+            total_usd=round(total, 4),
+            model_usd=round(claude, 4),
+            gpu_usd=round(gpu, 4),
+            proxy_usd=round(proxy, 4),
+            tokens_in=claude_input or None,
+            tokens_out=claude_output or None,
+            cache_hit_tokens=claude_cached_input or None,
+        )
+        # elapsed_seconds has no slot on the costs record, so it stays
+        # a tag — same parser the workspace already uses for duration.
+        augur.add_tag("elapsed_seconds", f"{elapsed:.2f}")
         # The metric event is the structured/query-able surface — keeps
         # the same data shape as other Augur ``kind="metric"`` events.
         augur.record_cost_metric(
