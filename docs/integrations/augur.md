@@ -122,6 +122,111 @@ Mantis runner status maps onto `RunStatus`:
 | `MANTIS_DATA_DIR` | Default bundle root when `MANTIS_AUGUR_DIR` is unset. Defaults to `./data`. |
 | `MANTIS_VERSION` | Surfaced as `client.version` on the manifest — useful when bisecting which build produced a bundle. |
 | `MANTIS_GIT_SHA` | Surfaced as `client.git_sha` on the manifest. |
+| `MANTIS_AUGUR_VERBOSE` | `1` → adapter diagnostics log at `WARN` instead of `DEBUG`. Modal suppresses `INFO`/`DEBUG`, so flip this on when verifying a deploy. |
+
+## Structured session costs (augur-sdk 0.1.8+)
+
+The Augur workspace's Runs-list **COST** column reads from the
+canonical `session.costs` record (added in SDK 0.1.6, populated via
+the `set_costs` helper in 0.1.8). Mantis stamps it from the run's
+`CostMeter` totals at finalization:
+
+```python
+augur.set_costs(
+    total_usd=..., model_usd=..., gpu_usd=..., proxy_usd=...,
+    tokens_in=..., tokens_out=..., cache_hit_tokens=...,
+)
+```
+
+The legacy `add_tag("cost_usd", ...)` / `add_tag("cost_claude_usd",
+...)` chain was retired alongside the bump — keep one source of
+truth. `elapsed_seconds` stays a tag because the costs schema has no
+slot for run wallclock.
+
+Per-step cost deltas land on the `StepTrace.costs` field (filled
+inline by `_build_step_trace` from a `CostMeter.totals_from(snapshot)`
+diff). The adapter additionally exposes `set_step_costs(step_index,
+...)` for callers that compute costs after the fact, but the inline
+path is preferred when it's available.
+
+## Per-LLM-call modelio capture (augur-sdk 0.1.6+, opt-in)
+
+`modelio/<step:04d>-<layer>-<seq>.json` is the canonical per-call
+training-data record (one file per LLM invocation under the bundle).
+Mantis ships the plumbing in
+`src/mantis_agent/observability/modelio.py` plus a hook inside the
+shared `AnthropicToolUseClient`; per-layer call sites opt in by
+publishing a context:
+
+```python
+from mantis_agent.observability.modelio import publish_modelio_context
+
+# Around a planner / grounding / verifier / step_recovery / judge LLM call:
+with publish_modelio_context(runner._augur, layer="planner", step_index=0):
+    plan = decomposer.decompose_text(plan_text)  # auto-captures
+    # any call via AnthropicToolUseClient inside this block is also captured
+```
+
+Captured layers must be one of the SDK enum literals: `planner`,
+`grounding`, `model`, `verifier`, `step_recovery`, `judge`. Unknown
+layer names log a warning and fall through as a no-op (typo guard).
+
+**Vendor field-name mapping (gotcha to remember):** the canonical
+`modelio.schema.json` `response.usage` block uses **OpenAI** field
+names — `prompt_tokens` / `completion_tokens` — with
+`additionalProperties: false`. Anthropic responses ship
+`input_tokens` / `output_tokens` plus
+`cache_creation_input_tokens` / `cache_read_input_tokens`. The
+`record_anthropic_modelio` mapper translates at the boundary; never
+construct a modelio record by hand from an Anthropic response or
+the SDK's Draft 2020-12 validation will reject it.
+
+**Status (PR #525..#528 chain):** the plumbing landed in PR B-1
+(#526) and the **planner** layer is wired in PR B-2 (#527 →
+`plan_decomposer.decompose_text`). The remaining four layers
+(grounder, verifier, step_recovery, judge) are pending PRs in the
+#523 multi-PR campaign and capture nothing today. Default behavior
+when no layer is wired: the entire `modelio/` directory is absent
+from the bundle, exactly as it was before the plumbing landed.
+
+## Continuous verdict score (augur-sdk 0.1.7+)
+
+When a step's typed `Verdict.confidence` is non-zero, the adapter
+patches the step's verdict with a continuous reward score via
+`augur.set_score(step_index, confidence, comparator="verifier")`.
+
+This replaces Augur's default binary status→score map
+(`passed=1.0` / `failed=0.0`) with the verifier's actual signal,
+which RLHF / DPO pipelines need for ranked preferences.
+
+- `comparator` must be one of the SDK's canonical values:
+  `verifier`, `model-judge`, `exact-match`, `human`. Mantis stamps
+  `verifier`.
+- Score is clamped to `[0.0, 1.0]` SDK-side; out-of-band values
+  trigger a `ValueError` that the wrapper swallows (telemetry
+  never breaks runs).
+- Steps with `Verdict.confidence == 0` (the default — most
+  deterministic handlers never set it) are **skipped**, so we
+  don't pollute the bundle with bogus scores.
+
+## Capture-mode upgrade on first failure (augur-sdk 0.1.3+)
+
+The runner upgrades the active capture mode from `metadata` (cheap)
+to `screenshots` (full evidence) the first time a step fails:
+
+```python
+if not step_result.success and not runner._augur_capture_upgraded:
+    augur.set_capture_mode("screenshots")
+    runner._augur_capture_upgraded = True
+```
+
+Healthy runs stay on the original (cheap) mode; failing runs auto-
+collect screenshot evidence from the first failure onward. The
+sentinel is idempotent — only the first failure flips the switch.
+
+The override is per-step (stamped on the next `record_step` call,
+not on the manifest baseline). To upgrade the baseline globally,
+set `AUGUR_CAPTURE_MODE=screenshots` at the runtime instead.
 
 ## Failure-class hygiene diagnostic (augur-sdk 0.1.4+)
 
