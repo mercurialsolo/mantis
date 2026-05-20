@@ -85,6 +85,43 @@ class TaskLoopConfig:
     summary_extras: dict = field(default_factory=dict)
 
 
+def diagnose_proxy_egress(proxy_server: str, *, timeout: float = 8.0) -> dict[str, Any]:
+    """Hit ipinfo.io through ``proxy_server`` and return the egress IP +
+    geo info (#viewer-proxy-diag). Best-effort — never raises.
+
+    Returns one of:
+      * ``{"disabled": True}`` when no proxy is configured
+      * ``{"ip", "city", "region", "country", "org"}`` on success
+      * ``{"error": "..."}`` when the probe fails (network, timeout, 5xx)
+
+    Surfaced to the live-viewer overlay so operators see at a glance
+    which exit IP / geo the run is actually using — bare ``proxy_provider``
+    in the runtime block hides whether the geo modifier landed (e.g.
+    PrivateProxy returning a Romanian IP despite ``city=miami``).
+    """
+    if not proxy_server:
+        return {"disabled": True}
+    try:
+        import requests as _r
+        r = _r.get(
+            "https://ipinfo.io/json",
+            proxies={"http": proxy_server, "https": proxy_server},
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            return {"error": f"HTTP {r.status_code}"}
+        d = r.json()
+        return {
+            "ip": str(d.get("ip", "") or ""),
+            "city": str(d.get("city", "") or ""),
+            "region": str(d.get("region", "") or ""),
+            "country": str(d.get("country", "") or ""),
+            "org": str(d.get("org", "") or "")[:80],
+        }
+    except Exception as exc:  # noqa: BLE001 — diag, never fatal
+        return {"error": f"{type(exc).__name__}: {str(exc)[:120]}"}
+
+
 def setup_env(
     *,
     base_url: str,
@@ -102,7 +139,7 @@ def setup_env(
     profile_dir: str = "",
     save_screenshots_dir: str = "/data/screenshots",
     reuse_session: bool = False,
-) -> tuple[Any, Any]:
+) -> tuple[Any, Any, dict[str, Any]]:
     """Set up proxy + XdotoolGymEnv.
 
     Args:
@@ -110,7 +147,10 @@ def setup_env(
             test/internal sites that don't need bot-detection bypass and
             shouldn't depend on the residential proxy's availability.
 
-    Returns (env, proxy_proc_or_None).
+    Returns ``(env, proxy_proc_or_None, proxy_diag)`` where ``proxy_diag``
+    is the ipinfo egress probe (``{"ip", "city", "region", ...}`` on
+    success, ``{"disabled": True}`` when proxy is off, ``{"error": ...}``
+    when the probe failed).
     """
     from .gym.xdotool_env import XdotoolGymEnv
 
@@ -129,6 +169,12 @@ def setup_env(
         if proxy:
             provider = proxy_provider or os.environ.get("MANTIS_PROXY_PROVIDER") or "iproyal"
             print(f"  Proxy: {provider} via {proxy.get('server', '')}")
+
+    # #viewer-proxy-diag: best-effort egress probe so the live-viewer
+    # overlay shows the actual IP / city / region instead of just the
+    # provider name. Hits ipinfo.io through the same proxy chain Chrome
+    # uses, so we surface the IP Cloudflare sees.
+    proxy_diag = diagnose_proxy_egress(proxy_server)
 
     if start_xvfb and display:
         subprocess.Popen(
@@ -155,27 +201,40 @@ def setup_env(
         env_kwargs["profile_dir"] = profile_dir
 
     env = XdotoolGymEnv(**env_kwargs)
-    return env, proxy_proc
+    return env, proxy_proc, proxy_diag
 
 
-def setup_viewer(enabled: bool) -> tuple[Any, Any, str | None]:
+def setup_viewer(
+    enabled: bool,
+    *,
+    proxy_diag: dict[str, Any] | None = None,
+    api_run_id: str | None = None,
+    api_tenant_id: str | None = None,
+) -> tuple[Any, Any, str | None]:
     """Set up the Modal viewer if enabled.
 
     Returns ``(viewer_ctx, viewer_event_bus, viewer_url)``. All three
     are ``None`` when ``enabled`` is False or setup fails.
 
-    The third element (``viewer_url``) was added under #416 so the
-    detached ``/v1/predict`` worker can surface the live tunnel URL
-    via ``status.json``. Existing CLI callers — which previously
-    discarded the URL — should destructure all three values and can
-    ignore the third if they don't need it.
+    ``proxy_diag`` is the ipinfo egress probe from :func:`setup_env`
+    (passed through to the viewer's ``/api/proxy_info`` endpoint so
+    the live-viewer header can display the IP / city / region).
+
+    ``api_run_id`` / ``api_tenant_id`` thread through so the viewer's
+    Pause/Resume buttons can POST to the cua-server API on behalf
+    of the user (the cua-server API token stays inside the Modal
+    container — never exposed to the browser).
     """
     if not enabled:
         return None, None, None
     try:
         from .viewer_modal import modal_viewer
 
-        viewer_ctx = modal_viewer()
+        viewer_ctx = modal_viewer(
+            proxy_diag=proxy_diag or {},
+            api_run_id=api_run_id or "",
+            api_tenant_id=api_tenant_id or "",
+        )
         viewer_event_bus, viewer_url = viewer_ctx.__enter__()
         return viewer_ctx, viewer_event_bus, viewer_url
     except Exception as e:

@@ -62,6 +62,10 @@ def _start_background(
     port: int = 7860,
     fps: float = 3.0,
     monitor: int = 1,
+    *,
+    proxy_diag: dict | None = None,
+    api_run_id: str = "",
+    api_tenant_id: str = "",
 ) -> tuple[ModalViewerBus, str, callable]:
     """Start capture + server in background threads.
 
@@ -166,6 +170,77 @@ def _start_background(
         events_list, _ = event_bus.events_since(0)
         return JSONResponse(events_list)
 
+    # ── #viewer-proxy-diag: surface the actual proxy egress IP /
+    # city / region the run is using. Lets operators verify the geo
+    # modifier (e.g. ``-cc-us-city-miami``) actually landed instead
+    # of trusting the runtime block. ``proxy_diag`` is the
+    # ipinfo-probe dict from ``setup_env`` — already computed once
+    # at executor startup; this endpoint is a cheap re-serve.
+    @app.get("/api/proxy_info")
+    async def proxy_info(token: str = Query(...)):
+        _auth(token)
+        return JSONResponse(proxy_diag or {})
+
+    # ── #viewer-takeover: Pause / Resume controls that proxy to
+    # the cua-server API. The browser POSTs here with the viewer
+    # token; this endpoint uses the executor's ``MANTIS_API_TOKEN``
+    # (env var, server-side only) to call the cua-server API. The
+    # API token never reaches the browser.
+    def _post_to_cua_api(action: str, reason: str = "") -> tuple[int, dict]:
+        """POST {action,run_id,...} to the cua-server API on behalf of
+        the viewer user. Returns (http_status, body_dict)."""
+        import os as _os
+        import requests as _r
+        api_token = _os.environ.get("MANTIS_API_TOKEN", "")
+        if not api_token:
+            return 500, {"detail": "MANTIS_API_TOKEN unset in executor env"}
+        if not api_run_id:
+            return 400, {"detail": "api_run_id not threaded — viewer can't route action"}
+        api_endpoint = _os.environ.get(
+            "MANTIS_API_ENDPOINT",
+            "https://getmason--mantis-cua-server-api.modal.run",
+        )
+        body: dict = {"action": action, "run_id": api_run_id}
+        if reason:
+            body["reason"] = reason
+        try:
+            r = _r.post(
+                f"{api_endpoint}/v1/predict",
+                headers={
+                    "X-Mantis-Token": api_token,
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=15,
+            )
+            try:
+                return r.status_code, r.json()
+            except Exception:
+                return r.status_code, {"raw": r.text[:300]}
+        except Exception as exc:  # noqa: BLE001
+            return 502, {"detail": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+    @app.post("/api/pause_run")
+    async def pause_run(token: str = Query(...)):
+        _auth(token)
+        status_code, body = _post_to_cua_api("pause", reason="viewer_takeover")
+        return JSONResponse(body, status_code=status_code)
+
+    @app.post("/api/resume_run")
+    async def resume_run(token: str = Query(...)):
+        _auth(token)
+        status_code, body = _post_to_cua_api("resume")
+        return JSONResponse(body, status_code=status_code)
+
+    @app.get("/api/run_state")
+    async def run_state(token: str = Query(...)):
+        """Proxy to cua-server ``action=status`` so the viewer can
+        poll Pause/Resume button state (paused vs running) without
+        the browser needing the API token."""
+        _auth(token)
+        status_code, body = _post_to_cua_api("status")
+        return JSONResponse(body, status_code=status_code)
+
     # ── Server thread ────────────────────────────────────────────────
     config = uvicorn.Config(
         app, host="0.0.0.0", port=port,
@@ -187,6 +262,10 @@ def modal_viewer(
     port: int = 7860,
     fps: float = 3.0,
     monitor: int = 1,
+    *,
+    proxy_diag: dict | None = None,
+    api_run_id: str = "",
+    api_tenant_id: str = "",
 ):
     """Context manager: starts viewer + Modal tunnel, yields (event_bus, url).
 
@@ -197,6 +276,15 @@ def modal_viewer(
         port: Local port for the viewer server.
         fps: Screen capture rate (2-5 FPS recommended).
         monitor: Which monitor to capture (1=primary, 0=all).
+        proxy_diag: ipinfo egress probe from
+            :func:`task_loop.diagnose_proxy_egress`. Surfaced via
+            ``/api/proxy_info`` so the viewer header shows the actual
+            exit IP / city / region.
+        api_run_id: run identifier for the cua-server API, threaded
+            through so the viewer's ``/api/pause_run`` /
+            ``/api/resume_run`` buttons can route their POST to the
+            right run.
+        api_tenant_id: tenant for the cua-server API call.
 
     Yields:
         (event_bus, url): ModalViewerBus for emitting events, and the
@@ -204,7 +292,12 @@ def modal_viewer(
     """
     import modal
 
-    event_bus, token, stop = _start_background(port, fps, monitor)
+    event_bus, token, stop = _start_background(
+        port, fps, monitor,
+        proxy_diag=proxy_diag or {},
+        api_run_id=api_run_id,
+        api_tenant_id=api_tenant_id,
+    )
 
     with modal.forward(port) as tunnel:
         url = f"{tunnel.url}?token={token}"

@@ -476,6 +476,44 @@ footer {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.3; }
 }
+
+/* ── #viewer-takeover: Take Over / Resume button + proxy pill ────── */
+.action-btn {
+    background: var(--blue);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+}
+.action-btn:hover {
+    opacity: 0.85;
+}
+.action-btn:active {
+    transform: translateY(1px);
+}
+.action-btn.resume {
+    background: var(--green);
+}
+.action-btn.disabled {
+    background: var(--border);
+    color: var(--text-3);
+    cursor: not-allowed;
+}
+#proxy-info {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 11px;
+    color: var(--text-2);
+}
+#proxy-info.warn {
+    color: var(--amber);
+}
+#proxy-info.error {
+    color: var(--red);
+}
 </style>
 </head>
 <body>
@@ -484,6 +522,8 @@ footer {
     <div class="logo">MANTIS</div>
     <div class="task" id="task">Waiting for task...</div>
     <div class="stats">
+        <div class="stat" id="proxy-stat" title="Proxy egress IP + geo (from ipinfo through the active proxy)">Proxy: <span id="proxy-info">…</span></div>
+        <button class="action-btn" id="takeover-btn" type="button" title="Pause the runner so you can interact with the page (CAPTCHA, login, etc.)">Take Over</button>
         <div class="stat">Step <strong id="step-num">0</strong>/<strong id="step-max">-</strong></div>
         <div class="stat" id="elapsed">0:00</div>
         <div class="conn-dot" id="conn-dot" title="Disconnected"></div>
@@ -682,6 +722,92 @@ function esc(s) {
     var d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
+}
+
+/* ── #viewer-proxy-diag: surface the actual egress IP / city / region
+   so operators can verify the geo modifier landed (e.g.
+   PrivateProxy returning a Romanian IP despite city=miami). One
+   fetch on load, cached server-side. */
+fetch('/api/proxy_info?token=' + TOKEN)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        var el = $('proxy-info');
+        if (!el) return;
+        if (d.disabled) {
+            el.textContent = 'DISABLED';
+            el.className = 'warn';
+        } else if (d.error) {
+            el.textContent = 'probe failed: ' + d.error;
+            el.className = 'error';
+        } else if (d.ip) {
+            var parts = [d.ip];
+            if (d.city) parts.push(d.city);
+            if (d.region) parts.push(d.region);
+            if (d.country) parts.push(d.country);
+            el.textContent = parts.join(' · ');
+            el.className = '';
+            if (d.org) el.title = d.org;
+        } else {
+            el.textContent = 'unknown';
+        }
+    })
+    .catch(function() {
+        var el = $('proxy-info');
+        if (el) { el.textContent = 'fetch failed'; el.className = 'error'; }
+    });
+
+/* ── #viewer-takeover: Take Over button — POSTs action=pause to the
+   cua-server API via the viewer's local /api/pause_run proxy (the
+   real MANTIS_API_TOKEN never leaves the executor container). When
+   the run is paused, button text flips to "Resume" and POSTs
+   action=resume on the next click. Polls /api/run_state every 3s
+   to stay in sync. */
+var takeoverBtn = $('takeover-btn');
+var currentRunStatus = 'running';
+
+function setTakeoverButton(status) {
+    if (!takeoverBtn) return;
+    currentRunStatus = status;
+    if (status === 'paused') {
+        takeoverBtn.textContent = 'Resume';
+        takeoverBtn.classList.add('resume');
+        takeoverBtn.classList.remove('disabled');
+    } else if (status === 'running') {
+        takeoverBtn.textContent = 'Take Over';
+        takeoverBtn.classList.remove('resume');
+        takeoverBtn.classList.remove('disabled');
+    } else {
+        // halted / cancelled / failed → no more actions possible
+        takeoverBtn.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        takeoverBtn.classList.add('disabled');
+        takeoverBtn.classList.remove('resume');
+    }
+}
+
+if (takeoverBtn) {
+    takeoverBtn.addEventListener('click', function() {
+        if (takeoverBtn.classList.contains('disabled')) return;
+        var path = (currentRunStatus === 'paused')
+            ? '/api/resume_run?token=' + TOKEN
+            : '/api/pause_run?token=' + TOKEN;
+        takeoverBtn.classList.add('disabled');
+        fetch(path, { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.status) setTakeoverButton(d.status);
+                else takeoverBtn.classList.remove('disabled');
+            })
+            .catch(function() { takeoverBtn.classList.remove('disabled'); });
+    });
+
+    // Periodic status sync so the button stays accurate after
+    // server-side auto-pause (cf_challenge) fires without user click.
+    setInterval(function() {
+        fetch('/api/run_state?token=' + TOKEN)
+            .then(function(r) { return r.json(); })
+            .then(function(d) { if (d.status) setTakeoverButton(d.status); })
+            .catch(function() {});
+    }, 3000);
 }
 
 /* ── Init ───────────────────────────────────────────────── */
