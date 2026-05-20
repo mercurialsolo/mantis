@@ -230,6 +230,38 @@ def credit_claude_tokens_from_response(response: Any) -> None:
         logger.debug("anthropic cost_meter token credit failed: %s", exc)
 
 
+def _record_modelio_if_active(
+    request_payload: dict[str, Any],
+    response_json: dict[str, Any],
+    duration_ms: int,
+) -> None:
+    """Forward to the modelio capture layer when a context is active.
+
+    Local import to avoid pulling the observability module into every
+    LLM call when no caller has published a layer context (which is the
+    case at module load until PR B-2..B-5 wire individual call sites).
+    """
+    try:
+        from ..observability.modelio import (
+            current_modelio_context,
+            record_anthropic_modelio,
+        )
+    except Exception:  # noqa: BLE001 — import-time issues never block calls
+        return
+    ctx = current_modelio_context()
+    if ctx is None:
+        return
+    try:
+        record_anthropic_modelio(
+            request_payload=request_payload,
+            response_json=response_json,
+            duration_ms=duration_ms,
+            ctx=ctx,
+        )
+    except Exception as exc:  # noqa: BLE001 — Augur spec §4.3
+        logger.debug("modelio capture failed: %s", exc)
+
+
 class AnthropicToolUseClient:
     """Anthropic ``/v1/messages`` client tuned for schema-validated tool_use.
 
@@ -427,6 +459,12 @@ class AnthropicToolUseClient:
                 return None
             payload_json = resp.json()
             credit_claude_tokens_from_response(payload_json)
+            # #523 — capture the modelio record when an upstream caller
+            # has published a layer context (planner / grounding /
+            # verifier / step_recovery / judge). No-op otherwise.
+            _record_modelio_if_active(
+                payload, payload_json, int((time.monotonic() - t0) * 1000),
+            )
             for block in payload_json.get("content", []):
                 if block.get("type") == "tool_use" and block.get("name") == tool_name:
                     tool_input = block.get("input")
@@ -509,6 +547,9 @@ class AnthropicToolUseClient:
                 return None
             payload_json = resp.json()
             credit_claude_tokens_from_response(payload_json)
+            _record_modelio_if_active(
+                payload, payload_json, int((time.monotonic() - t0) * 1000),
+            )
             for block in payload_json.get("content", []):
                 if block.get("type") == "tool_use" and block.get("name") == tool_name:
                     tool_input = block.get("input")

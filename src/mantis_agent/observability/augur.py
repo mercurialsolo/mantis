@@ -550,6 +550,49 @@ class AugurAdapter:
                     exc,
                 )
 
+    def record_modelio(
+        self,
+        record: dict[str, Any],
+        *,
+        step_index: int | None = None,
+        layer: str | None = None,
+        validate: bool = True,
+    ) -> str | None:
+        """Stage one modelio record (#523, SDK 0.1.6+).
+
+        The record must satisfy ``modelio.schema.json``. Use
+        :func:`mantis_agent.observability.modelio.record_anthropic_modelio`
+        rather than building the dict by hand — it handles the
+        Anthropic→OpenAI usage field-name mapping the schema requires.
+
+        Callers pass Mantis's 0-based ``StepResult.step_index``; we
+        bump to 1-based at the boundary (same convention as
+        :meth:`record_step` / :meth:`attach_observation`). Returns the
+        bundle-relative path the SDK assigned, or None on any failure
+        (telemetry never breaks runs).
+        """
+        if not self.active or not hasattr(self._session, "record_modelio"):
+            return None
+        try:
+            return self._session.record_modelio(
+                record,
+                step_index=(int(step_index) + 1) if step_index is not None else None,
+                layer=layer,
+                validate=validate,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning(
+                    "AugurAdapter.record_modelio(layer=%s, step=%s) failed: %r",
+                    layer, step_index, exc,
+                )
+            else:
+                logger.debug(
+                    "AugurAdapter.record_modelio(layer=%s, step=%s) failed: %s",
+                    layer, step_index, exc,
+                )
+            return None
+
     def append_log(
         self,
         text: str,
