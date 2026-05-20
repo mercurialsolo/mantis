@@ -76,7 +76,12 @@ class PredictRequest(BaseModel):
     # Supports a ``since`` ISO-8601 cursor for incremental polling.
     action: Optional[Literal[
         "status", "result", "logs", "cancel", "resume", "reasoning_trace",
+        "pause",  # #541 external-pause for human-takeover-via-viewer
     ]] = None
+    # #541: human-readable reason for ``action="pause"`` (e.g.
+    # "manual_takeover", "human_review"). Surfaces on status as
+    # ``pause_reason``. Optional; defaults to "external".
+    reason: Optional[str] = None
     run_id: Optional[str] = None
     tail: Optional[int] = Field(default=None, ge=1, le=10000)
     # Caller-supplied value handed to ``runner.consume_pause_input(...)`` on
