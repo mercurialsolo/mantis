@@ -39,13 +39,20 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from ..actions import Action, ActionType
+from ..observability.augur import AugurAdapter
 from ..plan_decomposer import MicroIntent
 from . import failure_class as failure_class_mod
 from . import step_snapshot
 from .checkpoint import RunCheckpoint, StepResult
+
+
+def _utc_iso_now() -> str:
+    """ISO-8601 UTC timestamp matching the Augur schema's ``YYYY-MM-DDThh:mm:ssZ``."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 if TYPE_CHECKING:
     from ..plan_decomposer import MicroPlan
@@ -171,6 +178,18 @@ class RunExecutor:
                 )
                 return state.results
 
+        # #509 Augur observability — open a DebugSession for the whole run.
+        # No-op when ``augur-sdk`` isn't installed or
+        # ``MANTIS_AUGUR_DISABLED`` is set. The adapter is stashed on the
+        # runner so the per-step loop below and ``_finalize`` can reach it
+        # without an extra parameter on every helper signature.
+        runner._augur = AugurAdapter(
+            run_id=str(getattr(runner, "run_key", "") or runner.plan_signature or "run"),
+            tenant_id=str(getattr(runner, "tenant_id", "") or ""),
+            session_name=str(getattr(runner, "session_name", "") or ""),
+            extra_tags={"plan_signature": runner.plan_signature or ""},
+        )
+
         if not runner._results_base_url and plan.steps:
             runner._results_base_url = runner._extract_url_from_intent(
                 plan.steps[0].intent
@@ -202,6 +221,7 @@ class RunExecutor:
                 self._handle_loop_step(plan, step, state)
                 continue
 
+            step_started_at = _utc_iso_now()
             pre_snapshot = self._dispatch_step(plan, state, effective_step)
 
             self._maybe_demote_form_no_change(state, effective_step, pre_snapshot)
@@ -228,8 +248,35 @@ class RunExecutor:
             # plug in via the same hook.
             self._consult_critic(plan, state, step, step_result, continued)
 
+            # #509: emit the step + any healing events accumulated on
+            # this iteration to Augur. Runs after _consult_critic so
+            # critic-emitted healing events are picked up too. Any
+            # adapter failure is swallowed internally — never breaks
+            # the run.
+            self._emit_augur_step(step_result, step_started_at)
+
         self._finalize(plan, state)
         return state.results
+
+    def _emit_augur_step(self, step_result: StepResult, started_at: str) -> None:
+        """Per-step Augur emission — observation, trace, decision events."""
+        runner = self.parent
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is None or not augur.active:
+            return
+        observation_post = augur.attach_observation(
+            step_index=int(getattr(step_result, "step_index", 0)),
+            kind="post",
+            png=getattr(step_result, "screenshot_png", None),
+        )
+        augur.record_step(
+            step_result=step_result,
+            started_at=started_at,
+            ended_at=_utc_iso_now(),
+            observation_post=observation_post,
+        )
+        healing = getattr(runner, "_healing_events", None) or []
+        augur.drain_healing_events(healing)
 
     def _consult_critic(
         self,
@@ -1364,6 +1411,15 @@ class RunExecutor:
             )
         except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
             logger.debug("trace export failed: %s", exc)
+
+        # #509 close the Augur DebugSession (flush the on-disk bundle +
+        # finalize the streaming sink). Status mirrors the runner's
+        # terminal verdict so the Augur workspace shows the same outcome
+        # as ``status.json``. Adapter swallows internal errors.
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is not None:
+            augur.close(status=runner._final_status or None)
+            runner._augur = None
 
     # ── Helpers ─────────────────────────────────────────────────────────
 

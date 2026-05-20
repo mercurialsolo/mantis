@@ -53,6 +53,16 @@ client = [
 metrics = [
     "prometheus-client>=0.20",
 ]
+# Augur observability (#509) — per-run debug bundles + optional live
+# streaming to the Augur workspace via DebugSession. When AUGUR_DSN is
+# set in the environment, every gym run streams; when unset, the same
+# records still land on disk under ${MANTIS_DATA_DIR}/augur/<run_id>/.
+# The wedge in src/mantis_agent/observability/augur.py imports
+# augur_sdk lazily and no-ops when the package isn't installed, so
+# this extra is purely opt-in — no base-install footprint change.
+observability = [
+    "augur-sdk>=0.1.0",
+]
 # Self-host the FastAPI server that fronts /predict and /v1/chat/completions.
 # Used by the Baseten / EKS / GKE deployments.
 server = [
@@ -114,7 +124,7 @@ docs = [
 ]
 # Convenience: install everything.
 full = [
-    "mantis-agent[orchestrator,server,local-cua,viewer,gpu,hud]",
+    "mantis-agent[orchestrator,server,local-cua,viewer,gpu,hud,observability]",
 ]
 
 [project.scripts]
