@@ -448,6 +448,43 @@ class AugurAdapter:
             else:
                 logger.debug("AugurAdapter.add_tag(%s) failed: %s", key, exc)
 
+    def append_log(
+        self,
+        text: str,
+        *,
+        step_index: int | None = None,
+        name: str = "run",
+    ) -> None:
+        """Stream a log chunk to the workspace's ``logs/`` panel.
+
+        Thin wrapper over ``DebugSession.append_log`` (augur-sdk 0.1.3+):
+        when streaming is enabled, POSTs to ``/api/v1/runs/<id>/logs``
+        which the server appends to ``logs/<name>.log`` (or
+        ``logs/step-<idx>.log`` when ``step_index`` is set). When the
+        SDK installed is older than 0.1.3, OR when streaming is off
+        (no ``AUGUR_DSN``), this is a clean no-op — silently dropping
+        the log chunk so callers never have to feature-check.
+
+        Use for runner / handler progress lines you'd want to scrub
+        through in the Augur viewer alongside the per-step trace.
+        Adapter-side ``logger.debug`` already covers internal events
+        — don't double-emit.
+        """
+        if not self.active or not text:
+            return
+        # SDK 0.1.2 doesn't have ``append_log``; guard so a stale
+        # install in the executor image doesn't crash the wedge.
+        append = getattr(self._session, "append_log", None)
+        if append is None:
+            return
+        try:
+            append(text, step_index=step_index, name=name)
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning("AugurAdapter.append_log failed: %r", exc)
+            else:
+                logger.debug("AugurAdapter.append_log failed: %s", exc)
+
     def record_cost_metric(
         self,
         *,

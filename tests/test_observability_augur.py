@@ -428,6 +428,46 @@ def test_add_tag_surfaces_on_session(monkeypatch, tmp_path: Path):
     assert tags.get("failure_class") == "selector_miss"
 
 
+def test_append_log_forwards_to_sdk_when_available(monkeypatch, tmp_path: Path):
+    """``append_log`` delegates to ``DebugSession.append_log`` when the
+    SDK exposes it (0.1.3+). Empty text + no-active adapter are no-ops."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="log_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    assert a.active
+
+    captured: list[tuple[str, dict]] = []
+
+    def _spy(text, *, step_index=None, name="run"):
+        captured.append((text, {"step_index": step_index, "name": name}))
+
+    a._session.append_log = _spy  # type: ignore[assignment]
+    a.append_log("runner-line 1")
+    a.append_log("step 3 reasoning", step_index=3, name="reasoning")
+    a.append_log("")  # empty → silent no-op
+    a.close(status="completed")
+
+    assert captured == [
+        ("runner-line 1", {"step_index": None, "name": "run"}),
+        ("step 3 reasoning", {"step_index": 3, "name": "reasoning"}),
+    ]
+
+
+def test_append_log_silent_no_op_when_sdk_lacks_method(monkeypatch, tmp_path: Path):
+    """When the SDK install is older than 0.1.3 (no ``append_log`` on
+    DebugSession), the adapter wrapper drops the call silently
+    rather than raising AttributeError."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    from augur_sdk import DebugSession as _DS
+    # Simulate the older SDK by removing the method from the class for
+    # the duration of this test. ``monkeypatch.delattr`` restores on
+    # teardown so the rest of the suite still sees the real method.
+    monkeypatch.delattr(_DS, "append_log", raising=False)
+    a = AugurAdapter(run_id="log_v2", tenant_id="t", session_name="s", out_dir=tmp_path)
+    # Should not raise.
+    a.append_log("anything")
+    a.close(status="completed")
+
+
 def test_cost_metric_emits_runner_metric_decision_event(monkeypatch, tmp_path: Path):
     """``record_cost_metric`` emits a layer='runner' / kind='metric'
     DecisionEvent so the workspace's COST column can derive totals
