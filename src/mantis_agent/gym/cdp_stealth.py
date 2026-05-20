@@ -207,12 +207,15 @@ def inject_stealth_patches(cdp_call: Callable[[str, dict[str, Any]], tuple[bool,
             {"source": STEALTH_JS},
         )
         if ok:
-            logger.info(
+            # WARN so Modal's INFO/DEBUG suppression doesn't hide the
+            # one signal we have that stealth fired (memory:
+            # feedback_modal_info_log_suppression).
+            logger.warning(
                 "CDP stealth: patches registered (identifier=%s)",
                 payload.get("identifier", "?"),
             )
         else:
-            logger.debug("CDP stealth: register returned not-ok: %r", payload)
+            logger.warning("CDP stealth: register returned not-ok: %r", payload)
         return bool(ok)
     except Exception as exc:  # noqa: BLE001 — telemetry-style; never fatal
         logger.debug("CDP stealth: register failed: %s", exc)
