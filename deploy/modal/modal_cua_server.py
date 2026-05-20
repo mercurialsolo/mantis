@@ -1223,6 +1223,8 @@ def _run_gemma4_cua_executor(
     ).pip_install(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
+        # #509: parity with run_holo3 — Gemma4 also runs the augur wedge.
+        "augur-sdk>=0.1.2",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -1252,6 +1254,10 @@ claude_executor_image = (
     .pip_install(
         "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
+        # #509: parity with run_holo3 / run_gemma4_cua — Claude executor
+        # also runs the augur wedge so bundles + streaming work for the
+        # Anthropic-API tier.
+        "augur-sdk>=0.1.2",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -2113,6 +2119,11 @@ def api():
     ).pip_install(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
+        # #509: run_holo3 uses its own inline image (NOT executor_image),
+        # so augur-sdk has to be added here separately. Without this the
+        # AugurAdapter init logs sdk_available=False and is a no-op even
+        # though the package is in executor_image for the other tiers.
+        "augur-sdk>=0.1.2",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
