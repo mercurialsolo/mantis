@@ -234,6 +234,20 @@ class RunExecutor:
             if not self._tick_preamble(plan, state):
                 break
 
+            # #541: external pause sentinel — check between steps.
+            # When the API container has written pause_request.json
+            # (via action=pause) OR when an earlier step auto-paused
+            # on cf_challenge, this blocks the runner here while
+            # keeping Chrome + the noVNC viewer alive. User takes
+            # over via the live-viewer URL; action=resume clears the
+            # sentinel and the runner resumes from the next step.
+            try:
+                from . import external_pause
+                if external_pause.is_pause_requested():
+                    external_pause.wait_while_paused()
+            except Exception as exc:  # noqa: BLE001 — never break a run
+                logger.debug("external_pause check raised: %s", exc)
+
             step = plan.steps[state.step_index]
             effective_step = self._build_effective_step(step, state)
             logger.info(
@@ -287,6 +301,15 @@ class RunExecutor:
                 step_type=step.type,
                 costs_before=costs_before_step,
             )
+
+            # #541: auto-pause on CAPTCHA. When the step result
+            # carries failure_class='cf_challenge' (Cloudflare
+            # Turnstile etc.), write the pause sentinel so the next
+            # iteration's pause check blocks. Chrome + viewer stay
+            # alive — user takes over via the live-viewer URL and
+            # clears the CAPTCHA manually, then action=resume.
+            # Gated by MANTIS_PAUSE_ON_CAPTCHA (default-on).
+            self._maybe_auto_pause_on_captcha(step_result)
 
         self._finalize(plan, state)
         return state.results
@@ -1706,17 +1729,132 @@ class RunExecutor:
             },
         )
 
+    # #541: classes that name the *cause* of a halt (root signal).
+    # These ALWAYS win over symptom classes (``brain_loop_exhausted``,
+    # ``no_state_change``) when both are observed across the step
+    # retry history — otherwise the symptom overwrites the cause in
+    # the final StepResult and operators chase the wrong fix.
+    _CAUSE_LEVEL_FAILURE_CLASSES: frozenset[str] = frozenset({
+        "cf_challenge",       # Cloudflare Turnstile / 403 challenge
+        "proxy_failed",       # ERR_TUNNEL / proxy auth failure
+        "http_4xx",           # 4xx from target
+        "http_5xx",           # 5xx from target
+        "nav_timeout",        # navigation didn't complete
+        "extractor_error",    # extraction layer error
+        "budget_exceeded",    # cost / time / step caps
+        "wrong_target",       # click landed on the wrong destination
+        "cf_challenge_human_takeover",  # paired with auto-pause
+    })
+
+    def _pick_primary_failure_class(self, results: list[StepResult]) -> str:
+        """Pick the most diagnostic failure class across all step results.
+
+        Cause-level classes (cf_challenge / proxy_failed / http_*xx /
+        nav_timeout / extractor_error / budget_exceeded / wrong_target)
+        always win over symptom-level classes (brain_loop_exhausted /
+        no_state_change / unknown) regardless of step ordering.
+
+        Why this matters: a CF-walled step gets classified
+        ``cf_challenge`` on its first attempt, but after the retry
+        loop exhausts the final StepResult carries
+        ``brain_loop_exhausted`` (the symptom). The legacy aggregator
+        took "first non-empty failure_class" which surfaced the
+        symptom, hiding the CF cause. Operators chase the wrong fix.
+
+        Order:
+        1. Scan all results for any cause-level class — return the
+           first one found
+        2. Fall back to the first non-empty failure_class (legacy)
+        3. Empty if nothing classified
+        """
+        cause: str = ""
+        symptom: str = ""
+        for r in results:
+            fc = str(getattr(r, "failure_class", "") or "").strip()
+            if not fc:
+                continue
+            if not symptom:
+                symptom = fc
+            if fc in self._CAUSE_LEVEL_FAILURE_CLASSES and not cause:
+                cause = fc
+                # Don't break — keep scanning so we surface the FIRST
+                # cause-level class even if later steps stamp a
+                # different one (consistency with legacy ordering).
+        return cause or symptom
+
+    def _maybe_auto_pause_on_captcha(self, step_result: StepResult) -> None:
+        """If a step failed with cf_challenge AND auto-pause is
+        enabled, write the external pause sentinel (#541).
+
+        The next iteration's pause check blocks the runner here while
+        keeping Chrome + the noVNC viewer alive. The user takes over
+        via the live-viewer URL — solves the CAPTCHA manually, then
+        ``action=resume`` clears the sentinel.
+
+        Without this, a CF-walled step burns retry budget until
+        ``brain_loop_exhausted``, halting the run with no signal that
+        a human could have unblocked it. With this, the run sits at
+        ``status=paused`` with reason=cf_challenge_human_takeover
+        until either resumed or the wait timeout expires.
+
+        Default-on; opt out per-run via ``MANTIS_PAUSE_ON_CAPTCHA=0``.
+        """
+        try:
+            failure_class = str(
+                getattr(step_result, "failure_class", "") or ""
+            ).strip()
+            if failure_class != "cf_challenge":
+                return
+            from . import external_pause
+            if not external_pause.is_captcha_autopause_enabled():
+                return
+            if external_pause.is_pause_requested():
+                # Sentinel already set (race with external pause or
+                # earlier step). Don't overwrite the reason.
+                return
+            wrote = external_pause.request_pause(reason="cf_challenge_human_takeover")
+            if wrote:
+                logger.warning(
+                    "external_pause: auto-paused on cf_challenge at step %s "
+                    "— viewer URL is live; resume after manual takeover",
+                    getattr(step_result, "step_index", "?"),
+                )
+        except Exception as exc:  # noqa: BLE001 — never break a run
+            logger.debug("auto-pause-on-captcha raised: %s", exc)
+
     def _emit_augur_failure_class_tag(self, results: list[StepResult]) -> None:
-        """Tag the session with the first non-empty failure class (#509)."""
+        """Tag the session with the most-diagnostic failure class (#509, #541).
+
+        Prefers cause-level classes over symptoms — see
+        :meth:`_pick_primary_failure_class` for the priority rules.
+        Also surfaces the symptom as a separate ``failure_class_symptom``
+        tag when it differs from the cause, so operators can still
+        see both signals.
+        """
         runner = self.parent
         augur: AugurAdapter | None = getattr(runner, "_augur", None)
         if augur is None or not augur.active:
             return
-        for r in results:
-            fc = str(getattr(r, "failure_class", "") or "").strip()
-            if fc:
-                augur.add_tag("failure_class", fc)
-                return
+        primary = self._pick_primary_failure_class(results)
+        if primary:
+            augur.add_tag("failure_class", primary)
+            # #541: when the primary is a cause-level class but the
+            # final-step failure was a different (symptom) class,
+            # surface both so the dashboard's filter chip ("cause")
+            # and the per-step view ("what the runner exited with")
+            # both have a signal.
+            last_fc = ""
+            for r in reversed(results):
+                fc = str(getattr(r, "failure_class", "") or "").strip()
+                if fc:
+                    last_fc = fc
+                    break
+            if (
+                primary in self._CAUSE_LEVEL_FAILURE_CLASSES
+                and last_fc
+                and last_fc != primary
+            ):
+                augur.add_tag("failure_class_symptom", last_fc)
         # Also surface the runner's terminal status so any downstream
         # filtering ("show me halted runs") can read it as a tag.
         halt_reason = str(getattr(runner, "_final_halt_reason", "") or "").strip()

@@ -709,6 +709,21 @@ def _run_holo3_executor(
         except Exception as exc:  # noqa: BLE001 — viewer is best-effort
             print(f"  WARNING: failed to surface live-viewer URL into viewer.json: {exc}")
 
+    # #541: wire the external-pause sentinel path so the API
+    # container's ``action=pause`` can signal this executor, and
+    # the runner's auto-pause-on-captcha can write its own
+    # sentinel. ``wait_while_paused`` keeps the executor alive
+    # (Chrome + viewer up) until ``action=resume`` clears the
+    # sentinel.
+    if api_run_id and api_tenant_id:
+        try:
+            from mantis_agent.gym import external_pause
+            external_pause.init_paths(
+                str(_run_dir(api_tenant_id, api_run_id) / "pause_request.json"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"  WARNING: external_pause init failed: {exc}")
+
     # ── Micro-intent mode: run MicroPlanRunner ──
     micro_plan_data = task_suite.get("_micro_plan")
     if micro_plan_data:
@@ -1795,6 +1810,22 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         if viewer_url:
             status["viewer_url"] = viewer_url
 
+        # #541: synthesize ``status=paused`` when the external-pause
+        # sentinel exists. The Modal function call is still "running"
+        # from Modal's perspective (executor is sleeping in
+        # wait_while_paused), but for the caller we want the
+        # paused-state signal so the dashboard / poll loop knows to
+        # surface the viewer URL + the resume hint.
+        pause_path = _run_dir(tenant.tenant_id, run_id) / "pause_request.json"
+        if pause_path.exists() and status.get("status") in {"queued", "running"}:
+            try:
+                pause_blob = json.loads(pause_path.read_text())
+                status["status"] = "paused"
+                status["pause_reason"] = pause_blob.get("reason", "")
+                status["paused_at"] = pause_blob.get("requested_at", "")
+            except (OSError, json.JSONDecodeError):
+                pass
+
         action = payload["action"]
 
         # action=reasoning_trace — return the structured event stream
@@ -1850,12 +1881,70 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
                 status["updated_at"] = datetime.now(timezone.utc).isoformat()
                 _write_status(tenant.tenant_id, run_id, status)
                 release_profile_lock(tenant, status.get("profile_id", ""))
+            # #541: tidy the pause sentinel on cancel too.
+            try:
+                pause_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return status
+
+        if action == "pause":
+            # #541: external pause — write the sentinel file the
+            # executor polls between steps. Chrome + noVNC viewer
+            # stay alive while the runner sleeps in
+            # ``wait_while_paused``. User takes over via the
+            # live-viewer URL, then ``action=resume`` clears the
+            # sentinel and the runner picks up from the next step.
+            current = status.get("status", "")
+            if current not in {"queued", "running"}:
+                raise HTTPException(
+                    400,
+                    f"action='pause' requires a running run; "
+                    f"this run is {current!r}",
+                )
+            reason = str(payload.get("reason") or "external") or "external"
+            now_iso = datetime.now(timezone.utc).isoformat()
+            try:
+                pause_path.parent.mkdir(parents=True, exist_ok=True)
+                pause_path.write_text(json.dumps({
+                    "reason": reason,
+                    "requested_at": now_iso,
+                }))
+            except OSError as exc:
+                raise HTTPException(500, f"failed to write pause sentinel: {exc}")
+            status["status"] = "paused"
+            status["pause_reason"] = reason
+            status["paused_at"] = now_iso
+            status["updated_at"] = now_iso
+            _write_status(tenant.tenant_id, run_id, status)
             return status
 
         if action == "resume":
-            # #347: rehydrate a paused Modal run. Validate, layer the
-            # caller's user_input + stored pause_state onto the saved
-            # task_suite, re-spawn the executor, update modal_call_id.
+            # #541: external-pause resume — when ``pause_request.json``
+            # exists, the executor is still running (sleeping in
+            # ``wait_while_paused``). Just delete the sentinel; the
+            # runner picks up from the next step automatically. No
+            # task_suite rehydration / spawn / user_input needed —
+            # this path is for human-takeover-via-viewer, where the
+            # user has already cleared the page state manually.
+            if pause_path.exists():
+                try:
+                    pause_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    raise HTTPException(
+                        500, f"failed to clear pause sentinel: {exc}",
+                    )
+                status["status"] = "running"
+                status.pop("pause_reason", None)
+                status.pop("paused_at", None)
+                status["updated_at"] = datetime.now(timezone.utc).isoformat()
+                _write_status(tenant.tenant_id, run_id, status)
+                return status
+
+            # #347: rehydrate a snapshot-paused Modal run. Validate,
+            # layer the caller's user_input + stored pause_state onto
+            # the saved task_suite, re-spawn the executor, update
+            # modal_call_id.
             if status.get("status") != "paused":
                 raise HTTPException(
                     400,

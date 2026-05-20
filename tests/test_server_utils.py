@@ -168,7 +168,12 @@ class TestBuildProxyConfig:
         assert cfg["server"] == "http://pr.oxylabs.io:7777"
         assert cfg["username"] == "customer-oxy_user-cc-US-city-miami"
 
-    def test_privateproxy_provider_uses_privateproxy_credentials(self, monkeypatch):
+    def test_privateproxy_provider_appends_city_geo_to_username(self, monkeypatch):
+        """Verified against ``edge1-us.privateproxy.me:8888`` on 2026-05-20 —
+        bare username returns random global IPs (saw Munich + Romanian);
+        ``-cc-us-city-miami`` reliably returns real Miami FL Comcast IPs."""
+        for k in ("PRIVATEPROXY_COUNTRY", "PRIVATEPROXY_CC", "PRIVATEPROXY_CITY"):
+            monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv("PRIVATEPROXY_ENTRYPOINT", "privateproxy.example:8080")
         monkeypatch.setenv("PRIVATEPROXY_USERNAME", "private_user")
         monkeypatch.setenv("PRIVATEPROXY_PASSWORD", "private_pass")
@@ -177,11 +182,52 @@ class TestBuildProxyConfig:
 
         assert cfg == {
             "server": "http://privateproxy.example:8080",
-            "username": "private_user",
+            "username": "private_user-cc-us-city-miami",
             "password": "private_pass",
         }
 
+    def test_privateproxy_country_only_when_no_city(self, monkeypatch):
+        """No city → ``-cc-us`` only. Default country is US (the most
+        common deployment) — operators override via PRIVATEPROXY_COUNTRY."""
+        for k in ("PRIVATEPROXY_COUNTRY", "PRIVATEPROXY_CC", "PRIVATEPROXY_CITY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("PRIVATEPROXY_ENTRYPOINT", "privateproxy.example:8080")
+        monkeypatch.setenv("PRIVATEPROXY_USERNAME", "private_user")
+        monkeypatch.setenv("PRIVATEPROXY_PASSWORD", "private_pass")
+
+        cfg = build_proxy_config(provider="privateproxy")
+        assert cfg["username"] == "private_user-cc-us"
+
+    def test_privateproxy_country_override_via_env(self, monkeypatch):
+        """PRIVATEPROXY_COUNTRY env var overrides the US default."""
+        for k in ("PRIVATEPROXY_CC", "PRIVATEPROXY_CITY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("PRIVATEPROXY_ENTRYPOINT", "privateproxy.example:8080")
+        monkeypatch.setenv("PRIVATEPROXY_USERNAME", "private_user")
+        monkeypatch.setenv("PRIVATEPROXY_PASSWORD", "private_pass")
+        monkeypatch.setenv("PRIVATEPROXY_COUNTRY", "uk")
+
+        cfg = build_proxy_config(city="london", provider="privateproxy")
+        assert cfg["username"] == "private_user-cc-uk-city-london"
+
+    def test_privateproxy_skips_geo_when_username_already_targeted(self, monkeypatch):
+        """If the operator has manually baked geo into the username
+        (``mb5ku-cc-us-city-miami``), don't double-append. The check
+        looks for ``-cc-`` or ``-city-`` substrings."""
+        for k in ("PRIVATEPROXY_COUNTRY", "PRIVATEPROXY_CC", "PRIVATEPROXY_CITY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("PRIVATEPROXY_ENTRYPOINT", "privateproxy.example:8080")
+        monkeypatch.setenv("PRIVATEPROXY_USERNAME", "mb5ku-cc-us-city-miami")
+        monkeypatch.setenv("PRIVATEPROXY_PASSWORD", "p")
+
+        cfg = build_proxy_config(city="austin", provider="privateproxy")
+        # Manual targeting preserved — even though we asked for austin,
+        # the env-stamped username wins (caller-explicit intent).
+        assert cfg["username"] == "mb5ku-cc-us-city-miami"
+
     def test_privateproxy_provider_accepts_four_part_endpoint(self, monkeypatch):
+        for k in ("PRIVATEPROXY_COUNTRY", "PRIVATEPROXY_CC", "PRIVATEPROXY_CITY"):
+            monkeypatch.delenv(k, raising=False)
         monkeypatch.setenv(
             "PRIVATEPROXY_ENTRYPOINT",
             "privateproxy.example:8080:private_user:private_pass",
@@ -191,9 +237,11 @@ class TestBuildProxyConfig:
 
         cfg = build_proxy_config(provider="privateproxy")
 
+        # Four-part endpoint still extracts user; default -cc-us appended
+        # (no city since none was passed).
         assert cfg == {
             "server": "http://privateproxy.example:8080",
-            "username": "private_user",
+            "username": "private_user-cc-us",
             "password": "private_pass",
         }
 
