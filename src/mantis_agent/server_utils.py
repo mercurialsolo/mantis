@@ -174,7 +174,33 @@ def build_proxy_config(
 
         proxy: dict[str, str] = {"server": proxy_url}
         if proxy_user:
-            proxy["username"] = proxy_user
+            # PrivateProxy geo-targeting via username suffix (verified
+            # empirically 2026-05-20 against ``edge1-us.privateproxy.me:8888``).
+            # Working syntax:
+            #   ``USERNAME-cc-{country}``             → country only
+            #   ``USERNAME-cc-{country}-city-{city}`` → country + city
+            # Without ``-cc-XX``, the bare username can return ANY
+            # global IP (we saw Munich + Romanian IPs land despite
+            # the ``edge1-us`` hostname promising US-only). City
+            # alone (no state) works; state / region / zip / session
+            # modifiers all 407.
+            country = (
+                os.environ.get("PRIVATEPROXY_COUNTRY", "")
+                or os.environ.get("PRIVATEPROXY_CC", "")
+                or "us"  # default US — the most common deployment
+            ).strip().lower()
+            target_city = (city or os.environ.get("PRIVATEPROXY_CITY", "")).strip().lower()
+            user_with_geo = proxy_user
+            lowered = proxy_user.lower()
+            already_targeted = "-cc-" in lowered or "-city-" in lowered
+            if not already_targeted:
+                user_with_geo = f"{proxy_user}-cc-{country}"
+                if target_city:
+                    # Slug: lowercase, strip non-word, underscore spaces.
+                    city_slug = _slug_proxy_location(target_city).lower().replace("-", "_")
+                    if city_slug:
+                        user_with_geo = f"{user_with_geo}-city-{city_slug}"
+            proxy["username"] = user_with_geo
             proxy["password"] = proxy_pass
         return proxy
 

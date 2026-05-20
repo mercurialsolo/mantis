@@ -83,7 +83,13 @@ docs/cua_notes.md
 docs/cua-debugger-spec.md
 docs/experiments/staff-crm-long-learnings.md
 
-# Local proxy-on/off comparison harness for staff-crm-long. Useful for
-# bisecting proxy-related halts without going through Modal; not part of
-# the shipped CLI surface.
+# Local adhoc submission / probe / verify harnesses. These tend to
+# hardcode customer-named target URLs, seed lead IDs, and proxy creds
+# — they must NOT land in the repo (per
+# feedback_no_customer_names_in_tracked_files + the no-adhoc-scripts
+# rule). The shipped submission surface is the mantis CLI; adhoc
+# scripts stay local. Match anything under scripts/ that looks like
+# a run-with-flags helper.
+scripts/run_*_with_proxy.py
+scripts/run_*_no_proxy.py
 scripts/run_staff_crm_long_no_proxy.py
