@@ -210,54 +210,54 @@ def _build_grounding(
     """Derive an Augur Grounding dict from a Mantis StepResult (#509 fu).
 
     Mantis is screenshot-grounded by design — every dispatched click /
-    type / scroll has coordinates that came from either the SoM CDP
-    pipeline (``executor_backend="som"``) or the brain's vision grounding
-    (``executor_backend="vision"`` / xdotool). Surface that data on the
-    Augur trace so the per-step ``GROUNDING`` panel populates instead
-    of saying "No grounding for this step."
+    type / scroll resolves either through the SoM CDP pipeline
+    (``executor_backend="som"``) or the brain's vision grounding
+    (``executor_backend="vision"`` / xdotool). Surface that on the
+    trace so the per-step ``GROUNDING`` panel populates instead of
+    saying "No grounding for this step."
 
-    Returns ``None`` for steps that don't have a grounded action
-    (navigate, scroll, verify, gate, extract_data, ...): keeping the
-    Grounding field absent matches the SDK's ``total=False`` semantics
-    so the schema validator is happy.
+    The Mantis runner doesn't currently stamp ``last_action`` on
+    StepResult (the field exists with ``default=None`` for resume
+    handling but no handler populates it). So we key grounding
+    emission off ``executor_backend`` — the field that IS reliably
+    set when a dispatch happens — and treat coordinates as optional.
+
+    Returns ``None`` for steps that didn't dispatch a grounded action
+    (navigate, verify, gate, extract_data, ...): keeping the Grounding
+    field absent matches the SDK's ``total=False`` semantics so the
+    schema validator stays happy.
     """
-    if last_action is None:
-        return None
-    # Only action types that resolve to a coordinate on the screenshot
-    # carry meaningful grounding. Skip pure keyboard / nav / verify
-    # actions where x/y don't apply.
-    grounded_actions = {"click", "double_click", "right_click", "drag", "scroll", "type"}
-    norm_action = (action_type or "").lower()
-    if norm_action not in grounded_actions:
-        return None
     backend = (getattr(sr, "executor_backend", "") or "").lower()
-    x = action_params.get("x")
-    y = action_params.get("y")
-    if x is None and y is None:
-        # No screenshot-anchored coordinates → can't ground meaningfully.
+    # ``som`` / ``vision`` are the two backends that actually anchor a
+    # coordinate on the screenshot. Empty backend = no dispatch =
+    # nothing to ground (extract_data, verify, navigate, ...).
+    if backend not in {"som", "vision", "plan"}:
         return None
     provider = _GROUNDING_PROVIDER_MAP.get(backend, "mantis")
     # SoM-anchored clicks resolve through a CDP element check, so they
     # carry near-certainty by construction (the element existed and
     # accepted the synthetic event); vision-grounded coordinates are
-    # the brain's best guess and warrant lower confidence. Empty
-    # backend (deterministic plan executor) → 1.0.
-    confidence = {"som": 0.99, "vision": 0.7}.get(backend, 1.0)
+    # the brain's best guess and warrant lower confidence. Plan
+    # executor (deterministic Playwright) → 1.0.
+    confidence = {"som": 0.99, "vision": 0.7, "plan": 1.0}[backend]
     target_label = str(getattr(sr, "intent", "") or "")[:120] or "(no intent)"
-    # ``provenance`` is a literal: ``"screenshot" | "dom" | …``.
-    # SoM CDP path mixes the two (it checks the DOM element at the
-    # vision coords); call it ``screenshot`` because the COORDINATE
-    # came from the screenshot — DOM is the verification, not the
-    # source. ``"dom"`` would imply the coordinate itself was DOM-
-    # derived, which would violate the screenshot-grounded invariant.
-    return {
+    grounding: dict[str, Any] = {
         "provider": provider,
         "target_label": target_label,
-        "coordinates": {"x": float(x or 0), "y": float(y or 0)},
         "confidence": confidence,
-        "evidence": f"backend={backend or 'deterministic'}",
+        "evidence": f"backend={backend}",
         "provenance": "screenshot",
     }
+    # Coordinates are best-effort. Mantis's StepResult.last_action is
+    # rarely populated today; when it is (e.g. tests, future runner
+    # work) we include them so the workspace can render the click
+    # overlay. Omit cleanly when absent — ``coordinates`` is optional
+    # on the Augur Grounding TypedDict (total=False).
+    x = action_params.get("x")
+    y = action_params.get("y")
+    if x is not None and y is not None:
+        grounding["coordinates"] = {"x": float(x), "y": float(y)}
+    return grounding
 
 
 def _resolve_capture_mode(value: str | None) -> Any:
@@ -403,14 +403,25 @@ class AugurAdapter:
         ended_at: str = "",
         observation_pre: str | None = None,
         observation_post: str | None = None,
+        step_type: str = "",
     ) -> None:
-        """Emit a StepTrace for a completed step."""
+        """Emit a StepTrace for a completed step.
+
+        ``step_type`` is the originating ``MicroIntent.type`` (the kind
+        of step the plan dispatched — ``click``, ``navigate``,
+        ``extract_data``, ...). Surfacing it as ``action.type`` keeps
+        the workspace's ACTION DISPATCHED panel meaningful even when
+        the runner doesn't stamp ``StepResult.last_action`` (which is
+        the common case today — Mantis's runner sets ``last_action``
+        only on a few code paths).
+        """
         if not self.active:
             return
         try:
             trace = self._build_step_trace(
                 step_result, started_at, ended_at,
                 observation_pre, observation_post,
+                step_type=step_type,
             )
             self._session.record_step(trace)
         except Exception as exc:  # noqa: BLE001
@@ -578,6 +589,8 @@ class AugurAdapter:
         ended_at: str,
         observation_pre: str | None,
         observation_post: str | None,
+        *,
+        step_type: str = "",
     ) -> dict[str, Any]:
         last_action = getattr(sr, "last_action", None)
         action_type = ""
@@ -605,14 +618,18 @@ class AugurAdapter:
                 if v not in (None, ""):
                     action_params[attr] = v
 
+        # Prefer the MicroIntent's ``step.type`` when ``last_action``
+        # isn't stamped (the common case) so the workspace's ACTION
+        # DISPATCHED panel shows ``click`` / ``navigate`` / etc.
+        # instead of ``unknown``.
         action: dict[str, Any] = {
-            "type": action_type or "unknown",
+            "type": action_type or step_type or "unknown",
             "params": action_params,
             "coordinate_space": "screenshot_px",
             "dispatch_backend": getattr(sr, "executor_backend", "") or "",
         }
 
-        grounding = _build_grounding(sr, last_action, action_type, action_params)
+        grounding = _build_grounding(sr, last_action, action_type or step_type, action_params)
 
         # Verdict: prefer the typed slot, fall back to success boolean.
         v_obj = getattr(sr, "verdict", None)
@@ -671,7 +688,7 @@ class AugurAdapter:
             "step_id": f"step-{augur_index:04d}",
             "step_index": augur_index,
             "intent": str(getattr(sr, "intent", "") or "")[:500] or "(no intent)",
-            "step_type": action_type or "unknown",
+            "step_type": action_type or step_type or "unknown",
             "required": True,
             "status": _map_step_status(sr),
             "started_at": started_at or "",

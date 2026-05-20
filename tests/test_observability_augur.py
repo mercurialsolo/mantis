@@ -330,6 +330,50 @@ def test_grounding_omitted_for_nav_step(monkeypatch, tmp_path: Path):
     assert "grounding" not in trace
 
 
+def test_grounding_fires_when_backend_set_even_without_last_action(monkeypatch, tmp_path: Path):
+    """The Mantis runner doesn't stamp ``StepResult.last_action`` on
+    most code paths — only ``executor_backend`` is reliable. Adapter
+    must emit Grounding whenever the backend is set; coordinates are
+    optional (omitted cleanly when missing)."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="ground_no_last_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0, intent="Click the Sign In button")
+    sr.executor_backend = "som"
+    sr.last_action = None  # Mantis's common case
+    trace = a._build_step_trace(
+        sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z",
+        None, None, step_type="click",
+    )
+    assert "grounding" in trace, "backend=som should emit grounding even without last_action"
+    g = trace["grounding"]
+    assert g["provider"] == "mantis-som-cdp"
+    assert "Sign In" in g["target_label"]
+    assert g["confidence"] == 0.99
+    # Coordinates omitted when last_action isn't populated — schema is total=False
+    assert "coordinates" not in g
+    # action.type falls back to step_type when last_action.action_type isn't there
+    assert trace["action"]["type"] == "click"
+    assert trace["step_type"] == "click"
+
+
+def test_step_type_fallback_when_no_last_action(monkeypatch, tmp_path: Path):
+    """Without ``step_type`` AND without ``last_action.action_type``,
+    action.type defaults to 'unknown'. That's the empty-state behaviour
+    — workspace renders ``unknown`` for that, but we don't crash."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    a = AugurAdapter(run_id="step_type_v1", tenant_id="t", session_name="s", out_dir=tmp_path)
+    sr = _FakeStepResult(step_index=0)
+    sr.executor_backend = ""
+    sr.last_action = None
+    trace = a._build_step_trace(
+        sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z",
+        None, None,  # no step_type kw
+    )
+    assert trace["action"]["type"] == "unknown"
+    assert trace["step_type"] == "unknown"
+    assert "grounding" not in trace  # no backend = no grounding
+
+
 def test_grounding_reads_from_real_action_params_dict(monkeypatch, tmp_path: Path):
     """Mantis ``actions.Action`` is a dataclass with a ``params`` dict
     — x/y/text/etc. live INSIDE ``params``, not as top-level attrs.

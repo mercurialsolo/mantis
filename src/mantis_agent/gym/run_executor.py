@@ -261,13 +261,26 @@ class RunExecutor:
             # critic-emitted healing events are picked up too. Any
             # adapter failure is swallowed internally — never breaks
             # the run.
-            self._emit_augur_step(step_result, step_started_at)
+            self._emit_augur_step(step_result, step_started_at, step_type=step.type)
 
         self._finalize(plan, state)
         return state.results
 
-    def _emit_augur_step(self, step_result: StepResult, started_at: str) -> None:
-        """Per-step Augur emission — observation, trace, decision events."""
+    def _emit_augur_step(
+        self,
+        step_result: StepResult,
+        started_at: str,
+        *,
+        step_type: str = "",
+    ) -> None:
+        """Per-step Augur emission — observation, trace, decision events.
+
+        ``step_type`` is the originating ``MicroIntent.type`` (``click``,
+        ``navigate``, ``extract_data``, ...) — passed through so the
+        adapter can populate ``action.type`` even when the runner
+        doesn't stamp ``StepResult.last_action`` (which is the common
+        case). Optional for compatibility with non-runner callers.
+        """
         runner = self.parent
         augur: AugurAdapter | None = getattr(runner, "_augur", None)
         if augur is None or not augur.active:
@@ -280,9 +293,9 @@ class RunExecutor:
         from ..observability.augur import is_verbose as _augur_verbose
         if _augur_verbose():
             logger.warning(
-                "AugurAdapter._emit_augur_step: step=%d png_bytes=%d success=%s",
+                "AugurAdapter._emit_augur_step: step=%d png_bytes=%d success=%s type=%r",
                 step_index, len(png) if png else 0,
-                getattr(step_result, "success", False),
+                getattr(step_result, "success", False), step_type,
             )
         observation_post = augur.attach_observation(
             step_index=step_index,
@@ -294,6 +307,7 @@ class RunExecutor:
             started_at=started_at,
             ended_at=_utc_iso_now(),
             observation_post=observation_post,
+            step_type=step_type,
         )
         # #509: surface the brain's planner reasoning as an Augur
         # planner-layer DecisionEvent. The workspace's "PLANNER REASONING"
