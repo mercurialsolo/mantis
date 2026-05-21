@@ -133,6 +133,7 @@ def build_proxy_config(
     state: str = "",
     session_id: str = "",
     provider: str = "",
+    country: str = "",
 ) -> dict[str, str] | None:
     """Build proxy config from environment variables.
 
@@ -193,19 +194,47 @@ def build_proxy_config(
             # the ``edge1-us`` hostname promising US-only). City
             # alone (no state) works; state / region / zip / session
             # modifiers all 407.
-            country = (
-                os.environ.get("PRIVATEPROXY_COUNTRY", "")
+            # Resolution order:
+            # 1. Caller-supplied ``country`` arg (runtime override —
+            #    wins over env so a plan can force US even if the
+            #    Modal Secret has a UK-locked username baked in.
+            #    Observed in production: PRIVATEPROXY_USERNAME pre-
+            #    targeted with -cc-gb returned Sheffield IPs for a
+            #    US plan because already_targeted=True short-circuited
+            #    the cc-us application.)
+            # 2. PRIVATEPROXY_COUNTRY / PRIVATEPROXY_CC env vars.
+            # 3. Default "us".
+            resolved_country = (
+                country
+                or os.environ.get("PRIVATEPROXY_COUNTRY", "")
                 or os.environ.get("PRIVATEPROXY_CC", "")
-                or "us"  # default US — the most common deployment
+                or "us"
             ).strip().lower()
             target_city = (city or os.environ.get("PRIVATEPROXY_CITY", "")).strip().lower()
             user_with_geo = proxy_user
             lowered = proxy_user.lower()
             already_targeted = "-cc-" in lowered or "-city-" in lowered
-            if not already_targeted:
-                user_with_geo = f"{proxy_user}-cc-{country}"
+            if country and already_targeted:
+                # Runtime country supplied — strip any pre-baked -cc-XX
+                # / -city-YYY suffix from the username and re-apply
+                # our targeting. Match conservatively: only the trailing
+                # -cc-XX(-city-YYY)? pattern, leaving any other dashes
+                # in the base username alone.
+                import re
+                stripped = re.sub(
+                    r"-cc-[a-z]{2}(-city-[a-z0-9_]+)?$",
+                    "",
+                    proxy_user,
+                    flags=re.IGNORECASE,
+                )
+                user_with_geo = f"{stripped}-cc-{resolved_country}"
                 if target_city:
-                    # Slug: lowercase, strip non-word, underscore spaces.
+                    city_slug = _slug_proxy_location(target_city).lower().replace("-", "_")
+                    if city_slug:
+                        user_with_geo = f"{user_with_geo}-city-{city_slug}"
+            elif not already_targeted:
+                user_with_geo = f"{proxy_user}-cc-{resolved_country}"
+                if target_city:
                     city_slug = _slug_proxy_location(target_city).lower().replace("-", "_")
                     if city_slug:
                         user_with_geo = f"{user_with_geo}-city-{city_slug}"
@@ -957,6 +986,7 @@ _RUNTIME_KEYS = (
     "proxy_provider",
     "proxy_city",
     "proxy_state",
+    "proxy_country",
     "max_cost",
     "max_time_minutes",
 )
@@ -1043,6 +1073,7 @@ def build_micro_suite(
     proxy_provider: str = "",
     proxy_city: str = "",
     proxy_state: str = "",
+    proxy_country: str = "",
     proxy_disabled: bool = False,
     objective: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1092,6 +1123,7 @@ def build_micro_suite(
         "_proxy_provider": proxy_provider,
         "_proxy_city": proxy_city,
         "_proxy_state": proxy_state,
+        "_proxy_country": proxy_country,
         "_proxy_disabled": bool(proxy_disabled),
         "_micro_plan": micro_plan_steps,
         "tasks": [],

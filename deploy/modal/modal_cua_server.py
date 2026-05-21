@@ -524,6 +524,7 @@ def _run_executor(
         proxy_city=str(task_suite.get("_proxy_city") or ""),
         proxy_state=str(task_suite.get("_proxy_state") or ""),
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
+        proxy_country=str(task_suite.get("_proxy_country") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
         profile_dir=profile_dir,
     )
@@ -721,6 +722,7 @@ def _run_holo3_executor(
         proxy_city=str(task_suite.get("_proxy_city") or ""),
         proxy_state=str(task_suite.get("_proxy_state") or ""),
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
+        proxy_country=str(task_suite.get("_proxy_country") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
         profile_dir=profile_dir,
     )
@@ -1269,6 +1271,7 @@ def _run_gemma4_cua_executor(
         proxy_city=str(task_suite.get("_proxy_city") or ""),
         proxy_state=str(task_suite.get("_proxy_state") or ""),
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
+        proxy_country=str(task_suite.get("_proxy_country") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
         profile_dir=profile_dir,
     )
@@ -1421,6 +1424,7 @@ def _run_claude_executor(
         proxy_city=str(task_suite.get("_proxy_city") or ""),
         proxy_state=str(task_suite.get("_proxy_state") or ""),
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
+        proxy_country=str(task_suite.get("_proxy_country") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
         profile_dir=profile_dir,
     )
@@ -1563,6 +1567,7 @@ def _build_suite_from_payload(payload: dict) -> str:
         # path (vs the pre-built task_suite path) silently fell
         # back to no-proxy egress through Modal IPs.
         proxy_provider=str(payload.get("proxy_provider") or ""),
+        proxy_country=str(payload.get("proxy_country") or ""),
         proxy_disabled=bool(payload.get("proxy_disabled", False)),
     )
     return json.dumps(suite)

@@ -131,6 +131,7 @@ def setup_env(
     proxy_city: str = "miami",
     proxy_state: str = "",
     proxy_provider: str = "",
+    proxy_country: str = "",
     proxy_disabled: bool = False,
     display: str | None = None,
     start_xvfb: bool = False,
@@ -164,6 +165,7 @@ def setup_env(
             state=proxy_state,
             session_id=f"mantis{run_id.replace('_', '')}",
             provider=proxy_provider,
+            country=proxy_country,
         )
         proxy_server, proxy_proc = resolve_proxy_server(proxy)
         if proxy:

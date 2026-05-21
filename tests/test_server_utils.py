@@ -192,6 +192,57 @@ class TestBuildProxyConfig:
             "password": "private_pass",
         }
 
+    def test_privateproxy_runtime_country_overrides_pre_baked_cc_in_username(self, monkeypatch):
+        """Runtime ``country="us"`` MUST strip + replace any -cc-XX
+        suffix already baked into PRIVATEPROXY_USERNAME. Pre-PR-bug:
+        ``already_targeted=True`` short-circuited the cc-us application
+        and a UK-locked username from the Modal Secret kept producing
+        Sheffield egress IPs for a US plan (run 20260521_051150)."""
+        for k in ("PRIVATEPROXY_COUNTRY", "PRIVATEPROXY_CC", "PRIVATEPROXY_CITY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("PRIVATEPROXY_ENTRYPOINT", "privateproxy.example:8080")
+        # Pre-baked UK target in the username — simulates the Modal
+        # Secret state we observed in production.
+        monkeypatch.setenv("PRIVATEPROXY_USERNAME", "private_user-cc-gb")
+        monkeypatch.setenv("PRIVATEPROXY_PASSWORD", "private_pass")
+
+        cfg = build_proxy_config(provider="privateproxy", country="us")
+        assert cfg["username"] == "private_user-cc-us", (
+            f"runtime country must strip pre-baked -cc-gb and apply -cc-us; "
+            f"got {cfg['username']!r}"
+        )
+
+    def test_privateproxy_runtime_country_with_city_replaces_pre_baked_target(self, monkeypatch):
+        """Runtime country + city wins over a pre-baked
+        ``-cc-XX-city-YYY`` username. Whole geo suffix is stripped
+        and re-applied."""
+        for k in ("PRIVATEPROXY_COUNTRY", "PRIVATEPROXY_CC", "PRIVATEPROXY_CITY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("PRIVATEPROXY_ENTRYPOINT", "privateproxy.example:8080")
+        monkeypatch.setenv("PRIVATEPROXY_USERNAME", "private_user-cc-gb-city-sheffield")
+        monkeypatch.setenv("PRIVATEPROXY_PASSWORD", "private_pass")
+
+        cfg = build_proxy_config(
+            provider="privateproxy", country="us", city="miami",
+        )
+        assert cfg["username"] == "private_user-cc-us-city-miami"
+
+    def test_privateproxy_no_runtime_country_keeps_pre_baked_target(self, monkeypatch):
+        """Backward compat: when the caller does NOT pass ``country``,
+        a pre-baked -cc-XX username is left alone. This preserves the
+        existing behavior for plans that deliberately want whatever
+        the Secret encodes."""
+        for k in ("PRIVATEPROXY_COUNTRY", "PRIVATEPROXY_CC", "PRIVATEPROXY_CITY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("PRIVATEPROXY_ENTRYPOINT", "privateproxy.example:8080")
+        monkeypatch.setenv("PRIVATEPROXY_USERNAME", "private_user-cc-gb")
+        monkeypatch.setenv("PRIVATEPROXY_PASSWORD", "private_pass")
+
+        cfg = build_proxy_config(provider="privateproxy")
+        # No -cc-us applied because already_targeted + no runtime
+        # override.
+        assert cfg["username"] == "private_user-cc-gb"
+
     def test_privateproxy_country_only_when_no_city(self, monkeypatch):
         """No city → ``-cc-us`` only. Default country is US (the most
         common deployment) — operators override via PRIVATEPROXY_COUNTRY."""
