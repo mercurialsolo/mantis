@@ -17,10 +17,12 @@ from mantis_agent.gym.step_handlers import (
     ClaudeGuidedFormHandler,
     ClaudeStepHandler,
     Holo3StepHandler,
+    MechanicalScrollHandler,
     NavigateHandler,
     PaginateHandler,
     default_registry,
 )
+from mantis_agent.plan_decomposer import MicroIntent
 
 
 def _registry():
@@ -84,14 +86,74 @@ def test_claude_step_types_share_one_handler_instance():
     assert url is data
 
 
-def test_holo3_types_share_one_handler_instance():
-    """scroll / navigate_back fall through to Holo3 in legacy dispatch;
-    after cleanup they share one Holo3StepHandler in the registry."""
+def test_navigate_back_binds_to_Holo3StepHandler():
+    """``navigate_back`` is a goal-shaped step type — it stays on the
+    brain. Only ``scroll`` was peeled off into the dispatcher."""
+    assert isinstance(_registry().get("navigate_back"), Holo3StepHandler)
+
+
+def test_scroll_uses_dispatcher_routing_to_mechanical_or_holo3():
+    """``scroll`` routes through a dispatcher that prefers the
+    deterministic mechanical handler when ``params.count`` is set,
+    falling through to Holo3 for goal-shaped scroll intents.
+
+    This is the (a) Layer-1 fix: a ``scroll`` step with explicit
+    count never goes through the brain, so the brain can't fall
+    back to clicking visible elements (the "misclick on ad-link"
+    pattern that drove every recent boattrader halt).
+    """
     reg = _registry()
-    scroll = reg.get("scroll")
-    nav_back = reg.get("navigate_back")
-    assert isinstance(scroll, Holo3StepHandler)
-    assert scroll is nav_back
+    dispatcher = reg.get("scroll")
+    # Dispatcher is NOT the Holo3 instance directly; it's a wrapper.
+    assert dispatcher is not None
+    assert not isinstance(dispatcher, Holo3StepHandler)
+
+    # Build a fake StepContext + env that records env.step dispatches.
+    env = MagicMock()
+    # Simulate scrollY going from 0 → 600 so the verification gate passes.
+    env.cdp_evaluate = MagicMock(side_effect=[0.0, 600.0])
+    ctx = MagicMock()
+    ctx.env = env
+    ctx.state = {"index": 0}
+
+    # With params.count = 1 → mechanical path fires (env.step called).
+    mech_step = MicroIntent(
+        intent="scroll down once",
+        type="scroll",
+        params={"count": 1, "direction": "down"},
+    )
+    dispatcher.execute(mech_step, ctx)
+    assert env.step.called, (
+        "scroll with params.count should dispatch via mechanical "
+        "handler (env.step), not the brain"
+    )
+
+
+def test_mechanical_scroll_handler_applies_to_predicate_gated_on_count():
+    """The mechanical handler claims a step only when ``params.count``
+    is present + positive. Steps without count fall through to Holo3
+    so vision-mediated scrolling ("scroll until X visible") still
+    works for plans that need it."""
+    runner = MagicMock()
+    mech = MechanicalScrollHandler(runner)
+    assert mech.applies_to(
+        MicroIntent(intent="x", type="scroll", params={"count": 1})
+    )
+    assert mech.applies_to(
+        MicroIntent(intent="x", type="scroll", params={"count": 3, "direction": "up"})
+    )
+    # No count → Holo3 should own this step.
+    assert not mech.applies_to(
+        MicroIntent(intent="scroll until target visible", type="scroll", params={})
+    )
+    # Count of 0 or negative → not valid; defer to Holo3.
+    assert not mech.applies_to(
+        MicroIntent(intent="x", type="scroll", params={"count": 0})
+    )
+    # Non-numeric count → defer to Holo3.
+    assert not mech.applies_to(
+        MicroIntent(intent="x", type="scroll", params={"count": "many"})
+    )
 
 
 def test_unregistered_step_types_return_none():
