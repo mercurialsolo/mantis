@@ -36,7 +36,10 @@ from mantis_agent.server_utils import (  # noqa: E402
 
 ENDPOINT = "https://getmason--mantis-cua-server-api.modal.run"
 PLAN_PATH = REPO_ROOT / "plans" / "luma-extract.json"
-PROFILE_ID = f"luma-extract-{int(time.time())}"
+# #572: stable PROFILE_ID by default so cookies (including any CF
+# clearance) persist across runs. Override via env for a clean
+# profile. WORKFLOW_ID stays timestamped per run.
+PROFILE_ID = os.environ.get("MANTIS_PROFILE_ID", "luma-extract-stable")
 WORKFLOW_ID = f"luma-extract-{int(time.time())}"
 
 
