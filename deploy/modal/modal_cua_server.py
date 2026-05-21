@@ -2281,17 +2281,29 @@ def api():
         # `task_suite` HTTP path) — without these fonts present here
         # the in-prod Chrome still rendered with the sparse Linux-server
         # font set even after the executor_image fix.
-        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool xclip scrot "
+        #
+        # ``tzdata`` prompts for Geographic area interactively under
+        # ``run_commands`` (Modal's ``apt_install`` injects
+        # DEBIAN_FRONTEND=noninteractive but raw run_commands does
+        # not). Pre-seed the answer via TZ env + DEBIAN_FRONTEND
+        # prefix so the install completes unattended.
+        "DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get update && DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get install -y gnupg curl wget xvfb xdotool xclip scrot "
         "fonts-liberation fonts-dejavu-core fonts-noto-color-emoji locales tzdata",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
-        "apt-get update && apt-get install -y google-chrome-stable || true",
+        "DEBIAN_FRONTEND=noninteractive apt-get update && "
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable || true",
         "sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen",
         "ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime",
     ).env({
         "LANG": "en_US.UTF-8",
         "LC_ALL": "en_US.UTF-8",
         "TZ": "America/New_York",
+        # Keep DEBIAN_FRONTEND set for any downstream pip / apt that
+        # may run during further image steps.
+        "DEBIAN_FRONTEND": "noninteractive",
     }).pip_install(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
@@ -2401,17 +2413,23 @@ def _make_page_task(original_task: dict, worker_id: int, page: int) -> dict:
     gpu="A100-80GB",
     image=planner_base_image.run_commands(
         # #stealth-parity: same fonts+locale+TZ as run_holo3's image.
-        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool xclip scrot "
+        # See run_holo3 image for the DEBIAN_FRONTEND/TZ rationale —
+        # tzdata prompts interactively in run_commands otherwise.
+        "DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get update && DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get install -y gnupg curl wget xvfb xdotool xclip scrot "
         "fonts-liberation fonts-dejavu-core fonts-noto-color-emoji locales tzdata",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
-        "apt-get update && apt-get install -y google-chrome-stable || true",
+        "DEBIAN_FRONTEND=noninteractive apt-get update && "
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable || true",
         "sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen",
         "ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime",
     ).env({
         "LANG": "en_US.UTF-8",
         "LC_ALL": "en_US.UTF-8",
         "TZ": "America/New_York",
+        "DEBIAN_FRONTEND": "noninteractive",
     }).pip_install(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
