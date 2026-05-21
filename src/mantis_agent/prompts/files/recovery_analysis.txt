@@ -46,6 +46,34 @@ FAILURE DATA LEGEND (decode the failure string before choosing a mode):
   ``edit_step`` with refined ``params.option_label`` matching the
   text the dropdown is actually rendering.
 
+- ``extract_data`` / ``extract_url`` failure where the screenshot
+  doesn't show what the step's intent asks for — two common shapes,
+  disambiguate using the PAGE STATE block above:
+  * **URL drift** — ``anchor_url`` (last successful navigate) and
+    ``current_url`` differ in their path. Almost always means an
+    earlier step misclicked into a sub-page (e.g. a ``scroll`` step
+    that wandered and clicked a listing card, navigating away from
+    the search results). The visible page is the wrong page, no
+    amount of brain hinting will fix it. Prefer
+    ``insert_steps=[{type: "navigate", "params": {"url":
+    "<anchor_url>"}}]`` — the runner splices the navigate BEFORE
+    the failed extract, the browser returns to the anchored page,
+    then the original extract re-runs against the right page.
+    Do NOT pick this when ``anchor_url == current_url`` (the page
+    didn't drift; the extract is failing for some other reason like
+    overscroll or missing data).
+  * **Overscroll / past-the-fold viewport** — PAGE STATE shows
+    ``scrollY`` >= one viewport height (so the page is scrolled past
+    the extraction target). Common when a prior ``scroll`` step
+    overshot ("scroll once to lazy-load" landed in the footer). The
+    screenshot will show footer chrome / cookie banner / "back to
+    top" affordances rather than the content the extract step
+    expects. Prefer ``insert_steps=[{type: "scroll", "params":
+    {"direction": "up"}}]`` (one to two scroll-up steps; the runner
+    can dispatch keyboard PageUp / wheel-up via the standard scroll
+    handler). Do NOT pick this when scrollY is near 0 — the issue
+    is something else (URL drift, empty data, anti-bot).
+
 - ``no_state_change`` (or demoted submit) — the click landed but
   produced no observable page change. Two common shapes — disambiguate
   using the screenshot:
@@ -71,6 +99,9 @@ FAILURE DATA LEGEND (decode the failure string before choosing a mode):
 
 PLAN CONTEXT (steps already completed successfully):
 __PLAN_CONTEXT__
+
+PAGE STATE (live values from the runner; cross-check against the screenshot):
+__PAGE_STATE__
 
 RECOVERY MODES (pick ONE via the record_recovery tool):
 
@@ -169,6 +200,16 @@ prefer a STRUCTURALLY DIFFERENT recovery:**
   is better than burning more retries on the same dead end.
 
 Decision priority when multiple modes plausibly fit:
+- Step type is ``extract_data`` / ``extract_url`` AND PAGE STATE shows
+  ``anchor_url`` ≠ ``current_url`` (different paths, not just query
+  strings) → strongly prefer ``insert_steps=[{type: navigate, params:
+  {url: <anchor_url>}}]``. The page drifted; restoring it is cheaper
+  and more reliable than any brain-mediated alternative.
+- Step type is ``extract_data`` / ``extract_url`` AND PAGE STATE shows
+  ``scrollY >= viewport_h`` AND screenshot shows footer / cookie banner
+  → strongly prefer ``insert_steps=[{type: scroll, params: {direction:
+  up}}]`` (one or two scroll-up steps depending on how far below the
+  fold the page is).
 - FAILURE_DATA starts with ``form_target_not_input:`` → strongly
   prefer ``add_hint``. The runner's tag-guard already recorded an
   avoid-this-coord hint; one well-placed clarifying hint usually

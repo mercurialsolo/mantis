@@ -218,6 +218,152 @@ def test_prompt_renders_zero_hint_count_by_default() -> None:
     assert "HINT-LOOP DETECTION" in rendered
 
 
+def test_prompt_renders_page_state_when_supplied() -> None:
+    """Live page state (anchor URL, current URL, scrollY) appears in
+    the rendered prompt so the LLM can detect URL drift / overscroll
+    without having to read it from the screenshot pixels."""
+    from mantis_agent.prompts import load_prompt
+
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="x", step_type="extract_data", params="{}",
+        failure_data="x", attempts=2, plan_context="",
+        page_state=(
+            "  anchor_url (last navigate): https://example.com/listings\n"
+            "  current_url:                https://example.com/listing/abc-123\n"
+            "  (URL drifted — the page is no longer the one the plan anchored to)\n"
+            "  scroll: scrollY=1500px viewport_h=720px (ratio=2.08 viewports below top)\n"
+            "  (page is past the fold — extraction targets above the current viewport are not visible)"
+        ),
+    )
+    assert "anchor_url" in rendered
+    assert "https://example.com/listings" in rendered
+    assert "https://example.com/listing/abc-123" in rendered
+    assert "URL drifted" in rendered
+    assert "scrollY=1500px" in rendered
+    assert "past the fold" in rendered
+
+
+def test_prompt_renders_page_state_unavailable_by_default() -> None:
+    """Legacy callers that don't pass ``page_context`` get a clean
+    PAGE STATE section saying ``(unavailable)`` so the prompt stays
+    valid + reviewable. The default avoids leaking ``__PAGE_STATE__``
+    into the LLM."""
+    from mantis_agent.prompts import load_prompt
+
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="x", step_type="extract_data", params="{}",
+        failure_data="x", attempts=1, plan_context="",
+    )
+    assert "PAGE STATE" in rendered
+    assert "(unavailable)" in rendered
+    assert "__PAGE_STATE__" not in rendered
+
+
+def test_prompt_teaches_url_drift_pattern_for_extract_failures() -> None:
+    """The legend + decision-priority sections must enumerate the
+    URL-drift recovery pattern: when anchor_url ≠ current_url on an
+    extract_data / extract_url failure, the LLM should insert a
+    navigate step back to anchor_url. Without this, the LLM would
+    fall through to add_hint / halt and waste retries on the wrong
+    page."""
+    from mantis_agent.prompts import load_prompt
+
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="x", step_type="extract_data", params="{}",
+        failure_data="x", attempts=2, plan_context="",
+    )
+    text = rendered.lower()
+    # The pattern is named in the legend.
+    assert "url drift" in text or "anchor_url" in text
+    # Concrete recovery: insert_steps with type=navigate to anchor.
+    assert "insert_steps" in rendered
+    assert "navigate" in rendered.lower()
+    # The decision-priority section mentions extract + URL.
+    assert "extract_data" in rendered and "navigate" in rendered
+
+
+def test_prompt_teaches_overscroll_pattern_for_extract_failures() -> None:
+    """The legend must enumerate the overscroll pattern: when
+    scrollY >= viewport_h on an extract failure, the LLM should
+    insert a scroll-up step. Without this, the LLM might pick halt
+    after seeing footer chrome in the screenshot."""
+    from mantis_agent.prompts import load_prompt
+
+    rendered = load_prompt(
+        "recovery_analysis",
+        intent="x", step_type="extract_data", params="{}",
+        failure_data="x", attempts=2, plan_context="",
+    )
+    text = rendered.lower()
+    # Overscroll language is present.
+    assert "overscroll" in text or "past the fold" in text or "past-the-fold" in text
+    # Concrete recovery: insert_steps with type=scroll, direction=up.
+    assert "scroll" in text
+    assert "direction" in text and ("up" in text or '"up"' in rendered)
+
+
+def test_step_recovery_passes_page_context_to_agentic_recovery(monkeypatch) -> None:
+    """Plumbing test: when an extract_data failure escalates to
+    agentic_recovery, the runner's ``_last_known_url`` + env.current_url
+    + cdp_evaluate(scrollY/innerHeight) results are bundled into a
+    ``page_context`` dict and threaded through. The LLM then has the
+    live values it needs to decide URL-drift / overscroll without
+    relying solely on pixel-perfect screenshot analysis."""
+    from unittest.mock import MagicMock as _MM
+    from mantis_agent.gym.step_recovery import StepRecoveryPolicy
+    from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
+    from mantis_agent.gym.checkpoint import StepResult
+
+    captured: dict = {}
+
+    def _capture(*, step, failure_data, screenshot, plan_context,
+                 attempts, model=None, api_key="", prior_hints=None,
+                 page_context=None):
+        captured["page_context"] = page_context
+        return None
+
+    runner = _MM()
+    runner._recovery_attempts_per_step = {}
+    runner._total_recovery_attempts = 0
+    runner._safe_screenshot = lambda: None
+    runner._last_known_url = "https://example.com/listings"
+    runner.env = _MM()
+    runner.env.current_url = "https://example.com/listing/abc-123"
+    def _cdp(expr):
+        if "innerHeight" in expr:
+            return 720.0
+        if "scrollY" in expr:
+            return 1500.0
+        return None
+    runner.env.cdp_evaluate = _MM(side_effect=_cdp)
+    policy = StepRecoveryPolicy(runner)
+    plan = MicroPlan()
+    failing = MicroIntent(intent="Verify listings", type="extract_data")
+    plan.steps.append(failing)
+    failed = StepResult(
+        step_index=0, intent="Verify listings", success=False,
+        data="no data", failure_class="",
+    )
+
+    with patch(
+        "mantis_agent.agentic_recovery.analyse_failure_and_recover",
+        side_effect=_capture,
+    ):
+        policy._try_agentic_recovery(
+            step=failing, step_result=failed, step_index=0,
+            plan=plan, step_retry_counts={}, attempts=2,
+        )
+
+    pc = captured.get("page_context") or {}
+    assert pc.get("anchor_url") == "https://example.com/listings"
+    assert pc.get("current_url") == "https://example.com/listing/abc-123"
+    assert pc.get("scroll_y") == 1500.0
+    assert pc.get("viewport_h") == 720.0
+
+
 def test_analyse_threads_prior_hints_into_prompt() -> None:
     """End-to-end: ``analyse_failure_and_recover`` accepts a
     ``prior_hints`` kwarg, formats it into a PRIOR HINTS TEXT block,
@@ -338,8 +484,10 @@ def test_no_state_change_submit_uses_opus_model() -> None:
     captured: dict = {}
 
     def _capture(*, step, failure_data, screenshot, plan_context,
-                 attempts, model=None, api_key="", prior_hints=None):
+                 attempts, model=None, api_key="", prior_hints=None,
+                 page_context=None):
         captured["model"] = model
+        captured["page_context"] = page_context
         return None  # short-circuit; we only care about the model arg.
 
     runner = _MM()
@@ -777,7 +925,8 @@ def test_recovery_runs_tab_blur_traversal_on_no_state_change_submit() -> None:
     captured: dict = {}
 
     def _capture(*, step, failure_data, screenshot, plan_context,
-                 attempts, model=None, api_key="", prior_hints=None):
+                 attempts, model=None, api_key="", prior_hints=None,
+                 page_context=None):
         captured["screenshot"] = screenshot
         return None  # short-circuit; we only care about the pre-call sequence.
 
