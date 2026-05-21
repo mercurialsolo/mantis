@@ -299,7 +299,7 @@ class XdotoolGymEnv(GymEnvironment):
             f"--window-size={self._viewport[0]},{self._viewport[1]}",
             "--start-maximized",
             f"--user-data-dir={self._profile_dir}",
-            # #stealth-parity (vision_claude diff): force WebGL ON
+            # #stealth-parity (parity-reference diff): force WebGL ON
             # via SwiftShader software renderer. On a virtualized
             # GPU (Modal A100 isn't exposed to Chrome) WebGL may be
             # disabled — that fingerprints as "WebGL absent" which

@@ -1,8 +1,8 @@
-"""Source-level checks for the #stealth-parity-with-vision-claude PR.
+"""Source-level checks for the stealth-parity-with-reference-browser PR.
 
-vision_claude (staffai/agents/tool_runner/Dockerfile.vision_claude) runs
-its CUA without tripping Cloudflare Turnstile; mantis was tripping it
-on the same proxy IP. This PR closes 5 gaps + 1 proxy-routing bug:
+A reference parity-browser stack runs its CUA without tripping
+Cloudflare Turnstile; mantis was tripping it on the same proxy
+IP. This PR closes 5 gaps + 1 proxy-routing bug:
 
   1. Locale + Timezone explicitly set (LANG=en_US.UTF-8, TZ=America/New_York)
   2. WebGL flags forcing SwiftShader software renderer
@@ -85,7 +85,7 @@ def test_chrome_launch_loads_webgl_spoof_extension():
     assert "--load-extension=" in src
 
 
-# ── 3. Font set parity with vision_claude ────────────────────────────────
+# ── 3. Font set parity with the reference browser ───────────────────────
 
 
 def test_image_installs_stealth_fonts():
@@ -222,7 +222,6 @@ def _read_modal_server() -> str:
     """Load modal_cua_server.py source as text. We avoid importing
     the module because importing it pulls in modal SDK side-effects
     (App creation, Volume.from_name)."""
-    import os
     from deploy.modal import modal_cua_server as m
     with open(m.__file__) as f:
         return f.read()

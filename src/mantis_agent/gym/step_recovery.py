@@ -329,6 +329,97 @@ class StepRecoveryPolicy:
                         )
                         # Fall through to the normal retry path below.
 
+            # Deterministic scroll-to-top fallback for extract_data /
+            # extract_url failures where the page is scrolled past the
+            # extraction target. Common pattern: an upstream plan step
+            # overscrolls into the page footer / cookie banner area
+            # (e.g. brain dispatches "scroll down to lazy-load" but
+            # overshoots, or the SoM click on a card triggered a
+            # browser-side scroll-into-view that landed past the
+            # element). The screenshot then shows footer-area content,
+            # the brain returns "no relevant data on this view," and
+            # we burn the entire retry budget on the same wrong
+            # viewport before agentic_recovery picks halt.
+            #
+            # The CDP path here is action-only (window.scrollTo) +
+            # post-action verification (scrollY readback) — same
+            # provenance contract as the scroll-cdp-fallback above.
+            # We don't derive any click target from the DOM; we just
+            # dispatch a plan-implicit scroll-to-top so the next
+            # retry attempts extraction from above-the-fold content.
+            #
+            # Trigger: extract_data / extract_url step, attempt >= 2
+            # (one retry already burned), scrollY > one viewport
+            # height (clearly past the fold).
+            if (
+                step.type in ("extract_data", "extract_url")
+                and attempt >= 2
+            ):
+                env = getattr(runner, "env", None)
+                cdp_eval = getattr(env, "cdp_evaluate", None) if env is not None else None
+                if callable(cdp_eval):
+                    def _read_scroll_y_extract() -> float:
+                        try:
+                            v = cdp_eval(
+                                "(window.scrollY || document.documentElement.scrollTop || 0)"
+                            )
+                            return float(v) if v is not None else 0.0
+                        except Exception:
+                            return -1.0
+
+                    def _read_viewport_h() -> float:
+                        try:
+                            v = cdp_eval("(window.innerHeight || 720)")
+                            return float(v) if v is not None else 720.0
+                        except Exception:
+                            return 720.0
+
+                    pre_y = _read_scroll_y_extract()
+                    vh = _read_viewport_h()
+                    # Threshold: scrolled at least one viewport height
+                    # below the top. Below that and we're likely
+                    # already where the brain wants to be.
+                    if pre_y >= vh:
+                        scroll_top_js = (
+                            "(function(){"
+                            "  window.scrollTo(0, 0);"
+                            "  if (document.scrollingElement) "
+                            "    document.scrollingElement.scrollTo(0, 0);"
+                            "})()"
+                        )
+                        try:
+                            cdp_eval(scroll_top_js)
+                        except Exception as exc:  # noqa: BLE001
+                            logger_.warning(
+                                f"  [{step_index}] extract scroll-to-top "
+                                f"CDP dispatch failed: {exc}"
+                            )
+                        else:
+                            post_y = _read_scroll_y_extract()
+                            if post_y < pre_y - 50:
+                                # Bump retry counter so the next call's
+                                # attempt arithmetic is consistent + we
+                                # don't loop indefinitely on the same
+                                # scroll-back path.
+                                step_retry_counts[step_index] = attempt
+                                logger_.warning(
+                                    f"  [{step_index}] {step.type} attempt "
+                                    f"{attempt} — page scrolled past target "
+                                    f"(scrollY {pre_y:.0f} > viewport {vh:.0f}); "
+                                    f"CDP scrollTo(0,0) dispatched, "
+                                    f"scrollY {pre_y:.0f} → {post_y:.0f}; "
+                                    f"retrying extraction from top"
+                                )
+                                return RecoveryOutcome(
+                                    halt=False, step_index=step_index,
+                                    halt_reason="extract_scroll_to_top_fallback",
+                                )
+                            logger_.warning(
+                                f"  [{step_index}] extract scroll-to-top "
+                                f"fired but scrollY {pre_y:.0f} → {post_y:.0f} "
+                                f"(no movement); continuing retry budget"
+                            )
+
             if attempt <= max_retries:
                 step_retry_counts[step_index] = attempt
                 logger_.warning(

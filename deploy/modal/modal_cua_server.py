@@ -57,8 +57,8 @@ _PROMPTS_FILES_LOCAL = os.path.join(_REPO_ROOT, "src", "mantis_agent", "prompts"
 _PROMPTS_FILES_REMOTE = "/root/mantis_agent/prompts/files"
 
 # #stealth-parity: WebGL spoofing Chrome extension (ported from
-# vision_claude — staffai/tools/staffai_tools/vision_claude/
-# chrome_extensions/webgl_spoof). Loaded via ``--load-extension``
+# the parity-reference browser stack — see internal docs for the
+# upstream source). Loaded via ``--load-extension``
 # on Chrome launch in ``xdotool_env._start_browser``. The extension's
 # content script runs at ``document_start`` in MAIN world across
 # ``<all_urls>`` and all frames — hooks WebGLRenderingContext at the
@@ -69,7 +69,7 @@ _PROMPTS_FILES_REMOTE = "/root/mantis_agent/prompts/files"
 _WEBGL_SPOOF_LOCAL = os.path.join(_REPO_ROOT, "deploy", "modal", "chrome_extensions", "webgl_spoof")
 _WEBGL_SPOOF_REMOTE = "/opt/chrome-extensions/webgl-spoof"
 
-# #stealth-parity: Fonts vision_claude installs but we currently don't.
+# #stealth-parity: Fonts the parity-reference browser ships but we didn't.
 # Sparse font set is a strong bot tell — CF/Turnstile fingerprints
 # ``document.fonts.check('italic 9pt Arial')`` etc. for ~30 canary
 # fonts; only Linux servers have a Liberation-only set.
@@ -193,8 +193,8 @@ executor_image = (
                  "xvfb", "xdotool", "xclip", "scrot",
                  # #stealth-parity: fonts + locales (tzdata comes
                  # from the base image) so the browser fingerprint
-                 # matches a typical US Linux desktop (vision_claude
-                 # has these; we didn't).
+                 # matches a typical US Linux desktop (the parity
+                 # reference has these; we didn't).
                  *_STEALTH_APT_FONTS_AND_LOCALE)
     .run_commands(
         # Install real Google Chrome (not Chromium)
