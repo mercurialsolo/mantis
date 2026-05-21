@@ -989,6 +989,11 @@ _RUNTIME_KEYS = (
     "proxy_country",
     "max_cost",
     "max_time_minutes",
+    # #560: per-step-type Holo3 brain-loop caps (dict step_type → int).
+    # ``None`` (= key absent) lets the runner apply
+    # ``DEFAULT_BRAIN_BUDGET_CAPS`` (scroll=3, click=4). Pass ``{}`` to
+    # disable all caps for a single submission.
+    "brain_budgets",
 )
 
 
@@ -1076,6 +1081,7 @@ def build_micro_suite(
     proxy_country: str = "",
     proxy_disabled: bool = False,
     objective: dict[str, Any] | None = None,
+    brain_budgets: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
@@ -1130,6 +1136,11 @@ def build_micro_suite(
     }
     if objective:
         suite["_objective"] = objective
+    # #560: ``None`` means "let the runner apply DEFAULT_BRAIN_BUDGET_CAPS".
+    # Persist only when an override was supplied (including ``{}`` to
+    # explicitly disable caps for this run).
+    if brain_budgets is not None:
+        suite["_brain_budgets"] = dict(brain_budgets)
     return suite
 
 

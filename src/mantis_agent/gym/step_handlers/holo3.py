@@ -49,6 +49,43 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# #560: per-step-type ceilings on the Holo3 brain loop. The decomposer
+# prompt still advertises higher upper bounds (scroll=10, click=8) so
+# its LLM can reason about worst-case effort, but past these caps the
+# brain typically exhausts into ``brain_loop_exhausted`` and falls
+# through to recovery anyway (scroll_cdp_fallback / pointer_retry) —
+# the slack burned GPU + wall-clock for no gain.
+#
+# Runtime override: a submission can pass ``brain_budgets`` (dict
+# step_type → cap) through ``merge_runtime`` / ``build_micro_suite`` /
+# the runner constructor to retune per plan. ``None`` on the runner
+# falls back to these defaults; an explicit empty dict disables all
+# caps and honours each step's ``budget`` verbatim (escape hatch).
+DEFAULT_BRAIN_BUDGET_CAPS: dict[str, int] = {
+    "scroll": 3,
+    "click": 4,
+}
+
+
+def effective_brain_budget(
+    step_type: str, step_budget: int, caps: dict[str, int] | None
+) -> int:
+    """Return the brain ``max_steps`` after applying the runtime cap.
+
+    ``caps`` is the per-run dict (``runner.brain_budgets``). A missing
+    key means "no cap for this type" — return ``step_budget`` unchanged.
+    Caps below 1 are ignored (defensive: a cap of 0 would brick the
+    handler; we'd rather honour the decomposer's value than dispatch
+    a zero-step Holo3 loop).
+    """
+    if not caps:
+        return step_budget
+    cap = caps.get(step_type)
+    if cap is None or cap < 1:
+        return step_budget
+    return min(step_budget, cap)
+
+
 # The shared retry-attempts module owns the window cap + line format
 # (#435 item 7: Claude / Fara prompt builders use the same shape).
 # Re-export the private helpers here for back-compat with existing
@@ -167,10 +204,13 @@ class Holo3StepHandler:
         grounding = ctx.grounding
         index = int(ctx.state.get("index", 0))
 
+        max_steps = effective_brain_budget(
+            step.type, step.budget, getattr(runner, "brain_budgets", None),
+        )
         gym_runner = GymRunner(
             brain=brain,
             env=env,
-            max_steps=step.budget,
+            max_steps=max_steps,
             frames_per_inference=1,
             grounding=grounding if step.grounding else None,
             on_step=runner.on_step,

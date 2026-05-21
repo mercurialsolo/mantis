@@ -99,6 +99,7 @@ class MicroPlanRunner:
         seen_url_predicate: Any = None,  # Callable[[str], bool] | None
         routing_policy: Any = None,  # RoutingPolicy | None — typed in body to avoid import cycle
         seed: int | None = None,
+        brain_budgets: dict[str, int] | None = None,
     ):
         # Seed the global RNG so per-action human_speed delays
         # (random.uniform / random.randint in playwright_env.py +
@@ -108,6 +109,17 @@ class MicroPlanRunner:
         if seed is not None:
             random.seed(seed)
         self.seed = seed
+        # #560: per-step-type ceilings on Holo3 ``max_steps``. ``None``
+        # falls back to ``Holo3StepHandler.DEFAULT_BRAIN_BUDGET_CAPS``
+        # (scroll=3, click=4); an explicit ``{}`` disables all caps and
+        # honours each step's decomposer ``budget`` verbatim. Submitters
+        # pass this via the ``brain_budgets`` runtime field (threaded by
+        # ``build_micro_suite`` → ``_brain_budgets`` on the suite dict).
+        from .step_handlers.holo3 import DEFAULT_BRAIN_BUDGET_CAPS
+        self.brain_budgets: dict[str, int] = (
+            dict(DEFAULT_BRAIN_BUDGET_CAPS) if brain_budgets is None
+            else dict(brain_budgets)
+        )
         self.brain, self.env, self.grounding, self.extractor = (
             brain, env, grounding, extractor
         )
