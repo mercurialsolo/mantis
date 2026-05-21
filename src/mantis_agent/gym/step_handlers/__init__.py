@@ -34,6 +34,7 @@ from .form import ClaudeGuidedFormHandler
 from .holo3 import Holo3StepHandler
 from .navigate import NavigateHandler
 from .paginate import PaginateHandler
+from .scroll import MechanicalScrollHandler
 
 if TYPE_CHECKING:
     from ..micro_runner import MicroPlanRunner
@@ -45,6 +46,7 @@ __all__ = [
     "ClaudeGuidedFormHandler",
     "ClaudeStepHandler",
     "Holo3StepHandler",
+    "MechanicalScrollHandler",
     "NavigateHandler",
     "PaginateHandler",
     "default_registry",
@@ -98,8 +100,23 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
         ClaudeStepHandler(runner),
         ("extract_url", "extract_data"),
     )
-    reg.register_for_types(
-        Holo3StepHandler(runner),
-        ("scroll", "navigate_back"),
-    )
+    # ``scroll`` routes through a dispatcher that prefers the
+    # MechanicalScrollHandler when the plan supplies ``params.count``
+    # (deterministic, no brain), falling through to Holo3StepHandler
+    # for goal-shaped scroll intents that need vision mediation
+    # ("scroll until X is visible"). ``navigate_back`` stays on
+    # Holo3 — it's a goal-shaped step type by nature.
+    holo3 = Holo3StepHandler(runner)
+    mechanical_scroll = MechanicalScrollHandler(runner)
+
+    class _ScrollDispatcher:
+        step_type = "scroll"
+
+        def execute(self, step, ctx):
+            if mechanical_scroll.applies_to(step):
+                return mechanical_scroll.execute(step, ctx)
+            return holo3.execute(step, ctx)
+
+    reg.register(_ScrollDispatcher())
+    reg.register_for_types(holo3, ("navigate_back",))
     return reg
