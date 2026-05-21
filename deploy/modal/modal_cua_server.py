@@ -784,6 +784,13 @@ def _run_holo3_executor(
             from mantis_agent.gym import external_pause
             external_pause.init_paths(
                 str(_run_dir(api_tenant_id, api_run_id) / "pause_request.json"),
+                # vol.reload invalidates the executor's volume cache
+                # so we see API-container sentinel deletes (action=resume).
+                # Without this the executor's stat keeps returning
+                # exists=True even after the API cleared it; runner
+                # loops in wait_while_paused for 30 min until timeout
+                # while the viewer button stays stuck on "Resume".
+                reload_cb=vol.reload,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"  WARNING: external_pause init failed: {exc}")

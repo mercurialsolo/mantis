@@ -97,6 +97,65 @@ def test_wait_while_paused_immediate_return_when_no_sentinel(tmp_path: Path):
     assert external_pause.wait_while_paused(max_seconds=10) == "not_paused"
 
 
+def test_is_pause_requested_calls_reload_cb_only_when_cached_exists(tmp_path: Path):
+    """Volume-staleness defence: when the cached stat says the
+    sentinel exists, ``is_pause_requested`` invokes the reload
+    callback wired through ``init_paths`` and re-stats. Without
+    cached-exists, the reload is skipped — we don't pay the
+    reload tax on every poll of a healthy run."""
+    reload_calls: list[int] = []
+    sentinel = tmp_path / "pause.json"
+    external_pause.init_paths(
+        sentinel, reload_cb=lambda: reload_calls.append(1),
+    )
+
+    # Cached state: sentinel does NOT exist → no reload call.
+    assert external_pause.is_pause_requested() is False
+    assert reload_calls == []
+
+    # Write sentinel: cached state will now say "exists" → reload fires
+    # then re-stat confirms exists.
+    external_pause.request_pause(reason="external")
+    assert external_pause.is_pause_requested() is True
+    assert len(reload_calls) == 1
+
+    # Delete sentinel between calls. The next call's first stat still
+    # sees the file (we just wrote it locally), reload fires, second
+    # stat may or may not see the deletion depending on filesystem
+    # semantics — for the local-FS test we just confirm reload was
+    # invoked when the cached path-exists check passed.
+    sentinel.unlink()
+    assert external_pause.is_pause_requested() is False
+    # No reload call on this iteration — first stat returned False
+    # so the reload short-circuit didn't fire.
+    assert len(reload_calls) == 1
+
+
+def test_init_paths_reload_cb_defaults_to_noop(tmp_path: Path):
+    """Legacy callers that don't pass ``reload_cb`` get the default
+    no-op so existing test code + local-CLI runs keep working
+    without changes."""
+    # Reset module state via fresh init_paths without reload_cb.
+    external_pause.init_paths(tmp_path / "pause.json")
+    # Cycle through write / read / delete — should not raise.
+    external_pause.request_pause()
+    assert external_pause.is_pause_requested() is True
+    external_pause.clear_pause_request()
+    assert external_pause.is_pause_requested() is False
+
+
+def test_is_pause_requested_swallows_reload_cb_exception(tmp_path: Path):
+    """A failing reload_cb (e.g. transient network error talking to
+    the Modal Volume service) must NOT block ``is_pause_requested``
+    from returning a stat answer — the reload is best-effort."""
+    def _boom():
+        raise RuntimeError("modal volume unavailable")
+    external_pause.init_paths(tmp_path / "pause.json", reload_cb=_boom)
+    external_pause.request_pause()
+    # Should not raise even though reload_cb does.
+    assert external_pause.is_pause_requested() is True
+
+
 def test_is_captcha_autopause_enabled_default_true(monkeypatch):
     monkeypatch.delenv("MANTIS_PAUSE_ON_CAPTCHA", raising=False)
     assert external_pause.is_captcha_autopause_enabled() is True

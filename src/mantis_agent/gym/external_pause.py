@@ -34,6 +34,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,26 @@ logger = logging.getLogger(__name__)
 _REQUEST_PATH: Path | None = None
 
 
-def init_paths(pause_request_path: str | os.PathLike[str]) -> None:
+def _noop_reload() -> None:
+    """Default reload callback — a no-op for local CLI runs / tests
+    where POSIX stat is already coherent across processes."""
+    return None
+
+
+# Optional callback that invalidates the host filesystem cache so
+# subsequent ``stat()`` calls see writes from other processes /
+# containers. On Modal, this is ``vol.reload``; on a local CLI run
+# the default no-op is correct because POSIX stat is already coherent.
+# Wired by ``init_paths``; called by ``is_pause_requested`` only when
+# the sentinel was previously cached as "exists" so we don't pay the
+# reload tax on every poll of a healthy run.
+_RELOAD_CB: Callable[[], None] = _noop_reload
+
+
+def init_paths(
+    pause_request_path: str | os.PathLike[str],
+    reload_cb: Callable[[], None] | None = None,
+) -> None:
     """Wire the sentinel path. Call once at executor startup before the
     runner loop begins.
 
@@ -52,17 +72,51 @@ def init_paths(pause_request_path: str | os.PathLike[str]) -> None:
     Claude/Gemma4 executors) call this with
     ``_run_dir(api_tenant_id, api_run_id) / "pause_request.json"`` so
     the API container and the executor share the same sentinel.
+
+    ``reload_cb`` lets the caller wire a function that invalidates the
+    host's volume cache so the executor sees ``pause_request.json``
+    deletions written by another container. On Modal this is
+    ``vol.reload`` — without it the executor's snapshot of the volume
+    can keep returning ``exists() == True`` after the API container
+    cleared the sentinel via ``action=resume``, causing
+    ``wait_while_paused`` to loop until ``max_seconds`` (default 30
+    min) expires even though the user clicked Resume immediately.
+    Live repro: the viewer "Resume" button stayed on "Resume" after
+    click because the executor never woke up, so subsequent
+    ``/api/run_state`` polls kept returning ``status=paused``.
+
+    Default is a no-op for local CLI / unit tests where POSIX stat
+    is already coherent across processes.
     """
-    global _REQUEST_PATH
+    global _REQUEST_PATH, _RELOAD_CB
     _REQUEST_PATH = Path(pause_request_path)
+    if reload_cb is not None:
+        _RELOAD_CB = reload_cb
 
 
 def is_pause_requested() -> bool:
     """True when the sentinel file exists. Cheap stat() — safe to call
-    inside the per-step loop on every iteration."""
+    inside the per-step loop on every iteration.
+
+    Volume-staleness defence: when the cached stat says the sentinel
+    exists, invoke the reload callback (see ``init_paths``) and
+    re-stat. Catches the case where the API container deleted the
+    sentinel via ``action=resume`` but the executor's volume snapshot
+    is stale and still serves a hit. The reload cost is only paid
+    while we're actively in a pause loop — healthy runs never trip
+    the inner branch.
+    """
     if _REQUEST_PATH is None:
         return False
     try:
+        if not _REQUEST_PATH.exists():
+            return False
+        # Cached state says "exists". Reload before trusting it so
+        # we see external deletions.
+        try:
+            _RELOAD_CB()
+        except Exception:  # noqa: BLE001 — reload failure must not block resume
+            logger.debug("external_pause: reload_cb failed", exc_info=True)
         return _REQUEST_PATH.exists()
     except OSError:
         return False
