@@ -1000,6 +1000,11 @@ _RUNTIME_KEYS = (
     # takeover (useful for CI / verify reruns); ``True`` forces auto-
     # pause on regardless of env.
     "pause_on_captcha",
+    # #561: global ceiling (seconds) clamping every ``settle_after_action``
+    # call site. ``None`` (= key absent) preserves per-call max_seconds.
+    # Typical override is 2.0 — most pages stabilise in 1-1.5s; the 2-3s
+    # tail past that is pure wall-clock tax.
+    "settle_ceiling_seconds",
 )
 
 
@@ -1089,6 +1094,7 @@ def build_micro_suite(
     objective: dict[str, Any] | None = None,
     brain_budgets: dict[str, int] | None = None,
     pause_on_captcha: bool | None = None,
+    settle_ceiling_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
@@ -1153,6 +1159,10 @@ def build_micro_suite(
     # (MANTIS_PAUSE_ON_CAPTCHA) otherwise.
     if pause_on_captcha is not None:
         suite["_pause_on_captcha"] = bool(pause_on_captcha)
+    # #561: same shape — persist only when supplied; absent means
+    # "no ceiling" (each call uses its own max_seconds).
+    if settle_ceiling_seconds is not None:
+        suite["_settle_ceiling_seconds"] = float(settle_ceiling_seconds)
     return suite
 
 

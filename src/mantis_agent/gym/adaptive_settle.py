@@ -47,6 +47,49 @@ def is_enabled() -> bool:
     return os.environ.get(_ENV_TOGGLE, "enabled").lower() != "disabled"
 
 
+# #561: per-run ceiling applied to every ``settle_after_action`` call.
+# Set via ``set_runtime_ceiling`` by ``MicroPlanRunner.__init__`` when
+# the suite carries a ``settle_ceiling_seconds`` runtime field.
+# ``None`` (default) preserves each call site's existing ``max_seconds``
+# argument — no clamp. When set, every settle is clamped to
+# ``min(call_site_max, ceiling)``.
+#
+# Module-level state is safe in this codebase: Modal executors are
+# single-process per run; only one ``MicroPlanRunner`` instance is
+# active at a time per process. Tests reset via ``set_runtime_ceiling(None)``.
+_runtime_ceiling: float | None = None
+
+
+def set_runtime_ceiling(seconds: float | None) -> None:
+    """Set the per-run global ceiling for ``settle_after_action`` calls.
+
+    Pass ``None`` to clear (every call uses its own ``max_seconds``).
+    Pass a positive float to clamp every settle to at most that many
+    seconds — typical pattern is the runner setting this at init from
+    the suite's ``_settle_ceiling_seconds`` field.
+
+    Non-positive values are treated as ``None`` (clear) — a ceiling
+    of 0 would brick every settle, never intended.
+    """
+    global _runtime_ceiling
+    if seconds is None or seconds <= 0:
+        _runtime_ceiling = None
+    else:
+        _runtime_ceiling = float(seconds)
+
+
+def get_runtime_ceiling() -> float | None:
+    """Current ceiling, or ``None`` when unset."""
+    return _runtime_ceiling
+
+
+def _apply_ceiling(max_seconds: float) -> float:
+    """Clamp ``max_seconds`` to ``_runtime_ceiling`` if set."""
+    if _runtime_ceiling is None:
+        return max_seconds
+    return min(max_seconds, _runtime_ceiling)
+
+
 def wait_until_stable(
     capture: Callable[[], "Image.Image | None"],
     *,
@@ -135,19 +178,22 @@ def settle_after_action(
 
     Returns seconds actually waited.
     """
-    if not is_enabled() or max_seconds <= 0:
-        if max_seconds > 0:
-            time.sleep(max_seconds)
-        elapsed = max_seconds if max_seconds > 0 else 0.0
+    # #561: apply the per-run ceiling BEFORE the early-exit and fixed-
+    # sleep branches so all paths honor it consistently.
+    effective_max = _apply_ceiling(max_seconds)
+    if not is_enabled() or effective_max <= 0:
+        if effective_max > 0:
+            time.sleep(effective_max)
+        elapsed = effective_max if effective_max > 0 else 0.0
         _credit_settle(elapsed)
         return elapsed
     capture = getattr(env, "_screenshot", None) or getattr(env, "screenshot", None)
     if not callable(capture):
-        time.sleep(max_seconds)
-        _credit_settle(max_seconds)
-        return max_seconds
+        time.sleep(effective_max)
+        _credit_settle(effective_max)
+        return effective_max
     elapsed = wait_until_stable(
-        capture, max_seconds=max_seconds, poll_interval=poll_interval,
+        capture, max_seconds=effective_max, poll_interval=poll_interval,
     )
     _credit_settle(elapsed)
     return elapsed

@@ -101,6 +101,7 @@ class MicroPlanRunner:
         seed: int | None = None,
         brain_budgets: dict[str, int] | None = None,
         pause_on_captcha: bool | None = None,
+        settle_ceiling_seconds: float | None = None,
     ):
         # Seed the global RNG so per-action human_speed delays
         # (random.uniform / random.randint in playwright_env.py +
@@ -121,6 +122,16 @@ class MicroPlanRunner:
             dict(DEFAULT_BRAIN_BUDGET_CAPS) if brain_budgets is None
             else dict(brain_budgets)
         )
+        # #561: per-run global ceiling on every ``settle_after_action``
+        # call. ``None`` → no ceiling, each call uses its own max_seconds
+        # (existing behavior). Set this via the ``settle_ceiling_seconds``
+        # runtime field to globally clamp page-stabilisation waits — most
+        # pages settle in 1-1.5s, the 2-3s tail past that is pure tax.
+        # Module-level state in ``adaptive_settle`` is safe here:
+        # executors are single-process per run.
+        from . import adaptive_settle as _adaptive_settle
+        self.settle_ceiling_seconds: float | None = settle_ceiling_seconds
+        _adaptive_settle.set_runtime_ceiling(settle_ceiling_seconds)
         # #570: per-run override for the cf_challenge auto-pause loop
         # (PR #555). ``None`` → env var fallback
         # (``MANTIS_PAUSE_ON_CAPTCHA``, default on); ``False`` → fail
