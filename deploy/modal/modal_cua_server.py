@@ -78,7 +78,17 @@ _STEALTH_APT_FONTS_AND_LOCALE = [
     "fonts-dejavu-core",
     "fonts-noto-color-emoji",
     "locales",
-    "tzdata",
+    # NB: tzdata is intentionally NOT here. Both nvidia/cuda:12.4.0-
+    # devel-ubuntu22.04 and ubuntu:22.04 ship tzdata pre-installed
+    # in the base layer, so /usr/share/zoneinfo/* + the
+    # ``ln -sf .../America/New_York /etc/localtime`` step in
+    # run_commands already give us proper TZ behavior. Reinstalling
+    # tzdata via apt_install fires its postinst "Geographic area"
+    # prompt — DEBIAN_FRONTEND=noninteractive alone doesn't suppress
+    # it without also pre-seeding /etc/timezone, which would mean
+    # running shell commands BEFORE apt_install (not supported in
+    # the Image builder chain order). Skipping the reinstall sidesteps
+    # the prompt entirely.
 ]
 
 # ── Model configs ───────────────────────────────────────────────────
@@ -181,9 +191,10 @@ executor_image = (
     )
     .apt_install("git", "build-essential", "curl", "wget", "gnupg",
                  "xvfb", "xdotool", "xclip", "scrot",
-                 # #stealth-parity: fonts + locale + tzdata so the
-                 # browser fingerprint matches a typical US Linux
-                 # desktop (vision_claude has these; we didn't).
+                 # #stealth-parity: fonts + locales (tzdata comes
+                 # from the base image) so the browser fingerprint
+                 # matches a typical US Linux desktop (vision_claude
+                 # has these; we didn't).
                  *_STEALTH_APT_FONTS_AND_LOCALE)
     .run_commands(
         # Install real Google Chrome (not Chromium)
@@ -2290,7 +2301,7 @@ def api():
         "DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
         "apt-get update && DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
         "apt-get install -y gnupg curl wget xvfb xdotool xclip scrot "
-        "fonts-liberation fonts-dejavu-core fonts-noto-color-emoji locales tzdata",
+        "fonts-liberation fonts-dejavu-core fonts-noto-color-emoji locales",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
         "DEBIAN_FRONTEND=noninteractive apt-get update && "
@@ -2418,7 +2429,7 @@ def _make_page_task(original_task: dict, worker_id: int, page: int) -> dict:
         "DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
         "apt-get update && DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
         "apt-get install -y gnupg curl wget xvfb xdotool xclip scrot "
-        "fonts-liberation fonts-dejavu-core fonts-noto-color-emoji locales tzdata",
+        "fonts-liberation fonts-dejavu-core fonts-noto-color-emoji locales",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
         "DEBIAN_FRONTEND=noninteractive apt-get update && "
