@@ -22,6 +22,13 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
+# ``deploy/modal/modal_cua_server.py`` imports the ``modal`` SDK at
+# module-load time, so every test below transitively requires it.
+# CI doesn't install modal — same skip gate as test_modal_endpoint.py.
+pytest.importorskip("modal")
+
 
 # ── 1. Locale + TZ env on every Chrome-launching Modal image ─────────────
 
