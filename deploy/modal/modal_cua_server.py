@@ -882,6 +882,9 @@ def _run_holo3_executor(
             # #560: ``None`` (key absent) → runner falls back to
             # ``Holo3StepHandler.DEFAULT_BRAIN_BUDGET_CAPS``.
             brain_budgets=task_suite.get("_brain_budgets"),
+            # #570: ``None`` → runner falls back to
+            # ``MANTIS_PAUSE_ON_CAPTCHA`` env (default on).
+            pause_on_captcha=task_suite.get("_pause_on_captcha"),
         )
 
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
@@ -1582,6 +1585,9 @@ def _build_suite_from_payload(payload: dict) -> str:
         # #560: forward only when the caller supplied one — ``None``
         # lets the runner pick its DEFAULT_BRAIN_BUDGET_CAPS.
         brain_budgets=payload.get("brain_budgets"),
+        # #570: per-run cf_challenge auto-pause override. ``None`` →
+        # runner falls back to MANTIS_PAUSE_ON_CAPTCHA env.
+        pause_on_captcha=payload.get("pause_on_captcha"),
     )
     return json.dumps(suite)
 

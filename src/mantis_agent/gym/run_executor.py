@@ -1816,7 +1816,16 @@ class RunExecutor:
             if failure_class != "cf_challenge":
                 return
             from . import external_pause
-            if not external_pause.is_captcha_autopause_enabled():
+            # #570: per-run override via runtime field
+            # ``pause_on_captcha`` (None = fall back to env var).
+            override = getattr(self.parent, "pause_on_captcha", None)
+            if not external_pause.is_captcha_autopause_enabled(override=override):
+                logger.warning(
+                    "external_pause: auto-pause disabled by runtime field "
+                    "(pause_on_captcha=False) — failing fast on cf_challenge "
+                    "at step %s",
+                    getattr(step_result, "step_index", "?"),
+                )
                 return
             if external_pause.is_pause_requested():
                 # Sentinel already set (race with external pause or

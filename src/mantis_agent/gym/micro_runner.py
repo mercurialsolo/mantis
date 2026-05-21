@@ -100,6 +100,7 @@ class MicroPlanRunner:
         routing_policy: Any = None,  # RoutingPolicy | None — typed in body to avoid import cycle
         seed: int | None = None,
         brain_budgets: dict[str, int] | None = None,
+        pause_on_captcha: bool | None = None,
     ):
         # Seed the global RNG so per-action human_speed delays
         # (random.uniform / random.randint in playwright_env.py +
@@ -120,6 +121,14 @@ class MicroPlanRunner:
             dict(DEFAULT_BRAIN_BUDGET_CAPS) if brain_budgets is None
             else dict(brain_budgets)
         )
+        # #570: per-run override for the cf_challenge auto-pause loop
+        # (PR #555). ``None`` → env var fallback
+        # (``MANTIS_PAUSE_ON_CAPTCHA``, default on); ``False`` → fail
+        # fast on cf_challenge (CI / verify reruns where 30-min human-
+        # takeover wait is a tax, not a feature); ``True`` → force
+        # auto-pause even if env disables it. Read by
+        # ``RunExecutor._maybe_auto_pause_on_captcha``.
+        self.pause_on_captcha: bool | None = pause_on_captcha
         self.brain, self.env, self.grounding, self.extractor = (
             brain, env, grounding, extractor
         )

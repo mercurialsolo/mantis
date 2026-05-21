@@ -217,11 +217,22 @@ def wait_while_paused(*, max_seconds: int = 1800, poll_seconds: float = 2.0) -> 
     return "resumed"
 
 
-def is_captcha_autopause_enabled() -> bool:
+def is_captcha_autopause_enabled(override: bool | None = None) -> bool:
     """Whether to auto-pause when a step fails with
-    ``failure_class='cf_challenge'``. Default ``True``; set
-    ``MANTIS_PAUSE_ON_CAPTCHA=0`` to fall back to legacy halt-on-
-    cf_challenge behavior."""
+    ``failure_class='cf_challenge'``.
+
+    Resolution order (first non-``None`` wins):
+
+    1. ``override`` kwarg — the per-run ``pause_on_captcha`` runtime
+       field threaded through ``MicroPlanRunner.pause_on_captcha``.
+       Lets a single submission opt out of the 30-min pause loop
+       (e.g. CI / verify reruns) without touching the Modal Secret.
+    2. ``MANTIS_PAUSE_ON_CAPTCHA`` env var — legacy deploy-wide
+       toggle. ``0/false/no/off`` disables; any other value enables.
+    3. Default ``True`` — auto-pause on cf_challenge.
+    """
+    if override is not None:
+        return bool(override)
     raw = os.environ.get("MANTIS_PAUSE_ON_CAPTCHA", "").strip().lower()
     if not raw:
         return True
