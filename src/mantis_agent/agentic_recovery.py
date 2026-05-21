@@ -193,6 +193,7 @@ def analyse_failure_and_recover(
     api_key: str = "",
     model: str = "claude-haiku-4-5-20251001",
     prior_hints: list[str] | None = None,
+    page_context: dict | None = None,
 ) -> RecoveryDecision | None:
     """Ask Claude to analyse a step failure and pick a recovery mode.
 
@@ -221,6 +222,29 @@ def analyse_failure_and_recover(
             ``ANTHROPIC_API_KEY`` env var.
         model: Claude model. Defaults to Haiku-tier (the analysis
             task is structured-JSON lift, not deep reasoning).
+        page_context: Optional dict surfacing runtime page state
+            the LLM can compare against the failure. Recognised keys:
+
+            * ``anchor_url`` (str) — the URL the most recent
+              successful ``navigate`` step landed on
+              (``runner._last_known_url``). When this differs from
+              the current URL, the page has drifted and the LLM
+              should prefer ``insert_steps=[{type: navigate,
+              params: {url: anchor_url}}]`` over more brain retries.
+            * ``current_url`` (str) — what ``env.current_url``
+              reports right now. Pairs with ``anchor_url``.
+            * ``scroll_y`` (int|float) — current ``window.scrollY``.
+              When ``scroll_y >= viewport_h`` the viewport is past
+              the fold and the LLM should prefer
+              ``insert_steps=[{type: scroll, params: {direction:
+              up}}]`` to bring the extraction target back into view.
+            * ``viewport_h`` (int|float) — current ``window.innerHeight``.
+              Pairs with ``scroll_y``.
+
+            All values are best-effort; missing keys are simply
+            omitted from the prompt. The decision still belongs to
+            the LLM — these hints just give it the values it would
+            otherwise have to infer from the screenshot pixels.
 
     Returns:
         :class:`RecoveryDecision` on a successful tool_use call,
@@ -246,6 +270,7 @@ def analyse_failure_and_recover(
         api_key=api_key,
         model=model,
         prior_hints=prior_hints or [],
+        page_context=page_context or {},
     )
     if parsed is None:
         return None
@@ -263,6 +288,7 @@ def _call_recovery_tool(
     api_key: str,
     model: str,
     prior_hints: list[str] | None = None,
+    page_context: dict | None = None,
 ) -> dict | None:
     """Tool_use call. Returns the validated input dict or ``None``."""
     import requests
@@ -287,6 +313,7 @@ def _call_recovery_tool(
         plan_context=_format_plan_context(plan_context),
         prior_hint_count=len(hints),
         prior_hints_block=hints_block,
+        page_state=_format_page_context(page_context or {}),
     )
 
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -419,6 +446,48 @@ def _format_plan_context(steps: list[str]) -> str:
     if not steps:
         return "  (this is the first step that failed)"
     return "\n".join(f"  [{i}] {s[:100]}" for i, s in enumerate(steps))
+
+
+def _format_page_context(page: dict) -> str:
+    """Render runtime page state for the recovery prompt.
+
+    Emits only the keys that are populated — missing values omit
+    their line entirely so the prompt stays terse and the LLM
+    doesn't reason from placeholders. Returns the literal string
+    ``(unavailable)`` when nothing is known, so the prompt section
+    still renders coherently.
+    """
+    lines: list[str] = []
+    anchor = str(page.get("anchor_url") or "").strip()
+    current = str(page.get("current_url") or "").strip()
+    if anchor:
+        lines.append(f"  anchor_url (last navigate): {anchor[:200]}")
+    if current:
+        lines.append(f"  current_url:                {current[:200]}")
+    if anchor and current and anchor != current:
+        lines.append("  (URL drifted — the page is no longer the one the plan anchored to)")
+
+    scroll_y = page.get("scroll_y")
+    viewport_h = page.get("viewport_h")
+    try:
+        if scroll_y is not None and viewport_h is not None:
+            sy = float(scroll_y)
+            vh = float(viewport_h)
+            lines.append(
+                f"  scroll: scrollY={sy:.0f}px viewport_h={vh:.0f}px "
+                f"(ratio={sy / vh:.2f} viewports below top)"
+            )
+            if vh > 0 and sy >= vh:
+                lines.append(
+                    "  (page is past the fold — extraction targets above "
+                    "the current viewport are not visible)"
+                )
+    except (TypeError, ValueError):
+        pass
+
+    if not lines:
+        return "  (unavailable)"
+    return "\n".join(lines)
 
 
 # ── Plan-splice helper (exposed for the runner to call on insert_steps) ─

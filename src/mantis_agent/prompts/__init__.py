@@ -67,6 +67,10 @@ _PROMPT_PLACEHOLDER_DEFAULTS: dict[str, dict[str, str]] = {
     "recovery_analysis": {
         "prior_hint_count": "0",
         "prior_hints_block": "",
+        # PAGE STATE is optional — older callers that don't pass
+        # ``page_context`` get a clean "(unavailable)" line instead of
+        # an unresolved ``__PAGE_STATE__`` token leaking through.
+        "page_state": "  (unavailable)",
     },
 }
 

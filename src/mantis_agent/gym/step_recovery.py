@@ -329,96 +329,14 @@ class StepRecoveryPolicy:
                         )
                         # Fall through to the normal retry path below.
 
-            # Deterministic scroll-to-top fallback for extract_data /
-            # extract_url failures where the page is scrolled past the
-            # extraction target. Common pattern: an upstream plan step
-            # overscrolls into the page footer / cookie banner area
-            # (e.g. brain dispatches "scroll down to lazy-load" but
-            # overshoots, or the SoM click on a card triggered a
-            # browser-side scroll-into-view that landed past the
-            # element). The screenshot then shows footer-area content,
-            # the brain returns "no relevant data on this view," and
-            # we burn the entire retry budget on the same wrong
-            # viewport before agentic_recovery picks halt.
-            #
-            # The CDP path here is action-only (window.scrollTo) +
-            # post-action verification (scrollY readback) — same
-            # provenance contract as the scroll-cdp-fallback above.
-            # We don't derive any click target from the DOM; we just
-            # dispatch a plan-implicit scroll-to-top so the next
-            # retry attempts extraction from above-the-fold content.
-            #
-            # Trigger: extract_data / extract_url step, attempt >= 2
-            # (one retry already burned), scrollY > one viewport
-            # height (clearly past the fold).
-            if (
-                step.type in ("extract_data", "extract_url")
-                and attempt >= 2
-            ):
-                env = getattr(runner, "env", None)
-                cdp_eval = getattr(env, "cdp_evaluate", None) if env is not None else None
-                if callable(cdp_eval):
-                    def _read_scroll_y_extract() -> float:
-                        try:
-                            v = cdp_eval(
-                                "(window.scrollY || document.documentElement.scrollTop || 0)"
-                            )
-                            return float(v) if v is not None else 0.0
-                        except Exception:
-                            return -1.0
-
-                    def _read_viewport_h() -> float:
-                        try:
-                            v = cdp_eval("(window.innerHeight || 720)")
-                            return float(v) if v is not None else 720.0
-                        except Exception:
-                            return 720.0
-
-                    pre_y = _read_scroll_y_extract()
-                    vh = _read_viewport_h()
-                    # Threshold: scrolled at least one viewport height
-                    # below the top. Below that and we're likely
-                    # already where the brain wants to be.
-                    if pre_y >= vh:
-                        scroll_top_js = (
-                            "(function(){"
-                            "  window.scrollTo(0, 0);"
-                            "  if (document.scrollingElement) "
-                            "    document.scrollingElement.scrollTo(0, 0);"
-                            "})()"
-                        )
-                        try:
-                            cdp_eval(scroll_top_js)
-                        except Exception as exc:  # noqa: BLE001
-                            logger_.warning(
-                                f"  [{step_index}] extract scroll-to-top "
-                                f"CDP dispatch failed: {exc}"
-                            )
-                        else:
-                            post_y = _read_scroll_y_extract()
-                            if post_y < pre_y - 50:
-                                # Bump retry counter so the next call's
-                                # attempt arithmetic is consistent + we
-                                # don't loop indefinitely on the same
-                                # scroll-back path.
-                                step_retry_counts[step_index] = attempt
-                                logger_.warning(
-                                    f"  [{step_index}] {step.type} attempt "
-                                    f"{attempt} — page scrolled past target "
-                                    f"(scrollY {pre_y:.0f} > viewport {vh:.0f}); "
-                                    f"CDP scrollTo(0,0) dispatched, "
-                                    f"scrollY {pre_y:.0f} → {post_y:.0f}; "
-                                    f"retrying extraction from top"
-                                )
-                                return RecoveryOutcome(
-                                    halt=False, step_index=step_index,
-                                    halt_reason="extract_scroll_to_top_fallback",
-                                )
-                            logger_.warning(
-                                f"  [{step_index}] extract scroll-to-top "
-                                f"fired but scrollY {pre_y:.0f} → {post_y:.0f} "
-                                f"(no movement); continuing retry budget"
-                            )
+            # NB: an earlier ``extract_scroll_to_top_fallback`` deterministic
+            # branch lived here. It was removed in favor of letting
+            # agentic_recovery (which now receives scrollY + viewport_h via
+            # the page_context block and an explicit overscroll pattern in
+            # the prompt) decide whether the right recovery is "scroll up"
+            # or "URL drift restore" or "halt". The LLM sees the same
+            # signals plus the screenshot and can make a more contextual
+            # call than the threshold check we had hardcoded.
 
             if attempt <= max_retries:
                 step_retry_counts[step_index] = attempt
@@ -1074,6 +992,43 @@ class StepRecoveryPolicy:
         # this contextvar at the boundary and emits one
         # modelio/<step>-step_recovery-<seq>.json record on success.
         # No-op when augur is None or inactive.
+        # Page-state hints help the LLM disambiguate URL drift
+        # (current page is not the one the plan anchored to) from
+        # overscroll (viewport is past the fold) — two common
+        # extract-failure shapes that used to be handled by
+        # deterministic if/else fallbacks. The LLM sees the
+        # screenshot AND the live values, then picks the right
+        # ``insert_steps`` recovery without anyone hardcoding the
+        # decision tree.
+        page_ctx: dict = {}
+        env = getattr(runner, "env", None)
+        anchor_url = str(getattr(runner, "_last_known_url", "") or "")
+        if anchor_url:
+            page_ctx["anchor_url"] = anchor_url
+        if env is not None:
+            try:
+                cur = str(getattr(env, "current_url", "") or "")
+                if cur:
+                    page_ctx["current_url"] = cur
+            except Exception:  # noqa: BLE001
+                pass
+            cdp_eval = getattr(env, "cdp_evaluate", None)
+            if callable(cdp_eval):
+                try:
+                    sy = cdp_eval(
+                        "(window.scrollY || document.documentElement.scrollTop || 0)"
+                    )
+                    if sy is not None:
+                        page_ctx["scroll_y"] = float(sy)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    vh = cdp_eval("(window.innerHeight || 0)")
+                    if vh:
+                        page_ctx["viewport_h"] = float(vh)
+                except Exception:  # noqa: BLE001
+                    pass
+
         from ..observability.modelio import publish_modelio_context
         with publish_modelio_context(
             getattr(runner, "_augur", None),
@@ -1087,6 +1042,7 @@ class StepRecoveryPolicy:
                 attempts=attempts,
                 model=recovery_model,
                 prior_hints=prior_hints,
+                page_context=page_ctx,
             )
         if decision is None:
             # #431: even though analyse_failure_and_recover already logs
