@@ -152,7 +152,16 @@ def build_proxy_config(
     lowercase name (`_state-florida`) or omit the state entirely (city +
     country alone is plenty of geo-targeting for most use cases).
     """
-    provider = (provider or os.environ.get("MANTIS_PROXY_PROVIDER") or "iproyal").strip().lower()
+    # #stealth-parity: default provider switched from "iproyal" → "privateproxy".
+    # IPRoyal env vars (PROXY_*) have been stale in production for months per
+    # the standing memory note (feedback_proxy_provider.md); silently
+    # falling back to IPRoyal when the caller didn't specify a provider
+    # produced misleading "no proxy" runs (build_proxy_config returns None
+    # when PROXY_URL is unset → executor egress via Modal IP → CF blocks
+    # but logs never explain why). PrivateProxy is the actively-maintained
+    # default. Operators with iproyal/oxylabs still get them by passing
+    # provider explicitly OR setting MANTIS_PROXY_PROVIDER.
+    provider = (provider or os.environ.get("MANTIS_PROXY_PROVIDER") or "privateproxy").strip().lower()
     if provider in {"privateproxy", "private_proxy", "private"}:
         proxy_endpoint = os.environ.get("PRIVATEPROXY_ENTRYPOINT", "").strip()
         proxy_user = os.environ.get("PRIVATEPROXY_USERNAME", "")

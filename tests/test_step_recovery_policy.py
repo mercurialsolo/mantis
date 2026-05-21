@@ -660,6 +660,156 @@ def test_scroll_brain_loop_cdp_fallback_no_viewport_delta_keeps_step(monkeypatch
     runner.env.cdp_evaluate.assert_called_once()  # CDP did fire
 
 
+def test_required_extract_data_attempt2_scrolled_past_target_scrolls_to_top(monkeypatch):
+    """A required extract_data step on attempt 2 with scrollY past
+    one viewport height fires a deterministic CDP scrollTo(0,0) +
+    retries the same step. Mirrors the scroll_cdp_fallback pattern
+    for the overscroll-into-footer failure mode (boattrader run
+    20260521_022246_c515633b: brain extracted from footer/cookie
+    area because upstream scroll overshot)."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    # cdp_evaluate is called for: scrollY (pre, returns 1500),
+    # innerHeight (returns 720), scrollTo dispatch (returns None),
+    # scrollY (post, returns 0).
+    cdp_calls: list[str] = []
+    def _cdp(expr: str):
+        cdp_calls.append(expr)
+        if "innerHeight" in expr:
+            return 720.0
+        if "scrollTo(" in expr:
+            return None
+        if "scrollY" in expr:
+            # First scrollY read = pre (1500), second = post (0).
+            return 1500.0 if sum("scrollY" in c for c in cdp_calls) == 1 else 0.0
+        return None
+    runner.env.cdp_evaluate.side_effect = _cdp
+
+    policy = StepRecoveryPolicy(runner)
+    retries: dict = {0: 1}
+    outcome = policy.handle_failure(
+        step=MicroIntent(
+            intent="Verify listings render",
+            type="extract_data", required=True,
+        ),
+        step_result=_result(),
+        plan=_plan("extract_data"),
+        step_index=0,
+        step_retry_counts=retries,
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 0  # retry same step
+    assert outcome.halt_reason == "extract_scroll_to_top_fallback"
+    # Three CDP calls minimum: pre-scrollY, innerHeight, scrollTo,
+    # post-scrollY (four total).
+    assert any("scrollTo(" in c for c in cdp_calls)
+    assert any("innerHeight" in c for c in cdp_calls)
+    # Counter bumped to attempt # so the next retry's arithmetic is
+    # consistent (input was 1 = one prior fail; this call ran attempt 2).
+    assert retries[0] == 2
+
+
+def test_required_extract_data_attempt2_near_top_skips_fallback(monkeypatch):
+    """When the page is already near the top (scrollY < viewport),
+    the scroll-to-top fallback is a no-op and we fall through to
+    the normal retry path. Don't waste a CDP roundtrip on every
+    extract retry; only fire when overscroll is the plausible cause."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    cdp_calls: list[str] = []
+    def _cdp(expr: str):
+        cdp_calls.append(expr)
+        if "innerHeight" in expr:
+            return 720.0
+        if "scrollY" in expr:
+            return 200.0  # well under viewport
+        return None
+    runner.env.cdp_evaluate.side_effect = _cdp
+
+    policy = StepRecoveryPolicy(runner)
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Read details", type="extract_data", required=True),
+        step_result=_result(),
+        plan=_plan("extract_data"),
+        step_index=0,
+        step_retry_counts={0: 1},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    # No scrollTo dispatched — falls through to normal retry budget.
+    assert not any("scrollTo(" in c for c in cdp_calls)
+    assert outcome.halt is False
+    assert outcome.step_index == 0  # retry same step (normal path)
+    assert outcome.halt_reason == "required_retry:extract_data:2"
+
+
+def test_required_extract_data_scroll_to_top_no_movement_continues_retry(monkeypatch):
+    """If the CDP scrollTo dispatch fires but the page doesn't
+    actually move (overflow:hidden body, locked scroll, sub-element
+    scroller capturing events), the fallback falls through to the
+    retry budget rather than falsely advancing — same safety property
+    as scroll_cdp_fallback."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    cdp_calls: list[str] = []
+    def _cdp(expr: str):
+        cdp_calls.append(expr)
+        if "innerHeight" in expr:
+            return 720.0
+        if "scrollTo(" in expr:
+            return None
+        if "scrollY" in expr:
+            return 1500.0  # never moves
+        return None
+    runner.env.cdp_evaluate.side_effect = _cdp
+
+    policy = StepRecoveryPolicy(runner)
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Read listings", type="extract_data", required=True),
+        step_result=_result(),
+        plan=_plan("extract_data"),
+        step_index=0,
+        step_retry_counts={0: 1},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert any("scrollTo(" in c for c in cdp_calls)
+    # Falls through — normal retry path used the standard halt_reason.
+    assert outcome.halt is False
+    assert outcome.step_index == 0
+    assert outcome.halt_reason == "required_retry:extract_data:2"
+
+
+def test_required_extract_data_attempt1_skips_fallback(monkeypatch):
+    """First failure burns the regular retry budget before the
+    fallback fires — gives the brain a chance to recover on its own
+    before paying for the CDP eval roundtrip."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    cdp_calls: list[str] = []
+    runner.env.cdp_evaluate.side_effect = lambda e: (cdp_calls.append(e) or 0.0)
+
+    policy = StepRecoveryPolicy(runner)
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Read", type="extract_data", required=True),
+        step_result=_result(),
+        plan=_plan("extract_data"),
+        step_index=0,
+        step_retry_counts={},  # attempt 1
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    # No CDP calls on attempt 1.
+    assert cdp_calls == []
+    assert outcome.halt_reason == "required_retry:extract_data:1"
+
+
 def test_paginate_failure_exhausts_loop_counters_and_advances():
     runner = _runner_stub()
     policy = StepRecoveryPolicy(runner)

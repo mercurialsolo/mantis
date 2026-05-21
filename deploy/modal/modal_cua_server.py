@@ -56,6 +56,41 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 _PROMPTS_FILES_LOCAL = os.path.join(_REPO_ROOT, "src", "mantis_agent", "prompts", "files")
 _PROMPTS_FILES_REMOTE = "/root/mantis_agent/prompts/files"
 
+# #stealth-parity: WebGL spoofing Chrome extension (ported from
+# the parity-reference browser stack — see internal docs for the
+# upstream source). Loaded via ``--load-extension``
+# on Chrome launch in ``xdotool_env._start_browser``. The extension's
+# content script runs at ``document_start`` in MAIN world across
+# ``<all_urls>`` and all frames — hooks WebGLRenderingContext at the
+# C++ binding level (more thorough than our ``addScriptToEvaluateOnNew
+# Document`` JS patches which run page-context only and miss iframe
+# probes). Returns a realistic Intel UHD Graphics renderer string
+# that matches a real Linux x86_64 user.
+_WEBGL_SPOOF_LOCAL = os.path.join(_REPO_ROOT, "deploy", "modal", "chrome_extensions", "webgl_spoof")
+_WEBGL_SPOOF_REMOTE = "/opt/chrome-extensions/webgl-spoof"
+
+# #stealth-parity: Fonts the parity-reference browser ships but we didn't.
+# Sparse font set is a strong bot tell — CF/Turnstile fingerprints
+# ``document.fonts.check('italic 9pt Arial')`` etc. for ~30 canary
+# fonts; only Linux servers have a Liberation-only set.
+_STEALTH_APT_FONTS_AND_LOCALE = [
+    "fonts-liberation",
+    "fonts-dejavu-core",
+    "fonts-noto-color-emoji",
+    "locales",
+    # NB: tzdata is intentionally NOT here. Both nvidia/cuda:12.4.0-
+    # devel-ubuntu22.04 and ubuntu:22.04 ship tzdata pre-installed
+    # in the base layer, so /usr/share/zoneinfo/* + the
+    # ``ln -sf .../America/New_York /etc/localtime`` step in
+    # run_commands already give us proper TZ behavior. Reinstalling
+    # tzdata via apt_install fires its postinst "Geographic area"
+    # prompt — DEBIAN_FRONTEND=noninteractive alone doesn't suppress
+    # it without also pre-seeding /etc/timezone, which would mean
+    # running shell commands BEFORE apt_install (not supported in
+    # the Image builder chain order). Skipping the reinstall sidesteps
+    # the prompt entirely.
+]
+
 # ── Model configs ───────────────────────────────────────────────────
 
 CUA_MODELS = {
@@ -155,13 +190,30 @@ executor_image = (
         "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11"
     )
     .apt_install("git", "build-essential", "curl", "wget", "gnupg",
-                 "xvfb", "xdotool", "xclip", "scrot")
+                 "xvfb", "xdotool", "xclip", "scrot",
+                 # #stealth-parity: fonts + locales (tzdata comes
+                 # from the base image) so the browser fingerprint
+                 # matches a typical US Linux desktop (the parity
+                 # reference has these; we didn't).
+                 *_STEALTH_APT_FONTS_AND_LOCALE)
     .run_commands(
         # Install real Google Chrome (not Chromium)
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
         "apt-get update && apt-get install -y google-chrome-stable || true",
+        # #stealth-parity: generate en_US locale + link America/New_York
+        # timezone so Intl.DateTimeFormat().resolvedOptions().timeZone
+        # reports 'America/New_York' (matches the US proxy IP) instead
+        # of the Modal container default 'Etc/UTC'.
+        "sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen",
+        "ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime",
     )
+    .env({
+        # #stealth-parity: process-wide locale + TZ for child Chrome.
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+        "TZ": "America/New_York",
+    })
     .pip_install(
         "vllm>=0.12.0",
         "openai", "requests", "pillow", "mss",
@@ -178,6 +230,11 @@ executor_image = (
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
+    # #stealth-parity: ship the WebGL spoof Chrome extension. The
+    # loader in xdotool_env._start_browser checks os.path.isdir on
+    # the remote path before appending --load-extension, so this
+    # mount is what flips it on in production.
+    .add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE)
 )
 
 
@@ -1265,12 +1322,26 @@ def run_gemma4_cua(task_file_contents: str, **kwargs) -> dict:
 # Lightweight image: just Chrome + xdotool (no vLLM, no llama.cpp)
 claude_executor_image = (
     modal.Image.from_registry("ubuntu:22.04", add_python="3.11")
-    .apt_install("curl", "wget", "gnupg", "xvfb", "xdotool", "xclip", "scrot")
+    .apt_install("curl", "wget", "gnupg", "xvfb", "xdotool", "xclip", "scrot",
+                 # #stealth-parity: same fonts+locale+tzdata as the
+                 # vLLM executor_image — the Claude executor launches
+                 # Chrome via the same xdotool_env path and would
+                 # otherwise present a Liberation-only sparse font set
+                 # + Etc/UTC timezone, both strong bot signals.
+                 *_STEALTH_APT_FONTS_AND_LOCALE)
     .run_commands(
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
         "apt-get update && apt-get install -y google-chrome-stable || true",
+        # #stealth-parity: generate en_US locale + America/New_York TZ.
+        "sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen",
+        "ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime",
     )
+    .env({
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+        "TZ": "America/New_York",
+    })
     .pip_install(
         "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
@@ -1281,6 +1352,7 @@ claude_executor_image = (
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
+    .add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE)
 )
 
 
@@ -1483,6 +1555,14 @@ def _build_suite_from_payload(payload: dict) -> str:
         workflow_id=str(payload.get("workflow_id") or ""),
         proxy_city=str(payload.get("proxy_city") or ""),
         proxy_state=str(payload.get("proxy_state") or ""),
+        # #stealth-parity bug fix: previously this path dropped
+        # ``proxy_provider`` while threading proxy_city + proxy_state.
+        # The downstream ``build_proxy_config`` then defaulted to
+        # ``iproyal`` (stale creds) instead of the explicit provider
+        # the caller asked for. Plans submitted via the .json micro
+        # path (vs the pre-built task_suite path) silently fell
+        # back to no-proxy egress through Modal IPs.
+        proxy_provider=str(payload.get("proxy_provider") or ""),
         proxy_disabled=bool(payload.get("proxy_disabled", False)),
     )
     return json.dumps(suite)
@@ -2206,11 +2286,36 @@ def api():
 @app.function(
     gpu="A100-80GB",
     image=planner_base_image.run_commands(
-        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool xclip scrot",
+        # #stealth-parity: install fonts/locale alongside the existing
+        # Chrome + Xvfb deps. ``run_holo3`` is the most-used executor
+        # tier in production (`cua_model=holo3` is the default for the
+        # `task_suite` HTTP path) — without these fonts present here
+        # the in-prod Chrome still rendered with the sparse Linux-server
+        # font set even after the executor_image fix.
+        #
+        # ``tzdata`` prompts for Geographic area interactively under
+        # ``run_commands`` (Modal's ``apt_install`` injects
+        # DEBIAN_FRONTEND=noninteractive but raw run_commands does
+        # not). Pre-seed the answer via TZ env + DEBIAN_FRONTEND
+        # prefix so the install completes unattended.
+        "DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get update && DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get install -y gnupg curl wget xvfb xdotool xclip scrot "
+        "fonts-liberation fonts-dejavu-core fonts-noto-color-emoji locales",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
-        "apt-get update && apt-get install -y google-chrome-stable || true",
-    ).pip_install(
+        "DEBIAN_FRONTEND=noninteractive apt-get update && "
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable || true",
+        "sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen",
+        "ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime",
+    ).env({
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+        "TZ": "America/New_York",
+        # Keep DEBIAN_FRONTEND set for any downstream pip / apt that
+        # may run during further image steps.
+        "DEBIAN_FRONTEND": "noninteractive",
+    }).pip_install(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
         # #509: run_holo3 uses its own inline image (NOT executor_image),
@@ -2218,7 +2323,7 @@ def api():
         # AugurAdapter init logs sdk_available=False and is a no-op even
         # though the package is in executor_image for the other tiers.
         "augur-sdk>=0.1.9",
-    ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
+    ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE).add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
@@ -2318,14 +2423,28 @@ def _make_page_task(original_task: dict, worker_id: int, page: int) -> dict:
 @app.function(
     gpu="A100-80GB",
     image=planner_base_image.run_commands(
-        "apt-get update && apt-get install -y gnupg curl wget xvfb xdotool xclip scrot",
+        # #stealth-parity: same fonts+locale+TZ as run_holo3's image.
+        # See run_holo3 image for the DEBIAN_FRONTEND/TZ rationale —
+        # tzdata prompts interactively in run_commands otherwise.
+        "DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get update && DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get install -y gnupg curl wget xvfb xdotool xclip scrot "
+        "fonts-liberation fonts-dejavu-core fonts-noto-color-emoji locales",
         "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
-        "apt-get update && apt-get install -y google-chrome-stable || true",
-    ).pip_install(
+        "DEBIAN_FRONTEND=noninteractive apt-get update && "
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable || true",
+        "sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen",
+        "ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime",
+    ).env({
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+        "TZ": "America/New_York",
+        "DEBIAN_FRONTEND": "noninteractive",
+    }).pip_install(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
-    ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
+    ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE).add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours per page worker
