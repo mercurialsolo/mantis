@@ -329,6 +329,112 @@ class StepRecoveryPolicy:
                         )
                         # Fall through to the normal retry path below.
 
+            # Deterministic URL-drift recovery for extract_data /
+            # extract_url failures where the browser has navigated
+            # away from the last anchored page. Common pattern: a
+            # ``scroll`` step burns its brain budget and ends up
+            # misclicking a listing card → page navigates to the
+            # detail page → subsequent ``extract_data`` runs against
+            # the wrong page → agentic_recovery (correctly) picks
+            # halt because the gate condition can't be satisfied by
+            # the new page. Live repro: boattrader run
+            # 20260521_033843_7d67208d — search results URL
+            # /boats/state-fl/.../by-owner/radius-25/ drifted to
+            # /boat/1997-caroff-chatam-52/... after step 1's scroll
+            # attempt and the extract_data gate halted with reason
+            # "the current page is a single boat detail page".
+            #
+            # The fix mirrors the existing _ensure_results_filters
+            # rollback used for click login_redirect failures, but
+            # extends it to extract_* failures by checking URL drift
+            # explicitly. Action-only CDP dispatch (Page.navigate to
+            # the previously anchored URL) + safe substring check
+            # (first non-empty path segment) — no DOM-derived
+            # targeting, per feedback_cua_no_dom_access.
+            #
+            # Trigger: extract_data / extract_url step, attempt >= 2,
+            # current URL's first path segment differs from
+            # ``runner._last_known_url``'s first path segment. The
+            # segment check (not bytewise equality) avoids false
+            # positives from query-string churn (?page=2) or trailing-
+            # slash variants while reliably catching deep-link drift
+            # like /boats/... → /boat/... .
+            if (
+                step.type in ("extract_data", "extract_url")
+                and attempt >= 2
+            ):
+                anchor_url = str(getattr(runner, "_last_known_url", "") or "")
+                env = getattr(runner, "env", None)
+                if anchor_url and env is not None:
+                    try:
+                        current_url = str(getattr(env, "current_url", "") or "")
+                    except Exception:
+                        current_url = ""
+
+                    def _first_path_segment(u: str) -> str:
+                        if "://" not in u:
+                            return ""
+                        try:
+                            rest = u.split("://", 1)[1]
+                            path = rest.split("/", 1)[1] if "/" in rest else ""
+                            for seg in path.split("/"):
+                                if seg:
+                                    return seg.lower()
+                        except Exception:
+                            return ""
+                        return ""
+
+                    anchor_seg = _first_path_segment(anchor_url)
+                    current_seg = _first_path_segment(current_url)
+                    if (
+                        anchor_seg
+                        and current_seg
+                        and anchor_seg != current_seg
+                    ):
+                        # Prefer the env's high-level navigate helper
+                        # (handles CDP Page.navigate + omnibox fallback +
+                        # post-navigate settle); fall back to the raw
+                        # CDP call if the env exposes _cdp_call directly
+                        # (lighter test stubs).
+                        nav_helper = getattr(env, "_navigate_running_browser", None)
+                        cdp_call = getattr(env, "_cdp_call", None)
+                        navigated = False
+                        if callable(nav_helper):
+                            try:
+                                nav_helper(anchor_url)
+                                navigated = True
+                            except Exception as exc:  # noqa: BLE001
+                                logger_.warning(
+                                    f"  [{step_index}] {step.type} attempt "
+                                    f"{attempt} — URL drift detected ("
+                                    f"anchor='/{anchor_seg}' current='/"
+                                    f"{current_seg}'); _navigate_running_browser "
+                                    f"dispatch failed: {exc}"
+                                )
+                        elif callable(cdp_call):
+                            try:
+                                cdp_call("Page.navigate", {"url": anchor_url})
+                                navigated = True
+                            except Exception as exc:  # noqa: BLE001
+                                logger_.warning(
+                                    f"  [{step_index}] {step.type} attempt "
+                                    f"{attempt} — URL drift "
+                                    f"recovery CDP Page.navigate failed: {exc}"
+                                )
+                        if navigated:
+                            step_retry_counts[step_index] = attempt
+                            logger_.warning(
+                                f"  [{step_index}] {step.type} attempt "
+                                f"{attempt} — URL drift detected "
+                                f"(anchor='/{anchor_seg}' current='/"
+                                f"{current_seg}'); restoring "
+                                f"_last_known_url and retrying"
+                            )
+                            return RecoveryOutcome(
+                                halt=False, step_index=step_index,
+                                halt_reason="extract_url_drift_restore",
+                            )
+
             # Deterministic scroll-to-top fallback for extract_data /
             # extract_url failures where the page is scrolled past the
             # extraction target. Common pattern: an upstream plan step

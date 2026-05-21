@@ -660,6 +660,143 @@ def test_scroll_brain_loop_cdp_fallback_no_viewport_delta_keeps_step(monkeypatch
     runner.env.cdp_evaluate.assert_called_once()  # CDP did fire
 
 
+def test_required_extract_data_attempt2_url_drift_restores_anchor(monkeypatch):
+    """A required extract_data step on attempt 2 with URL drifted
+    away from runner._last_known_url (first path segment differs)
+    fires a deterministic CDP Page.navigate back to the anchored
+    URL + retries. Mirrors the scroll-to-top pattern for the
+    wrong-page failure mode (boattrader run 20260521_033843_7d67208d:
+    search results URL drifted to a single boat detail page after
+    Holo3 misclicked a card during a scroll step)."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    runner._last_known_url = "https://www.boattrader.com/boats/state-fl/city-miami/zip-33101/by-owner/radius-25/"
+    runner.env.current_url = "https://www.boattrader.com/boat/1997-caroff-chatam-52/9876543/"
+    # nav helper present + succeeds.
+    nav_calls: list[str] = []
+    def _nav(url: str) -> None:
+        nav_calls.append(url)
+    runner.env._navigate_running_browser = _nav
+
+    policy = StepRecoveryPolicy(runner)
+    retries: dict = {0: 1}
+    outcome = policy.handle_failure(
+        step=MicroIntent(
+            intent="Verify listings render",
+            type="extract_data", required=True,
+        ),
+        step_result=_result(),
+        plan=_plan("extract_data"),
+        step_index=0,
+        step_retry_counts=retries,
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 0  # retry same step
+    assert outcome.halt_reason == "extract_url_drift_restore"
+    assert nav_calls == [runner._last_known_url]
+    # Counter consistent with attempt arithmetic.
+    assert retries[0] == 2
+
+
+def test_required_extract_data_attempt2_url_drift_uses_cdp_fallback(monkeypatch):
+    """When the env doesn't expose ``_navigate_running_browser``
+    (light test stub) the fallback path dispatches the raw CDP
+    ``Page.navigate`` call directly. Same retry behavior."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    runner._last_known_url = "https://boattrader.com/boats/state-fl/by-owner/"
+    runner.env.current_url = "https://boattrader.com/boat/1997-caroff-chatam-52/"
+    # No nav helper — must use _cdp_call.
+    if hasattr(runner.env, "_navigate_running_browser"):
+        del runner.env._navigate_running_browser
+    cdp_calls: list[tuple] = []
+    def _cdp_call(method: str, params: dict | None = None):
+        cdp_calls.append((method, params or {}))
+        return (True, {})
+    runner.env._cdp_call = _cdp_call
+
+    policy = StepRecoveryPolicy(runner)
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Read", type="extract_data", required=True),
+        step_result=_result(),
+        plan=_plan("extract_data"),
+        step_index=0,
+        step_retry_counts={0: 1},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt_reason == "extract_url_drift_restore"
+    assert ("Page.navigate", {"url": runner._last_known_url}) in cdp_calls
+
+
+def test_required_extract_data_attempt2_same_url_skips_drift_fallback(monkeypatch):
+    """When the URL hasn't drifted (same first path segment), the
+    fallback is a no-op and we fall through to the scroll-to-top
+    check / normal retry path. Don't redundantly re-navigate the
+    page we're already on."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    runner._last_known_url = "https://boattrader.com/boats/state-fl/city-miami/page-1"
+    # Same first path segment — only query / page suffix differs.
+    runner.env.current_url = "https://boattrader.com/boats/state-fl/city-miami/page-2"
+    nav_calls: list[str] = []
+    runner.env._navigate_running_browser = lambda u: nav_calls.append(u)
+    # cdp_evaluate returns 0 for scrollY / 720 for innerHeight so
+    # the scroll-to-top check also skips and we land on the normal
+    # retry path.
+    def _eval(expr: str):
+        if "innerHeight" in expr:
+            return 720.0
+        if "scrollY" in expr:
+            return 100.0  # near top
+        return None
+    runner.env.cdp_evaluate.side_effect = _eval
+
+    policy = StepRecoveryPolicy(runner)
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Read", type="extract_data", required=True),
+        step_result=_result(),
+        plan=_plan("extract_data"),
+        step_index=0,
+        step_retry_counts={0: 1},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert nav_calls == [], "must not re-navigate when URL hasn't drifted"
+    assert outcome.halt_reason == "required_retry:extract_data:2"
+
+
+def test_required_extract_data_attempt1_skips_drift_fallback(monkeypatch):
+    """Same defer-to-brain-first pattern as the scroll-to-top
+    fallback — don't fire the drift recovery until the brain has
+    burned at least one retry."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    runner._last_known_url = "https://boattrader.com/boats/state-fl/"
+    runner.env.current_url = "https://boattrader.com/boat/1997-caroff/"
+    nav_calls: list[str] = []
+    runner.env._navigate_running_browser = lambda u: nav_calls.append(u)
+
+    policy = StepRecoveryPolicy(runner)
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Read", type="extract_data", required=True),
+        step_result=_result(),
+        plan=_plan("extract_data"),
+        step_index=0,
+        step_retry_counts={},  # attempt 1
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert nav_calls == []
+    assert outcome.halt_reason == "required_retry:extract_data:1"
+
+
 def test_required_extract_data_attempt2_scrolled_past_target_scrolls_to_top(monkeypatch):
     """A required extract_data step on attempt 2 with scrollY past
     one viewport height fires a deterministic CDP scrollTo(0,0) +
