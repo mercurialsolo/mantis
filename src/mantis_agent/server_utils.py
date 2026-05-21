@@ -333,7 +333,33 @@ def start_local_proxy(
         def log_message(self, *_args):
             return
 
-    server = socketserver.ThreadingTCPServer(("127.0.0.1", local_port), ProxyHandler)
+    # Warm-container reuse: a previous run's proxy thread may have
+    # released the socket but the kernel still holds it in TIME_WAIT
+    # (~60s on Linux). Without ``allow_reuse_address`` the next run
+    # crashes with ``OSError: [Errno 98] Address already in use``
+    # before its first step (Modal run 20260521_033003_a4692859).
+    # SO_REUSEADDR + handler-thread daemonization is the standard
+    # idiom for restartable TCP servers.
+    class _ReusableTCPServer(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        # Don't block ``server.shutdown()`` on long-lived CONNECT
+        # tunnels — daemon handler threads die with the server.
+        daemon_threads = True
+
+    bound_port = local_port
+    try:
+        server = _ReusableTCPServer(("127.0.0.1", bound_port), ProxyHandler)
+    except OSError as exc:
+        # Rare path: the port is actively bound by an unrelated process
+        # (not just TIME_WAIT). Fall back to an OS-chosen ephemeral
+        # port. Caller reads the actual port via ``ProxyProcess.port``
+        # rather than assuming ``local_port``.
+        logger.warning(
+            "local proxy port :%s is busy (%s) — falling back to ephemeral",
+            local_port, exc,
+        )
+        server = _ReusableTCPServer(("127.0.0.1", 0), ProxyHandler)
+        bound_port = server.server_address[1]
 
     def serve():
         with server:
@@ -343,10 +369,12 @@ def start_local_proxy(
     thread.start()
 
     class ProxyProcess:
+        port = bound_port
+
         def terminate(self):
             server.shutdown()
 
-    logger.info("local proxy forwarder listening on :%s", local_port)
+    logger.info("local proxy forwarder listening on :%s", bound_port)
     return ProxyProcess()
 
 
@@ -359,7 +387,11 @@ def resolve_proxy_server(proxy: dict[str, str] | None, local_port: int = 3128) -
         return "", None
     if proxy.get("username"):
         proc = start_local_proxy(proxy, local_port=local_port)
-        return f"http://127.0.0.1:{local_port}", proc
+        # ``proc.port`` reflects the actually-bound port — may differ
+        # from ``local_port`` if the requested one was busy and we
+        # fell back to ephemeral.
+        actual_port = getattr(proc, "port", local_port)
+        return f"http://127.0.0.1:{actual_port}", proc
     return proxy["server"], None
 
 
