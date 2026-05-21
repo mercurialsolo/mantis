@@ -299,7 +299,31 @@ class XdotoolGymEnv(GymEnvironment):
             f"--window-size={self._viewport[0]},{self._viewport[1]}",
             "--start-maximized",
             f"--user-data-dir={self._profile_dir}",
+            # #stealth-parity (vision_claude diff): force WebGL ON
+            # via SwiftShader software renderer. On a virtualized
+            # GPU (Modal A100 isn't exposed to Chrome) WebGL may be
+            # disabled — that fingerprints as "WebGL absent" which
+            # CF / Turnstile flag as a server/automation context.
+            # Forcing SwiftShader makes WebGL always work + render
+            # consistently, then the loaded extension below spoofs
+            # the vendor/renderer strings to a realistic Intel UHD
+            # value.
+            "--use-gl=angle",
+            "--use-angle=swiftshader-webgl",
+            "--enable-unsafe-swiftshader",
+            "--ignore-gpu-blocklist",
+            "--enable-webgl",
         ]
+        # #stealth-parity: load the WebGL spoof Chrome extension when
+        # present (deployed via the Modal image's add_local_dir).
+        # Extension content scripts run at document_start in MAIN
+        # world across <all_urls> + all frames — hooks WebGLRendering
+        # Context at the C++ binding level. More thorough than our
+        # JS-injected getParameter patch which is page-context only
+        # and can be probed away.
+        _stealth_ext_dir = "/opt/chrome-extensions/webgl-spoof"
+        if os.path.isdir(_stealth_ext_dir):
+            cmd.append(f"--load-extension={_stealth_ext_dir}")
         if self._proxy_server:
             cmd.append(f"--proxy-server={self._proxy_server}")
         cmd.append(url)

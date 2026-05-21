@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "WebGL Renderer Override",
+  "version": "1.0",
+  "description": "Overrides WebGL renderer strings for consistency",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    }
+  ]
+}
