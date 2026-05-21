@@ -645,27 +645,39 @@ class ClaudeExtractor:
 
         - When ``self.schema`` is set: every schema field becomes a
           property; the universal ``is_spam`` boolean is appended.
+          Only ``is_spam`` is server-required — every domain field
+          is OPTIONAL so the brain can return partial data when a
+          field isn't visible on the page (phone behind a "Show"
+          button, asking_price set to "Make Offer", seller_name
+          not displayed, etc.). Without this, a single missing
+          field server-side-rejects the whole tool call and every
+          extract step fails — produced "0 viable leads from 53
+          steps" on the boattrader plan (run 20260521_064044).
+          Per-field presence-checking belongs downstream where
+          incomplete leads can be filtered or post-flagged, not
+          at the model API boundary.
         - Otherwise: falls back to the legacy marketplace shape
           (year / make / model / price / phone / url / seller /
           is_dealer) so callers without a schema still get a
-          validated response.
+          validated response. Legacy required set kept for back
+          compat — callers depending on the strict shape are
+          off the schema path.
         """
         if self.schema:
             properties: dict[str, dict[str, Any]] = {}
-            required: list[str] = []
             for field in self.schema.fields:
                 name = field["name"]
                 json_type = self._EXTRACT_FIELD_JSON_TYPES.get(
                     str(field.get("type", "str")).lower(), "string",
                 )
                 properties[name] = {"type": json_type}
-                required.append(name)
             properties["is_spam"] = {"type": "boolean"}
-            required.append("is_spam")
             return {
                 "type": "object",
                 "properties": properties,
-                "required": required,
+                # Only is_spam is required — domain fields are optional
+                # so partial extractions land instead of failing.
+                "required": ["is_spam"],
             }
         # Legacy / no-schema fallback shape.
         return {

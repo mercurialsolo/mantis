@@ -381,9 +381,18 @@ def test_extract_dynamic_schema_built_from_extraction_schema_fields() -> None:
     assert props["salary_min"] == {"type": "integer"}
     assert props["remote"] == {"type": "boolean"}
     assert props["is_spam"] == {"type": "boolean"}
-    # Every property is required — the structure-validating effect is
-    # what makes tool_use stronger than prompt-only "Output JSON".
-    assert set(input_schema["required"]) == set(props.keys())
+    # Only ``is_spam`` is server-required. Domain fields are optional
+    # so partial extractions (e.g. phone behind a "Show" button, or
+    # asking_price set to "Make Offer") land instead of triggering
+    # an Anthropic server-side schema rejection and collapsing every
+    # extract step. Live repro: boattrader run 20260521_064044 got
+    # "0 viable leads from 53 steps" because every listing had at
+    # least one strict field unavailable.
+    assert input_schema["required"] == ["is_spam"]
+    # Domain fields STILL appear in properties — Claude is asked to
+    # populate them when present, just not required to.
+    for k in ("title", "company", "salary_min", "remote"):
+        assert k in props
 
 
 def test_extract_returns_low_confidence_when_tool_returns_none() -> None:
