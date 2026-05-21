@@ -954,6 +954,7 @@ class BasetenCUARuntime:
             proxy_state=str(payload.get("proxy_state") or os.environ.get("MANTIS_PROXY_STATE", "")),
             proxy_disabled=bool(payload.get("proxy_disabled", False)),
             brain_budgets=payload.get("brain_budgets"),
+            pause_on_captcha=payload.get("pause_on_captcha"),
         )
 
     def _resolve_path(self, raw_path: str) -> Path:
@@ -1051,6 +1052,7 @@ class BasetenCUARuntime:
             proxy_disabled=bool(payload.get("proxy_disabled", False)),
             objective=objective_dict,
             brain_budgets=payload.get("brain_budgets"),
+            pause_on_captcha=payload.get("pause_on_captcha"),
         )
         return suite
 
@@ -1536,6 +1538,7 @@ class BasetenCUARuntime:
                 max_cost=task_suite.get("_max_cost", 10.0),
                 max_time_minutes=task_suite.get("_max_time_minutes", 180),
                 brain_budgets=task_suite.get("_brain_budgets"),
+                pause_on_captcha=task_suite.get("_pause_on_captcha"),
                 extraction_cache=cache,
                 routing_policy=routing_policy,
             )

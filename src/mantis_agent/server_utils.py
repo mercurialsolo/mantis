@@ -994,6 +994,12 @@ _RUNTIME_KEYS = (
     # ``DEFAULT_BRAIN_BUDGET_CAPS`` (scroll=3, click=4). Pass ``{}`` to
     # disable all caps for a single submission.
     "brain_budgets",
+    # #570: override the cf_challenge auto-pause loop (PR #555).
+    # ``None`` falls back to MANTIS_PAUSE_ON_CAPTCHA env var; ``False``
+    # fails fast on cf_challenge instead of sleeping 30 min for human
+    # takeover (useful for CI / verify reruns); ``True`` forces auto-
+    # pause on regardless of env.
+    "pause_on_captcha",
 )
 
 
@@ -1082,6 +1088,7 @@ def build_micro_suite(
     proxy_disabled: bool = False,
     objective: dict[str, Any] | None = None,
     brain_budgets: dict[str, int] | None = None,
+    pause_on_captcha: bool | None = None,
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
@@ -1141,6 +1148,11 @@ def build_micro_suite(
     # explicitly disable caps for this run).
     if brain_budgets is not None:
         suite["_brain_budgets"] = dict(brain_budgets)
+    # #570: same shape — persist only when the caller specified an
+    # override, so the runner falls through to env-var resolution
+    # (MANTIS_PAUSE_ON_CAPTCHA) otherwise.
+    if pause_on_captcha is not None:
+        suite["_pause_on_captcha"] = bool(pause_on_captcha)
     return suite
 
 
