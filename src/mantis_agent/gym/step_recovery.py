@@ -487,12 +487,28 @@ class StepRecoveryPolicy:
                 env = getattr(runner, "env", None)
                 cdp_eval = getattr(env, "cdp_evaluate", None) if env is not None else None
                 if prior_failures >= 1 and callable(cdp_eval):
-                    from . import step_snapshot as _snap
-                    pre = None
-                    try:
-                        pre = _snap.capture(runner)
-                    except Exception:
-                        pre = None
+                    # Verify CDP scroll via actual ``window.scrollY``
+                    # readback rather than the runner's internal
+                    # ``viewport_stage`` counter. That counter is only
+                    # updated by Holo3-dispatched scroll actions
+                    # (set_scroll_state callbacks fire on brain ops);
+                    # CDP scrolls don't update it. Pre-fix: CDP scroll
+                    # fires, page moves, viewport_stage unchanged →
+                    # "viewport unchanged" → keep step → infinite
+                    # loop. Live repro: iter 8 of boattrader plan-passes
+                    # loop wedged for 22 min at $0.77 on a detail-page
+                    # scroll. Plus advance-after-3 ceiling so we never
+                    # loop more than the brain budget × 3.
+                    def _read_scroll_y_fallback() -> float:
+                        try:
+                            v = cdp_eval(
+                                "(window.scrollY || document.documentElement.scrollTop || 0)"
+                            )
+                            return float(v) if v is not None else 0.0
+                        except Exception:
+                            return -1.0
+
+                    pre_y = _read_scroll_y_fallback()
                     try:
                         cdp_eval("window.scrollBy(0, window.innerHeight)")
                     except Exception as exc:  # noqa: BLE001
@@ -501,31 +517,44 @@ class StepRecoveryPolicy:
                             f"dispatch failed: {exc} — keeping step for retry"
                         )
                     else:
-                        try:
-                            post = _snap.capture(runner)
-                            moved = (
-                                pre is None
-                                or pre.viewport_stage != post.viewport_stage
-                                or pre.scroll_signature != post.scroll_signature
-                            )
-                        except Exception:
-                            moved = True
+                        post_y = _read_scroll_y_fallback()
+                        moved = (
+                            pre_y >= 0 and post_y >= 0
+                            and abs(post_y - pre_y) >= 50
+                        )
                         if moved:
                             logger_.warning(
                                 f"  [{step_index}] scroll brain_loop_exhausted "
-                                f"x{prior_failures+1} — CDP fallback dispatched "
-                                f"window.scrollBy(0, innerHeight); viewport "
-                                f"moved, advancing"
+                                f"x{prior_failures+1} — CDP scrollBy dispatched; "
+                                f"scrollY {pre_y:.0f} → {post_y:.0f}; advancing"
                             )
                             return RecoveryOutcome(
                                 halt=False, step_index=step_index + 1,
                                 halt_reason="scroll_cdp_fallback",
                             )
+                        # No movement OR can't verify (no CDP eval).
+                        # If we've burned more than 3 cycles, advance
+                        # anyway — the page is genuinely unscrollable
+                        # (sticky overlay, page already at bottom,
+                        # SPA with custom scroll container). Looping
+                        # produces no information; the next step has
+                        # a chance to recognize the state.
+                        if prior_failures >= 2:
+                            logger_.warning(
+                                f"  [{step_index}] scroll brain_loop_exhausted "
+                                f"x{prior_failures+1} — CDP fired but scrollY "
+                                f"{pre_y:.0f} → {post_y:.0f} (no movement); "
+                                f"exceeded 3 cycles, advancing to avoid loop"
+                            )
+                            return RecoveryOutcome(
+                                halt=False, step_index=step_index + 1,
+                                halt_reason="scroll_no_movement_advance",
+                            )
                         logger_.warning(
                             f"  [{step_index}] scroll brain_loop_exhausted "
-                            f"x{prior_failures+1} — CDP fallback fired but "
-                            f"viewport unchanged (page bottom or scroll "
-                            f"blocked); keeping step for one more retry"
+                            f"x{prior_failures+1} — CDP fired but scrollY "
+                            f"{pre_y:.0f} → {post_y:.0f}; keeping step for "
+                            f"one more retry"
                         )
                 # First failure (or no CDP env): legacy keep-step path
                 # so intent_rewriter / next retry can affect the step.
