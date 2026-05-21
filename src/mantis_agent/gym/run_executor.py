@@ -281,6 +281,20 @@ class RunExecutor:
                 self._handle_success(plan, state, step, step_result)
                 continued = True
             else:
+                # #541 + fu: auto-pause on CAPTCHA must run BEFORE
+                # ``_handle_failure`` — the recovery policy decides
+                # to halt on required-step exhaustion at line ~284
+                # below, then ``if not continued: break`` exits the
+                # loop. If we wait until AFTER ``_handle_failure``,
+                # the halt-break pre-empts our pause and the
+                # executor exits before the viewer can be used.
+                # Blocking here keeps Chrome + the noVNC tunnel
+                # alive past the halt window; after the user
+                # resumes via the viewer, ``_handle_failure``
+                # runs as usual (recovery policy retries the step
+                # if it still has retry budget — likely succeeds
+                # this time because the user cleared the CF state).
+                self._maybe_auto_pause_on_captcha(step_result)
                 continued = self._handle_failure(plan, state, step, step_result)
                 if not continued:
                     break
@@ -301,15 +315,6 @@ class RunExecutor:
                 step_type=step.type,
                 costs_before=costs_before_step,
             )
-
-            # #541: auto-pause on CAPTCHA. When the step result
-            # carries failure_class='cf_challenge' (Cloudflare
-            # Turnstile etc.), write the pause sentinel so the next
-            # iteration's pause check blocks. Chrome + viewer stay
-            # alive — user takes over via the live-viewer URL and
-            # clears the CAPTCHA manually, then action=resume.
-            # Gated by MANTIS_PAUSE_ON_CAPTCHA (default-on).
-            self._maybe_auto_pause_on_captcha(step_result)
 
         self._finalize(plan, state)
         return state.results
