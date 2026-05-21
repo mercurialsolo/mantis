@@ -241,6 +241,111 @@ def _start_background(
         status_code, body = _post_to_cua_api("status")
         return JSONResponse(body, status_code=status_code)
 
+    # ── #viewer-input-dispatch: bidirectional input via xdotool.
+    # The MJPEG stream is one-way (server pushes frames to browser);
+    # we add HTTP endpoints that take browser-coord clicks / keys /
+    # text and dispatch them on the Xvfb display via xdotool. Lets
+    # the operator click the CF Turnstile checkbox + solve CAPTCHA
+    # via the live viewer after Take-Over.
+    #
+    # Endpoint accepts DESKTOP coords directly — the browser-side JS
+    # does the scaling (browser-px → screen-px) because it knows the
+    # rendered <img> dimensions. Keeps the server stateless.
+    import subprocess as _subprocess
+
+    def _xdotool(args: list[str]) -> tuple[int, str]:
+        """Run xdotool with the active DISPLAY. Returns (rc, stderr_tail)."""
+        import os as _os
+        env = {**_os.environ, "DISPLAY": _os.environ.get("DISPLAY", ":99")}
+        try:
+            p = _subprocess.run(
+                ["xdotool", *args], env=env,
+                capture_output=True, text=True, timeout=5,
+            )
+            return p.returncode, (p.stderr or "")[-300:]
+        except FileNotFoundError:
+            return 127, "xdotool not installed in this container"
+        except Exception as exc:  # noqa: BLE001
+            return 1, f"{type(exc).__name__}: {exc}"
+
+    @app.post("/api/dispatch_click")
+    async def dispatch_click(
+        token: str = Query(...),
+        x: int = Query(..., ge=0),
+        y: int = Query(..., ge=0),
+        button: str = Query("left"),
+    ):
+        """Move to (x, y) on the Xvfb display and click. Coords are
+        in DESKTOP pixel space (browser-side JS scales from rendered
+        image pixels).
+
+        button: ``left`` (1) / ``middle`` (2) / ``right`` (3) — passed
+        verbatim to xdotool's button id."""
+        _auth(token)
+        button_id = {"left": "1", "middle": "2", "right": "3"}.get(button, "1")
+        rc, err = _xdotool(["mousemove", str(x), str(y), "click", button_id])
+        return JSONResponse(
+            {"ok": rc == 0, "x": x, "y": y, "button": button, "error": err if rc else ""},
+            status_code=200 if rc == 0 else 500,
+        )
+
+    @app.post("/api/dispatch_keys")
+    async def dispatch_keys(token: str = Query(...), keys: str = Query(...)):
+        """Send a keystroke or key combo via xdotool ``key`` (e.g.
+        ``Return``, ``Tab``, ``ctrl+l``, ``Page_Down``)."""
+        _auth(token)
+        rc, err = _xdotool(["key", "--", keys])
+        return JSONResponse(
+            {"ok": rc == 0, "keys": keys, "error": err if rc else ""},
+            status_code=200 if rc == 0 else 500,
+        )
+
+    @app.post("/api/dispatch_type")
+    async def dispatch_type(token: str = Query(...), text: str = Query(...)):
+        """Type literal text via xdotool ``type``. Use for filling
+        text inputs after a click-to-focus."""
+        _auth(token)
+        rc, err = _xdotool(["type", "--delay", "30", "--", text])
+        return JSONResponse(
+            {"ok": rc == 0, "len": len(text), "error": err if rc else ""},
+            status_code=200 if rc == 0 else 500,
+        )
+
+    @app.post("/api/dispatch_scroll")
+    async def dispatch_scroll(
+        token: str = Query(...),
+        direction: str = Query("down"),
+        amount: int = Query(3, ge=1, le=20),
+    ):
+        """Scroll via xdotool ``click`` on buttons 4 (up) / 5 (down).
+        ``amount`` is the wheel-notch count."""
+        _auth(token)
+        button_id = {"up": "4", "down": "5"}.get(direction, "5")
+        # Repeat the click N times for the desired scroll depth.
+        rc = 0
+        err = ""
+        for _ in range(amount):
+            rc, err = _xdotool(["click", button_id])
+            if rc != 0:
+                break
+        return JSONResponse(
+            {"ok": rc == 0, "direction": direction, "amount": amount, "error": err if rc else ""},
+            status_code=200 if rc == 0 else 500,
+        )
+
+    @app.get("/api/desktop_info")
+    async def desktop_info(token: str = Query(...)):
+        """Return the desktop's current pixel dimensions so the
+        browser JS can scale browser-coords → desktop-coords."""
+        _auth(token)
+        # Read from the most recent captured frame — same source the
+        # MJPEG stream uses, so the dimensions are guaranteed to match.
+        frame = streamer.latest
+        if frame is None:
+            return JSONResponse({"width": 0, "height": 0, "ready": False})
+        w, h = frame.image.size
+        return JSONResponse({"width": w, "height": h, "ready": True})
+
     # ── Server thread ────────────────────────────────────────────────
     config = uvicorn.Config(
         app, host="0.0.0.0", port=port,
