@@ -204,8 +204,16 @@ class Holo3StepHandler:
         grounding = ctx.grounding
         index = int(ctx.state.get("index", 0))
 
-        max_steps = effective_brain_budget(
-            step.type, step.budget, getattr(runner, "brain_budgets", None),
+        caps = getattr(runner, "brain_budgets", None)
+        max_steps = effective_brain_budget(step.type, step.budget, caps)
+        # #560 verify telemetry: WARNING (not INFO — INFO is suppressed
+        # by ``modal app logs`` per feedback_modal_info_log_suppression).
+        # Emits one line per Holo3 dispatch so production logs show
+        # the cap that fired. ``clamped=True`` when the runtime cap
+        # actually trimmed the decomposer's budget.
+        logger.warning(
+            "holo3 dispatch step_idx=%s type=%s decomposer_budget=%s effective=%s clamped=%s",
+            index, step.type, step.budget, max_steps, max_steps < step.budget,
         )
         gym_runner = GymRunner(
             brain=brain,
