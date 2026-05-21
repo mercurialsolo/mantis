@@ -48,31 +48,50 @@ FAILURE DATA LEGEND (decode the failure string before choosing a mode):
 
 - ``extract_data`` / ``extract_url`` failure where the screenshot
   doesn't show what the step's intent asks for — two common shapes,
-  disambiguate using the PAGE STATE block above:
+  disambiguate using the PAGE STATE block above. **For every
+  ``insert_steps`` recovery below, EACH inserted step MUST include
+  BOTH ``intent`` (string) AND ``type`` (string) — they are both
+  required by the tool schema; steps missing either field are
+  silently dropped by the runner.** ``params`` is optional.
   * **URL drift** — ``anchor_url`` (last successful navigate) and
     ``current_url`` differ in their path. Almost always means an
     earlier step misclicked into a sub-page (e.g. a ``scroll`` step
     that wandered and clicked a listing card, navigating away from
     the search results). The visible page is the wrong page, no
-    amount of brain hinting will fix it. Prefer
-    ``insert_steps=[{type: "navigate", "params": {"url":
-    "<anchor_url>"}}]`` — the runner splices the navigate BEFORE
-    the failed extract, the browser returns to the anchored page,
-    then the original extract re-runs against the right page.
-    Do NOT pick this when ``anchor_url == current_url`` (the page
-    didn't drift; the extract is failing for some other reason like
-    overscroll or missing data).
+    amount of brain hinting will fix it. Recover with exactly one
+    inserted navigate step, e.g.::
+
+        inserted_steps: [
+          {
+            "intent": "Navigate back to the search results URL",
+            "type": "navigate",
+            "params": {"url": "<value of anchor_url from PAGE STATE>"}
+          }
+        ]
+
+    The runner splices it BEFORE the failed extract, the browser
+    returns to the anchored page, then the original extract
+    re-runs against the right page. Do NOT pick this when
+    ``anchor_url == current_url`` (the page didn't drift; the
+    extract is failing for some other reason).
   * **Overscroll / past-the-fold viewport** — PAGE STATE shows
     ``scrollY`` >= one viewport height (so the page is scrolled past
     the extraction target). Common when a prior ``scroll`` step
     overshot ("scroll once to lazy-load" landed in the footer). The
     screenshot will show footer chrome / cookie banner / "back to
     top" affordances rather than the content the extract step
-    expects. Prefer ``insert_steps=[{type: "scroll", "params":
-    {"direction": "up"}}]`` (one to two scroll-up steps; the runner
-    can dispatch keyboard PageUp / wheel-up via the standard scroll
-    handler). Do NOT pick this when scrollY is near 0 — the issue
-    is something else (URL drift, empty data, anti-bot).
+    expects. Recover with one inserted scroll-up, e.g.::
+
+        inserted_steps: [
+          {
+            "intent": "Scroll back to the top of the page",
+            "type": "scroll",
+            "params": {"direction": "up"}
+          }
+        ]
+
+    Do NOT pick this when scrollY is near 0 — the issue is
+    something else (URL drift, empty data, anti-bot).
 
 - ``no_state_change`` (or demoted submit) — the click landed but
   produced no observable page change. Two common shapes — disambiguate
