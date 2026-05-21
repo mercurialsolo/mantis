@@ -118,11 +118,26 @@ def test_runner_auto_pauses_on_cf_challenge_step_result(
 ):
     """When _emit_augur_step's adjacent helper sees a step result
     with failure_class='cf_challenge', it must write the pause
-    sentinel so the next iteration of the runner loop blocks."""
+    sentinel AND block in-place via wait_while_paused.
+
+    Mocks wait_while_paused to return immediately so the test
+    doesn't block on the 30-min sentinel timeout. Captures the
+    sentinel state at the moment wait_while_paused is invoked
+    (the sentinel is cleared on wait return when timeout, but
+    we care that it was written before the wait)."""
     from mantis_agent.gym.run_executor import RunExecutor
 
     external_pause.init_paths(tmp_path / "pause.json")
     monkeypatch.delenv("MANTIS_PAUSE_ON_CAPTCHA", raising=False)
+
+    # Mock wait_while_paused — capture sentinel state at call time,
+    # then return immediately (no blocking, no auto-clear).
+    sentinel_at_wait: dict = {}
+    def _spy_wait(*args, **kwargs):
+        sentinel_at_wait["was_requested"] = external_pause.is_pause_requested()
+        sentinel_at_wait["reason"] = external_pause.read_pause_reason()
+        return "resumed"
+    monkeypatch.setattr(external_pause, "wait_while_paused", _spy_wait)
 
     executor = RunExecutor.__new__(RunExecutor)
     executor.parent = MagicMock()
@@ -132,8 +147,11 @@ def test_runner_auto_pauses_on_cf_challenge_step_result(
     sr.failure_class = "cf_challenge"
     executor._maybe_auto_pause_on_captcha(sr)
 
-    assert external_pause.is_pause_requested() is True
-    assert external_pause.read_pause_reason() == "cf_challenge_human_takeover"
+    # Sentinel was written before the wait kicked in.
+    assert sentinel_at_wait.get("was_requested") is True, (
+        "Sentinel must be written before wait_while_paused is called"
+    )
+    assert sentinel_at_wait.get("reason") == "cf_challenge_human_takeover"
 
 
 def test_runner_does_not_auto_pause_on_other_failures(tmp_path: Path, monkeypatch):

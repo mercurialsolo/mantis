@@ -1784,18 +1784,23 @@ class RunExecutor:
 
     def _maybe_auto_pause_on_captcha(self, step_result: StepResult) -> None:
         """If a step failed with cf_challenge AND auto-pause is
-        enabled, write the external pause sentinel (#541).
+        enabled, write the external pause sentinel AND block here
+        until the user resumes via the viewer (#541).
 
-        The next iteration's pause check blocks the runner here while
-        keeping Chrome + the noVNC viewer alive. The user takes over
-        via the live-viewer URL — solves the CAPTCHA manually, then
-        ``action=resume`` clears the sentinel.
+        **Why we block in-place instead of relying on the next
+        iteration's pause check:** when the cf_challenge step is
+        ``required``, the runner's retry-budget logic exits the
+        per-step loop after the configured retry count is exhausted —
+        BEFORE the next iteration's pause check runs. Writing the
+        sentinel alone doesn't stop the halt path. Blocking here
+        (via ``wait_while_paused`` immediately after writing the
+        sentinel) keeps the executor process alive — Chrome + noVNC
+        tunnel stay up — so the user can take over and resume.
 
-        Without this, a CF-walled step burns retry budget until
-        ``brain_loop_exhausted``, halting the run with no signal that
-        a human could have unblocked it. With this, the run sits at
-        ``status=paused`` with reason=cf_challenge_human_takeover
-        until either resumed or the wait timeout expires.
+        Without this, a CF-walled REQUIRED step would auto-pause AND
+        then immediately halt because the runner's required-step
+        ``HALTING`` branch runs in ``_tick_preamble`` before the
+        wait-while-paused at the top of the next iteration.
 
         Default-on; opt out per-run via ``MANTIS_PAUSE_ON_CAPTCHA=0``.
         """
@@ -1810,7 +1815,9 @@ class RunExecutor:
                 return
             if external_pause.is_pause_requested():
                 # Sentinel already set (race with external pause or
-                # earlier step). Don't overwrite the reason.
+                # earlier step). Don't overwrite the reason — but DO
+                # block so we don't fall through to the halt branch.
+                external_pause.wait_while_paused()
                 return
             wrote = external_pause.request_pause(reason="cf_challenge_human_takeover")
             if wrote:
@@ -1819,6 +1826,11 @@ class RunExecutor:
                     "— viewer URL is live; resume after manual takeover",
                     getattr(step_result, "step_index", "?"),
                 )
+                # Block IN-PLACE: keeps the executor alive past the
+                # required-step halt branch that would otherwise
+                # exit the runner loop before next iteration's
+                # pause check fires.
+                external_pause.wait_while_paused()
         except Exception as exc:  # noqa: BLE001 — never break a run
             logger.debug("auto-pause-on-captcha raised: %s", exc)
 
