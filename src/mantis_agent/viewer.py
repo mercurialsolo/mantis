@@ -810,6 +810,121 @@ if (takeoverBtn) {
     }, 3000);
 }
 
+/* ── #viewer-input-dispatch: click / keys / scroll relay to xdotool.
+   The MJPEG stream is one-way; we POST input events to server
+   endpoints that dispatch via xdotool on the Xvfb display. Only
+   forwards input while the run is paused — sending clicks while
+   the agent is running would fight the brain's mouse moves. */
+var feedImg = $('feed');
+var desktopW = 1280, desktopH = 720;  // updated from /api/desktop_info
+
+// Fetch desktop dimensions for browser→desktop coord scaling.
+fetch('/api/desktop_info?token=' + TOKEN)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        if (d.ready) { desktopW = d.width; desktopH = d.height; }
+    })
+    .catch(function() {});
+
+function browserToDesktop(evt) {
+    // Map click in rendered <img> (CSS pixels) to desktop (capture) px.
+    var rect = feedImg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    var cx = evt.clientX - rect.left;
+    var cy = evt.clientY - rect.top;
+    var dx = Math.round((cx / rect.width) * desktopW);
+    var dy = Math.round((cy / rect.height) * desktopH);
+    return { x: dx, y: dy };
+}
+
+if (feedImg) {
+    // Use mousedown so right-click and middle-click are catchable
+    // before the browser's native menu fires.
+    feedImg.addEventListener('mousedown', function(evt) {
+        // Only dispatch when paused — otherwise we'd fight the agent.
+        if (currentRunStatus !== 'paused') return;
+        var pt = browserToDesktop(evt);
+        if (!pt) return;
+        var btn = { 0: 'left', 1: 'middle', 2: 'right' }[evt.button] || 'left';
+        evt.preventDefault();
+        fetch('/api/dispatch_click?token=' + TOKEN +
+              '&x=' + pt.x + '&y=' + pt.y + '&button=' + btn,
+              { method: 'POST' })
+            .catch(function() {});
+    });
+    feedImg.addEventListener('contextmenu', function(evt) {
+        // Suppress the browser context menu so right-click dispatches
+        // cleanly when paused.
+        if (currentRunStatus === 'paused') evt.preventDefault();
+    });
+    // Block default drag of the <img> so click+drag doesn't pick up
+    // the image instead of dispatching.
+    feedImg.addEventListener('dragstart', function(evt) {
+        evt.preventDefault();
+    });
+}
+
+// Keyboard relay — only when the viewer page is focused AND paused.
+// Captures keystrokes globally because the <img> can't receive focus.
+document.addEventListener('keydown', function(evt) {
+    if (currentRunStatus !== 'paused') return;
+    // Skip if user is typing in a real input (we don't have any but
+    // future-proof against an embedded form).
+    var tgt = evt.target;
+    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA')) return;
+    // For printable single chars, use the type endpoint so xdotool
+    // handles shift/symbol correctly. For named keys (Enter, Tab,
+    // arrows, F-keys, modifier combos) use dispatch_keys.
+    var key = evt.key;
+    var isModifier = evt.ctrlKey || evt.altKey || evt.metaKey;
+    var isPrintable = key.length === 1 && !isModifier;
+    evt.preventDefault();
+    if (isPrintable) {
+        fetch('/api/dispatch_type?token=' + TOKEN +
+              '&text=' + encodeURIComponent(key),
+              { method: 'POST' })
+            .catch(function() {});
+    } else {
+        // Map common JS key names to xdotool key names.
+        var xkey = {
+            'Enter': 'Return',
+            'Backspace': 'BackSpace',
+            'ArrowUp': 'Up', 'ArrowDown': 'Down',
+            'ArrowLeft': 'Left', 'ArrowRight': 'Right',
+            'Escape': 'Escape',
+            'Tab': 'Tab',
+            'Delete': 'Delete', 'Home': 'Home', 'End': 'End',
+            'PageUp': 'Page_Up', 'PageDown': 'Page_Down',
+        }[key] || key;
+        // Build modifier prefix (xdotool uses ctrl+, alt+, super+, shift+).
+        var mods = [];
+        if (evt.ctrlKey)  mods.push('ctrl');
+        if (evt.altKey)   mods.push('alt');
+        if (evt.metaKey)  mods.push('super');
+        if (evt.shiftKey && key.length > 1) mods.push('shift');
+        var combo = (mods.length ? mods.join('+') + '+' : '') + xkey;
+        fetch('/api/dispatch_keys?token=' + TOKEN +
+              '&keys=' + encodeURIComponent(combo),
+              { method: 'POST' })
+            .catch(function() {});
+    }
+});
+
+// Wheel scroll relay — relay vertical wheel events to xdotool while paused.
+if (feedImg) {
+    feedImg.addEventListener('wheel', function(evt) {
+        if (currentRunStatus !== 'paused') return;
+        evt.preventDefault();
+        var dir = evt.deltaY > 0 ? 'down' : 'up';
+        // One wheel "notch" per ~100px deltaY, capped at 5 per event.
+        var notches = Math.max(1, Math.min(5, Math.round(Math.abs(evt.deltaY) / 100) || 1));
+        fetch('/api/dispatch_scroll?token=' + TOKEN +
+              '&direction=' + dir + '&amount=' + notches,
+              { method: 'POST' })
+            .catch(function() {});
+    }, { passive: false });
+}
+
 /* ── Init ───────────────────────────────────────────────── */
 connectSSE();
 
