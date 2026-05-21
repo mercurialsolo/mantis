@@ -9,8 +9,29 @@ Adapted from run_staff_crm_long_no_proxy.py with two differences:
   Secret.from_dotenv (BoatTrader's Cloudflare layer blocks direct
   Modal egress)
 
+Identity model (#572 Phase 1):
+
+* PROFILE_ID is **stable** by default (``boattrader-urlnav-stable``)
+  so the Chrome user-data-dir is reused across runs. Cookies
+  (notably ``cf_clearance``) persist — the FIRST run on a fresh
+  profile may hit a Cloudflare Turnstile widget; subsequent runs
+  within the cookie lifetime (~30 min to several hours) reuse the
+  cached clearance and skip CF entirely. Override per-run via
+  ``MANTIS_PROFILE_ID`` env when you want a clean profile.
+* WORKFLOW_ID is **timestamped** per run so checkpoint files don't
+  collide. Each run still gets its own checkpoint, but they all
+  share the same Chrome profile.
+
+To seed CF clearance on a fresh profile, submit with
+``pause_on_captcha=true`` (the default), open the viewer URL when
+the run auto-pauses, solve the Turnstile widget, click Resume.
+The ``cf_clearance`` cookie lands in the profile and every
+subsequent run skips CF.
+
 Usage::
     MANTIS_API_TOKEN=... uv run python scripts/run_boattrader_urlnav_with_proxy.py
+    # or override the profile:
+    MANTIS_PROFILE_ID=boattrader-clean uv run python scripts/run_boattrader_urlnav_with_proxy.py
 """
 
 from __future__ import annotations
@@ -37,8 +58,13 @@ from mantis_agent.server_utils import (  # noqa: E402
 
 ENDPOINT = "https://getmason--mantis-cua-server-api.modal.run"
 PLAN_PATH = REPO_ROOT / "plans" / "boattrader_scrape_urlnav"
-PROFILE_ID = f"boattrader-urlnav-{int(time.time())}"
-WORKFLOW_ID = PROFILE_ID
+# #572: stable PROFILE_ID by default so CF clearance cookies persist
+# across runs. Override via env when you need a clean profile for
+# debugging (e.g. testing first-run CF behavior).
+PROFILE_ID = os.environ.get("MANTIS_PROFILE_ID", "boattrader-urlnav-stable")
+# WORKFLOW_ID timestamped per run — each run gets its own checkpoint
+# file even though they share the Chrome profile.
+WORKFLOW_ID = f"boattrader-urlnav-{int(time.time())}"
 
 
 def _token() -> str:
