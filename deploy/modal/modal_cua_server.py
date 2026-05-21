@@ -879,6 +879,9 @@ def _run_holo3_executor(
             on_checkpoint=vol.commit,
             max_cost=task_suite.get("_max_cost", 10.0),
             max_time_minutes=task_suite.get("_max_time_minutes", 180),
+            # #560: ``None`` (key absent) → runner falls back to
+            # ``Holo3StepHandler.DEFAULT_BRAIN_BUDGET_CAPS``.
+            brain_budgets=task_suite.get("_brain_budgets"),
         )
 
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
@@ -1576,6 +1579,9 @@ def _build_suite_from_payload(payload: dict) -> str:
         proxy_provider=str(payload.get("proxy_provider") or ""),
         proxy_country=str(payload.get("proxy_country") or ""),
         proxy_disabled=bool(payload.get("proxy_disabled", False)),
+        # #560: forward only when the caller supplied one — ``None``
+        # lets the runner pick its DEFAULT_BRAIN_BUDGET_CAPS.
+        brain_budgets=payload.get("brain_budgets"),
     )
     return json.dumps(suite)
 
