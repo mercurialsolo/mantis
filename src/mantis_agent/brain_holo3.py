@@ -646,16 +646,44 @@ class Holo3Brain:
             m = re.match(r'-?\d+', str(val).strip())
             return int(m.group(0)) if m else default
 
+        def _has_valid_xy(args: dict) -> bool:
+            """#574: a click is only dispatchable when BOTH x and y were
+            present in the model's args AND not both zero. Missing keys
+            (e.g. ``click()`` or ``click({'button': 'left'})``) and
+            explicit ``(0, 0)`` both indicate the model didn't pin a
+            target — better to fall through to the WAIT(1s) fallback
+            than dispatch to the page origin.
+            """
+            if "x" not in args or "y" not in args:
+                return False
+            x = _safe_int(args["x"], default=-1)
+            y = _safe_int(args["y"], default=-1)
+            if x < 0 or y < 0:
+                # Malformed value that didn't parse to a non-negative int.
+                return False
+            return (x, y) != (0, 0)
+
         # Map to Action
         if func_name in ("click",):
-            x = _safe_int(args.get("x", 0))
-            y = _safe_int(args.get("y", 0))
+            # #574: reject click() with missing or (0,0) coords. Returning
+            # an Action(CLICK, {x:0, y:0}) silently dispatches to the page
+            # origin which always lands off-target (logo / header bg /
+            # off-canvas), producing wrong-page nav and DUPLICATE-URL
+            # loops on listings plans. ``None`` falls through to the
+            # parser chain → eventually Action(WAIT, 1s) at the brain
+            # level → clean no-op step.
+            if not _has_valid_xy(args):
+                return None
+            x = _safe_int(args["x"])
+            y = _safe_int(args["y"])
             sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
             return Action(ActionType.CLICK, {"x": sx, "y": sy, "button": args.get("button", "left")})
 
         if func_name in ("double_click", "doubleclick"):
-            x = _safe_int(args.get("x", 0))
-            y = _safe_int(args.get("y", 0))
+            if not _has_valid_xy(args):
+                return None
+            x = _safe_int(args["x"])
+            y = _safe_int(args["y"])
             sx, sy = _model_coords_to_screen(x, y, screen_size[0], screen_size[1])
             return Action(ActionType.DOUBLE_CLICK, {"x": sx, "y": sy})
 
