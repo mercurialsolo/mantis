@@ -28,6 +28,8 @@ recipes/
     plan.json
     schema.py                ExtractionSchema
     verifier.py              optional StepVerifier subclass
+  marketplace_planner/       legacy text-plan → Claude-Opus micro-plan CLI
+  staff_crm/                 URL-filter encoding for staff CRM consoles
   job_listings/              README.md + plan.json
   form_submit/               README.md + plan.json
   search_results/            README.md + plan.json

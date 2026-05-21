@@ -45,7 +45,7 @@ The full docs site is at **[mercurialsolo.github.io/mantis](https://mercurialsol
 |---|---|
 | Try it in 5 minutes | [Quickstart](docs/getting-started/quickstart.md) |
 | See what Mantis is good at | [Use cases](docs/getting-started/use-cases.md) — listings, jobs, real-estate, products, news, CRM edits, refunds, social posting, multi-app workflows |
-| Copy-paste a working plan | [Recipes](src/mantis_agent/recipes/) — 5 shipped recipes (marketplace listings, job listings, form submit, search results, docs lookup); 5 more worked examples in the [docs](docs/integrations/recipes.md) |
+| Copy-paste a working plan | [Recipes](src/mantis_agent/recipes/) — 7 shipped recipes (marketplace listings, marketplace planner, staff CRM, job listings, form submit, search results, docs lookup); 5 more worked examples in the [docs](docs/integrations/recipes.md) |
 | Understand the architecture | [Concepts](docs/getting-started/concepts.md) · [Architecture](docs/architecture.md) |
 | Deploy your own instance | [Hosting](docs/hosting/index.md) — Baseten / Modal / EKS / GKE / local |
 | Integrate from your app | [Client](docs/client/index.md) — auth, plans, polling, recordings |
@@ -105,7 +105,7 @@ src/mantis_agent/             core library
     logging_setup.py          JSON log formatter + per-run log handler
   brain_holo3.py              Holo3 inference client
   brain_claude.py             Claude inference client
-  extraction.py               ClaudeExtractor (structured data)
+  extraction/                 ClaudeExtractor + schema / spam / cache
   grounding.py                ClaudeGrounding (refine click coordinates)
   gym/
     base.py                   GymEnvironment ABC
@@ -125,10 +125,13 @@ deploy/                       cloud paths
   baseten/                    Baseten Truss configs (holo3, gemma4, ...)
   aws/                        EKS — Terraform + k8s manifests + runbook
   gke/                        GKE — Terraform + k8s manifests + runbook
+  sim_envs/                   Dockerized fixture apps for plan smoke-tests
 
 docker/
   cua.Dockerfile              Local CUA loop (Xvfb + xdotool + Chromium)
   server.Dockerfile           Production FastAPI server (CUDA + llama.cpp + Holo3)
+  hud.Dockerfile              HUD evaluation harness image
+  local.Dockerfile            Local all-in-one dev image
 
 docs/                         MkDocs site source
   index.md  api.md  architecture.md
@@ -137,7 +140,6 @@ docs/                         MkDocs site source
 
 scripts/                      CLI helpers (run_*.py, monitor_*.sh, baseten_workload.py)
 plans/                        plan files (.txt, .json)
-tasks/                        task descriptors
 benchmarks/                   OSWorld / VWA benchmark harnesses
 training/                     distillation + fine-tuning configs
 tests/                        pytest suite
