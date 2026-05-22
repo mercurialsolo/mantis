@@ -25,13 +25,16 @@ Ground truth (optional, passed into ``episode()``):
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ...rewards.base import EpisodeState, RewardSignal
+from ...rewards.components import oracle_step_reward
 from ...rewards.plan_adherence import PlanAdherenceReward
 
 if TYPE_CHECKING:
+    from ...actions import Action
+    from ...gym.base import GymResult
     from ...gym.runner import RunResult
 
 
@@ -192,5 +195,151 @@ class MarketplaceListingReward(PlanAdherenceReward):
         state.extras["listing_missing_fields"] = missing
         state.extras["listing_url_ok"] = url_ok
         state.extras["listing_constraints_ok"] = constraints_ok
+
+        return RewardSignal(value=sum(components.values()), components=components)
+
+
+# ── Synthetic-env variant — uses sim-env oracle as ground truth ────────
+
+
+# Default mapping for mantis-boattrader. Recipes targeting a different
+# sim env override ``expected_ops_by_step_kind`` at construction time.
+DEFAULT_MARKETPLACE_OPS_BY_STEP_KIND: dict[str, frozenset[str]] = {
+    # Filter application — the boattrader env stamps no dedicated
+    # ``filter_applied`` mutation today (filters are read off the URL,
+    # not stored). Empty set means oracle_step_reward returns 0 — fall
+    # back to format/loop/off-site shaping for these.
+    "filter": frozenset(),
+    # Detail-page navigation — boattrader doesn't stamp a mutation for
+    # plain GETs either. Same fallback as filters.
+    "navigate": frozenset(),
+    # Form submissions are the high-value mutations: the lead row
+    # carries the boat_id + payload the terminal oracle grades on.
+    "submit_lead": frozenset({"lead_submitted"}),
+    # Pre-action gates the agent has to clear before extracting.
+    "phone_reveal": frozenset({"phone_revealed"}),
+    "consent": frozenset({"consent_set"}),
+}
+
+
+@dataclass
+class SyntheticEnvReward(MarketplaceListingReward):
+    """Marketplace-listing reward extended with sim-env oracle signal.
+
+    Drop-in replacement for ``MarketplaceListingReward`` when training
+    against a Mantis sim env (``mantis-boattrader``, etc.) that exposes
+    ``/__env__/oracle`` and ``/__env__/mutations``. The reward picks up
+    two extra signals the caller wires into the gym loop via
+    ``gym_result.info``:
+
+    * ``info["oracle_mutations_delta"]`` (``list[dict]``) — mutations
+      recorded since the previous step. Used by :func:`oracle_step_reward`
+      to award per-step credit for plan-aligned state changes (lead
+      submitted, consent accepted, phone revealed). The caller fetches
+      this via
+      :func:`mantis_agent.sim_envs.oracle_client.fetch_mutations` after
+      each step and stuffs the result on the info dict.
+
+    * ``info["oracle_step_kind"]`` (``str``) — optional. When set,
+      indexes :attr:`expected_ops_by_step_kind` to pick which operations
+      count as progress for THIS step. Without it the reward only fires
+      on the union of all expected ops (back-compat: if every step
+      could plausibly land any mutation, every matching mutation
+      counts).
+
+    Terminal reward uses ``info["oracle_terminal"]`` (the
+    ``GradingResult.to_dict()`` from
+    :func:`mantis_agent.gym.grading.grade_run`) when present; F1 score
+    plus a +1 bonus on pass. When the caller didn't run a terminal
+    oracle call, falls back to the parent class's done-summary gate.
+
+    This class does NOT call out to the env itself — the caller's loop
+    populates the info dict. That keeps the reward fn deterministic
+    given inputs (testable as a pure function) and lets the same
+    fetcher feed multiple reward implementations.
+    """
+
+    oracle_step_weight: float = 0.1
+    oracle_terminal_weight: float = 1.0
+    expected_ops_by_step_kind: dict[str, frozenset[str]] = field(
+        default_factory=lambda: dict(DEFAULT_MARKETPLACE_OPS_BY_STEP_KIND),
+    )
+
+    def step(
+        self,
+        *,
+        action: "Action",
+        gym_result: "GymResult",
+        state: EpisodeState,
+    ) -> RewardSignal:
+        # Inherit format / loop / off-site shaping.
+        base = super().step(action=action, gym_result=gym_result, state=state)
+
+        info = gym_result.info or {}
+        delta = info.get("oracle_mutations_delta") or []
+        if not isinstance(delta, list) or not delta:
+            return base
+
+        # Pick the expected_ops scope. When the caller tagged the step
+        # kind we use the matching set; otherwise the union of all kinds
+        # acts as "any mutation we know about" — still rewards real
+        # progress, just doesn't penalise the caller for not tagging.
+        step_kind = str(info.get("oracle_step_kind") or "")
+        if step_kind and step_kind in self.expected_ops_by_step_kind:
+            expected = self.expected_ops_by_step_kind[step_kind]
+        else:
+            expected = frozenset().union(*self.expected_ops_by_step_kind.values())
+
+        if not expected:
+            return base
+
+        bonus = oracle_step_reward(delta, expected, value=self.oracle_step_weight)
+        if bonus == 0.0:
+            return base
+
+        merged = dict(base.components)
+        merged["oracle_step"] = bonus
+        # Track the cumulative oracle bonus on the state for log/debug.
+        state.extras["oracle_step_total"] = (
+            state.extras.get("oracle_step_total", 0.0) + bonus
+        )
+        return RewardSignal(value=base.value + bonus, components=merged)
+
+    def episode(
+        self,
+        *,
+        run_result: "RunResult",
+        state: EpisodeState,
+        ground_truth: dict[str, Any] | None = None,
+    ) -> RewardSignal:
+        # Start with the parent's done-summary gate as a fallback signal.
+        base = super().episode(
+            run_result=run_result, state=state, ground_truth=ground_truth,
+        )
+
+        oracle = state.extras.get("oracle_terminal")
+        if not isinstance(oracle, dict):
+            # No terminal oracle call attached — keep the parent reward.
+            return base
+
+        # The oracle is the canonical truth source for sim-env runs.
+        # Replace the parent's gate term with the oracle's F1 score plus
+        # a pass bonus, so the trainer optimises against ground truth
+        # instead of the done() summary.
+        try:
+            score = float(oracle.get("score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        passed = bool(oracle.get("passed", False))
+
+        components = {k: v for k, v in base.components.items()
+                      if k not in ("gate_passed", "gate_partial", "gate_failed")}
+        components["oracle_score"] = self.oracle_terminal_weight * score
+        if passed:
+            components["oracle_passed_bonus"] = self.oracle_terminal_weight
+
+        state.extras["oracle_passed"] = passed
+        state.extras["oracle_score"] = score
+        state.extras["oracle_reasons"] = oracle.get("reasons") or []
 
         return RewardSignal(value=sum(components.values()), components=components)
