@@ -207,6 +207,38 @@ class ClaudeStepHandler:
             data = extractor.extract(screenshot)
             url = data.url if data else ""
 
+            # #585: validate URL matches the recipe's detail-page pattern
+            # when we're in the extraction section. Catches the wrong-page
+            # case where a click landed on a marketing CTA (``/boat-loans/``,
+            # ``/financing/`` etc.) and extract_url would otherwise accept
+            # it as a "listing" → downstream extract_data runs on a
+            # marketing page → UNKNOWN-filled junk lead.
+            # Gated on (1) section=="extraction" so non-marketplace plans
+            # aren't affected, and (2) detail_page_pattern present so
+            # plans without the pattern (analysis-stage-only configs)
+            # don't break.
+            site_config = getattr(runner, "site_config", None)
+            if (
+                url
+                and step.section == "extraction"
+                and site_config is not None
+                and getattr(site_config, "detail_page_pattern", "")
+                and not site_config.is_detail_page(url)
+            ):
+                logger.warning(
+                    "  [extract_url] WRONG_PAGE — url=%s doesn't match "
+                    "detail_page_pattern=%r — failing step for recovery",
+                    url[:120], site_config.detail_page_pattern,
+                )
+                return StepResult(
+                    step_index=index, intent=step.intent, success=False,
+                    data=(
+                        f"WRONG_PAGE|{url}|"
+                        f"expected={site_config.detail_page_pattern}"
+                    ),
+                    failure_class="wrong_target",
+                )
+
             # Dedup check (Phase 4: scanner owns the predicate now).
             if runner.scanner.is_duplicate(url):
                 logger.info(f"  [dedup] Already seen: {url[:50]}")

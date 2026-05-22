@@ -69,6 +69,13 @@ class ExtractionSchema:
     spam_label: str = "dealer/spam"  # what to call spam (e.g. "dealer", "recruiter")
     forbidden_controls: list[str] = field(default_factory=list)  # "Contact Seller", etc.
     allowed_controls: list[str] = field(default_factory=list)  # "Show more", "Show phone"
+    # #584: per-recipe enumeration of non-listing cards that look like
+    # listings to Claude vision — financing CTAs, sponsored boats,
+    # "Live Video Tour" overlays, newsletter cards, etc. Plumbed into
+    # ``_get_find_listings_prompt`` as an EXCLUDE list so the find-
+    # listings scan returns only organic results. Empty = no extra
+    # exclusions beyond the generic "sponsored / advertisement" line.
+    listing_card_exclusions: list[str] = field(default_factory=list)
     # Issue #246: recipe-rejection → host-facing intent map. Keys are
     # canonical rejection-reason tokens (``"dealer"``,
     # ``"incomplete_required"``, ``"parse_error"``…) that the runner
@@ -127,6 +134,9 @@ class ExtractionSchema:
             spam_label=str(payload.get("spam_label", "non-organic") or "non-organic"),
             forbidden_controls=[str(s) for s in (payload.get("forbidden_controls") or [])],
             allowed_controls=[str(s) for s in (payload.get("allowed_controls") or [])],
+            listing_card_exclusions=[
+                str(s) for s in (payload.get("listing_card_exclusions") or [])
+            ],
             rejection_intents={
                 str(k): str(v) for k, v in (payload.get("rejection_intents") or {}).items()
             },
@@ -163,6 +173,9 @@ class ExtractionSchema:
             spam_label=spam_label,
             forbidden_controls=forbidden,
             allowed_controls=allowed,
+            listing_card_exclusions=list(
+                getattr(objective, "listing_card_exclusions", []) or []
+            ),
         )
 
     @classmethod
@@ -325,5 +338,8 @@ class ExtractionSchema:
             spam_label=spam_lbl,
             forbidden_controls=_union(self.forbidden_controls, other.forbidden_controls),
             allowed_controls=_union(self.allowed_controls, other.allowed_controls),
+            listing_card_exclusions=_union(
+                self.listing_card_exclusions, other.listing_card_exclusions,
+            ),
             rejection_intents=merged_intents,
         )

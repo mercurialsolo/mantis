@@ -59,6 +59,22 @@ ALLOWED_CONTROLS: tuple[str, ...] = (
     "Call",
 )
 
+# #584: non-listing cards that look like listings to Claude vision.
+# Plumbed into ``ClaudeExtractor._get_find_listings_prompt`` as an
+# EXCLUDE list so find_all_listings returns only organic results
+# (not marketing/financing/promo cards). Without this, a click step
+# can target ``/boat-loans/`` instead of an actual boat detail page
+# → wrong-page extract → halt_reason cycle.
+LISTING_CARD_EXCLUSIONS: tuple[str, ...] = (
+    "Get Pre-Qualified financing CTAs (loan-rate prompts, monthly-payment calculators)",
+    "Boat Loans cards / 'Get Started' loan promos",
+    "Get Insurance / insurance-quote CTAs",
+    "Live Video Tour overlays (the overlay is not a listing — the card under it is)",
+    "Sponsored / Promoted boats labelled 'Sponsored' or 'Promoted'",
+    "Newsletter signup, email-alert, or saved-search promo cards",
+    "Auction or trade-in CTA tiles",
+)
+
 
 def fields() -> list[dict[str, Any]]:
     """Field descriptors for the marketplace listing schema."""
