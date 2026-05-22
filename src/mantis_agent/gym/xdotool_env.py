@@ -495,6 +495,51 @@ class XdotoolGymEnv(GymEnvironment):
         ok, _ = self._cdp_call("Input.insertText", {"text": text})
         return ok
 
+    def cdp_count_pages(self) -> int:
+        """#582: count Chrome page-type tabs via ``/json/list``.
+
+        Returns the number of ``type=page`` tabs whose URL isn't a
+        system page (``chrome://`` / ``about:``). Returns ``0`` on any
+        CDP failure (port unreachable, json decode, etc) — caller
+        treats ``0`` as "couldn't check" and skips the diff.
+
+        Used by the click handler to detect new-tab opens from
+        ``window.open()`` / modifier-clicks that bypass the existing
+        middle-click fallback path which is the only writer of
+        ``_opened_detail_in_new_tab`` today. A snapshot before + after
+        the click + comparison sets the flag regardless of which click
+        primitive opened the tab.
+
+        Memory note: per ``feedback_cua_cdp_post_action_verify.md``,
+        post-action CDP reads (verifying our action's side-effect) are
+        allowed. We're checking whether OUR click opened a tab —
+        action-side, not DOM-grounding-side.
+        """
+        try:
+            import json as _json
+            import urllib.request
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self._cdp_port}/json/list",
+                timeout=2,
+            ) as resp:
+                tabs = _json.loads(resp.read().decode())
+        except Exception as exc:  # noqa: BLE001 — observability, never fatal
+            logger.debug("cdp_count_pages failed: %s", exc)
+            return 0
+        if not isinstance(tabs, list):
+            return 0
+        count = 0
+        for tab in tabs:
+            if not isinstance(tab, dict):
+                continue
+            if tab.get("type") != "page":
+                continue
+            url = str(tab.get("url") or "")
+            if not url or url.startswith("chrome://") or url.startswith("about:"):
+                continue
+            count += 1
+        return count
+
     def cdp_evaluate(self, expression: str) -> Any:
         """Run a JS expression via CDP ``Runtime.evaluate``.
 

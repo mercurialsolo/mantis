@@ -330,6 +330,15 @@ class ClaudeGuidedClickHandler:
         # capability-miss / no-element-at-point. The result is recorded
         # on the StepResult's ``executor_backend`` tag (visible on the
         # /v1/predict response aggregate).
+        # #582: snapshot Chrome tab count BEFORE the click so we can
+        # detect new-tab opens from any click path (plain, SoM, Holo3-
+        # direct, modifier, JS-driven window.open). Today only the
+        # middle-click fallback sets ``_opened_detail_in_new_tab``;
+        # plain-click → window.open() spawns a tab the runner never
+        # knows about → subsequent navigate_back's Alt+Left fails →
+        # ``navigate_back_recovered`` halt cycle.
+        tabs_before_click = _safe_tab_count(env)
+
         primary_click_backend = "vision"
         from ..som_dispatch import try_som_click
         try:
@@ -388,6 +397,21 @@ class ClaudeGuidedClickHandler:
                 url = runner._read_current_url(after)
 
             if url and site_config.is_detail_page(url, base_url=runner._results_base_url):
+                # #582: tab-count diff. If the click opened a new tab
+                # (plain click → site's onclick → window.open(), or a
+                # modifier click that took a path other than the middle-
+                # click fallback), set the flag so subsequent
+                # navigate_back routes through execute_close_detail_tab
+                # (Ctrl+W) instead of Alt+Left.
+                tabs_after = _safe_tab_count(env)
+                if tabs_after > tabs_before_click > 0:
+                    runner._opened_detail_in_new_tab = True
+                    logger.warning(
+                        "  [claude-click] New tab detected via CDP "
+                        "diff (%d → %d) — flagged for Ctrl+W on "
+                        "next navigate_back",
+                        tabs_before_click, tabs_after,
+                    )
                 logger.info(f"  [claude-click] Verified on detail page: {url[:60]}")
                 runner._last_known_url = url
                 dynamic_verifier.record_item_opened(
@@ -770,6 +794,27 @@ _LOGIN_PATH_TOKENS: tuple[str, ...] = (
     "/users/sign_in",
     "/account/login",
 )
+
+
+def _safe_tab_count(env: Any) -> int:
+    """#582: defensively read ``env.cdp_count_pages()`` as an int.
+
+    Returns 0 when the env doesn't expose the method, the call raises,
+    or the result isn't coercible to int. Tests use ``MagicMock`` envs
+    that auto-create attributes returning ``MagicMock`` objects — those
+    can't be compared with ``>``, so we coerce + swallow defensively.
+    Production XdotoolGymEnv returns a real int; this is purely a
+    test-shape compatibility shim.
+    """
+    fn = getattr(env, "cdp_count_pages", None)
+    if not callable(fn):
+        return 0
+    try:
+        return int(fn())
+    except (TypeError, ValueError):
+        return 0
+    except Exception:  # noqa: BLE001 — never break the click path
+        return 0
 
 
 def _looks_like_login_redirect(url: str) -> bool:
