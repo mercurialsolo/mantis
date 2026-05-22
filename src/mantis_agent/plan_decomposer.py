@@ -849,6 +849,12 @@ class PlanDecomposer:
         # asks Claude to mirror the URL there already; this pass catches
         # the residual cases where it paraphrases the URL away entirely.
         self._repair_navigate_urls(plan)
+        # Fix 5 (#578): inject ``expect_url_contains`` hints onto
+        # navigate-verify gates so the runner's #563 URL short-circuit
+        # can fire — skips a ~$0.01-0.02 + ~10-15s Claude verify call
+        # per gate whose preceding navigate had a literal URL with
+        # distinctive path segments.
+        self._inject_gate_url_hints(plan)
 
         # Cache the full parsed structure (object or legacy array) so the
         # cached path round-trips through both schemas.
@@ -1059,6 +1065,96 @@ class PlanDecomposer:
                 f"  [decomposer] navigate step #{i} dropped its URL "
                 f"({step.intent[:60]!r}); repaired with source URL "
                 f"{recovered}. Tighten the decomposer prompt if this recurs."
+            )
+
+    @staticmethod
+    def _extract_url_hint_segments(url: str) -> list[str]:
+        """Pull distinctive path segments from a URL for #563 short-circuit.
+
+        Returns segments containing a digit OR a hyphen — captures
+        boattrader-style filter slugs (``zip-33101``, ``state-fl``,
+        ``by-owner``, ``radius-25``) and excludes bare resource
+        names (``boats``, ``discover``) that would match unrelated
+        pages on the same domain.
+
+        Returns ``[]`` when the URL has no distinctive segments —
+        the runner's short-circuit then falls through to vision
+        verify (no false positives possible).
+        """
+        if not url:
+            return []
+        # Strip scheme + host so we walk only the path. Query strings
+        # and fragments are intentionally excluded — they change
+        # across navigations within the same page (?page=2, #anchor)
+        # and would cause the short-circuit to false-negative.
+        m = re.search(r"https?://[^/]+(/[^?#]*)", url)
+        if not m:
+            return []
+        path = m.group(1)
+        segments = [s for s in path.split("/") if s]
+        # Distinctive = has digit OR hyphen. A bare "boats" matches
+        # too many pages; "zip-33101" / "state-fl" / "by-owner" only
+        # match the intended filtered listings.
+        distinctive = [
+            s for s in segments
+            if any(ch.isdigit() for ch in s) or "-" in s
+        ]
+        return distinctive
+
+    @staticmethod
+    def _inject_gate_url_hints(plan: MicroPlan) -> None:
+        r"""#578: emit ``expect_url_contains`` hints on navigate-verify gates.
+
+        Walks the plan; for each ``extract_data`` step with
+        ``gate=True`` and ``claude_only=True``, finds the nearest
+        preceding ``navigate`` step. If that navigate carries a
+        literal URL (in ``params.url`` or ``intent``), pulls
+        distinctive path segments via :meth:`_extract_url_hint_segments`
+        and merges them into the gate's ``hints.expect_url_contains``.
+
+        Idempotent: if the plan author already supplied hints, they're
+        preserved as-is. Empty / generic URLs (no distinctive segments)
+        are skipped silently — the runner's short-circuit handles
+        absent hints by falling through to vision.
+
+        Activates the ``_try_url_shortcircuit_gate`` path shipped in
+        PR #577 — that helper short-circuits the ~10-15s + \$0.01-0.02
+        Claude verify call when these hints are present and the URL
+        matches.
+        """
+        url_re = re.compile(r"https?://[^\s\"'<>]+")
+        last_navigate_url: str = ""
+        for step in plan.steps:
+            if step.type == "navigate":
+                # Prefer params.url, then any URL in the intent.
+                params = step.params or {}
+                candidate = str(params.get("url") or "").strip()
+                if not candidate:
+                    m = url_re.search(step.intent or "")
+                    if m:
+                        candidate = m.group(0)
+                if candidate:
+                    last_navigate_url = candidate
+                continue
+            if not (step.type == "extract_data" and step.gate and step.claude_only):
+                continue
+            if not last_navigate_url:
+                continue
+            hints = step.hints or {}
+            existing = hints.get("expect_url_contains")
+            if existing:
+                # Plan author already supplied hints — don't override.
+                continue
+            segments = PlanDecomposer._extract_url_hint_segments(last_navigate_url)
+            if not segments:
+                continue
+            new_hints = dict(hints)
+            new_hints["expect_url_contains"] = segments
+            step.hints = new_hints
+            logger.info(
+                "  [decomposer] injected expect_url_contains=%s on gate "
+                "step (intent=%r) from navigate URL %s",
+                segments, step.intent[:60], last_navigate_url[:120],
             )
 
     @staticmethod

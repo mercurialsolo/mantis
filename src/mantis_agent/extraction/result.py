@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any, ClassVar
 
 from .schema import ExtractionContext, ExtractionSchema
 
@@ -90,6 +91,25 @@ class ExtractionResult:
         digits = re.sub(r"\D", "", phone)
         return len(digits) >= 10
 
+    # #579: Claude's tool_use schema is permissive (#558) — domain
+    # fields are optional, so the brain may return literal "<UNKNOWN>"
+    # / "none" / "" when it can't read a field off the screenshot.
+    # Treat all of these as "missing" for required-field checks so a
+    # detail-page extract that landed on a marketing CTA (every field
+    # ``<UNKNOWN>``) doesn't get accepted as VIABLE. Without this, the
+    # boattrader-style failure produces a "1 lead" output where the
+    # only "lead" is junk pointing at ``/boat-loans/``.
+    _UNKNOWN_PLACEHOLDERS: ClassVar[frozenset[str]] = frozenset({
+        "", "unknown", "<unknown>", "none", "n/a", "na",
+        "not visible", "not shown", "not available", "tbd",
+    })
+
+    @classmethod
+    def _is_unknown(cls, value: Any) -> bool:
+        """True when the value is empty or one of the documented
+        unknown-placeholder strings (case + whitespace insensitive)."""
+        return str(value or "").strip().lower() in cls._UNKNOWN_PLACEHOLDERS
+
     def missing_required_reason(
         self,
         context: ExtractionContext = ExtractionContext.UNKNOWN,
@@ -118,14 +138,14 @@ class ExtractionResult:
                 fields_to_check = self._schema.required_fields
             missing = [
                 name for name in fields_to_check
-                if not self.extracted_fields.get(name)
+                if self._is_unknown(self.extracted_fields.get(name))
             ]
             return f"missing required field(s): {', '.join(missing)}" if missing else ""
         # Legacy
         missing = []
-        if not self.year:
+        if self._is_unknown(self.year):
             missing.append("year")
-        if not self.make:
+        if self._is_unknown(self.make):
             missing.append("make")
         return f"missing required field(s): {', '.join(missing)}" if missing else ""
 
@@ -162,12 +182,22 @@ class ExtractionResult:
         return "VIABLE | " + " | ".join(parts) if parts else ""
 
     def is_viable(self) -> bool:
-        """Has enough data to be a useful lead (not spam, required fields present)."""
+        """Has enough data to be a useful lead (not spam, required fields present).
+
+        #579: ``<UNKNOWN>`` / ``none`` / empty placeholders all count
+        as missing for the required-field check, so a detail-page
+        extract that landed on a marketing CTA (every field returned
+        as a placeholder) is rejected as non-viable.
+        """
         if self._schema:
             has_required = all(
-                self.extracted_fields.get(name)
+                not self._is_unknown(self.extracted_fields.get(name))
                 for name in self._schema.required_fields
             )
             return has_required and self.is_private_seller()
         # Legacy
-        return bool(self.year and self.make and self.is_private_seller())
+        return bool(
+            not self._is_unknown(self.year)
+            and not self._is_unknown(self.make)
+            and self.is_private_seller()
+        )
