@@ -350,6 +350,48 @@ def test_extract_routes_through_tool_schema_with_legacy_shape() -> None:
     assert result.confidence == 0.9
 
 
+def test_extract_legacy_schema_only_requires_url() -> None:
+    """Schema-less fallback's input_schema marks only ``url`` as required.
+    Every domain field is optional so the tool_use call accepts partial
+    extractions (e.g. by-owner classifieds that hide phone behind a
+    Contact-Seller form). Pre-fix the full 8-field required-set
+    rejected any response missing phone — extractor returned empty
+    and downstream reported '0 viable leads' despite the other 7
+    fields being visible on the page (boattrader run
+    20260522_211720_f8d28a2c)."""
+    extractor = ClaudeExtractor(api_key="dummy")
+    schema = extractor._build_extract_input_schema()
+    assert schema["required"] == ["url"]
+    # All canonical fields are still declared as properties so they
+    # remain extractable when visible.
+    for field in ("year", "make", "model", "price", "phone", "seller", "is_dealer"):
+        assert field in schema["properties"]
+
+
+def test_extract_legacy_partial_response_lands_with_url_only() -> None:
+    """A tool_use response with ONLY url + year + make (the common
+    by-owner shape: title has year+make+model, no phone published)
+    is accepted by the fallback and flows through to ExtractionResult.
+    Missing fields default to empty string; downstream viability
+    check sees year+make present and counts the lead."""
+    extractor = ClaudeExtractor(api_key="dummy")
+    tool, _call = _wired(extractor)
+    tool.return_value = {
+        "url": "https://x/boat/1",
+        "year": "2015",
+        "make": "Pioneer",
+        # No phone, no seller, no price, no model, no is_dealer
+    }
+    result = extractor.extract(_img())
+    assert result.url == "https://x/boat/1"
+    assert result.year == "2015"
+    assert result.make == "Pioneer"
+    # Missing fields default empty.
+    assert result.phone == ""
+    assert result.seller == ""
+    assert result.is_dealer is False  # parse_bool of missing → False
+
+
 def test_extract_dynamic_schema_built_from_extraction_schema_fields() -> None:
     """When an ExtractionSchema is set, the tool_use input_schema
     must include every schema field as a property + the universal

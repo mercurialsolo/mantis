@@ -127,15 +127,19 @@ def _coerce_coord(value: Any) -> int | None:
 EXTRACT_PROMPT = """\
 Look at this screenshot of a detail page.
 
-Extract the structured data the page exposes. Read the browser URL bar,
-the page heading, and the most prominent labelled fields. Where you see
-clear key-value pairs (label : value, label \u2014 value, or stacked
-label/value rows), return them.
+Extract the canonical fields the page exposes. Read the browser URL bar, the page heading / H1, the most prominent labelled fields, and the seller / contact area.
 
-Output ONLY valid JSON. The shape is open \u2014 use the field names
-you see on the page. Always include "url" with the address-bar value:
+Return values via the ``report_extracted_listing`` tool with the following fields. **Every field is OPTIONAL \u2014 return only the ones you can clearly read off the screenshot. If a field is not visible, omit it (or pass an empty string). DO NOT fabricate values.** The tool's schema enforces shape; missing fields are normal and expected for many listings (e.g. classified ads often don't expose contact phone publicly).
 
-{"url": "", "extracted": {"<field-name-as-shown>": "<value>", ...}}
+Field guide:
+- ``year`` \u2014 4-digit listing year, usually in the H1 / title. Extract the FIRST 4-digit year you see in the title.
+- ``make`` \u2014 manufacturer / brand, usually the second token in the H1.
+- ``model`` \u2014 model name + variant, the rest of the H1 after make.
+- ``price`` \u2014 asking price, usually the most prominent currency amount on the page. Include the currency symbol. If "Call for price" / "Make Offer", return that literal text.
+- ``url`` \u2014 copy the URL from the browser address bar verbatim. This is the ONE field you should always be able to return \u2014 the address bar is always visible.
+- ``phone`` \u2014 seller's phone if visible IN the listing's description / contact area. If the page only has a contact form (no published phone), return "". Don't extract phone numbers from headers / footers / ads.
+- ``seller`` \u2014 seller name or org if shown. If only a contact button is visible, return "".
+- ``is_dealer`` \u2014 true if the listing is clearly from a commercial seller (org name displayed, business badge, business contact form). false otherwise. Default false when unclear.
 """
 
 EXTRACT_SCROLLED_PROMPT = """\
@@ -150,15 +154,27 @@ Output ONLY valid JSON:
 """
 
 EXTRACT_MULTI_SCREENSHOT_PROMPT = """\
-You are looking at multiple screenshots from the SAME detail page,
-captured at different scroll positions.
+You are looking at multiple screenshots from the SAME detail page, captured at different scroll positions.
 
-Extract every labelled field visible across all screenshots. Combine
-them into one record. Always include "url" with the address-bar value
-from whichever screenshot shows it.
+Extract the canonical fields from across ALL screenshots — combine the title / H1 / specs / description / contact area into one record.
 
-Output ONLY valid JSON:
-{"url": "", "extracted": {"<field-name>": "<value>", ...}}
+Output ONLY valid JSON with TOP-LEVEL fields (no nesting). Every field is OPTIONAL — include only the ones you can clearly read. If a field is not visible across any screenshot, omit it or set it to empty string. DO NOT fabricate values. The URL field IS required — copy it verbatim from whichever screenshot shows the browser address bar.
+
+{
+  "year": "<4-digit year from title>",
+  "make": "<manufacturer / brand>",
+  "model": "<model + variant>",
+  "price": "<asking price with currency; or 'Make Offer' / 'Call for price'>",
+  "phone": "<seller phone if visible in description / contact area; empty if behind a contact form>",
+  "url": "<browser address-bar URL, verbatim>",
+  "seller": "<seller name or org if shown; empty if only a contact button is visible>",
+  "is_dealer": <true if listing is from a commercial seller, false otherwise>
+}
+
+Examples of fields that should be EMPTY (not fabricated):
+- Phone behind a "Contact" button (no number on page) → "phone": ""
+- Price shown as "Make Offer" → "price": "Make Offer"
+- Field not visible anywhere across screenshots → omit or empty string
 """
 
 FIND_LISTING_CONTENT_CONTROL_PROMPT = """\
@@ -704,7 +720,18 @@ class ClaudeExtractor:
                 # so partial extractions land instead of failing.
                 "required": ["is_spam"],
             }
-        # Legacy / no-schema fallback shape.
+        # Legacy / no-schema fallback shape. Every DOMAIN field is
+        # optional so partial extractions land instead of failing —
+        # matches the schema-path policy at lines above. Pre-fix, the
+        # full 8-field required-set rejected any tool_use response
+        # missing ``phone`` (universal for by-owner classifieds where
+        # phone sits behind a Contact-Seller form); the extractor
+        # then returned ``raw_response="<no tool_use>"`` and every
+        # extract step reported 0 leads despite the page having the
+        # other 7 fields visible. Only ``url`` is required (the
+        # address-bar value is always readable on any loaded page);
+        # the prompt explicitly tells Claude this is the one field
+        # to always return.
         return {
             "type": "object",
             "properties": {
@@ -717,10 +744,7 @@ class ClaudeExtractor:
                 "seller": {"type": "string"},
                 "is_dealer": {"type": "boolean"},
             },
-            "required": [
-                "year", "make", "model", "price",
-                "phone", "url", "seller", "is_dealer",
-            ],
+            "required": ["url"],
         }
 
     def extract_scrolled(self, screenshot: Image.Image) -> dict:
@@ -776,7 +800,22 @@ class ClaudeExtractor:
             result.confidence = 0.9
             return result
 
-        return ExtractionResult(
+        # Defensive parsing — accept BOTH the canonical flat shape
+        # (top-level year/make/...) and the legacy nested shape
+        # (``{"url": ..., "extracted": {<title-case fields>}}``) that
+        # an older prompt version asked for. The legacy shape silently
+        # dropped every field through ``parsed.get("year", "")`` —
+        # zero leads despite the page being extractable. Unwrap the
+        # ``extracted`` sub-object when present and normalize case so
+        # either shape produces a populated ExtractionResult.
+        nested = parsed.get("extracted") if isinstance(parsed.get("extracted"), dict) else None
+        if nested:
+            merged = {str(k).lower(): v for k, v in nested.items()}
+            for k, v in parsed.items():
+                if k != "extracted" and str(k).lower() not in merged:
+                    merged[str(k).lower()] = v
+            parsed = merged
+        result = ExtractionResult(
             year=str(parsed.get("year", "")),
             make=str(parsed.get("make", "")),
             model=str(parsed.get("model", "")),
@@ -788,14 +827,51 @@ class ClaudeExtractor:
             raw_response=text,
             confidence=0.9,
         )
+        # WARNING-level diagnostic so production runs surface what the
+        # extractor saw — Modal suppresses INFO/DEBUG, and 0-leads
+        # outcomes had no visibility into whether extract_multi
+        # returned populated data that got rejected downstream OR
+        # returned empty data the model failed to read off the page.
+        # Truncated raw_response to keep log lines bounded.
+        logger.warning(
+            "  [extract_multi] result: year=%r make=%r model=%r price=%r "
+            "phone=%r url=%r seller=%r is_dealer=%s "
+            "(nested_shape=%s, screenshots=%d, raw_len=%d)",
+            result.year[:40], result.make[:40], result.model[:60],
+            result.price[:40], result.phone[:40], result.url[:120],
+            result.seller[:60], result.is_dealer,
+            nested is not None, len(screenshots), len(text),
+        )
+        return result
 
     def find_listing_content_control(self, screenshot: Image.Image) -> dict | None:
         """Find a safe expand or phone reveal control on a listing page.
 
         Returns a dict with x/y/action/label/reason, or None if no safe target
         is visible. This intentionally avoids generic Contact Seller forms.
+
+        Two skip-gates protect against unsafe clicks:
+
+        * ``schema is not None and not schema.allowed_controls`` — explicit
+          empty allowlist on the active schema. Long-standing semantics.
+        * ``schema is None`` — schema-less callers have no allowlist at all,
+          so the safest policy is to NOT auto-click. Without this gate the
+          deep-extract routine clicks whatever the model thinks is a "reveal"
+          control — on real marketplace pages that often catches "Contact
+          Seller", "View N Photos", or similar nav links, opening modals /
+          carousels that block subsequent screenshots. Observed on the
+          boattrader plan (schema-less): every extract_data step failed
+          because the deep-extract loop opened the photo lightbox in
+          viewport 1, then captured 5 more screenshots OF the lightbox.
         """
-        if self.schema is not None and not self.schema.allowed_controls:
+        if self.schema is None:
+            logger.info(
+                "  [content-control] no schema → no click allowlist; skipping "
+                "auto-reveal. Callers that want auto-reveal must configure "
+                "an ExtractionSchema with allowed_controls."
+            )
+            return None
+        if not self.schema.allowed_controls:
             logger.info("  [content-control] schema has no allowed controls; skipping")
             return None
 
