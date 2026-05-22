@@ -60,24 +60,25 @@ def test_current_context_returns_a_copy() -> None:
 # ── Predicate firing ──────────────────────────────────────────────────
 
 
-def test_blocking_overlay_only_on_extraction_phase() -> None:
-    """BLOCKING_OVERLAY is scoped to extraction-phase steps. Active on
-    extract_data / extract_url AND any step whose section is
-    'extraction' (covers the scroll-before-extract case). Inactive
-    on navigate / setup / pagination steps where overlay-scanning is
-    wasted budget — observed regression: always-on caused ~3× slower
-    per-step deliberation."""
+def test_blocking_overlay_only_on_extract_primitives() -> None:
+    """BLOCKING_OVERLAY fires ONLY on actual extract_data /
+    extract_url steps — NOT on scroll-in-extraction (KEYBOARD_SCROLL
+    already covers image-misclick / carousel-trigger defense on
+    scroll steps). Stacking both prompt sections on scroll
+    paralyzed the brain (brain_loop_exhausted on scroll step
+    despite cap=8, run 20260522_200135_af9e031a)."""
     assert BLOCKING_OVERLAY in applicable_modules({"step_type": "extract_data"})
     assert BLOCKING_OVERLAY in applicable_modules({"step_type": "extract_url"})
-    assert BLOCKING_OVERLAY in applicable_modules(
+    # Inactive on scroll, regardless of section.
+    assert BLOCKING_OVERLAY not in applicable_modules(
         {"step_type": "scroll", "step_section": "extraction"},
     )
-    # Inactive on non-extraction phases.
-    assert BLOCKING_OVERLAY not in applicable_modules({})
-    assert BLOCKING_OVERLAY not in applicable_modules({"step_type": "navigate"})
     assert BLOCKING_OVERLAY not in applicable_modules(
         {"step_type": "scroll", "step_section": "setup"},
     )
+    # Inactive on navigation / setup / pagination.
+    assert BLOCKING_OVERLAY not in applicable_modules({})
+    assert BLOCKING_OVERLAY not in applicable_modules({"step_type": "navigate"})
     assert BLOCKING_OVERLAY not in applicable_modules(
         {"step_type": "paginate"},
     )
@@ -113,23 +114,24 @@ def test_compose_system_prompt_lean_base_for_empty_context() -> None:
     assert out.strip() == "BASE."  # nothing extra
 
 
-def test_compose_system_prompt_for_extraction_scroll() -> None:
-    """An extraction-section scroll step gets BOTH BLOCKING UI and
-    SCROLLING (the carousel-blocks-Description case the architecture
-    was built for). Excludes FORM / NAVIGATE."""
+def test_compose_system_prompt_extraction_scroll_keyboard_only() -> None:
+    """A scroll step (regardless of section) gets KEYBOARD_SCROLL
+    but NOT BLOCKING_OVERLAY. KEYBOARD_SCROLL already prohibits
+    image clicks (the carousel trigger); stacking BLOCKING_OVERLAY's
+    section on top doubles prompt overhead and paralyzed the brain."""
     out = compose_system_prompt(
         "BASE.", {"step_type": "scroll", "step_section": "extraction"},
     )
-    assert "BLOCKING UI" in out
     assert "SCROLLING" in out
+    assert "BLOCKING UI" not in out
     assert "FORM FILLING" not in out
     assert "NAVIGATION" not in out
 
 
-def test_compose_system_prompt_non_extraction_scroll_skips_overlay() -> None:
-    """A setup-section scroll gets KEYBOARD_SCROLL but NOT
-    BLOCKING_OVERLAY (no extraction content to be blocked on a
-    filter / setup page)."""
+def test_compose_system_prompt_setup_scroll_just_keyboard() -> None:
+    """A setup-section scroll gets KEYBOARD_SCROLL only —
+    BLOCKING_OVERLAY remains scoped out for scroll regardless of
+    section."""
     out = compose_system_prompt(
         "BASE.", {"step_type": "scroll", "step_section": "setup"},
     )
@@ -187,13 +189,23 @@ def test_compose_system_prompt_predicate_error_doesnt_break_compose() -> None:
 # ── Handler hints ────────────────────────────────────────────────────
 
 
-def test_handler_hints_for_extraction_scroll_carry_both_signals() -> None:
-    """An extraction-section scroll gets the avoid_image_click signal
-    (from KEYBOARD_SCROLL) AND overlay-dismiss (from BLOCKING_OVERLAY)."""
+def test_handler_hints_for_extraction_scroll_only_avoid_image() -> None:
+    """A scroll-in-extraction step gets avoid_image_click ONLY (from
+    KEYBOARD_SCROLL). BLOCKING_OVERLAY's dismiss_overlay_first does
+    NOT fire on scroll — it's reserved for extract_data /
+    extract_url."""
     hints = applicable_handler_hints(
         {"step_type": "scroll", "step_section": "extraction"},
     )
     assert hints.get("avoid_image_click") is True
+    assert "dismiss_overlay_first" not in hints
+
+
+def test_handler_hints_for_extract_data_step_carries_overlay_signal() -> None:
+    """The extract_data primitive itself gets the overlay-dismiss
+    signal — that's where the brain is about to read structured
+    fields and an overlay-blocked viewport is the actual risk."""
+    hints = applicable_handler_hints({"step_type": "extract_data"})
     assert hints.get("dismiss_overlay_first") is True
 
 
