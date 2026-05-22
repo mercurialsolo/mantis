@@ -609,14 +609,21 @@ class StepRecoveryPolicy:
             )
 
         if step.type == "navigate_back":
-            logger_.warning(f"  [{step_index}] BACK FAILED — retrying Alt+Left")
+            logger_.warning(f"  [{step_index}] BACK FAILED — retrying CDP-back then Alt+Left")
+            # #583: prefer CDP history.back() — more reliable than the
+            # xdotool keyboard shortcut on SPA pushState sites. Falls
+            # back to Alt+Left if CDP unavailable or didn't navigate.
+            cdp_back = getattr(runner.env, "cdp_history_back", None)
             for back_attempt in range(3):
                 try:
-                    runner.env.step(Action(
-                        action_type=ActionType.KEY_PRESS,
-                        params={"keys": "alt+Left"},
-                    ))
-                    time.sleep(3)
+                    if callable(cdp_back) and cdp_back():
+                        time.sleep(0.5)
+                    else:
+                        runner.env.step(Action(
+                            action_type=ActionType.KEY_PRESS,
+                            params={"keys": "alt+Left"},
+                        ))
+                        time.sleep(3)
                 except Exception:
                     pass
                 if runner.extractor:

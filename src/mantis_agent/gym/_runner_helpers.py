@@ -431,10 +431,23 @@ def return_to_results_page(runner: "MicroPlanRunner") -> None:
             action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+w"},
         ))
         runner._opened_detail_in_new_tab = False
-    else:
-        runner.env.step(Action(
-            action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"},
-        ))
+        time.sleep(2)
+        return
+    # #583: prefer CDP ``window.history.back()`` over xdotool ``Alt+Left``.
+    # SPA sites that use ``history.pushState`` don't always pop their
+    # history state cleanly on the keyboard shortcut; the JS call always
+    # does. Fall back to Alt+Left on CDP unavailability / no history
+    # entry to pop. cdp_history_back already polls for URL change.
+    cdp_back = getattr(runner.env, "cdp_history_back", None)
+    if callable(cdp_back):
+        try:
+            if cdp_back():
+                return
+        except Exception as exc:  # noqa: BLE001 — fall through to xdotool
+            logger.debug("cdp_history_back raised, falling back: %s", exc)
+    runner.env.step(Action(
+        action_type=ActionType.KEY_PRESS, params={"keys": "alt+Left"},
+    ))
     time.sleep(2)
 
 

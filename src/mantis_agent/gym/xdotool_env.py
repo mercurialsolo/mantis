@@ -495,6 +495,47 @@ class XdotoolGymEnv(GymEnvironment):
         ok, _ = self._cdp_call("Input.insertText", {"text": text})
         return ok
 
+    def cdp_history_back(self, *, settle_seconds: float = 1.5) -> bool:
+        """#583: navigate back via ``window.history.back()`` over CDP.
+
+        More reliable than xdotool ``Alt+Left`` on SPA sites that use
+        ``history.pushState`` — the keyboard shortcut sometimes doesn't
+        pop the SPA's history state cleanly; the JS call always does
+        when there's a history entry to pop.
+
+        Returns True when the URL changed within ``settle_seconds`` of
+        the back call, False otherwise (callers fall back to Alt+Left).
+
+        Memory note: per ``feedback_cua_cdp_post_action_verify.md``,
+        CDP for action dispatch + post-action verify is allowed. This
+        is action-side (dispatching back), not DOM-grounding-side.
+        """
+        url_before = self.current_url or ""
+        # Dispatch the back call. ``cdp_evaluate`` returns ``None`` when
+        # the call succeeds (void return) or on failure — we can't
+        # distinguish from the return value, so verify via URL change.
+        try:
+            self.cdp_evaluate("window.history.back()")
+        except Exception as exc:  # noqa: BLE001 — fall back on any failure
+            logger.debug("cdp_history_back: dispatch failed: %s", exc)
+            return False
+        # Poll URL up to ``settle_seconds`` for the change.
+        deadline = time.time() + max(0.1, settle_seconds)
+        poll_interval = 0.1
+        while time.time() < deadline:
+            time.sleep(poll_interval)
+            try:
+                url_after = self.current_url or ""
+            except Exception:  # noqa: BLE001
+                url_after = ""
+            if url_after and url_after != url_before:
+                logger.info(
+                    "  [cdp-back] history.back() succeeded: %s → %s",
+                    url_before[:60], url_after[:60],
+                )
+                return True
+        return False
+
     def cdp_count_pages(self) -> int:
         """#582: count Chrome page-type tabs via ``/json/list``.
 
