@@ -495,6 +495,92 @@ class XdotoolGymEnv(GymEnvironment):
         ok, _ = self._cdp_call("Input.insertText", {"text": text})
         return ok
 
+    def cdp_history_back(self, *, settle_seconds: float = 1.5) -> bool:
+        """#583: navigate back via ``window.history.back()`` over CDP.
+
+        More reliable than xdotool ``Alt+Left`` on SPA sites that use
+        ``history.pushState`` — the keyboard shortcut sometimes doesn't
+        pop the SPA's history state cleanly; the JS call always does
+        when there's a history entry to pop.
+
+        Returns True when the URL changed within ``settle_seconds`` of
+        the back call, False otherwise (callers fall back to Alt+Left).
+
+        Memory note: per ``feedback_cua_cdp_post_action_verify.md``,
+        CDP for action dispatch + post-action verify is allowed. This
+        is action-side (dispatching back), not DOM-grounding-side.
+        """
+        url_before = self.current_url or ""
+        # Dispatch the back call. ``cdp_evaluate`` returns ``None`` when
+        # the call succeeds (void return) or on failure — we can't
+        # distinguish from the return value, so verify via URL change.
+        try:
+            self.cdp_evaluate("window.history.back()")
+        except Exception as exc:  # noqa: BLE001 — fall back on any failure
+            logger.debug("cdp_history_back: dispatch failed: %s", exc)
+            return False
+        # Poll URL up to ``settle_seconds`` for the change.
+        deadline = time.time() + max(0.1, settle_seconds)
+        poll_interval = 0.1
+        while time.time() < deadline:
+            time.sleep(poll_interval)
+            try:
+                url_after = self.current_url or ""
+            except Exception:  # noqa: BLE001
+                url_after = ""
+            if url_after and url_after != url_before:
+                logger.info(
+                    "  [cdp-back] history.back() succeeded: %s → %s",
+                    url_before[:60], url_after[:60],
+                )
+                return True
+        return False
+
+    def cdp_count_pages(self) -> int:
+        """#582: count Chrome page-type tabs via ``/json/list``.
+
+        Returns the number of ``type=page`` tabs whose URL isn't a
+        system page (``chrome://`` / ``about:``). Returns ``0`` on any
+        CDP failure (port unreachable, json decode, etc) — caller
+        treats ``0`` as "couldn't check" and skips the diff.
+
+        Used by the click handler to detect new-tab opens from
+        ``window.open()`` / modifier-clicks that bypass the existing
+        middle-click fallback path which is the only writer of
+        ``_opened_detail_in_new_tab`` today. A snapshot before + after
+        the click + comparison sets the flag regardless of which click
+        primitive opened the tab.
+
+        Memory note: per ``feedback_cua_cdp_post_action_verify.md``,
+        post-action CDP reads (verifying our action's side-effect) are
+        allowed. We're checking whether OUR click opened a tab —
+        action-side, not DOM-grounding-side.
+        """
+        try:
+            import json as _json
+            import urllib.request
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self._cdp_port}/json/list",
+                timeout=2,
+            ) as resp:
+                tabs = _json.loads(resp.read().decode())
+        except Exception as exc:  # noqa: BLE001 — observability, never fatal
+            logger.debug("cdp_count_pages failed: %s", exc)
+            return 0
+        if not isinstance(tabs, list):
+            return 0
+        count = 0
+        for tab in tabs:
+            if not isinstance(tab, dict):
+                continue
+            if tab.get("type") != "page":
+                continue
+            url = str(tab.get("url") or "")
+            if not url or url.startswith("chrome://") or url.startswith("about:"):
+                continue
+            count += 1
+        return count
+
     def cdp_evaluate(self, expression: str) -> Any:
         """Run a JS expression via CDP ``Runtime.evaluate``.
 
