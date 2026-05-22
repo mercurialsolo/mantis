@@ -168,8 +168,14 @@ class CostMeter:
           ``gpu_steps`` only; ``gpu_seconds`` is owned by
           :meth:`sync_gpu_seconds_from_time_meter` which sets it
           from the meter's ``think`` bucket (actual brain-inference
-          wall time). Caller invokes the sync at terminal time +
-          optionally per-step for live dashboards.
+          wall time). Sync fires on EVERY ``record_step`` call,
+          even when ``steps_used == 0``, so per-step deltas absorb
+          think-bucket growth that happened during steps with no
+          dispatch-attributed brain work (e.g. ``extract_data``,
+          verify, and between-step critic / recovery handlers). Was
+          previously gated on ``steps_used > 0``, which leaked
+          inter-step think into the finalize sync where it landed
+          on the run total but on no per-step row.
         * **Without time_meter (tests, legacy hosts)** — keeps the
           pre-#351 synthetic ``steps × per-step`` accumulation so
           existing callers see no behaviour change.
@@ -183,12 +189,12 @@ class CostMeter:
                 self.costs["gpu_seconds"] += (
                     step_result.steps_used * cfg.gpu_seconds_per_step
                 )
-            else:
-                # Production path — gpu_seconds owned by
-                # sync_gpu_seconds_from_time_meter. We still sync
-                # here so per-step ``log_progress`` reads the real
-                # number instead of a stale value.
-                self.sync_gpu_seconds_from_time_meter(time_meter)
+        if time_meter is not None:
+            # Production path — sync unconditionally so per-step
+            # deltas pick up think growth from steps with
+            # ``steps_used == 0`` and from inter-step handlers
+            # (critic / recovery) that fired since the last sync.
+            self.sync_gpu_seconds_from_time_meter(time_meter)
         if step.claude_only:
             self.costs["claude_extract"] += 1
         if step.grounding:

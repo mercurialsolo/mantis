@@ -324,48 +324,6 @@ class ClaudeGuidedClickHandler:
         except Exception:
             url_before_click = ""
 
-        # #586: DOM-aware pre-click validation. When the site_config
-        # declares a ``listing_card_css_selector``, query the element
-        # at the proposed (x, y) and walk ancestors — reject the click
-        # when no ancestor matches the selector. Catches the wrong-
-        # card case where the brain picked coords on a marketing CTA
-        # (boat-loans, financing, insurance) instead of a real listing.
-        # Memory: ``feedback_cua_cdp_post_action_verify.md`` allows
-        # action-side CDP reads; this is action-VALIDATION, not
-        # grounding-derivation.
-        card_selector = getattr(site_config, "listing_card_css_selector", "")
-        validate_target = (
-            bool(card_selector)
-            and hasattr(env, "cdp_element_matches_selector")
-        )
-        if validate_target:
-            try:
-                matches = env.cdp_element_matches_selector(x, y, card_selector)
-            except Exception as exc:  # noqa: BLE001 — never break click on infra
-                logger.debug("[claude-click] selector validation raised: %s", exc)
-                matches = True  # fail-open: trust the brain on infra failure
-            if not matches:
-                logger.warning(
-                    "  [claude-click] PRE-CLICK REJECT — (%d,%d) doesn't "
-                    "match listing_card_css_selector=%r — failing step "
-                    "for recovery (brain picked off-card)",
-                    x, y, card_selector,
-                )
-                dynamic_verifier.record_item_completed(
-                    page=runner._current_page,
-                    item=getattr(runner, "_last_click_title", "") or title,
-                    success=False,
-                    reason="off_card_click_rejected",
-                )
-                return StepResult(
-                    step_index=index, intent=step.intent, success=False,
-                    data=(
-                        f"OFF_CARD|x={x}|y={y}|"
-                        f"selector={card_selector[:80]}"
-                    ),
-                    failure_class="wrong_target",
-                )
-
         # Click — #300: try SoM-anchored CDP dispatch first when the
         # routing policy promotes it AND the env exposes the CDP click
         # shim. Falls through to legacy xdotool on policy-off /

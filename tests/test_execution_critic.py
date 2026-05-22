@@ -277,6 +277,7 @@ def _runner_with_frontier_state(*, results_base_url: str = ""):
         _total_recovery_attempts=0,
         _recovery_hints={},
         _critic_frontier_fired_steps=set(),
+        _critic_frontier_last_fire_counts={},
         env=None,
     )
 
@@ -482,17 +483,86 @@ def test_frontier_fires_on_persistent_wrong_target(monkeypatch) -> None:
     assert len(captured) == 1
 
 
-def test_frontier_skipped_if_already_fired_on_step(monkeypatch) -> None:
-    """The frontier consultation happens at most once per step —
-    even if the next step also reports wrong_target, we don't re-
-    call Claude on the same slot."""
+def test_frontier_reads_history_under_step_result_index_not_state_index(
+    monkeypatch,
+) -> None:
+    """Regression: the recovery policy can advance ``state.step_index``
+    past the failed step BEFORE ``_consult_critic`` runs (e.g. the
+    policy decides to retry by re-routing through an earlier step
+    then come back). The critic-frontier must read history under the
+    FAILED step's index (``step_result.step_index``), not the
+    post-advance ``state.step_index`` — otherwise the failure_count
+    lookup misses the records the centralized failure path stamped
+    against the actual failed step.
+
+    Boattrader run ``20260522_080738_ac8962a8`` surfaced this:
+    ``[retry-history] step 2`` (correct, failed at 2) +
+    ``[critic-frontier] step 7`` (state had advanced to 7) +
+    ``failure_count=0`` → escalation never fired → time_cap halt.
+    """
+    monkeypatch.setenv("MANTIS_CRITIC_FRONTIER", "enabled")
+    runner = _runner_with_frontier_state()
+    # History stamped under the failed step's index (2), not the
+    # post-advance state.step_index (7).
+    runner._step_failure_history[2] = [
+        {"x": None, "y": None, "kind": "wrong_target"},
+        {"x": None, "y": None, "kind": "wrong_target"},
+    ]
+
+    from mantis_agent import agentic_recovery
+    from mantis_agent.agentic_recovery import RecoveryDecision
+
+    captured: list = []
+
+    def _fake_analyse(**kwargs):
+        captured.append(kwargs)
+        return RecoveryDecision(
+            mode="add_hint", reasoning="try harder",
+        )
+
+    monkeypatch.setattr(agentic_recovery, "analyse_failure_and_recover", _fake_analyse)
+
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="t")
+    for _ in range(8):
+        plan.steps.append(MicroIntent(intent="x", type="click"))
+    # state.step_index has been advanced to 7 by the recovery policy.
+    state = _state(step_index=7)
+    # But the step_result carries the FAILED step's index = 2.
+    result = StepResult(
+        step_index=2, intent="Click X", success=False,
+        failure_class="wrong_target",
+    )
+    out = critic.observe_step(
+        plan, state, plan.steps[2], result, recovery_continued=True,
+    )
+    # Must have called Claude — failure_count read under index 2
+    # sees both records and clears the threshold.
+    assert len(captured) == 1
+    # And the frontier marks step 2 (the failed step) as consulted,
+    # NOT step 7 (the post-advance state).
+    assert 2 in runner._critic_frontier_fired_steps
+    assert 7 not in runner._critic_frontier_fired_steps
+    # add_hint mode returns None directive.
+    assert out is None
+
+
+def test_frontier_skipped_when_no_new_failures_since_last_fire(monkeypatch) -> None:
+    """After firing, the critic must NOT re-fire on the same
+    ``failure_count`` — Claude already saw that exact history. The
+    re-fire gate requires THRESHOLD more failures since the last fire
+    (the prior binary fire-once guard was too strict for loop-
+    iterated plans — see
+    test_frontier_refires_when_failures_grow_after_first_fire)."""
     monkeypatch.setenv("MANTIS_CRITIC_FRONTIER", "enabled")
     runner = _runner_with_frontier_state()
     runner._step_failure_history[0] = [
         {"x": 1, "y": 1, "kind": "wrong_target"},
         {"x": 2, "y": 2, "kind": "wrong_target"},
     ]
+    # Simulate prior fire at the same failure_count (2).
     runner._critic_frontier_fired_steps.add(0)
+    runner._critic_frontier_last_fire_counts[0] = 2
 
     from mantis_agent import agentic_recovery
     monkeypatch.setattr(
@@ -512,6 +582,55 @@ def test_frontier_skipped_if_already_fired_on_step(monkeypatch) -> None:
         plan, state, plan.steps[0], result, recovery_continued=True,
     )
     assert out is None
+
+
+def test_frontier_refires_when_failures_grow_after_first_fire(monkeypatch) -> None:
+    """After firing once, the critic should re-fire when THRESHOLD
+    more failures accumulate — that's a new signal Claude hasn't
+    seen. Boattrader-style loop plans that hit the same plan step on
+    each listing iteration need this; the prior binary fire-once
+    guard left the agent stuck because each iteration's new failure
+    couldn't reach Claude.
+    """
+    monkeypatch.setenv("MANTIS_CRITIC_FRONTIER", "enabled")
+    runner = _runner_with_frontier_state()
+    # 4 failures total; last fire was at count=2 → 2 new failures
+    # since → meets threshold → must re-fire.
+    runner._step_failure_history[0] = [
+        {"x": 1, "y": 1, "kind": "wrong_target"},
+        {"x": 2, "y": 2, "kind": "wrong_target"},
+        {"x": 3, "y": 3, "kind": "wrong_target"},
+        {"x": 4, "y": 4, "kind": "wrong_target"},
+    ]
+    runner._critic_frontier_fired_steps.add(0)
+    runner._critic_frontier_last_fire_counts[0] = 2
+
+    from mantis_agent import agentic_recovery
+    from mantis_agent.agentic_recovery import RecoveryDecision
+
+    captured: list = []
+
+    def _fake_analyse(**kwargs):
+        captured.append(kwargs)
+        return RecoveryDecision(mode="add_hint", reasoning="r")
+
+    monkeypatch.setattr(agentic_recovery, "analyse_failure_and_recover", _fake_analyse)
+
+    critic = ExecutionCritic(runner)
+    plan = MicroPlan(domain="t")
+    plan.steps.append(MicroIntent(intent="x", type="submit"))
+    state = _state()
+    result = StepResult(
+        step_index=0, intent="x", success=False,
+        failure_class="wrong_target",
+    )
+    critic.observe_step(
+        plan, state, plan.steps[0], result, recovery_continued=True,
+    )
+    assert len(captured) == 1
+    # last_fire_counts advanced to the new failure_count so a
+    # subsequent same-count call wouldn't fire again.
+    assert runner._critic_frontier_last_fire_counts[0] == 4
 
 
 def test_frontier_skipped_when_per_step_budget_exhausted(monkeypatch) -> None:

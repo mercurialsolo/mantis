@@ -388,6 +388,20 @@ class RunExecutor:
         # the step record (per-step COST attribution in the
         # workspace inspector) without a separate DecisionEvent.
         per_step_costs = self._compute_step_costs(costs_before) if costs_before is not None else None
+        # Track per-step emitted totals so finalize can back-allocate
+        # the residual (run-total minus sum-of-step-rows) onto the
+        # last step. Catches GPU/think growth that the terminal
+        # ``sync_gpu_seconds_from_time_meter`` SET *after* the final
+        # step's per-step delta was computed — post-final-step
+        # critic / recovery, brain warmup, idle pings — which would
+        # otherwise live only on the header total and on no per-step
+        # row, breaking the visual sum.
+        if per_step_costs is not None:
+            emitted = getattr(runner, "_emitted_step_costs", None)
+            if emitted is None:
+                emitted = []
+                runner._emitted_step_costs = emitted
+            emitted.append((step_index, dict(per_step_costs)))
         # #518 — same shape, for the 0.1.6+ ``StepTrace.latency``
         # field; per-layer ms from this step's TimeMeter buckets.
         per_step_latency = self._compute_step_latency(step_index)
@@ -896,6 +910,7 @@ class RunExecutor:
                 step_index=state.step_index,
                 kind="no_state_change",
                 reason="snapshot diff and visual verifier both saw no UI change",
+                step_result=state.results[-1],
             )
             # Pattern-match the failure history for handler escalation.
             # When the same step has accumulated 2+ same-kind failures,
@@ -1045,6 +1060,7 @@ class RunExecutor:
             step_index=state.step_index,
             kind="no_state_change",
             reason="post-click snapshot saw no URL / page / scroll change",
+            step_result=state.results[-1],
         )
         self._maybe_set_handler_override(
             runner=runner, step_index=state.step_index,
@@ -1148,6 +1164,7 @@ class RunExecutor:
             step_index=state.step_index,
             kind="wrong_target",
             reason=reason,
+            step_result=state.results[-1],
         )
 
     @staticmethod
@@ -1157,6 +1174,7 @@ class RunExecutor:
         step_index: int,
         kind: str,
         reason: str,
+        step_result: "StepResult | None" = None,
     ) -> None:
         """Append a failure record for the agentic retry path.
 
@@ -1165,17 +1183,36 @@ class RunExecutor:
         can tell ``find_form_target`` "avoid this target." Records
         accumulate per step_index and are cleared on success
         (see ``_handle_success``).
+
+        Always appends — the record is also the count the
+        critic-frontier guard reads to decide whether to escalate
+        (threshold = 2). When there's no ``_last_submit_target``
+        (the demote-wrong-target path that fires without going
+        through the form/submit handler, or click handlers that
+        don't stash a target), the record is bare (x/y/label all
+        None / empty) but still counts. Skipping the append on
+        missing target — the prior behavior — let the same step
+        retry indefinitely on ``wrong_target`` / ``no_state_change``
+        because the critic-frontier saw ``failure_count == 0``
+        forever and never fired its escalation. Symptom: time-cap
+        halt with zero leads (see boattrader run
+        ``20260522_060327_43b46c0a``).
+
+        ``step_result`` (optional): when provided, gets stamped
+        with ``_retry_history_recorded = True`` after the append.
+        Subsequent calls in the same iteration that pass the same
+        step_result no-op, so the central call in
+        :meth:`_handle_failure` doesn't double-count failures that
+        a demote site already recorded.
         """
-        target = getattr(runner, "_last_submit_target", None)
-        if not target:
-            # The form handler didn't surface a click target — nothing
-            # to feed back. Common reason: ``form_target_not_found``
-            # already-failed step; the retry path's no-coordinate
-            # fallback handles it.
+        if step_result is not None and getattr(
+            step_result, "_retry_history_recorded", False,
+        ):
             return
         if not hasattr(runner, "_step_failure_history"):
             return
         history = runner._step_failure_history.setdefault(step_index, [])
+        target = getattr(runner, "_last_submit_target", None) or {}
         # PR-H (Option 1): enrich retry context with the SoM
         # diagnostic from the most recent click. Tells the next brain
         # prompt "you clicked at (x, y) and the element at that
@@ -1191,10 +1228,23 @@ class RunExecutor:
             "kind": kind,
             "reason": reason,
         }
+        if not target:
+            # No target stashed — typical for ``demote_wrong_target``
+            # firing on a click that didn't go through the
+            # form/submit handler. Record the bare failure so
+            # critic-frontier's failure_count advances; the retry
+            # path's no-coord fallback handles the missing
+            # avoid-coord hint.
+            logger.warning(
+                "  [retry-history] step %d: no target stashed — "
+                "recording bare failure (kind=%s) so critic-frontier "
+                "count advances; retry uses no-coord fallback",
+                step_index, kind,
+            )
         # Only attach SoM data if it's for THIS click's coords. Stale
         # diagnostics from an earlier step's click would mislead the
         # retry prompt.
-        if (
+        elif (
             som_diag.get("x") == target.get("x")
             and som_diag.get("y") == target.get("y")
         ):
@@ -1224,6 +1274,8 @@ class RunExecutor:
                 target.get("x"), target.get("y"),
             )
         history.append(record)
+        if step_result is not None:
+            step_result._retry_history_recorded = True
 
     @staticmethod
     def _maybe_set_handler_override(
@@ -1479,6 +1531,26 @@ class RunExecutor:
                 state.results[-1].skip_reason = "navigation_failed"
             self._persist(plan, state, status="halted", halt_reason=outcome.halt_reason)
             return False
+        # Central fallback: record the failure in the agentic retry
+        # history if no demote site already did. Step handlers that
+        # stamp ``failure_class`` directly on a failed StepResult
+        # (e.g. ``click.py`` setting ``wrong_target`` from its own
+        # post-click verifier) bypass the demote paths entirely, so
+        # without this the critic-frontier guard sees
+        # ``failure_count == 0`` forever and the step retries until
+        # the run hits ``time_cap`` with zero output. The stamp
+        # guard inside ``_record_failure_for_retry`` makes this a
+        # no-op for paths that already recorded.
+        from . import intent_rewriter as _ir
+        failure_class = str(getattr(step_result, "failure_class", "") or "")
+        if failure_class in _ir.REWRITE_TRIGGERING_CLASSES:
+            self._record_failure_for_retry(
+                runner=runner,
+                step_index=failed_step_index,
+                kind=failure_class,
+                reason=str(getattr(step_result, "data", "") or "")[:200],
+                step_result=step_result,
+            )
         # Epic #377 Phase B: when the policy decides retry AND the
         # failure_class is in the rewrite-triggering set, ask Claude to
         # propose a more mechanical / specific intent for the next
@@ -1714,6 +1786,15 @@ class RunExecutor:
             tokens_out=claude_output or None,
             cache_hit_tokens=claude_cached_input or None,
         )
+        # Back-allocate the finalize residual to the last emitted
+        # step so the per-step COST column visibly sums to the run
+        # total. Residual = run total − Σ per-step ``total_usd``.
+        # Catches: (a) terminal ``sync_gpu_seconds_from_time_meter``
+        # SET after the final step's delta was computed; (b) any
+        # framework overhead the per-step delta machinery missed.
+        # Skip when residual is below a $0.001 noise floor or when
+        # no step costs were emitted (e.g. zero-step halt).
+        self._back_allocate_residual_to_last_step(total)
         # elapsed_seconds has no slot on the costs record, so it stays
         # a tag — same parser the workspace already uses for duration.
         augur.add_tag("elapsed_seconds", f"{elapsed:.2f}")
@@ -1733,6 +1814,58 @@ class RunExecutor:
                 "claude_cached_input_tokens": claude_cached_input,
             },
         )
+
+    def _back_allocate_residual_to_last_step(self, run_total_usd: float) -> None:
+        """Patch the last emitted step's ``total_usd`` so the per-step
+        COST column sums to the run total.
+
+        The residual exists because per-step deltas are computed at
+        the close of each ``_emit_augur_step``, but the finalize
+        ``sync_gpu_seconds_from_time_meter`` SETs ``gpu_seconds`` to
+        the full ``TimeMeter.think`` bucket — which may have grown
+        between the last step's emission and finalize (post-final-step
+        critic / recovery, brain warmup, idle pings). That delta
+        lands on the run total but on no per-step row, making the
+        column look like it doesn't add up.
+
+        Strategy: read the cumulative emitted per-step ``total_usd``
+        from ``runner._emitted_step_costs`` (populated in
+        :meth:`_emit_augur_step`), compute ``residual = run_total -
+        emitted_sum``, and bump the last step's ``total_usd`` by the
+        residual via :meth:`AugurAdapter.set_step_costs`. The patch
+        merges — ``gpu_usd`` / ``model_usd`` / ``proxy_usd`` on the
+        step record stay as they were, so the per-bucket numbers
+        remain honest while the visible total reconciles.
+
+        No-op when:
+        - no per-step costs were emitted (zero-step halt, augur
+          inactive, ``costs_before`` was None for every step)
+        - residual is below the $0.001 noise floor
+        - the augur adapter is missing or inactive
+        """
+        runner = self.parent
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is None or not augur.active:
+            return
+        emitted = getattr(runner, "_emitted_step_costs", None)
+        if not isinstance(emitted, list) or not emitted:
+            return
+        emitted_sum = sum(
+            float(c.get("total_usd", 0.0) or 0.0) for _, c in emitted
+        )
+        residual = float(run_total_usd) - emitted_sum
+        if residual <= 0.001:
+            return
+        last_index, last_costs = emitted[-1]
+        new_total = round(
+            float(last_costs.get("total_usd", 0.0) or 0.0) + residual, 6,
+        )
+        try:
+            augur.set_step_costs(last_index, total_usd=new_total)
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug(
+                "back-allocate residual to step %s failed: %s", last_index, exc,
+            )
 
     # #541: classes that name the *cause* of a halt (root signal).
     # These ALWAYS win over symptom classes (``brain_loop_exhausted``,

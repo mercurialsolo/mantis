@@ -300,6 +300,20 @@ def test_record_step_without_time_meter_uses_legacy_multiplier() -> None:
     assert meter.costs["gpu_seconds"] == 12.0
 
 
+def test_record_step_with_time_meter_syncs_even_when_steps_used_zero() -> None:
+    """Per-step deltas must absorb think-bucket growth from steps with
+    ``steps_used == 0`` (e.g. ``extract_data``, verify) and from
+    between-step handlers (critic, recovery). Was previously skipped
+    when ``steps_used == 0``, leaking inter-step think into the
+    finalize sync where it landed on the run total but on no per-step
+    row."""
+    meter = CostMeter()
+    tm = _FakeTimeMeter(think_seconds=12.5)
+    meter.record_step(_FakeStep(), _FakeStepResult(steps_used=0), time_meter=tm)
+    assert meter.costs["gpu_steps"] == 0  # not bumped — still gated
+    assert meter.costs["gpu_seconds"] == 12.5  # but synced
+
+
 # ── #350: totals_from helper ─────────────────────────────────────────────
 
 

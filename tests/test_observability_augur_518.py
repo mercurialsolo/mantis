@@ -455,3 +455,122 @@ def test_run_executor_emits_set_costs_with_token_counts(
     )
     # elapsed_seconds is still a tag (no schema slot for wallclock).
     assert "elapsed_seconds" in tag_keys
+
+
+def test_back_allocate_residual_patches_last_step_total(
+    monkeypatch, tmp_path: Path,
+):
+    """When the finalize sync inflates the run total beyond the sum of
+    per-step ``total_usd`` rows, the executor should patch the last
+    emitted step so the per-step COST column visibly sums to the
+    header. Residual lands on ``set_step_costs(last_index,
+    total_usd=...)`` with the unchanged buckets preserved by the
+    SDK's merge semantics."""
+    from unittest.mock import MagicMock
+
+    from mantis_agent.gym.run_executor import RunExecutor
+
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    augur = AugurAdapter(
+        run_id="back_alloc", tenant_id="t", session_name="s", out_dir=tmp_path,
+    )
+    augur_spy = MagicMock(wraps=augur)
+    runner = MagicMock()
+    runner._augur = augur_spy
+    # Run total: $1.64 (mirrors the user-reported boattrader run).
+    meter = MagicMock()
+    meter.totals.return_value = (1.20, 0.40, 0.04, 1.64)
+    meter.elapsed_seconds.return_value = 1938.0
+    meter.costs = {
+        "claude_input_tokens": 20_000,
+        "claude_output_tokens": 1_500,
+        "claude_cached_input_tokens": 0,
+    }
+    runner.cost_meter = meter
+    # Three steps emitted, last is index=11 (the 12th step).
+    runner._emitted_step_costs = [
+        (9, {"total_usd": 0.05, "model_usd": 0.03, "gpu_usd": 0.02}),
+        (10, {"total_usd": 0.10, "model_usd": 0.05, "gpu_usd": 0.05}),
+        (11, {"total_usd": 0.13, "model_usd": 0.07, "gpu_usd": 0.06}),
+    ]
+    executor = RunExecutor.__new__(RunExecutor)
+    executor.parent = runner
+    executor._emit_augur_aggregate_metrics([])
+    # Residual = 1.64 - (0.05 + 0.10 + 0.13) = 1.36; last step bumps
+    # from 0.13 → 1.49 (0.13 + 1.36).
+    augur_spy.set_step_costs.assert_called_once()
+    call = augur_spy.set_step_costs.call_args
+    assert call.args == (11,)  # last emitted step_index
+    assert call.kwargs["total_usd"] == pytest.approx(1.49, abs=1e-6)
+    # We DON'T touch gpu_usd / model_usd / proxy_usd — the merge
+    # leaves them intact so the per-bucket numbers stay honest.
+    assert "gpu_usd" not in call.kwargs
+    assert "model_usd" not in call.kwargs
+
+
+def test_back_allocate_residual_noop_when_below_noise_floor(
+    monkeypatch, tmp_path: Path,
+):
+    """Skip the patch when residual < $0.001 — avoids churning the
+    last step's row over rounding noise."""
+    from unittest.mock import MagicMock
+
+    from mantis_agent.gym.run_executor import RunExecutor
+
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    augur = AugurAdapter(
+        run_id="back_alloc_noop", tenant_id="t", session_name="s", out_dir=tmp_path,
+    )
+    augur_spy = MagicMock(wraps=augur)
+    runner = MagicMock()
+    runner._augur = augur_spy
+    meter = MagicMock()
+    meter.totals.return_value = (0.10, 0.05, 0.0, 0.1505)
+    meter.elapsed_seconds.return_value = 60.0
+    meter.costs = {
+        "claude_input_tokens": 0, "claude_output_tokens": 0,
+        "claude_cached_input_tokens": 0,
+    }
+    runner.cost_meter = meter
+    runner._emitted_step_costs = [
+        (0, {"total_usd": 0.10}),
+        (1, {"total_usd": 0.05}),  # sum = 0.15; residual = 0.0005
+    ]
+    executor = RunExecutor.__new__(RunExecutor)
+    executor.parent = runner
+    executor._emit_augur_aggregate_metrics([])
+    augur_spy.set_step_costs.assert_not_called()
+
+
+def test_back_allocate_residual_noop_when_no_steps_emitted(
+    monkeypatch, tmp_path: Path,
+):
+    """Zero-step halts (e.g. pre-loop failure) leave
+    ``_emitted_step_costs`` empty / unset — nothing to patch."""
+    from unittest.mock import MagicMock
+
+    from mantis_agent.gym.run_executor import RunExecutor
+
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    augur = AugurAdapter(
+        run_id="back_alloc_zero", tenant_id="t", session_name="s", out_dir=tmp_path,
+    )
+    augur_spy = MagicMock(wraps=augur)
+    runner = MagicMock()
+    runner._augur = augur_spy
+    # MagicMock auto-attrs would synthesize _emitted_step_costs as a
+    # MagicMock — force it to absent-via-None so the getattr default
+    # kicks in. Realistic: runner never reached _emit_augur_step.
+    runner._emitted_step_costs = None
+    meter = MagicMock()
+    meter.totals.return_value = (0.50, 0.0, 0.0, 0.50)
+    meter.elapsed_seconds.return_value = 10.0
+    meter.costs = {
+        "claude_input_tokens": 0, "claude_output_tokens": 0,
+        "claude_cached_input_tokens": 0,
+    }
+    runner.cost_meter = meter
+    executor = RunExecutor.__new__(RunExecutor)
+    executor.parent = runner
+    executor._emit_augur_aggregate_metrics([])
+    augur_spy.set_step_costs.assert_not_called()

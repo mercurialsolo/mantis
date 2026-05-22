@@ -62,7 +62,16 @@ logger = logging.getLogger(__name__)
 # falls back to these defaults; an explicit empty dict disables all
 # caps and honours each step's ``budget`` verbatim (escape hatch).
 DEFAULT_BRAIN_BUDGET_CAPS: dict[str, int] = {
-    "scroll": 3,
+    # scroll bumped from 3 → 8 after observed regression on tall detail
+    # pages: 3 actions × ~600px ≈ 1800px coverage, well short of common
+    # 4000-6000px listing/detail pages. 8 actions covers ~4800px which
+    # spans most extraction-target pages without giving truly runaway
+    # scroll loops unbounded space. Decomposer asks for budget=10 on
+    # scroll steps; 8 still leaves the safety belt while matching real
+    # page heights. Run 20260522_175453_edc47137 (boattrader detail
+    # page, 4152px) halted at brain_loop_exhausted on scroll step with
+    # cap=3, scrollY only reached 1185.
+    "scroll": 8,
     "click": 4,
 }
 
@@ -255,12 +264,24 @@ class Holo3StepHandler:
             [r for r in prior_attempts if isinstance(r, dict)]
             if isinstance(prior_attempts, list) else None
         )
-        result = gym_runner.run(
-            task=task,
-            task_id=f"step_{index}_{step.type}",
-            pending_form_labels=outer_pending_labels,
-            retry_attempts=retry_attempts_list,
-        )
+        # Publish dispatch context so ContextModule predicates (read by
+        # the brain's compose_system_prompt) can include step-type-aware
+        # sections — KEYBOARD_SCROLL on scroll steps, FORM_FILLING on
+        # field/submit steps, NAVIGATE on navigate steps. Always-on
+        # modules (BLOCKING_OVERLAY) fire regardless. See
+        # ``src/mantis_agent/context_modules.py``.
+        from ...context_modules import push_step_context
+        with push_step_context({
+            "step_type": str(getattr(step, "type", "") or ""),
+            "step_section": str(getattr(step, "section", "") or ""),
+            "step_intent": str(getattr(step, "intent", "") or "")[:200],
+        }):
+            result = gym_runner.run(
+                task=task,
+                task_id=f"step_{index}_{step.type}",
+                pending_form_labels=outer_pending_labels,
+                retry_attempts=retry_attempts_list,
+            )
 
         success = result.success
         runner._update_scroll_state_from_trajectory(result, context=f"holo3_{step.type}")

@@ -1099,6 +1099,17 @@ class StepRecoveryPolicy:
         per_step_dict[step_index] = per_step + 1
         runner._total_recovery_attempts = per_run + 1
 
+        # Surface budget consumption explicitly so the next investigator
+        # can attribute who burned what — critic-frontier and
+        # step_recovery share one pool. Without this line the only
+        # signal was "skipped — per-step budget exhausted (N/N)" with
+        # no way to know who consumed the N.
+        logger.warning(
+            "  [%d] step_recovery: consumed recovery budget "
+            "(per_step=%d/%d, per_run=%d/%d) — decision.mode=%s",
+            step_index, per_step + 1, max_per_step,
+            per_run + 1, max_per_run, decision.mode,
+        )
         logger.warning(
             "  [%d] agentic recovery: mode=%s — %s",
             step_index, decision.mode, decision.reasoning[:200],

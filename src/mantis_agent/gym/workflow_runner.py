@@ -1291,6 +1291,17 @@ class WorkflowRunner:
                                 summary = _re.sub(r"URL:\s*\S*", f"URL: {url}", summary)
                             else:
                                 summary += f" | URL: {url}"
+                    # Ensure ``VIABLE | `` prefix is present — without it
+                    # ``ListingDedup.successful_lead_data`` silently drops
+                    # the lead (filter is ``data.startswith("VIABLE")``).
+                    # The Priority 2 synthetic-reconstruction branch
+                    # below already prepends it correctly; Priority 1 (the
+                    # happy path where the brain emitted structured fields
+                    # itself) was the regression-source — runs that
+                    # extracted real data reported "0 viable leads"
+                    # because the convention prefix was missing.
+                    if not summary.lstrip().startswith("VIABLE"):
+                        summary = "VIABLE | " + summary
                     return summary
 
         # Priority 2: Build structured data from thinking text

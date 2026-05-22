@@ -382,7 +382,15 @@ class Holo3Brain:
         per_step_action_history: list[Action] | None = None,
     ) -> list[dict]:
         """Build OpenAI-format messages with image content."""
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # Context-aware composition: splice in any ContextModule sections
+        # whose ``applies_when`` predicate is true for the active dispatch
+        # context (pushed via ``push_step_context`` by the calling handler).
+        # Modules are the modular replacement for hardcoded per-step
+        # sections in holo3_system.txt — adding a new behaviour for a new
+        # failure pattern is one module file, not a global prompt edit.
+        from .context_modules import compose_system_prompt
+        system_prompt = compose_system_prompt(SYSTEM_PROMPT)
+        messages = [{"role": "system", "content": system_prompt}]
 
         content: list[dict] = []
         n_frames = len(frames)
