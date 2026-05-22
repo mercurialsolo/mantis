@@ -241,7 +241,14 @@ class ClaudeStepHandler:
 
             # Dedup check (Phase 4: scanner owns the predicate now).
             if runner.scanner.is_duplicate(url):
-                logger.info(f"  [dedup] Already seen: {url[:50]}")
+                # WARNING-level so the dedup decision shows up in Modal
+                # logs (INFO is suppressed in production). Without this
+                # the "0 leads, halt=duplicate_listing" diagnosis is
+                # un-debuggable from logs alone (#600 follow-up).
+                logger.warning(
+                    "  [dedup] extract_url already seen: %s (step=%d)",
+                    url[:80], index,
+                )
                 dynamic_verifier.record_item_completed(
                     page=runner._current_page,
                     item=runner._current_item_label(data),
@@ -336,9 +343,14 @@ class ClaudeStepHandler:
             # listing and produce duplicate entries in the lead set.
             extracted_url = getattr(data, "url", "") if data else ""
             if runner.scanner.is_duplicate(extracted_url):
-                logger.info(
-                    "  [dedup] extract_data skip already-seen: %s",
-                    extracted_url[:80],
+                # WARNING-level (#600 follow-up): the "0 leads, halt=
+                # duplicate_listing" outcome turned out to be this gate
+                # firing immediately after extract_url marked the SAME
+                # URL seen one step earlier. We need the per-step URL
+                # in production logs to verify the mark→check race.
+                logger.warning(
+                    "  [dedup] extract_data already seen: %s (step=%d)",
+                    extracted_url[:80], index,
                 )
                 dynamic_verifier.record_item_completed(
                     page=runner._current_page,
@@ -404,7 +416,11 @@ class ClaudeStepHandler:
                 )
             if data and data.dealer_reason():
                 reason = data.dealer_reason()
-                logger.info("  [extract] Rejected non-private listing: %s", reason)
+                # WARNING-level (#600 follow-up) for production visibility.
+                logger.warning(
+                    "  [extract] Rejected non-private listing: %s url=%s",
+                    reason, (data.url or "")[:80],
+                )
                 runner._last_extracted = {
                     **runner._last_extracted,
                     "last_rejected_url": data.url,
@@ -441,7 +457,13 @@ class ClaudeStepHandler:
             extraction_context = _resolve_extraction_context(runner, data)
             if data and data.missing_required_reason(extraction_context):
                 reason = data.missing_required_reason(extraction_context)
-                logger.info("  [extract] Rejected incomplete lead: %s", reason)
+                # WARNING-level (#600 follow-up). Include URL + the
+                # extraction_context so we can tell DETAIL_PAGE-strict
+                # vs SEARCH_TILE-loose contracts apart in production.
+                logger.warning(
+                    "  [extract] Rejected incomplete lead: %s url=%s ctx=%s",
+                    reason, (data.url or "")[:80], extraction_context,
+                )
                 runner._last_extracted = {
                     **runner._last_extracted,
                     "last_rejected_url": data.url,
@@ -465,6 +487,16 @@ class ClaudeStepHandler:
                     data=f"REJECTED_INCOMPLETE|{reason}|{data.to_summary()[:160]}",
                     skip=skip, skip_reason=skip_reason,
                 )
+            # Catch-all: extract returned but didn't pass viable / dealer
+            # / missing-required gates. Previously silent; promote to
+            # WARNING (#600 follow-up) so the "0 leads, halt=…" outcome
+            # can be triaged from logs alone.
+            logger.warning(
+                "  [extract] Catch-all reject (not viable, no dealer flag, no required-miss): "
+                "url=%s data_present=%s",
+                (getattr(data, "url", "") or "")[:80],
+                bool(data),
+            )
             dynamic_verifier.record_item_completed(
                 page=runner._current_page,
                 item=item_label,
