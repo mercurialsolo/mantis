@@ -1232,6 +1232,7 @@ class ClaudeExtractor:
     def find_all_listings(
         self,
         screenshot: Image.Image,
+        already_clicked: list[str] | None = None,
     ) -> list[tuple[int, int, str]] | tuple[str]:
         """Find ALL listing cards on the page in ONE Claude call.
 
@@ -1243,6 +1244,15 @@ class ClaudeExtractor:
 
         Cost: ~$0.003-0.005 (one call regardless of how many cards).
         The caller clicks each sequentially without calling Claude again.
+
+        ``already_clicked``: titles of listings the runner has already
+        clicked-through in prior loop iterations. When non-empty, the
+        prompt explicitly instructs the brain NOT to return them — saves
+        Claude tokens (smaller scan output) and shifts dedup from a
+        post-hoc fuzzy title-substring match in ``click.py`` to the
+        model's classification step where it's both cheaper and cleaner.
+        Caller passes the bounded tail (last ~12) so the prompt token
+        budget stays small on long-running loops. See issue #597.
         """
         debug_stem = "claude_find_all"
         # All entity / spam / layout context comes from the schema. When no
@@ -1256,6 +1266,18 @@ class ClaudeExtractor:
             spam_examples_clause = (
                 f"\nSpam signals to filter (caller-provided): {examples}."
             )
+        already_clicked_clause = ""
+        if already_clicked:
+            # Cap defensively in case the caller forgets to slice; the
+            # tail-12 convention keeps the prompt bounded.
+            tail = list(already_clicked)[-12:]
+            tail_str = ", ".join(f'"{t}"' for t in tail if t)
+            if tail_str:
+                already_clicked_clause = (
+                    f"\nALREADY CLICKED — DO NOT RETURN (these entries "
+                    f"are already extracted by the runner; returning them "
+                    f"wastes a click cycle): {tail_str}."
+                )
         prompt = (
             f"Look at this screenshot ({screenshot.width}x{screenshot.height} pixels).\n\n"
             f"Find ALL eligible {entity} entries visible in this screenshot. "
@@ -1265,7 +1287,8 @@ class ClaudeExtractor:
             f"STRICT FILTER: only return organic entries the user can click. "
             f"Skip {spam_label} content, sponsored ads, navigation tabs, "
             f"sort/filter controls, headers, footers, and pagination bars."
-            f"{spam_examples_clause}\n\n"
+            f"{spam_examples_clause}"
+            f"{already_clicked_clause}\n\n"
             f"If the screenshot shows an error page, rate limit, bot check, "
             f"CAPTCHA, or sign-in wall, mark it as blocked.\n\n"
             f"Return the CENTER coordinates of each entry's primary clickable "

@@ -120,7 +120,17 @@ class ClaudeGuidedClickHandler:
                     pass
 
                 screenshot = env.screenshot()
-                scan_result = extractor.find_all_listings(screenshot)
+                # Issue #597: pass the runner's already-clicked title tail
+                # so the scan prompt instructs the brain NOT to return
+                # entries we've already processed. Shifts dedup from a
+                # post-hoc title-substring filter (below) to the model's
+                # classification step — saves Claude tokens and produces
+                # cleaner output (fewer cards to filter). Tail-12 keeps
+                # the prompt token budget bounded on long-running loops.
+                already_tail = list(getattr(runner, "_extracted_titles", []) or [])[-12:]
+                scan_result = extractor.find_all_listings(
+                    screenshot, already_clicked=already_tail,
+                )
                 runner.costs["claude_extract"] += 1
 
                 scan_status = "ok"
@@ -143,7 +153,9 @@ class ClaudeGuidedClickHandler:
                             runner._blocked_retry_done = True
                             time.sleep(12)
                             screenshot = env.screenshot()
-                            scan_result = extractor.find_all_listings(screenshot)
+                            scan_result = extractor.find_all_listings(
+                                screenshot, already_clicked=already_tail,
+                            )
                             runner.costs["claude_extract"] += 1
                             if isinstance(scan_result, tuple) and scan_result[0] == "blocked":
                                 logger.warning(
@@ -261,9 +273,15 @@ class ClaudeGuidedClickHandler:
         except Exception:
             pass
 
-        logger.info(
-            f"  [claude-click] Card {runner._page_listing_index}/{len(runner._page_listings)}: "
-            f"'{title_for_verification[:40]}' at ({x}, {y}) viewport={runner._viewport_stage}"
+        # WARNING level (not INFO) so per-run navigation counts surface
+        # in production logs — Modal app logs suppresses INFO. Without
+        # this every per-run "how many leads were clicked through?"
+        # question requires either tee-ing logs to durable storage or
+        # bisecting via deploy+rerun. See
+        # ``feedback_warning_level_for_modal_observability.md``.
+        logger.warning(
+            f"  [claude-click] NAV Card {runner._page_listing_index}/{len(runner._page_listings)}: "
+            f"'{title_for_verification[:60]}' at ({x}, {y}) viewport={runner._viewport_stage}"
         )
 
         # Delay before the final screenshot so grounding sees the frame we will actually click.
