@@ -65,6 +65,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Issue #600: the deterministic Home + N Page_Down scroll-restore would
+# place viewport stage 0 at the very top of the page, where a typical
+# results page shows a sticky header / search bar / promo band and the
+# first row of cards is only peeking in at the bottom edge (just the
+# photos, no titles or prices visible yet). ``find_all_listings`` then
+# returned ``title="unknown"`` for every card and the runner fell back
+# to coord placeholders — which (a) made PR #597's already-clicked
+# prefilter inert and (b) made the brain re-click the same screen
+# coordinates next iteration, hitting the URL-dedup gate.
+#
+# Adding a single Page_Down before stage 0 pushes the header off the
+# top so the first card row is fully visible (title + price + dealer
+# tag) when the scan + click both fire. The constant applies to both
+# the scan-time scroll and the click-time scroll so the brain clicks
+# at the same Y the scan reported.
+HEADER_PRESCROLL_PAGE_DOWNS = 1
+
 
 class ClaudeGuidedClickHandler:
     """Implements :class:`~..step_context.StepHandler` for listings ``click``.
@@ -106,13 +123,13 @@ class ClaudeGuidedClickHandler:
                 try:
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
                     time.sleep(0.5)
-                    for _ in range(runner._viewport_stage):
+                    for _ in range(HEADER_PRESCROLL_PAGE_DOWNS + runner._viewport_stage):
                         env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
                         time.sleep(0.5)
                     runner._set_scroll_state(
                         context="results_scan",
                         url=runner._current_results_page_url() or runner._results_base_url,
-                        page_downs=runner._viewport_stage,
+                        page_downs=HEADER_PRESCROLL_PAGE_DOWNS + runner._viewport_stage,
                         wheel_downs=0,
                         viewport_stage=runner._viewport_stage,
                     )
@@ -256,17 +273,19 @@ class ClaudeGuidedClickHandler:
             viewport_stage=runner._viewport_stage,
         )
 
-        # Scroll to the correct viewport (Home + N Page_Downs)
+        # Scroll to the correct viewport (Home + header-prescroll +
+        # N Page_Downs). The header prescroll must match the scan-time
+        # one (Issue #600) so the brain clicks the same Y the scan saw.
         try:
             env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
             time.sleep(0.5)
-            for _ in range(runner._viewport_stage):
+            for _ in range(HEADER_PRESCROLL_PAGE_DOWNS + runner._viewport_stage):
                 env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
                 time.sleep(0.5)
             runner._set_scroll_state(
                 context="results_click",
                 url=runner._current_results_page_url() or runner._results_base_url,
-                page_downs=runner._viewport_stage,
+                page_downs=HEADER_PRESCROLL_PAGE_DOWNS + runner._viewport_stage,
                 wheel_downs=0,
                 viewport_stage=runner._viewport_stage,
             )
@@ -700,7 +719,8 @@ class ClaudeGuidedClickHandler:
                 env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Escape"}))
                 env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
                 time.sleep(0.3)
-                for _ in range(runner._viewport_stage):
+                # Match the scan-time header prescroll (Issue #600).
+                for _ in range(HEADER_PRESCROLL_PAGE_DOWNS + runner._viewport_stage):
                     env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Page_Down"}))
                     time.sleep(0.3)
                 logger.info(
