@@ -25,7 +25,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from mantis_agent.actions import ActionType
-from mantis_agent.gym.step_handlers import click as click_module
 from mantis_agent.gym.step_handlers.click import (
     HEADER_PRESCROLL_PAGE_DOWNS,
     ClaudeGuidedClickHandler,
