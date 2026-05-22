@@ -874,6 +874,17 @@ def execute_step(
         return _stamp_backend(registry.get("submit").execute(synthesised, ctx), ctx)
 
     if step.gate and runner.extractor:
+        # #563: URL-substring short-circuit. When the plan author
+        # supplied ``expect_url_contains`` / ``expect_url_excludes``
+        # hints, check the address bar BEFORE paying for a Claude
+        # vision verify (~10-15s + $0.01-0.02 per gate). All listed
+        # substrings must be present (and any excludes absent) for
+        # the short-circuit to fire — falls through to the vision
+        # path otherwise. Hints are plan-author-opted-in; gates
+        # without hints are unchanged.
+        sc = _try_url_shortcircuit_gate(runner, step, index)
+        if sc is not None:
+            return sc
         print(f"  [gate] Verifying: {(step.verify or step.intent)[:80]}")
         time.sleep(2)
         screenshot = runner.env.screenshot()
@@ -916,6 +927,73 @@ def execute_step(
         return _stamp_backend(handler.execute(step, ctx), ctx)
 
     return runner._execute_holo3_step(step, index)
+
+
+def _try_url_shortcircuit_gate(
+    runner: Any, step: Any, index: int,
+) -> StepResult | None:
+    """#563: bypass the Claude verify_gate call when URL hints suffice.
+
+    Returns a PASS ``StepResult`` when the current URL matches
+    ``step.hints.expect_url_contains`` (all substrings present) and
+    does NOT match ``step.hints.expect_url_excludes`` (none present).
+    Returns ``None`` when no usable hints, when the current URL is
+    unavailable, or when the hint check doesn't conclusively pass —
+    caller falls through to the full Claude vision path.
+
+    Conservative on three fronts:
+
+    * Both hint lists must be parseable as ``list[str]`` — malformed
+      hints (dict, scalar, None) fall through silently.
+    * An empty ``expect_url_contains`` is treated as "no opinion"
+      (fall through). Plans that want pure-exclude gating can add
+      the domain itself to the expect list.
+    * Substring match is case-sensitive — URL paths are inherently
+      case-sensitive on most servers; case-insensitive matching could
+      false-positive on look-alike segments.
+
+    WARNING-level log on every short-circuit fire so production logs
+    surface the cost-savings path (Modal suppresses INFO).
+    """
+    hints = getattr(step, "hints", None) or {}
+    if not isinstance(hints, dict):
+        return None
+    expect = hints.get("expect_url_contains")
+    excludes = hints.get("expect_url_excludes")
+    expect_list: list[str] = []
+    excludes_list: list[str] = []
+    if isinstance(expect, (list, tuple)):
+        expect_list = [str(s) for s in expect if str(s)]
+    if isinstance(excludes, (list, tuple)):
+        excludes_list = [str(s) for s in excludes if str(s)]
+    if not expect_list:
+        # No expect-list → no signal strong enough to skip vision.
+        return None
+
+    url = ""
+    try:
+        url = str(getattr(runner.env, "current_url", "") or "")
+    except Exception:  # noqa: BLE001 — env adapter may not expose; fall through
+        return None
+    if not url:
+        return None
+
+    missing = [s for s in expect_list if s not in url]
+    if missing:
+        return None  # Vision still needed.
+    hit_excludes = [s for s in excludes_list if s in url]
+    if hit_excludes:
+        return None  # Exclude hit — vision still needed to disambiguate.
+
+    logger.warning(
+        "  [gate] URL short-circuit PASS — step %s expect=%s excludes=%s "
+        "url=%s (saved ~10-15s + Claude verify_gate cost)",
+        index, expect_list, excludes_list, url[:120],
+    )
+    return StepResult(
+        step_index=index, intent=step.intent, success=True,
+        data=f"gate:PASS:url_shortcircuit:{','.join(expect_list)}",
+    )
 
 
 def _stamp_backend(result: StepResult, ctx: Any) -> StepResult:
