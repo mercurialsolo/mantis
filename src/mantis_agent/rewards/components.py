@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from ..actions import Action
 
 
@@ -188,6 +190,47 @@ def _tokenize(text: str) -> set[str]:
         return set()
     raw = re.findall(r"[a-z0-9]+", text.lower())
     return {_stem(w) for w in raw if w and w not in _STOPWORDS}
+
+
+def oracle_step_reward(
+    mutations_delta: list[dict[str, Any]],
+    expected_ops: "Iterable[str]",
+    value: float = 0.1,
+) -> float:
+    """+``value`` per matching mutation, capped at one reward per step.
+
+    Used by sim-env reward fns to convert the server-side audit log
+    into a per-step training signal — cheaper and more reliable than
+    vision-based verifiers when the env exposes ``/__env__/mutations``.
+
+    Args:
+        mutations_delta: mutations recorded since the last step
+            (e.g. fetched via
+            :func:`mantis_agent.sim_envs.oracle_client.fetch_mutations`).
+            Each entry should have an ``operation`` key.
+        expected_ops: operation names that count as progress for this
+            step. Pass a small set tied to the plan step's intent —
+            ``{"lead_submitted"}`` for a contact-form click, etc.
+        value: positive reward per matching mutation. A single step
+            usually emits at most one mutation, so this caps reward at
+            ``value`` for the typical case while still scaling linearly
+            if a single agent action triggers multiple mutations.
+
+    Returns ``0.0`` when ``mutations_delta`` is empty or none of the
+    operations match — match-counting is single-pass and exact, so the
+    function is safe to call on every step regardless of whether a sim
+    env is in the loop.
+    """
+    if not mutations_delta:
+        return 0.0
+    expected = set(expected_ops)
+    if not expected:
+        return 0.0
+    hits = sum(
+        1 for m in mutations_delta
+        if isinstance(m, dict) and str(m.get("operation") or "") in expected
+    )
+    return value * hits
 
 
 def world_model_accuracy_reward(
