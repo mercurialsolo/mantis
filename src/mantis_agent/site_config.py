@@ -54,19 +54,6 @@ class SiteConfig:
     detail_page_pattern: str = ""  # e.g. r"/boat/[\w-]+" or r"/homes/\d+"
     results_page_pattern: str = ""  # e.g. r"/boats/" or r"/homes/"
 
-    # #586: CSS selector that matches legitimate listing-card elements.
-    # Plumbed into ``click.py`` BEFORE click dispatch — when set, the
-    # runner queries ``document.elementFromPoint(x, y)`` via CDP and
-    # walks ancestors to check whether the proposed click coords sit
-    # inside a real card or on a non-listing region (marketing CTA,
-    # newsletter promo, financing widget). Rejection lets the brain
-    # pick again instead of clicking the CTA.
-    #
-    # Empty (default) → no pre-click validation. Plans without a known
-    # card selector (analysis-stage-only configs, generic SaaS plans)
-    # are unaffected.
-    listing_card_css_selector: str = ""
-
     # Pagination
     pagination_format: str = ""  # template, e.g. "/page-{n}/" or "?page={n}" or "&start={n}"
     pagination_type: str = "path_suffix"  # "path_suffix", "query_param", "next_button"
@@ -271,16 +258,6 @@ class SiteConfig:
                 "Page is a filtered results page with these active filters: "
             ),
             filtered_results_url="https://www.boattrader.com/boats/by-owner/",
-            # #586: legitimate listing cards on boattrader carry
-            # ``data-reporting-impression-source="listings"`` on the
-            # outer <a>. Marketing CTAs (boat-loans, financing, insurance)
-            # don't have this attribute. Selector matches the anchor OR
-            # any ancestor — click.py walks ancestors when validating.
-            listing_card_css_selector=(
-                "a[data-reporting-impression-source='listings'], "
-                "article[data-listing-id], "
-                "div[data-listing-id]"
-            ),
         )
 
     @classmethod

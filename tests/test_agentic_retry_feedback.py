@@ -93,16 +93,58 @@ def test_record_failure_appends_to_history() -> None:
     assert history[0]["kind"] == "no_state_change"
 
 
-def test_record_failure_skips_when_no_target_stash() -> None:
-    """If the form handler didn't stash a click target (e.g. the step
-    failed with ``form_target_not_found`` before reaching the click),
-    there's nothing to feed back — record_failure is a no-op."""
+def test_record_failure_no_op_when_step_result_already_stamped() -> None:
+    """Second call within the same iteration that passes a stamped
+    ``step_result`` no-ops — prevents the centralized call in
+    ``_handle_failure`` from double-counting failures the demote
+    sites already recorded."""
+    from mantis_agent.gym.checkpoint import StepResult
+
+    runner = _make_runner(
+        last_submit_target={"x": 1, "y": 1, "label": "A", "matched_label": "A"},
+    )
+    sr = StepResult(
+        step_index=5, intent="click X", success=False,
+        data="wrong_target", duration=1.0, steps_used=0,
+        failure_class="wrong_target",
+    )
+    RunExecutor._record_failure_for_retry(
+        runner=runner, step_index=5, kind="wrong_target",
+        reason="first", step_result=sr,
+    )
+    # Centralized fallback in _handle_failure would call again on
+    # the same iteration with the stamped step_result. Must no-op.
+    RunExecutor._record_failure_for_retry(
+        runner=runner, step_index=5, kind="wrong_target",
+        reason="second", step_result=sr,
+    )
+    assert len(runner._step_failure_history[5]) == 1
+    assert runner._step_failure_history[5][0]["reason"] == "first"
+    assert sr._retry_history_recorded is True
+
+
+def test_record_failure_appends_bare_record_when_no_target_stash() -> None:
+    """When ``_last_submit_target`` is None — the demote-wrong-target
+    path that fires without going through the form/submit handler —
+    we still append a bare record (x/y/label all None / empty) so
+    the critic-frontier's ``failure_count`` actually advances. The
+    prior no-op behavior kept the count at 0 and let the same step
+    retry indefinitely; the canonical symptom was a time-cap halt
+    with zero leads on plans whose first failing step was a click
+    with URL hints that didn't go through the submit handler."""
     runner = _make_runner(last_submit_target=None)
     RunExecutor._record_failure_for_retry(
-        runner=runner, step_index=5, kind="no_state_change", reason="",
+        runner=runner, step_index=5, kind="wrong_target",
+        reason="URL missing expected substring(s)",
     )
-    # No history added.
-    assert runner._step_failure_history.get(5, []) == []
+    history = runner._step_failure_history[5]
+    assert len(history) == 1
+    assert history[0]["kind"] == "wrong_target"
+    # Coords / label are bare — no avoid-hint for the retry path,
+    # which falls back to no-coord retry.
+    assert history[0]["x"] is None
+    assert history[0]["y"] is None
+    assert history[0]["label"] == ""
 
 
 def test_record_failure_accumulates_across_retries() -> None:

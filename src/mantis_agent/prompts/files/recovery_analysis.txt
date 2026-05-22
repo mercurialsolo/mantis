@@ -93,6 +93,21 @@ FAILURE DATA LEGEND (decode the failure string before choosing a mode):
     Do NOT pick this when scrollY is near 0 — the issue is
     something else (URL drift, empty data, anti-bot).
 
+- **SCROLL STEP EXHAUSTED MID-PAGE** (very common, easy to misdiagnose as halt). Check this BEFORE picking ``halt``. Signature:
+  * ``step.type`` is ``scroll``
+  * ``failure_class`` is ``brain_loop_exhausted``
+  * PAGE STATE shows ``scrollY > 0`` (the page DID move) AND ``scrollY`` is well below ``scrollHeight - viewportHeight`` (still room to scroll further; the target content is below the current viewport — NOT at the end of the page)
+  This is NOT a stuck step — it just needs MORE iterations. The brain ran out of per-step move budget while making real progress (you'll typically see scrollY jumped by hundreds of pixels per attempt). The right recovery is ``add_hint``, NOT ``halt``: emit a hint like ``"This scroll step is making progress (scrollY=<observed>/<total>) but ran out of brain budget before reaching the target. On the next attempt, prefer scroll(direction='down', amount=15) so each action covers more of the page, and continue scrolling until the Description/More Details/footer content the plan expects is in view."`` Only pick ``halt`` if the page is already at the bottom (scrollY ≈ scrollHeight - viewportHeight) and the target content STILL isn't visible — that means the plan's content expectation is wrong, not the scroll itself.
+
+- **BLOCKING OVERLAY DETECTED in the screenshot** (highest-priority diagnosis — check FIRST regardless of the failure_class string). When the screenshot shows any of the patterns below, the failure is almost certainly that the agent's action landed on or behind the overlay rather than on the underlying content. Recovery is the same in every case: dismiss the overlay first, then re-attempt the original step.
+  Patterns:
+  * Fullscreen image / media lightbox — full-viewport image (the page's hero / gallery photo), a "N of M" caption near the top of the viewport, and a "Close" / "X" button at the top-right. Triggered by clicking a hero image during scroll. Blocks the underlying content the step needs.
+  * Cookie / GDPR consent banner — bottom-of-viewport or modal with "Accept" / "Reject" / "Manage" buttons and a dark scrim.
+  * Newsletter / email-signup modal — centered popup with input + "Subscribe" / "No thanks" / "X".
+  * "Sign in to continue" / paywall / login-wall — centered modal demanding auth before the underlying content can be read.
+  * Notification toast or chat widget covering the target action area.
+  Recovery: prefer ``add_hint`` with text like ``"A blocking overlay is covering the page (signature: <pattern>). BEFORE re-attempting the step, press the Escape key to dismiss it. If Escape doesn't work, click the Close / X button at the top-right corner of the overlay. Then proceed with the original action."`` Use ``insert_steps`` ONLY when the dismiss needs its own distinct action whose handler the runner can dispatch (rare — the brain can usually do Escape + retry inline). Do NOT pick ``edit_step`` or ``halt`` for overlay cases — the step's structure is fine; only the page state is wrong.
+
 - ``no_state_change`` (or demoted submit) — the click landed but
   produced no observable page change. Two common shapes — disambiguate
   using the screenshot:

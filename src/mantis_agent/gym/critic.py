@@ -323,8 +323,19 @@ class ExecutionCritic:
             # If we still don't have a scheme, fall through — let the
             # navigate handler surface its own error. Better than
             # silently no-op on the only recovery path the plan named.
+        # Read history under the FAILED step's index, NOT
+        # ``state.step_index``. The recovery policy may have advanced
+        # ``state.step_index`` past the failed step before this critic
+        # runs (canonical case: ``handle_failure`` returns an
+        # ``outcome.step_index`` further along, then ``_consult_critic``
+        # fires); reading under the advanced index misses the history
+        # the demote / centralized-failure path recorded against the
+        # ACTUAL failed step. Symptom: ``[retry-history] step N`` keeps
+        # firing while ``[critic-frontier] step M`` reports
+        # ``failure_count=0`` forever (N != M).
+        history_key = int(getattr(step_result, "step_index", state.step_index))
         history = (
-            self.runner._step_failure_history.get(int(state.step_index), [])
+            self.runner._step_failure_history.get(history_key, [])
             if hasattr(self.runner, "_step_failure_history") else []
         )
         if not isinstance(history, list) or len(history) < 2:
@@ -332,7 +343,7 @@ class ExecutionCritic:
         logger.warning(
             "  [critic] step %d: using plan-supplied fallback_url=%r "
             "(after %d prior failures of class %s)",
-            state.step_index, fallback_url, len(history), failure_class,
+            history_key, fallback_url, len(history), failure_class,
         )
         # Reasoning-trace event so viewer overlays see the
         # deterministic replacement alongside the frontier-critic
@@ -608,7 +619,18 @@ class ExecutionCritic:
         from . import intent_rewriter
         failure_class = str(getattr(step_result, "failure_class", "") or "")
         runner = self.runner
-        step_index = int(state.step_index)
+        # Use the FAILED step's index, not ``state.step_index``. The
+        # recovery policy may have advanced state.step_index past the
+        # failed step before this critic runs, so reading
+        # ``_step_failure_history[state.step_index]`` misses the
+        # records the demote / centralized-failure paths recorded
+        # under the actual failed step. The boattrader run
+        # ``20260522_080738_ac8962a8`` surfaced this: every iteration
+        # logged ``[retry-history] step 2`` (correct, failed_step=2)
+        # alongside ``[critic-frontier] step 7`` ``failure_count=0``
+        # — different keys, history lookup missed forever, escalation
+        # never fired, time_cap halt with 0 leads.
+        step_index = int(getattr(step_result, "step_index", state.step_index))
 
         # Diagnostic: surface every gate decision at WARNING so the
         # trace shows which guard closed the door. This makes the
@@ -639,17 +661,38 @@ class ExecutionCritic:
             )
             return None
 
-        # Already consulted Claude for this step? Don't double-spend.
+        # Growth-gated re-fire: track the failure_count at last fire
+        # and allow re-firing only after THRESHOLD more failures have
+        # accumulated. The prior "fire-once-ever" guard was too strict
+        # for loop-iterated plans (e.g. boattrader scrapes that hit
+        # the same plan step on each listing iteration) — Claude got
+        # one shot at the same step_index regardless of how many fresh
+        # failures arrived, then was locked out until time_cap. The
+        # per-step + per-run budget caps below already bound total
+        # Claude cost, so the binary fire-once was belt-and-suspenders
+        # at the cost of recovery opportunity.
         fired = getattr(runner, "_critic_frontier_fired_steps", None)
         if not isinstance(fired, set):
             fired = set()
             runner._critic_frontier_fired_steps = fired
+        last_fire_counts = getattr(
+            runner, "_critic_frontier_last_fire_counts", None,
+        )
+        if not isinstance(last_fire_counts, dict):
+            last_fire_counts = {}
+            runner._critic_frontier_last_fire_counts = last_fire_counts
         if step_index in fired:
-            logger.warning(
-                "  [critic-frontier] step %d: skipped — already fired this step",
-                step_index,
-            )
-            return None
+            prev_count = int(last_fire_counts.get(step_index, 0))
+            new_failures = failure_count - prev_count
+            if new_failures < _FRONTIER_PERSISTENT_FAILURE_THRESHOLD:
+                logger.warning(
+                    "  [critic-frontier] step %d: skipped — only %d new "
+                    "failures since last fire (count=%d, last_fire=%d); "
+                    "threshold=%d",
+                    step_index, new_failures, failure_count, prev_count,
+                    _FRONTIER_PERSISTENT_FAILURE_THRESHOLD,
+                )
+                return None
 
         # Reuse the existing recovery budget pool so the critic's
         # frontier call and step_recovery's terminal call share one
@@ -748,8 +791,11 @@ class ExecutionCritic:
 
         # Mark fired BEFORE applying — even if Claude returned halt /
         # invalid, we don't want to retry the consultation on the same
-        # step (the policy budget exists for that).
+        # step (the policy budget exists for that). The companion
+        # ``last_fire_counts`` dict gates re-fires on growth — see the
+        # guard above.
         fired.add(step_index)
+        last_fire_counts[step_index] = failure_count
 
         if decision is None:
             # Claude call failed (no key / API error / parse fallback).
@@ -774,6 +820,12 @@ class ExecutionCritic:
         # path doesn't double-spend.
         per_step_dict[step_index] = per_step_dict.get(step_index, 0) + 1
         runner._total_recovery_attempts = total_attempts + 1
+        logger.warning(
+            "  [critic-frontier] step %d: consumed recovery budget "
+            "(per_step=%d/%d, per_run=%d/%d) — decision.mode=%s",
+            step_index, per_step_dict[step_index], max_per_step,
+            runner._total_recovery_attempts, max_per_run, decision.mode,
+        )
         if decision.mode == "halt":
             logger.warning(
                 "  [critic-frontier] step %d: halt — Claude says no plan "
