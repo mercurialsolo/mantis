@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% set f = result.filters %}
+{% set facets = result.facets %}
+{% block title %}Boats for sale - Boat Trader{% endblock %}
+
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <a href="/">Home</a> <span>/</span> <span aria-current="page">Boats For Sale</span>
+</nav>
+
+<div class="srp">
+  <h1 class="srp-h1">Boats for sale</h1>
+
+  <div class="srp-grid">
+    <aside class="srp-sidebar" aria-label="Filters">
+      <form id="filters-form" action="/boats/" method="get" class="filters-form">
+        <button type="submit" class="btn btn-primary btn-block search-alerts-button" name="save_search" value="1" data-testid="save-search">Save Search</button>
+
+        <details class="filter-group" data-testid="filter-location" open>
+          <summary><span class="filter-group-label">Location</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <div class="zip-toggle">
+              <button type="button" class="zip-tab active" data-tab="zip">Zip Code</button>
+              <button type="button" class="zip-tab" data-tab="city">City / State</button>
+              <button type="button" class="zip-tab" data-tab="other">Other ▾</button>
+            </div>
+            <div class="zip-row">
+              <div class="zip-select-wrap">
+                <select class="filter-select" name="distance">
+                  <option value="10">10 miles</option>
+                  <option value="25" selected>25 miles</option>
+                  <option value="50">50 miles</option>
+                  <option value="100">100 miles</option>
+                  <option value="200">200 miles</option>
+                  <option value="500">500 miles</option>
+                </select>
+              </div>
+              <span class="zip-from">from</span>
+              <input class="filter-input zip-input" type="text" name="zip" value="{{ request.query_params.get('zip','') }}" placeholder="Zip" pattern="[0-9]{5}" maxlength="5" />
+            </div>
+            <a href="#" class="zip-use-location">Use My Location</a>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-condition" open>
+          <summary><span class="filter-group-label">Condition</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <div class="seg-control" role="radiogroup">
+              <label class="seg {% if f.condition=='all' %}active{% endif %}">
+                <input type="radio" name="condition" value="all" {% if f.condition=='all' %}checked{% endif %} /> All
+              </label>
+              <label class="seg {% if f.condition=='new' %}active{% endif %}">
+                <input type="radio" name="condition" value="new" {% if f.condition=='new' %}checked{% endif %} /> New
+              </label>
+              <label class="seg {% if f.condition=='used' %}active{% endif %}">
+                <input type="radio" name="condition" value="used" {% if f.condition=='used' %}checked{% endif %} /> Used
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-length" open>
+          <summary><span class="filter-group-label">Length</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <div class="range-slider-wrap" aria-hidden="true">
+              <div class="range-track"></div>
+              <div class="range-fill"></div>
+              <div class="range-handle range-handle-min"></div>
+              <div class="range-handle range-handle-max"></div>
+            </div>
+            <div class="range-row">
+              <input class="filter-input range-input" type="number" min="{{ facets.length_range[0]|int }}" max="{{ facets.length_range[1]|int }}" name="length_min" placeholder="No Min" value="{{ f.length_min or '' }}" />
+              <span>to</span>
+              <input class="filter-input range-input" type="number" min="{{ facets.length_range[0]|int }}" max="{{ facets.length_range[1]|int }}" name="length_max" placeholder="No Max" value="{{ f.length_max or '' }}" />
+              <span class="range-unit">ft.</span>
+            </div>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-year" open>
+          <summary><span class="filter-group-label">Year</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <div class="range-slider-wrap" aria-hidden="true">
+              <div class="range-track"></div>
+              <div class="range-fill"></div>
+              <div class="range-handle range-handle-min"></div>
+              <div class="range-handle range-handle-max"></div>
+            </div>
+            <div class="range-row">
+              <input class="filter-input range-input" type="number" min="{{ facets.year_range[0] }}" max="{{ facets.year_range[1] }}" name="year_min" placeholder="No Min" value="{{ f.year_min or '' }}" />
+              <span>to</span>
+              <input class="filter-input range-input" type="number" min="{{ facets.year_range[0] }}" max="{{ facets.year_range[1] }}" name="year_max" placeholder="No Max" value="{{ f.year_max or '' }}" />
+            </div>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-price" open>
+          <summary><span class="filter-group-label">Price</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <div class="range-slider-wrap" aria-hidden="true">
+              <div class="range-track"></div>
+              <div class="range-fill"></div>
+              <div class="range-handle range-handle-min"></div>
+              <div class="range-handle range-handle-max"></div>
+            </div>
+            <div class="range-row">
+              <input class="filter-input range-input" type="number" min="0" step="1000" name="price_min" placeholder="No Min" value="{{ f.price_min or '' }}" />
+              <span>to</span>
+              <input class="filter-input range-input" type="number" min="0" step="1000" name="price_max" placeholder="No Max" value="{{ f.price_max or '' }}" />
+            </div>
+            <label class="checkbox-row">
+              <input type="checkbox" name="price_drop" value="1" {% if f.price_drop %}checked{% endif %} />
+              <span>Price Drop only</span>
+            </label>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-type" open>
+          <summary><span class="filter-group-label">Boat Type</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <select class="filter-select" name="type">
+              <option value="">All Boat Types</option>
+              {% for t, n in facets.by_type.items() %}
+                <option value="{{ t }}" {% if f.type==t %}selected{% endif %}>{{ t }} ({{ n }})</option>
+              {% endfor %}
+            </select>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-make" open>
+          <summary><span class="filter-group-label">Make</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <select class="filter-select" name="make">
+              <option value="">All Makes</option>
+              {% for m, n in facets.by_make.items() %}
+                <option value="{{ m }}" {% if f.make==m %}selected{% endif %}>{{ m }} ({{ n }})</option>
+              {% endfor %}
+            </select>
+          </div>
+        </details>
+
+        <button type="submit" class="btn btn-primary btn-block apply-filters" data-testid="apply-filters">Apply Filters</button>
+        <a href="/boats/" class="filter-clear">Clear all</a>
+      </form>
+    </aside>
+
+    <section class="srp-results">
+      <form class="srp-search" action="/boats/" method="get" role="search">
+        <span class="ai-search-v2__icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2 L13.5 8.5 L20 10 L13.5 11.5 L12 18 L10.5 11.5 L4 10 L10.5 8.5 Z M19 4 L19.7 6.3 L22 7 L19.7 7.7 L19 10 L18.3 7.7 L16 7 L18.3 6.3 Z"/></svg></span>
+        <span class="ai-search-v2__try-prefix" aria-hidden="true">Try</span>
+        <input class="ai-search-v2__input" type="search" name="q" placeholder='&ldquo;fishing boats under $80k&rdquo;' value="{{ f.q }}" />
+        <button type="submit" class="ai-search-v2__submit" aria-label="Search"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+      </form>
+
+      <div class="prequal-banner" data-testid="prequal-banner">
+        <div class="prequal-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3"/></svg></div>
+        <div class="prequal-copy">
+          <strong>Pre-qualify for a boat loan in minutes</strong>
+          <span>We'll check over 15 marine lenders to get you the best rate.</span>
+        </div>
+        <a href="/boat-loans/" class="btn btn-primary banner-prequal-button srp-apply-now-button">Get Started →</a>
+      </div>
+
+      <header class="srp-results-header">
+        <span class="srp-results-count" data-testid="srp-count"><strong>{{ "{:,}".format(result.total) }}</strong> boats</span>
+        <label class="sort-row">
+          <span class="sort-label"><strong>Sort:</strong></span>
+          <select name="sort" form="filters-form" class="sort-select" data-testid="sort-select">
+            {% for value, label in sorts %}
+              <option value="{{ value }}" {% if result.sort==value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </header>
+
+      {% if result.boats %}
+      <div class="srp-grid-results">
+        {% for b in result.boats %}
+          {% include "_listing_card.html" %}
+          {% if loop.index == 6 %}
+            {% set rail_ad = pick_ad("rail_right") %}
+            <a class="ad-card" href="/ad/{{ rail_ad.id }}/click" data-testid="ad-component" data-ad-id="{{ rail_ad.id }}">
+              <img src="/ad/{{ rail_ad.id }}.svg?w=400&h=420" alt="{{ rail_ad.sponsor }}" />
+              <span class="sponsor-tag">Sponsored</span>
+            </a>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="srp-empty">
+        <strong>No boats found.</strong>
+        <p>Try widening your filters — for example, broaden the price range or remove the make filter.</p>
+        <a href="/boats/" class="btn btn-primary">Reset filters</a>
+      </div>
+      {% endif %}
+
+      <nav class="pagination" aria-label="Pagination">
+        {% set qs = querystring %}
+        {% set page_url = '/boats/?page=' %}
+        {% if result.page > 1 %}
+          <a class="page-prev" href="?{% if qs %}{{ qs }}&{% endif %}page={{ result.page - 1 }}">‹ Prev</a>
+        {% endif %}
+        {% set total_pages = result.pages %}
+        {% set window_lo = [1, result.page - 2]|max %}
+        {% set window_hi = [total_pages, result.page + 2]|min %}
+        {% for p in range(window_lo, window_hi + 1) %}
+          <a class="page-link {% if p==result.page %}active{% endif %}" href="?{% if qs %}{{ qs }}&{% endif %}page={{ p }}">{{ p }}</a>
+        {% endfor %}
+        <span class="page-total">of {{ total_pages }}</span>
+        {% if result.page < total_pages %}
+          <a class="page-next" href="?{% if qs %}{{ qs }}&{% endif %}page={{ result.page + 1 }}">Next ›</a>
+        {% endif %}
+      </nav>
+    </section>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,538 @@
+{% extends "base.html" %}
+{% block title %}{{ boat.condition|capitalize }} {{ boat.title }}, {{ boat.zip }} {{ boat.city }} - Boat Trader{% endblock %}
+{% block description %}{{ boat.description[0] if boat.description else '' }} {{ boat.city }}, {{ boat.state }}.{% endblock %}
+
+{# Real BT BDP omits the top prequal ribbon. #}
+{% block ribbon %}{% endblock %}
+
+{% block content %}
+
+{# ─── Top sponsor banner (above breadcrumb) ──────────────────── #}
+{% set banner_ad = pick_ad("leaderboard_top") %}
+<section class="ad-strip detail-top">
+  <a class="ad-banner" href="/ad/{{ banner_ad.id }}/click" data-testid="ad-component" data-ad-id="{{ banner_ad.id }}">
+    <img src="/ad/{{ banner_ad.id }}.svg?w=970&h=120" alt="{{ banner_ad.sponsor }}" />
+    <span class="sponsor-tag">Sponsored</span>
+  </a>
+</section>
+
+{# ─── Sticky boat header bar (shows on scroll).
+   Matches real BT: breadcrumb stays in the sticky row, NOT the
+   title/price line — that lives only in the right-rail summary. ── #}
+<div class="bdp-sticky-bar" data-testid="bdp-sticky-bar">
+  <div class="bdp-sticky-bar-inner">
+    <a href="/boats/" class="bdp-back">‹ Search</a>
+    <nav class="breadcrumb sticky-breadcrumb" aria-label="Breadcrumb">
+      <a href="/">Home</a> / <a href="/boats/">Boats For Sale</a> /
+      <a href="/boats/?fuel_type=Diesel">Power</a> /
+      <a href="/boats/?type={{ boat.boat_type|urlencode }}">{{ boat.boat_type }}</a> /
+      <a href="/boats/?make={{ boat.make|urlencode }}">{{ boat.make }}</a>
+    </nav>
+    <div class="sticky-actions">
+      {% if next_boat %}<a href="/boat/{{ next_boat.slug }}/" class="bdp-next">Next Boat</a>{% endif %}
+      <a href="#contact" class="btn-primary sticky-contact-btn">Contact Seller</a>
+    </div>
+  </div>
+</div>
+
+{# ─── Breadcrumb row ─────────────────────────────────────────── #}
+<div class="bdp-nav-row">
+  <a href="/boats/" class="bdp-back">‹ Search</a>
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/">Home</a> / <a href="/boats/">Boats For Sale</a> /
+    <a href="/boats/?fuel_type=Diesel">Power</a> /
+    <a href="/boats/?type={{ boat.boat_type|urlencode }}">{{ boat.boat_type }}</a> /
+    <a href="/boats/?make={{ boat.make|urlencode }}">{{ boat.make }}</a>
+  </nav>
+  {% if next_boat %}<a href="/boat/{{ next_boat.slug }}/" class="bdp-next">Next Boat ›</a>{% endif %}
+</div>
+
+{% if lead_confirmation %}
+<div class="lead-confirm" data-testid="lead-confirmation">
+  ✓ Your message was sent to the seller. Confirmation: <strong>{{ lead_confirmation.id }}</strong>
+</div>
+{% endif %}
+
+{# ─── Two-column layout: gallery + summary side-by-side, with
+   the stats strip, "What Owners Say", and Boat Details all
+   constrained to the left column. Loan calc / Listed By / Similar
+   Boats fall outside the grid and span full width. ───────── #}
+<div class="bdp-grid bdp-grid-stack">
+
+  {# Right rail comes first in HTML so the grid's column 2 anchors
+     to the top of the gallery row. CSS reorders visually with
+     grid-column placement. #}
+  <div class="bdp-gallery" data-testid="gallery">
+    <div class="bdp-main-image">
+      <img src="{{ boat.images[0] }}" alt="{{ boat.title }}" />
+      <button class="gallery-prev" type="button" aria-label="Previous photo">‹</button>
+      <button class="gallery-next" type="button" aria-label="Next photo">›</button>
+      <button class="gallery-share" type="button" aria-label="Share">⤴</button>
+      <button class="liked-boat-btn gallery-like" type="button" aria-label="Save listing" data-testid="liked-boat-btn">♡</button>
+    </div>
+    <ul class="bdp-thumbs" data-testid="bdp-thumbs">
+      {% set _thumbs = boat.images[:5] %}
+      {% set _more = (boat.images|length) - 5 %}
+      {% for img in _thumbs %}
+        <li class="bdp-thumb {% if loop.index == 2 %}is-active{% endif %}">
+          <img src="{{ img }}" alt="{{ boat.title }} photo {{ loop.index }}" />
+          {% if loop.first %}
+            <span class="thumb-overlay">View {{ boat.images|length }} Photos</span>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <aside class="bdp-summary" data-listing-type="{{ boat.listing_type }}">
+    {% if boat.is_sponsored %}
+      <div class="sponsored-strip">SPONSORED LISTING</div>
+    {% endif %}
+    {% if boat.badges %}
+      <div class="bdp-badges">
+      {% for badge in boat.badges %}<span class="listing-tag listing-tag-{{ badge|lower|replace(' ','-') }}">{{ badge }}</span>{% endfor %}
+      </div>
+    {% endif %}
+    <h1 class="bdp-title">{{ boat.title }} <span class="bdp-length">| {{ boat.length_ft|int }}'</span></h1>
+    <p class="bdp-location">{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</p>
+    <div class="bdp-price-block" data-testid="price-block">
+      <p class="bdp-price">
+        <strong>{{ boat.display_price }}</strong>
+        {% if boat.price_drop_amount %}
+          <span class="bdp-price-drop"><span class="bdp-price-drop-arrow">↓</span>{{ boat.price_drop_amount|replace('-','') }}</span>
+        {% endif %}
+      </p>
+      {% if boat.monthly_price %}
+        <p class="bdp-own-line">
+          <a href="#loan-calculator" class="bdp-own-link">Own this boat for {{ boat.display_monthly|replace('*','') }}</a>
+          <span class="info-tip" title="Estimated payment">ⓘ</span>
+          <a href="#loan-calculator" class="bdp-customize-link">Customize</a>
+        </p>
+      {% endif %}
+    </div>
+    <ul class="bdp-engagement-row">
+      <li class="engagement-item"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span> <strong>{{ boat.views }}</strong> Views</li>
+      <li class="engagement-item"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></span> <strong>{{ boat.saves }}</strong> Save{% if boat.saves != 1 %}s{% endif %}</li>
+      <li class="engagement-item"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
+        {% if boat.listed_days_ago <= 7 %}New to Market
+        {% elif boat.listed_days_ago <= 30 %}Listed {{ boat.listed_days_ago }} days ago
+        {% else %}Listed {{ (boat.listed_days_ago / 30)|int }} months ago{% endif %}
+      </li>
+    </ul>
+
+    {# ─── Contact card (owner vs dealer/sponsored) ────────────── #}
+    {% if boat.is_owner_listed %}
+      <div class="bdp-private-seller-card" id="contact" data-testid="private-seller-card">
+        <div class="private-seller-tag">Private Seller</div>
+        <h2 class="dealer-card-heading">Contact {{ boat.owner_name }}, the owner</h2>
+        <p class="private-seller-note">
+          This boat is being sold directly by the owner. Boat Trader does not verify
+          private-seller listings — please ask for a survey, title, and registration before purchase.
+        </p>
+        <div class="private-seller-phone-row" data-testid="phone-row">
+          {% set show_phone = request.cookies.get('bt_show_phone_' ~ boat.id) == '1' %}
+          {% if show_phone %}
+            <img class="phone-svg" src="/assets/phone/{{ boat.slug }}.svg?_t={{ boat.id }}" alt="Phone number" data-testid="phone-svg" />
+            <span class="phone-note">Call between 9am – 6pm local time.</span>
+          {% else %}
+            <form method="post" action="/boat/{{ boat.slug }}/show-phone">
+              <button type="submit" class="btn-secondary show-phone-btn" data-testid="show-phone-btn"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> Show Phone Number</button>
+            </form>
+            <span class="phone-note">The seller's number is hidden until you confirm you're a buyer.</span>
+          {% endif %}
+        </div>
+        <form class="dealer-lead-form" method="post" action="/boat/{{ boat.slug }}/contact" data-testid="dealer-lead-form">
+          <input type="text" name="name" placeholder="First &amp; Last Name" required class="lead-input" />
+          <div class="lead-row">
+            <input type="email" name="email" placeholder="Your Email" required class="lead-input" />
+            <input type="tel" name="phone" placeholder="Your Phone" class="lead-input" />
+          </div>
+          <textarea name="message" rows="3" class="lead-textarea" placeholder="Hi {{ boat.owner_name }}, I'm interested in your {{ boat.year }} {{ boat.make }} {{ boat.model }}. Is it still available?"></textarea>
+          <button type="submit" class="btn-primary btn-block contact-seller-btn srp-apply-now-button" data-testid="contact-seller-submit">Email Seller</button>
+        </form>
+      </div>
+    {% else %}
+      <div class="bdp-dealer-card" id="contact" data-testid="dealer-card">
+        {% set _sp_idx = (boat.id|length + boat.year) % 6 %}
+        <h2 class="dealer-card-heading">Contact {{ ['Michael Mandery','Jennifer Cole','Marcus Webb','Elena Patel','Tom Hartwell','Priya Shah'][_sp_idx] }}</h2>
+        <div class="dealer-card-meta">
+          <div class="dealer-headshot" aria-label="Salesperson headshot">
+            <svg viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" width="60" height="60">
+              <defs><linearGradient id="hs{{ _sp_idx }}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#9bbcdb"/><stop offset="1" stop-color="#3a6a93"/></linearGradient></defs>
+              <rect width="60" height="60" rx="30" fill="url(#hs{{ _sp_idx }})"/>
+              <circle cx="30" cy="24" r="11" fill="#f2e3c8"/>
+              <path d="M8 60 Q 30 36 52 60 Z" fill="#f2e3c8"/>
+            </svg>
+          </div>
+          <address class="dealer-address">
+            {{ dealer.name }}<br/>
+            <a href="tel:{{ dealer.phone }}" class="dealer-phone"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> {{ dealer.phone }}</a>
+          </address>
+        </div>
+        <form class="dealer-lead-form" method="post" action="/boat/{{ boat.slug }}/contact" data-testid="dealer-lead-form">
+          <input type="text" name="name" placeholder="First &amp; Last Name" required class="lead-input" />
+          <div class="lead-row">
+            <input type="email" name="email" placeholder="Your Email" required class="lead-input" />
+            <input type="tel" name="phone" placeholder="Your Phone" class="lead-input" />
+          </div>
+          <textarea name="message" rows="3" class="lead-textarea" placeholder="I'm interested in your {{ boat.year }} {{ boat.make }} {{ boat.model }}. Please contact me with more information."></textarea>
+          <button type="submit" class="btn-primary btn-block contact-seller-btn srp-apply-now-button" data-testid="contact-seller-submit">Contact Seller</button>
+          <a href="tel:{{ dealer.phone }}" class="btn-secondary btn-block call-btn"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> Call</a>
+        </form>
+      </div>
+
+      {# Separate dealership card with logo + address + active/sold stats. #}
+      <div class="bdp-dealership-card" data-testid="dealership-card">
+        <div class="dealership-logo-wrap">
+          <div class="dealership-logo">
+            <span class="logo-mark">{{ dealer.logo_initial }}</span>
+            <span class="logo-name">{{ dealer.name|upper }}</span>
+          </div>
+        </div>
+        <p class="dealership-address">{{ dealer.address }}, {{ dealer.city }}, {{ dealer.state }}, {{ dealer.zip }}</p>
+        <p class="trusted-partner">Trusted Boat Trader Partner | <strong>{{ dealer.trusted_partner_label }}</strong></p>
+        <div class="dealership-stats">
+          <div class="dealership-stat-box">
+            <span class="dealership-stat-num">{{ dealer.active_listings }}</span>
+            <span class="dealership-stat-label">Active listings</span>
+          </div>
+          <div class="dealership-stat-box">
+            <span class="dealership-stat-num">{{ "{:,}".format(dealer.sold_listings) }}</span>
+            <span class="dealership-stat-label">Sold listings</span>
+          </div>
+        </div>
+        <a href="https://www.{{ dealer.name|lower|replace(' ','-')|replace(',','')|replace('--','-') }}.com" class="visit-seller-link dealership-link" target="_blank" rel="nofollow">Visit Seller Website ↗</a>
+      </div>
+    {% endif %}
+
+    {# ─── Get pre-qualified card (always last in the right rail) ─── #}
+    <div class="prequal-card">
+      <h3 class="prequal-card-heading">Get pre-qualified in minutes</h3>
+      <ul class="prequal-bullets">
+        <li><span class="prequal-check">✓</span> We'll compare over 15 lenders to get you the best rate &amp; terms</li>
+        <li><span class="prequal-check">✓</span> Customized financing to meet your needs</li>
+        <li><span class="prequal-check">✓</span> Over 25 years of marine lending experience</li>
+      </ul>
+      <a href="/boat-loans/" class="btn-secondary btn-block prequal-btn">Get Pre-Qualified</a>
+    </div>
+  </aside>
+
+{# ─── Top stats strip (8 cells in a 4-col × 2-row grid) ──────── #}
+{% set _engine_model = (boat.engine_make ~ ' ' ~ (['ZR6','V12','V8','MerCruiser','F300','VX1100','XS500'])[boat.year % 7]) %}
+<section class="bdp-stats-strip" data-testid="bdp-stats-strip">
+  <div class="stat-card">
+    <div class="stat-icon" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><rect x="15" y="14" width="10" height="12" rx="1.5" fill="#3a6a93"/><rect x="12" y="17" width="3" height="6" fill="#3a6a93"/><rect x="25" y="17" width="3" height="6" fill="#3a6a93"/><line x1="20" y1="14" x2="20" y2="10" stroke="#3a6a93" stroke-width="1.6"/></svg>
+    </div>
+    <div class="stat-text"><span class="stat-label">Engine</span><span class="stat-value">{{ _engine_model }}</span></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><circle cx="20" cy="20" r="3" fill="#3a6a93"/><path d="M20 11 Q 26 14 23 20 Q 29 17 26 23 Q 26 30 20 27 Q 14 30 14 23 Q 11 17 17 20 Q 14 14 20 11 Z" fill="#3a6a93" opacity="0.85"/></svg>
+    </div>
+    <div class="stat-text"><span class="stat-label">Total Power</span><span class="stat-value">{{ boat.engine_hp * boat.engine_count }}hp</span></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><circle cx="20" cy="22" r="8" fill="none" stroke="#3a6a93" stroke-width="1.5"/><line x1="20" y1="22" x2="20" y2="16" stroke="#3a6a93" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="22" x2="25" y2="22" stroke="#3a6a93" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="13" x2="20" y2="11" stroke="#3a6a93" stroke-width="1.5"/></svg>
+    </div>
+    <div class="stat-text"><span class="stat-label">Engine Hours</span><span class="stat-value">{{ boat.hours if boat.hours else '-' }}</span></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><path d="M10 24 L 30 24 L 27 28 L 13 28 Z" fill="#3a6a93"/><rect x="14" y="18" width="12" height="6" rx="1" fill="#3a6a93"/><rect x="17" y="14" width="6" height="4" rx="1" fill="#3a6a93"/></svg>
+    </div>
+    <div class="stat-text"><span class="stat-label">Class</span><span class="stat-value">{{ boat.boat_type }}</span></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><path d="M10 20 L 30 20 M 10 16 L 10 24 M 30 16 L 30 24 M 14 18 L 14 22 M 18 18 L 18 22 M 22 18 L 22 22 M 26 18 L 26 22" stroke="#3a6a93" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg>
+    </div>
+    <div class="stat-text"><span class="stat-label">Length</span><span class="stat-value">{{ boat.length_ft|int }}ft</span></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><rect x="11" y="11" width="18" height="18" rx="2" fill="none" stroke="#3a6a93" stroke-width="1.5"/><line x1="11" y1="16" x2="29" y2="16" stroke="#3a6a93" stroke-width="1.5"/><line x1="15" y1="11" x2="15" y2="14" stroke="#3a6a93" stroke-width="1.5"/><line x1="25" y1="11" x2="25" y2="14" stroke="#3a6a93" stroke-width="1.5"/><text x="20" y="26" font-size="6" font-family="Arial" font-weight="700" fill="#3a6a93" text-anchor="middle">YEAR</text></svg>
+    </div>
+    <div class="stat-text"><span class="stat-label">Year</span><span class="stat-value">{{ boat.year }}</span></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><path d="M9 27 L 31 27 L 28 31 L 12 31 Z" fill="#3a6a93"/><path d="M13 24 L 27 24 L 27 21 L 23 21 L 23 17 L 17 17 L 17 21 L 13 21 Z" fill="#3a6a93"/><rect x="19" y="14" width="2" height="4" fill="#3a6a93"/></svg>
+    </div>
+    <div class="stat-text"><span class="stat-label">Model</span><span class="stat-value">{{ boat.model }}</span></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-icon" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><circle cx="14" cy="17" r="3" fill="#3a6a93"/><circle cx="20" cy="15" r="3.5" fill="#3a6a93"/><circle cx="26" cy="17" r="3" fill="#3a6a93"/><path d="M9 28 Q 14 22 14 22 Q 17 24 20 24 Q 23 24 26 22 Q 26 22 31 28 Z" fill="#3a6a93"/></svg>
+    </div>
+    <div class="stat-text"><span class="stat-label">Capacity</span><span class="stat-value">{{ boat.capacity_people }} people</span></div>
+  </div>
+</section>
+
+{# ─── What Owners Say card ──────────────────────────────────── #}
+<section class="bdp-owners-card" data-testid="what-owners-say">
+  <div class="owners-card-grid">
+    <div class="owners-card-text">
+      <h2 class="owners-card-heading">
+        <span class="sparkle-icon" aria-hidden="true">✦</span>
+        What Owners Say
+        <span class="info-tip" title="Generated from owner reviews and editorial sources">ⓘ</span>
+      </h2>
+      <p class="owners-card-paragraph">{{ boat.what_owners_say }}</p>
+    </div>
+    <div class="owners-card-tags">
+      <h3 class="owners-card-tags-heading">Owner Highlights</h3>
+      <ul class="owner-tags-list">
+        {% for tag in boat.owner_highlight_tags %}
+        <li class="owner-tag">{{ tag }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>
+
+{# ─── Boat Details (accordion-style) ────────────────────────── #}
+<section class="bdp-details-section" data-testid="boat-details">
+  <h2 class="bdp-details-h2">Boat Details</h2>
+
+  <details class="bdp-accordion" open>
+    <summary>
+      <span class="accordion-title">Description</span>
+      <span class="accordion-chevron"></span>
+    </summary>
+    <div class="accordion-body">
+      <p class="bdp-seller-blurb">{{ boat.owner_seller_description }}</p>
+      <div class="bdp-description">
+        {% for para in boat.description %}<p>{{ para }}</p>{% endfor %}
+      </div>
+      {% if boat.description_features %}
+        <h3 class="bdp-feature-h3">Key Features</h3>
+        <ul class="bdp-feature-list">
+          {% for f in boat.description_features %}<li>{{ f }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+      {% if boat.is_owner_listed %}
+        <p class="bdp-disclaimer-text">
+          This listing was placed by a private seller. Boat Trader has not verified
+          the accuracy of any claims made in the description. Always inspect a boat
+          in person and obtain a marine survey before any purchase decision.
+        </p>
+      {% endif %}
+    </div>
+  </details>
+
+  <details class="bdp-accordion">
+    <summary>
+      <span class="accordion-title">Measurements</span>
+      <span class="accordion-chevron"></span>
+    </summary>
+    <div class="accordion-body">
+      <dl class="spec-grid">
+        <div><dt>Length Overall</dt><dd>{{ boat.length_ft }} ft</dd></div>
+        <div><dt>Beam</dt><dd>{{ boat.beam_ft }} ft</dd></div>
+        <div><dt>Draft</dt><dd>{{ "%.1f"|format(boat.length_ft * 0.09) }} ft</dd></div>
+        <div><dt>Dry Weight</dt><dd>{{ (boat.length_ft * 280)|int }} lbs</dd></div>
+        <div><dt>Fuel Capacity</dt><dd>{{ boat.fuel_capacity_gal }} gal</dd></div>
+        <div><dt>Fresh Water Capacity</dt><dd>{{ (boat.length_ft * 1.2)|int }} gal</dd></div>
+      </dl>
+    </div>
+  </details>
+
+  <details class="bdp-accordion">
+    <summary>
+      <span class="accordion-title">Propulsion</span>
+      <span class="accordion-chevron"></span>
+    </summary>
+    <div class="accordion-body">
+      <dl class="spec-grid">
+        <div><dt>Drive Type</dt><dd>{{ boat.drive_type }}</dd></div>
+        <div><dt>Engine Make</dt><dd>{{ boat.engine_make }}</dd></div>
+        <div><dt>Number of Engines</dt><dd>{{ boat.engine_count }}</dd></div>
+        <div><dt>Engine Power</dt><dd>{{ boat.engine_hp }} hp{% if boat.engine_count > 1 %} (each){% endif %}</dd></div>
+        <div><dt>Fuel Type</dt><dd>{{ boat.fuel_type }}</dd></div>
+        <div><dt>Engine Hours</dt><dd>{{ boat.hours if boat.hours else '—' }}</dd></div>
+      </dl>
+    </div>
+  </details>
+
+  <details class="bdp-accordion">
+    <summary>
+      <span class="accordion-title">More Details</span>
+      <span class="accordion-chevron"></span>
+    </summary>
+    <div class="accordion-body">
+      <dl class="spec-grid">
+        <div><dt>Condition</dt><dd>{{ boat.condition|capitalize }}</dd></div>
+        <div><dt>Class</dt><dd>{{ boat.boat_type }}</dd></div>
+        <div><dt>Hull Material</dt><dd>{{ boat.hull_material }}</dd></div>
+        <div><dt>Hull Color</dt><dd>{{ boat.hull_color }}</dd></div>
+        <div><dt>Passenger Capacity</dt><dd>{{ boat.capacity_people }}</dd></div>
+        <div><dt>Listing ID</dt><dd>{{ boat.id }}</dd></div>
+      </dl>
+    </div>
+  </details>
+
+  <details class="bdp-accordion">
+    <summary>
+      <span class="accordion-title">Location</span>
+      <span class="accordion-chevron"></span>
+    </summary>
+    <div class="accordion-body">
+      <p>{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</p>
+      <div class="bdp-map-placeholder" data-testid="map-placeholder">
+        <span>Map of {{ boat.city }}, {{ boat.state }}</span>
+      </div>
+    </div>
+  </details>
+</section>
+
+{# ─── Sponsor banner #2 — INSIDE left column ──── #}
+{% set mid_ad = pick_ad("leaderboard_mid") %}
+<section class="ad-strip detail-mid">
+  <a class="ad-banner" href="/ad/{{ mid_ad.id }}/click" data-testid="ad-component" data-ad-id="{{ mid_ad.id }}">
+    <img src="/ad/{{ mid_ad.id }}.svg?w=970&h=120" alt="{{ mid_ad.sponsor }}" />
+    <span class="sponsor-tag">Sponsored</span>
+  </a>
+</section>
+
+{# ─── Loan Calculator ──────────────────────────────────────── #}
+<section class="bdp-loan-card" id="loan-calculator" data-testid="loan-calculator">
+  <div class="loan-card-grid">
+    <div class="loan-form">
+      <h3 class="loan-form-heading">Boat Loan Payment Calculator</h3>
+      <p class="loan-form-sub">Estimate your monthly payment based on the boat you want to buy and your specific loan need.</p>
+      <label class="loan-field"><span>Loan Type</span>
+        <select class="filter-select"><option>{{ boat.condition|capitalize }} Boat Loan</option><option>New Boat Loan</option></select>
+      </label>
+      <label class="loan-field"><span>Year</span>
+        <select class="filter-select"><option>{{ boat.year }}</option></select>
+      </label>
+      <label class="loan-field"><span>Purchase Price</span>
+        <input type="text" class="filter-input" value="{{ boat.display_price }}" />
+      </label>
+      <label class="loan-field"><span>Down Payment</span>
+        <input type="text" class="filter-input" value="${{ ((boat.price or 0) * 0.10)|int }}" />
+      </label>
+      <label class="loan-field"><span>Credit Score (FICO)</span>
+        <select class="filter-select"><option>800-850</option><option>740-799</option><option>670-739</option></select>
+      </label>
+    </div>
+    <div class="loan-preview">
+      <h3 class="loan-preview-heading">Here is what your monthly payment might look like:</h3>
+      <p class="loan-apr"><strong>{{ '%.2f'|format(7.49 if boat.condition == 'new' else 8.24) }}%</strong> APR</p>
+      <p class="loan-payment">{{ boat.display_monthly|replace('/mo*','')|replace('/mo','') if boat.display_monthly else '$—' }}</p>
+      <p class="loan-total">TOTAL LOAN AMOUNT <strong>${{ ((boat.price or 0) * 0.90)|int }}</strong></p>
+      <p class="loan-term"><strong>180</strong> MONTHS</p>
+      <a href="/boat-loans/" class="btn-secondary loan-prequal-btn">Get Pre-Qualified</a>
+      <hr class="loan-divider" />
+      <h4 class="loan-bullets-heading">Get pre-qualified in minutes</h4>
+      <ul class="prequal-bullets">
+        <li><span class="prequal-check">✓</span> We'll compare over 15 lenders to get you the best rate &amp; terms</li>
+        <li><span class="prequal-check">✓</span> Customized financing to meet your needs</li>
+        <li><span class="prequal-check">✓</span> Over 25 years of marine lending experience</li>
+      </ul>
+      <a href="#" class="loan-disclosure-link">See Important Disclosure<sup>3</sup></a>
+    </div>
+  </div>
+</section>
+
+{# ─── Listed By / enhanced dealer card (left column) ─────────── #}
+{% if not boat.is_owner_listed %}
+<section class="bdp-listed-by enhanced-seller-details-card" data-testid="listed-by">
+  <h2 class="bdp-listed-by-h2">Listed By</h2>
+  <div class="enhanced-seller-details-card-container">
+    <div class="enhanced-seller-card-left">
+      <div class="enhanced-dealer-logo">
+        <span class="logo-mark">{{ dealer.logo_initial }}</span>
+        <span class="logo-name">{{ dealer.name|upper }}</span>
+      </div>
+      <h3 class="enhanced-dealer-name">{{ dealer.name }}</h3>
+      <p class="enhanced-dealer-address">
+        <a href="#">{{ dealer.address }}, {{ dealer.city }}, {{ dealer.state }}, {{ dealer.zip }}</a>
+      </p>
+      <p class="enhanced-dealer-phone"><a href="tel:{{ dealer.phone }}"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> {{ dealer.phone }}</a></p>
+      <a href="#" class="enhanced-dealer-link">Visit Seller Website</a>
+    </div>
+    <div class="enhanced-seller-card-right">
+      <p class="trusted-partner enhanced-trusted">Trusted Boat Trader Partner | <strong>{{ dealer.trusted_partner_label }}</strong></p>
+      <div class="enhanced-stat-row">
+        <div class="enhanced-stat-num">{{ dealer.active_listings }}</div>
+        <div class="enhanced-stat-label">Active listings</div>
+      </div>
+      <div class="enhanced-stat-row">
+        <div class="enhanced-stat-num">{{ "{:,}".format(dealer.sold_listings) }}</div>
+        <div class="enhanced-stat-label">Sold listings</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ─── More From This Dealer — horizontally scrolling carousel
+   matching real boattrader: image-only cards (no heart/badge/contact),
+   visible scrollbar, › next button on right, "More Boats from this
+   Dealer" link at the bottom. ────────────────────────────────── #}
+<section class="bdp-more-from-dealer" data-testid="more-from-dealer">
+  <h2 class="more-from-dealer-h2">More From This Dealer</h2>
+  <div class="more-from-dealer-rail-wrap">
+    <div class="more-from-dealer-rail" role="region" aria-label="More from this dealer">
+      {% for b in similar[:8] %}
+        <a class="dealer-rail-card" href="/boat/{{ b.slug }}/">
+          <div class="dealer-rail-media"><img src="{{ b.images[0] }}" alt="{{ b.title }}" loading="lazy"/></div>
+          <div class="dealer-rail-body">
+            <div class="dealer-rail-title">{{ b.title }}</div>
+            <div class="dealer-rail-price">{{ b.display_price }}</div>
+            <div class="dealer-rail-loc">{{ b.city }}, {{ b.state }} {{ b.zip[:5] }}</div>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+    <button class="more-from-dealer-next" type="button" aria-label="Next">›</button>
+  </div>
+  <a href="#" class="more-from-dealer-link">More Boats from this Dealer</a>
+</section>
+{% else %}
+<section class="bdp-listed-by" data-testid="listed-by-private">
+  <h2 class="bdp-listed-by-h2">Listed By</h2>
+  <div class="listed-by-card listed-by-private">
+    <div class="listed-by-logo private">{{ boat.owner_name[0] }}</div>
+    <div class="listed-by-body">
+      <h3 class="listed-by-dealer">{{ boat.owner_name }}</h3>
+      <p class="listed-by-address">Private Seller · {{ boat.city }}, {{ boat.state }}</p>
+      <p class="listed-by-private-note">Listed for <strong>{{ boat.listed_days_ago }} days</strong>. Not a verified dealer.</p>
+    </div>
+  </div>
+</section>
+{% endif %}
+
+{# ─── Still have a question? ────────────────────────────────── #}
+<section class="bdp-question-card" data-testid="still-have-question">
+  <h2 class="question-card-h2">Still have a question?</h2>
+  <span class="question-card-rule" aria-hidden="true"></span>
+  <p>Get answers, schedule a visit to see the boat, or find a good time for a sea trial.</p>
+  <p>Take the next step and contact the seller.</p>
+  <a href="#contact" class="btn-secondary question-contact-btn">Contact seller</a>
+</section>
+
+{# ─── OTHER SERVICES tiles ──────────────────────────────────── #}
+<section class="bdp-other-services" data-testid="other-services">
+  <h3 class="other-services-label">OTHER SERVICES</h3>
+  <div class="other-services-tiles">
+    <a class="other-service-tile" href="#">
+      <div class="other-service-icon" aria-hidden="true">
+        <svg viewBox="0 0 60 60" width="44" height="44"><circle cx="30" cy="30" r="29" fill="#0a3d62"/><path d="M10 38 L 30 26 L 50 38" stroke="#fff" stroke-width="3" fill="none"/><text x="30" y="50" font-family="Arial" font-size="7" font-weight="700" fill="#fff" text-anchor="middle">ELITE</text></svg>
+      </div>
+      <span class="other-service-name">Elite Marine Surveyors</span>
+    </a>
+    <a class="other-service-tile" href="#">
+      <div class="other-service-icon other-service-icon-yc" aria-hidden="true">
+        <svg viewBox="0 0 60 60" width="44" height="44"><circle cx="30" cy="30" r="29" fill="#fff" stroke="#1f6cd1" stroke-width="2"/><text x="30" y="36" font-family="Arial" font-size="22" font-weight="700" fill="#1f6cd1" text-anchor="middle">yc</text></svg>
+      </div>
+      <span class="other-service-name">Boat Documentation</span>
+    </a>
+  </div>
+</section>
+
+
+</div>  {# ─── close .bdp-grid — page ends here; footer follows ── #}
+{% endblock %}
