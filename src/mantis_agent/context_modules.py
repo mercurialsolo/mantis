@@ -106,26 +106,25 @@ def _is_extraction_scroll(ctx: dict[str, Any]) -> bool:
 
 
 def _is_extraction_phase(ctx: dict[str, Any]) -> bool:
-    """Steps where blocking overlays actually matter — extraction
-    primitives reading from detail pages, plus the scroll that
-    precedes them. Excludes navigate / setup / pagination steps
-    where the brain doesn't need overlay-scanning deliberation
-    (those pages haven't loaded extractable content yet).
+    """Active ONLY on the read-from-detail-page primitives —
+    extract_data / extract_url. Excludes scroll-in-extraction
+    because that's already covered by KEYBOARD_SCROLL's image-click
+    defense (which is the carousel-trigger we want to prevent), and
+    stacking BLOCKING_OVERLAY's prompt section on top of
+    KEYBOARD_SCROLL's was paralyzing the brain — runs hit
+    brain_loop_exhausted on the scroll step despite cap=8, because
+    per-action deliberation grew with the dual sections.
 
-    Tuned after observing that always-on BLOCKING_OVERLAY makes the
-    brain ~3× slower per step (extra deliberation on overlay-scan
-    for every action), regressing total step throughput. Scoping to
-    extraction-flavor steps keeps the overlay-dismissal benefit
-    where it pays (carousel-on-detail-page) without taxing
-    navigate / paginate / loop steps.
+    Earlier scoping (``step_section == "extraction"`` inclusive of
+    scroll) caused: 9 steps / 0 leads / duplicate_listing on run
+    20260522_200135_af9e031a. Tightening to actual extract
+    primitives keeps overlay-defense where it pays (the brain about
+    to read structured fields off a detail page) without doubling
+    up on the scroll step.
     """
-    step_type = str(ctx.get("step_type") or "")
-    step_section = str(ctx.get("step_section") or "")
-    if step_section == "extraction":
-        return True
-    if step_type in ("extract_data", "extract_url"):
-        return True
-    return False
+    return str(ctx.get("step_type") or "") in (
+        "extract_data", "extract_url",
+    )
 
 
 # ── Module content ────────────────────────────────────────────────────
@@ -154,6 +153,11 @@ _KEYBOARD_SCROLL_SECTION = """\
 SCROLLING — CRITICAL (this step is a scroll action):
 - Use scroll(direction="down", amount=10) to advance through long pages in one action. Larger amounts cover more of the page per step and conserve your action budget — prefer amount=10+ on tall pages.
 - key_press(keys="Page_Down") / key_press(keys="End") are good alternatives when scroll() doesn't move the page (sticky-positioned content, scroll-locked overlays).
+- KNOW WHEN TO STOP. After 2-4 scroll actions you have typically traversed enough of the page for downstream extraction. Once any of the following is true, emit ``done(success=true, summary="scrolled — <what you see>")`` IMMEDIATELY — do NOT keep scrolling indefinitely:
+    * You see the page footer (copyright notice, social links, "back to top" affordance, secondary nav links to other site sections).
+    * The viewport's content stops changing after a scroll action (scrollY is the same after two consecutive scrolls — you've reached the bottom).
+    * You can see the content sections the plan asked you to scroll past (Description / About / Details / etc. are in or above the current viewport).
+- key_press(keys="End") is the fastest way to jump to the bottom when you're confident the target content is reachable via scrolling without missing intermediate elements; one keypress + one done() = step complete in 2 actions.
 - NEVER click on images, photos, thumbnails, video previews, or any media element during a scroll step. Many sites turn the hero image into a fullscreen carousel trigger; one stray click opens a "N of M" lightbox overlay that blocks all underlying content and is hard to recover from. If you need to scroll past an image area, use scroll() / Page_Down — don't click.
 - NEVER click on within-page navigation links (Next / Previous / "go to next item") during a scroll step — they navigate to a different page, breaking the workflow position the plan expects to scroll within.\
 """

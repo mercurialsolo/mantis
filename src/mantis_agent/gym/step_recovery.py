@@ -544,8 +544,24 @@ class StepRecoveryPolicy:
                                 f"  [{step_index}] scroll brain_loop_exhausted "
                                 f"x{prior_failures+1} — CDP fired but scrollY "
                                 f"{pre_y:.0f} → {post_y:.0f} (no movement); "
-                                f"exceeded 3 cycles, advancing to avoid loop"
+                                f"exceeded 3 cycles, scrolling to top then "
+                                f"advancing so downstream extract sees the "
+                                f"page content, not the footer"
                             )
+                            # The next step (typically extract_data) needs
+                            # the page's primary content in the viewport.
+                            # By the time scroll plateaus at the bottom,
+                            # the viewport is showing the footer — extract
+                            # screenshots that and finds nothing useful.
+                            # Reset to top so the next step starts from a
+                            # known-good viewport position.
+                            try:
+                                cdp_eval("window.scrollTo(0, 0)")
+                            except Exception as exc:  # noqa: BLE001
+                                logger_.debug(
+                                    f"  [{step_index}] post-scroll reset-to-top "
+                                    f"failed (non-fatal): {exc}"
+                                )
                             return RecoveryOutcome(
                                 halt=False, step_index=step_index + 1,
                                 halt_reason="scroll_no_movement_advance",

@@ -195,7 +195,15 @@ class ClaudeExtractor:
     def __init__(
         self,
         api_key: str = "",
-        model: str = "claude-opus-4-7",
+        # Default extraction model: Sonnet 4.6. Switched from Opus 4.7
+        # after observing extraction failures on populated detail pages
+        # (boattrader run 20260522_204618_706eca3d returned 0 leads
+        # despite year/make/model/price all visible in the screenshot).
+        # Sonnet is the right level for structured-field tool_use
+        # extraction — fast, cheap, and proven on similar shapes.
+        # Verifier escalation path (haiku → opus on disagreement) is
+        # unchanged.
+        model: str = "claude-sonnet-4-6",
         schema: ExtractionSchema | None = None,
         form_target_model: str = "",
     ):

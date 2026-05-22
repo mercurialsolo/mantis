@@ -62,16 +62,19 @@ logger = logging.getLogger(__name__)
 # falls back to these defaults; an explicit empty dict disables all
 # caps and honours each step's ``budget`` verbatim (escape hatch).
 DEFAULT_BRAIN_BUDGET_CAPS: dict[str, int] = {
-    # scroll bumped from 3 → 8 after observed regression on tall detail
-    # pages: 3 actions × ~600px ≈ 1800px coverage, well short of common
-    # 4000-6000px listing/detail pages. 8 actions covers ~4800px which
-    # spans most extraction-target pages without giving truly runaway
-    # scroll loops unbounded space. Decomposer asks for budget=10 on
-    # scroll steps; 8 still leaves the safety belt while matching real
-    # page heights. Run 20260522_175453_edc47137 (boattrader detail
-    # page, 4152px) halted at brain_loop_exhausted on scroll step with
-    # cap=3, scrollY only reached 1185.
-    "scroll": 8,
+    # scroll budget tuning history (observed on 4152px boattrader
+    # detail pages):
+    #   cap=3 → scrollY only reached 1185 (run …_173945)
+    #   cap=8 → reached 2640 before CDP fallback (run …_201848)
+    #   cap=12 → ~330px/action × 12 = ~3960px, covers most detail pages
+    # The brain often uses small ``amount`` values per scroll() call
+    # (Holo3's default behaviour); the prompt's "amount=10+" hint
+    # isn't reliably honoured, so the safety-belt cap has to assume
+    # small-step scrolling. 12 leaves headroom while still bounded —
+    # a truly runaway brain still trips brain_loop_exhausted before
+    # spending unbounded budget. Decomposer requests budget=10;
+    # cap=12 means decomposer-requested == effective for scroll.
+    "scroll": 12,
     "click": 4,
 }
 
