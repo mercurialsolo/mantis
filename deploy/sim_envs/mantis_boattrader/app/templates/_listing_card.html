@@ -1,0 +1,41 @@
+{# ─ Listing card — mirrors real boattrader.com SRP card.
+   Title H2 18px regular, price 16px, location+dealer 12px,
+   no monthly, no ft+type footer. Contact Seller is the only
+   button (14px, 4px 16px padding). #}
+{% set _all_dealers = dealers_by_id() %}
+{% set _dealer_label = (b.owner_name ~ ' (Private Seller)' if b.is_owner_listed else _all_dealers[b.dealer_id].name) %}
+<article class="listing-card listing-card-{{ b.listing_type }}" data-listing-type="{{ b.listing_type }}" data-name="{{ b.title }}" data-reporting-click-product-id="{{ b.id }}" data-reporting-click-listing-type="{{ b.condition }}">
+  <a href="/boat/{{ b.slug }}/" class="listing-card-link">
+    <div class="listing-card-media">
+      <img src="{{ b.images[0] }}" alt="{{ b.title }}" loading="lazy" />
+      {% for badge in b.badges %}
+        <span class="listing-tag listing-tag-{{ badge|lower|replace(' ', '-') }}">{{ badge }}</span>
+      {% endfor %}
+      <button class="liked-boat-btn" type="button" aria-label="Save to favourites" data-testid="liked-boat-btn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></button>
+    </div>
+    <div class="listing-card-body">
+      <h2 class="listing-title">{{ b.title }}</h2>
+      <p class="listing-price">{{ b.display_price }}</p>
+      {% if b.display_monthly %}<p class="listing-monthly">{{ b.display_monthly }}<button type="button" class="listing-monthly-info" aria-label="info" data-monthly-info="{{ b.id }}"><span class="info-mark">i</span></button></p>{% endif %}
+      <p class="listing-meta">{{ b.city }}, {{ b.state }} {{ b.zip }}{% if _dealer_label %} | {{ _dealer_label }}{% endif %}</p>
+    </div>
+  </a>
+  <footer class="listing-card-footer">
+    {% if not b.is_owner_listed %}
+      {% set _d = _all_dealers[b.dealer_id] %}
+      <div class="listing-dealer-logo" aria-label="{{ _d.name }}">
+        <span class="listing-dealer-logo-mark">{{ _d.logo_initial }}</span>
+        <span class="listing-dealer-logo-name">{{ _d.name|upper }}</span>
+      </div>
+    {% endif %}
+    <a href="/boat/{{ b.slug }}/#contact" class="btn contact-seller-btn">
+      {% if b.is_owner_listed %}Contact Owner{% else %}Contact Seller{% endif %}
+    </a>
+  </footer>
+  {% if b.display_monthly %}
+  <div class="listing-monthly-tooltip" data-monthly-tooltip="{{ b.id }}" hidden role="tooltip">
+    <p class="listing-monthly-tooltip-text">Estimated monthly payment based on a 240-month loan at 6.49% APR.</p>
+    <button type="button" class="listing-monthly-tooltip-close" aria-label="Close">×</button>
+  </div>
+  {% endif %}
+</article>

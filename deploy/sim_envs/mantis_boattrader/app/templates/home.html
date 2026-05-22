@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Boat Trader - #1 marketplace to buy & sell boats in the US{% endblock %}
+
+{% block content %}
+{% set hero_ad = pick_ad("leaderboard_top") %}
+<section class="home-hero">
+  <aside class="home-search" aria-label="Find a boat">
+    <h1 class="hero-h1">Find your perfect boat</h1>
+    <form class="ai-search-v2" action="/boats/" method="get" role="search" data-testid="hero-search">
+      <span class="ai-search-v2__icon">✦</span>
+      <span class="ai-search-v2__try-prefix" aria-hidden="true">Try</span>
+      <input class="ai-search-v2__input" name="q" type="search" placeholder='&ldquo;Sea Ray under 40 feet&rdquo;' />
+      <button class="ai-search-v2__submit" type="submit" aria-label="Search"><span class="icon-search">⌕</span></button>
+    </form>
+    <div class="or-divider"><span>OR</span></div>
+    <label class="filter-block">
+      <select class="filter-select" name="type" form="hero-classic-search">
+        <option value="">All Boat Types</option>
+        {% for t in popular_types %}
+          <option value="{{ t[0] }}">{{ t[0] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="filter-block">
+      <select class="filter-select" name="make" form="hero-classic-search">
+        <option value="">All Manufacturers</option>
+        {% for m in top_makes %}
+          <option value="{{ m[0] }}">{{ m[0] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p class="zip-note">Within
+      <select name="distance" form="hero-classic-search" class="zip-inline">
+        <option value="200" selected>200 Miles</option>
+        <option value="50">50 Miles</option>
+        <option value="100">100 Miles</option>
+        <option value="500">500 Miles</option>
+      </select>
+      of <a href="#" id="hero-zip-link">{{ popular_zip }}</a>
+    </p>
+    <form id="hero-classic-search" action="/boats/" method="get">
+      <input type="hidden" name="zip" value="{{ popular_zip }}" />
+      <button class="btn-primary btn-block hero-search-submit" type="submit" data-testid="hero-submit">Search</button>
+    </form>
+    <div class="hero-sell-card">
+      <div class="hero-sell-icon">⛵</div>
+      <h2 class="hero-sell-h2">Sell Your Boat Fast!</h2>
+      <p>We want you to have options selling your boat. Listing your boat is easy.</p>
+      <a class="btn-primary btn-block sell-cta" href="/sell/" data-testid="hero-sell-cta">Sell Your Boat →</a>
+    </div>
+  </aside>
+
+  <div class="home-hero-carousel" data-testid="hero-carousel">
+    <a class="carousel-slide" href="/ad/{{ hero_ad.id }}/click" data-testid="ad-component" data-ad-id="{{ hero_ad.id }}">
+      <img src="/ad/{{ hero_ad.id }}.svg?w=1100&h=520" alt="{{ hero_ad.sponsor }} — {{ hero_ad.headline }}" />
+      <span class="sponsor-tag">Sponsored</span>
+    </a>
+    <ol class="carousel-dots" aria-hidden="true">
+      <li class="dot active"></li><li class="dot"></li><li class="dot"></li>
+    </ol>
+  </div>
+</section>
+
+{# Mid leaderboard ad #}
+{% set mid_ad = pick_ad("leaderboard_mid") %}
+<section class="ad-strip leaderboard">
+  <a class="ad-banner" href="/ad/{{ mid_ad.id }}/click" data-testid="ad-component" data-ad-id="{{ mid_ad.id }}">
+    <img src="/ad/{{ mid_ad.id }}.svg?w=970&h=120" alt="{{ mid_ad.sponsor }} ad" />
+    <span class="sponsor-tag">Ad</span>
+  </a>
+</section>
+
+<section class="home-section" data-testid="boats-near-you">
+  <header class="section-header">
+    <h2>Boats Near You <span class="section-sub">Based on your location</span></h2>
+    <a href="/boats/" class="section-link">View all →</a>
+  </header>
+  <div class="card-rail">
+    {% for b in near %}
+      {% include "_listing_card.html" %}
+    {% endfor %}
+  </div>
+</section>
+
+<section class="home-section featured-brands">
+  <header class="section-header">
+    <h2>Featured Brands Offering New Boats</h2>
+  </header>
+  <ul class="brand-tile-row">
+    {% for m, count in top_makes %}
+    <li class="brand-tile" data-testid="brand-tile">
+      <a href="/boats/?make={{ m|urlencode }}&condition=new">
+        <div class="brand-tile-mark">{{ m[0] }}</div>
+        <span class="brand-tile-name">{{ m }}</span>
+        <span class="brand-tile-count">{{ count }} listings</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="home-section popular-types" data-testid="popular-types">
+  <header class="section-header">
+    <h2>Popular Boat Types</h2>
+  </header>
+  <ul class="type-tile-row">
+    {% for name, n, img in popular_types[:8] %}
+    <li class="type-tile">
+      <a href="/boats/?type={{ name|urlencode }}">
+        <img src="{{ img }}" alt="{{ name }}" />
+        <span class="type-name">{{ name }}</span>
+        <span class="type-count">{{ n }} for sale</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="home-section popular-boats">
+  <header class="section-header">
+    <h2>Popular Boats</h2>
+    <a href="/boats/?sort=recommended" class="section-link">View all →</a>
+  </header>
+  <div class="card-grid">
+    {% for b in featured %}
+      {% include "_listing_card.html" %}
+    {% endfor %}
+  </div>
+</section>
+
+{% set foot_ad = pick_ad("footer_banner") %}
+<section class="ad-strip footer-banner">
+  <a class="ad-banner" href="/ad/{{ foot_ad.id }}/click" data-testid="ad-component" data-ad-id="{{ foot_ad.id }}">
+    <img src="/ad/{{ foot_ad.id }}.svg?w=970&h=120" alt="{{ foot_ad.sponsor }} ad" />
+    <span class="sponsor-tag">Ad</span>
+  </a>
+</section>
+
+<section class="recent-articles">
+  <header class="section-header"><h2>Recent Articles and Reviews</h2></header>
+  <ul class="article-grid">
+    <li class="article-card"><h3>10 Best Family Bowriders Under 25'</h3><p>Hands-on with the most-shopped bowriders this year.</p></li>
+    <li class="article-card"><h3>Buying Guide: Center Console Fishing Boats</h3><p>From a 22' day-boat to a 36' offshore monster — what to look for.</p></li>
+    <li class="article-card"><h3>Pontoon vs. Tritoon: Which Is Right for You?</h3><p>Stability, speed, capacity — we break down the choice.</p></li>
+  </ul>
+</section>
+{% endblock %}

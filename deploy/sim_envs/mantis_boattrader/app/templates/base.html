@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Boat Trader - #1 marketplace to buy & sell boats in the US{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" />
+  <link rel="stylesheet" href="/static/app.css?v=71" />
+  <meta name="description" content="{% block description %}Buy and sell new & used boats. Find boats, yachts, sailboats, fishing boats, pontoons, and more.{% endblock %}" />
+</head>
+<body class="bt-body">
+
+<header class="main nav-slide show-header" role="banner">
+  <div class="header-inner">
+    <a href="/" class="brand" data-testid="brand-link">
+      <img src="/static/bt_logo.svg" alt="Boat Trader" width="150" height="19" />
+    </a>
+    <nav class="main-nav" role="navigation" aria-label="Main">
+      <button class="navbar-toggle" type="button" aria-label="Toggle navigation"><span></span></button>
+      <ul class="nav-list">
+        <li class="nav-item has-submenu">
+          <a href="/boats/" data-reporting-action="nav-find">Find <span class="caret">▾</span></a>
+          <ul class="submenu">
+            <li><a href="/boats/">Boats For Sale</a></li>
+            <li><a href="/boats/?condition=new">New Boats</a></li>
+            <li><a href="/boats/?condition=used">Used Boats</a></li>
+            <li><a href="/boats/?type=Yacht">Yachts</a></li>
+            <li><a href="/boats/?type=Sailboat">Sailboats</a></li>
+            <li><a href="/boats/?type=Pontoon">Pontoons</a></li>
+            <li><a href="/boats/?type=Center+Console">Center Console</a></li>
+          </ul>
+        </li>
+        <li class="nav-item"><a href="/sell/" data-reporting-action="nav-sell">Sell Your Boat</a></li>
+        <li class="nav-item has-submenu">
+          <a href="#" data-reporting-action="nav-finance">Finance <span class="caret">▾</span></a>
+          <ul class="submenu">
+            <li><a href="/boat-loans/">Boat Loans</a></li>
+            <li><a href="/boat-loans/calculator/">Loan Calculator</a></li>
+            <li><a href="/boat-loans/rates/">Rates</a></li>
+          </ul>
+        </li>
+        <li class="nav-item has-submenu">
+          <a href="#" data-reporting-action="nav-services">Services <span class="caret">▾</span></a>
+          <ul class="submenu">
+            <li><a href="/services/extended-service-plan/">Extended Service Plan</a></li>
+            <li><a href="/services/boat-insurance/">Boat Insurance</a></li>
+            <li><a href="/services/boat-transport-shipping/">Boat Transport</a></li>
+            <li><a href="/services/boat-warranty/">Boat Warranty</a></li>
+            <li><a href="/services/boat-rental/">Boat Rental</a></li>
+          </ul>
+        </li>
+        <li class="nav-item has-submenu">
+          <a href="#" data-reporting-action="nav-research">Research <span class="caret">▾</span></a>
+          <ul class="submenu">
+            <li><a href="/research/buying/">Buying</a></li>
+            <li><a href="/research/selling/">Selling</a></li>
+            <li><a href="/research/boating/">Boating</a></li>
+          </ul>
+        </li>
+        <li class="nav-item"><a href="#" data-reporting-action="nav-dealer">Open a Dealer Account</a></li>
+      </ul>
+    </nav>
+    <div class="user-menu">
+      <a href="#" class="usermenu-link" data-testid="usermenu-signup-button">Sign up</a>
+      <a href="#" class="usermenu-link" data-testid="usermenu-login-button">Log in</a>
+    </div>
+  </div>
+</header>
+
+{% block ribbon %}
+<div class="ribbon-prequal" id="prequal-ribbon" role="region" aria-label="Pre-qualify">
+  <div class="ribbon-inner">
+    Check your instant approval odds — no credit impact.
+    <a href="/boat-loans/" class="ribbon-cta">Get started</a>
+    <button class="ribbon-close" type="button" aria-label="Dismiss">×</button>
+  </div>
+</div>
+{% endblock %}
+
+<main class="bt-main">
+  {% block content %}{% endblock %}
+</main>
+<script>
+  // Toggle .bdp-scrolled on <body> once the gallery is scrolled past so
+  // the sticky title/price/contact bar can appear (matches real boattrader).
+  (function(){
+    var threshold = 320;
+    var raf = null;
+    function check(){
+      raf = null;
+      if (window.scrollY > threshold) document.body.classList.add('bdp-scrolled');
+      else document.body.classList.remove('bdp-scrolled');
+    }
+    window.addEventListener('scroll', function(){ if (!raf) raf = requestAnimationFrame(check); }, { passive: true });
+    check();
+  })();
+  // Listing-card monthly-payment info: click info → toggle sticky tooltip
+  // at card bottom. × closes; clicking outside closes the open tooltip too.
+  (function(){
+    document.addEventListener('click', function(ev){
+      var btn = ev.target.closest && ev.target.closest('[data-monthly-info]');
+      if (btn) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var id = btn.getAttribute('data-monthly-info');
+        var tip = document.querySelector('[data-monthly-tooltip="' + id + '"]');
+        // Close any other open tooltips first.
+        document.querySelectorAll('.listing-monthly-tooltip').forEach(function(t){
+          if (t !== tip) t.setAttribute('hidden', '');
+        });
+        if (tip) {
+          if (tip.hasAttribute('hidden')) tip.removeAttribute('hidden');
+          else tip.setAttribute('hidden', '');
+        }
+        return;
+      }
+      var close = ev.target.closest && ev.target.closest('.listing-monthly-tooltip-close');
+      if (close) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var t = close.closest('.listing-monthly-tooltip');
+        if (t) t.setAttribute('hidden', '');
+        return;
+      }
+      // Click outside any open tooltip → close them.
+      document.querySelectorAll('.listing-monthly-tooltip:not([hidden])').forEach(function(t){
+        if (!t.contains(ev.target)) t.setAttribute('hidden', '');
+      });
+    }, true);
+  })();
+</script>
+
+<footer class="site-footer">
+  <div class="footer-cols">
+    <div class="footer-col">
+      <h4>Boat Trader</h4>
+      <ul>
+        <li><a href="/about/">About Us</a></li>
+        <li><a href="/contact/">Contact Us</a></li>
+        <li><a href="/sitemap/">Site Map</a></li>
+        <li><a href="/careers/">Careers</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h4>For Buyers</h4>
+      <ul>
+        <li><a href="/boats/">Boats For Sale</a></li>
+        <li><a href="/boats/?condition=new">New Boats</a></li>
+        <li><a href="/boats/?condition=used">Used Boats</a></li>
+        <li><a href="/boat-loans/">Boat Loans</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h4>For Sellers</h4>
+      <ul>
+        <li><a href="/sell/">Sell Your Boat</a></li>
+        <li><a href="/services/boat-documentation/">Documentation</a></li>
+        <li><a href="/services/boat-warranty/">Warranty</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h4>Connect</h4>
+      <ul>
+        <li><a href="#">Facebook</a></li>
+        <li><a href="#">Instagram</a></li>
+        <li><a href="#">YouTube</a></li>
+        <li><a href="#">Newsletter</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>© 2026 Boat Trader. All rights reserved.</span>
+    <span class="footer-legal">
+      <a href="/privacy/">Privacy</a> ·
+      <a href="/terms/">Terms</a> ·
+      <a href="/sitemap/">Sitemap</a> ·
+      <a href="#" id="open-cookie-prefs">Cookie Preferences</a>
+    </span>
+  </div>
+</footer>
+
+{% if not request.state.consent %}
+<aside id="onetrust-banner-sdk" class="ot-banner" role="alertdialog" aria-modal="false" aria-describedby="onetrust-group-container">
+  <div class="ot-banner-row">
+    <div id="onetrust-group-container" class="ot-banner-text">
+      <h3 class="ot-banner-title">Your Privacy Choices</h3>
+      <p class="ot-banner-body">
+        We and our 824 partners store and access information on your device, such as cookies, and process personal data, such as unique identifiers and standard information sent by a device, for personalised advertising and content, advertising and content measurement, audience research and services development. With your permission we and our partners may use precise geolocation data and identification through device scanning.
+        See our <a href="/privacy/" class="ot-link">Cookie Policy</a> for details.
+      </p>
+    </div>
+    <form class="ot-banner-actions" method="post" action="/__site/consent">
+      <input type="hidden" name="next_url" value="{{ request.url.path }}" />
+      <button type="button" class="ot-btn ot-btn-link" id="onetrust-pc-btn-handler" data-testid="cookie-settings">Cookies Settings</button>
+      <button type="submit" name="choice" value="decline" class="ot-btn ot-btn-secondary" id="onetrust-reject-all-handler" data-testid="cookie-decline">Reject All</button>
+      <button type="submit" name="choice" value="accept" class="ot-btn ot-btn-primary" id="onetrust-accept-btn-handler" data-testid="cookie-accept">Accept All</button>
+    </form>
+  </div>
+</aside>
+{% endif %}
+
+</body>
+</html>

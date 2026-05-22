@@ -1,0 +1,2188 @@
+/* mantis-boattrader — high-fidelity Boat Trader marketplace clone.
+   Palette derived from www.boattrader.com (Roboto body, Georgia serif
+   wordmark, navy + sky-blue accents, orange/gold sponsor ad accents). */
+
+:root {
+  --bt-navy: #07324f;          /* nav link color on real BT (rgb 7,50,79) */
+  --bt-navy-strong: #082c4a;
+  --bt-blue: #2566b0;          /* ribbon background + primary blue (rgb 37,102,176) */
+  --bt-blue-2: #2876c0;
+  --bt-blue-3: #3391fc;
+  --bt-sky: #4189c6;
+  --bt-orange: #e08a3c;
+  --bt-yellow: #f6d23a;
+  --bt-text: #333333;
+  --bt-text-dim: #666666;
+  --bt-border: #d8dee4;
+  --bt-bg: #ffffff;
+  --bt-bg-alt: #f3f6f9;
+  --bt-bg-alt-2: #e9eef3;
+  --bt-shadow: 0 1px 3px rgba(10,30,60,0.07), 0 1px 2px rgba(10,30,60,0.06);
+  --bt-radius: 6px;
+  --bt-radius-lg: 8px;
+  --bt-font: Roboto, -apple-system, "system-ui", "Segoe UI", "Helvetica Neue", sans-serif;
+  --bt-font-serif: Georgia, "Times New Roman", serif;
+  --container: 1440px;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+body.bt-body {
+  font-family: var(--bt-font);
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--bt-text);
+  background: var(--bt-bg);
+}
+a { color: var(--bt-blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4 { color: var(--bt-navy); margin: 0; }
+
+img { max-width: 100%; display: block; }
+
+/* ── Header ────────────────────────────────────────────────────── */
+header.main {
+  background: #fff;
+  border-bottom: 1px solid var(--bt-border);
+}
+/* Real BT header is FULL-WIDTH (not 1440-container-bound). Logo sits at
+   x=30 from viewport left as a compact 150x19 wordmark; first nav anchor
+   sits at x=338 (158px gap after logo). */
+.header-inner {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 15px 0 30px;
+  min-height: 0;
+}
+.brand { flex: 0 0 auto; margin-right: 158px; }
+.brand img { height: 19px; width: 150px; display: block; }
+.main-nav { flex: 1; }
+.main-nav .nav-list {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; gap: 0; justify-content: flex-start;
+}
+.nav-item > a {
+  color: var(--bt-navy);
+  font-weight: 500;
+  font-size: 15px;
+  padding: 23px 20px 26px 25px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1;
+}
+.nav-item > a:hover { text-decoration: none; color: var(--bt-blue); }
+/* Dropdown caret on Find/Finance/Services/Research — same 8×6 SVG
+   chevron real BT uses (fill #2566b0). */
+.caret { display: none; }
+.has-submenu > a::after {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 6px;
+  margin-left: 6px;
+  background-image: url("data:image/svg+xml;utf8,<svg fill='none' height='6' width='8' xmlns='http://www.w3.org/2000/svg'><path d='M4 5.47l4-4-.94-.94L4 3.583.94.53 0 1.47z' fill='%232566b0'/></svg>");
+  background-repeat: no-repeat;
+  background-size: 8px 6px;
+}
+.has-submenu { position: relative; }
+.has-submenu .submenu {
+  display: none;
+  position: absolute;
+  top: 100%; left: -16px;
+  background: #fff;
+  border: 1px solid var(--bt-border);
+  border-radius: var(--bt-radius);
+  min-width: 220px;
+  padding: 8px 0;
+  list-style: none;
+  margin: 0;
+  box-shadow: var(--bt-shadow);
+  z-index: 50;
+}
+.has-submenu:hover .submenu { display: block; }
+.submenu li a {
+  display: block; padding: 8px 18px;
+  color: var(--bt-text); font-size: 14px;
+}
+.submenu li a:hover { background: var(--bt-bg-alt); text-decoration: none; }
+.user-menu { display: flex; gap: 16px; }
+.usermenu-link {
+  font-size: 15px; color: var(--bt-navy); font-weight: 500;
+}
+.navbar-toggle { display: none; }
+
+/* ── Ribbon (pre-qualify) — real BT bg rgb(37,102,176), 14/400 white,
+   40px tall. */
+.ribbon-prequal {
+  background: rgb(37, 102, 176);
+  color: #fff;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 400;
+}
+.ribbon-inner {
+  margin: 0;
+  padding: 10px 16px;
+  position: relative;
+  height: 40px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.ribbon-cta {
+  font-weight: 700;
+  font-size: 14px;
+  color: #fff;
+  line-height: 1;
+  text-decoration: none;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  display: inline;
+}
+.ribbon-cta:hover { text-decoration: underline; }
+.ribbon-close {
+  position: absolute; right: 16px; top: 4px;
+  background: transparent; border: 0; color: #fff;
+  font-size: 18px; cursor: pointer; line-height: 1;
+}
+
+/* ── Main + container — matches real boattrader: max-width 1440px,
+   margin auto so at 1512px viewport the main element starts at x=36
+   with 20px internal padding (giving x=56 for the inner content). */
+.bt-main {
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 0 20px;
+  min-height: 480px;
+}
+
+/* ── Home: hero ─────────────────────────────────────────────────── */
+.home-hero {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 0;
+  background: var(--bt-navy-strong);
+  margin: 0 calc(50% - 50vw);
+  padding: 0;
+  width: 100vw;
+}
+.home-search {
+  background: #0a3d62;
+  color: #fff;
+  padding: 18px 20px 22px;
+  border-radius: 0;
+}
+.home-search .hero-h1 {
+  color: #fff; font-size: 18px; font-weight: 700; margin: 0 0 12px;
+}
+.ai-search-v2 {
+  display: flex; align-items: center;
+  background: #fff;
+  border-radius: 999px;
+  padding: 6px 6px 6px 12px;
+  margin-bottom: 10px;
+}
+.ai-search-v2__icon { color: var(--bt-blue); font-size: 16px; margin-right: 6px; }
+/* Real BT splits the placeholder so "Try" is bold (700) and the quoted
+   suggestion is regular (400). Both are 16px Roboto, #64748b slate grey. */
+.ai-search-v2__try-prefix {
+  font-size: 16px; font-weight: 700; color: #64748b;
+  margin-right: 6px; line-height: 1;
+}
+.ai-search-v2__input {
+  border: 0; outline: 0; flex: 1; font: inherit;
+  font-size: 16px; font-weight: 400; color: #1f2937;
+  background: transparent;
+}
+.ai-search-v2__input::placeholder {
+  color: #64748b; font-style: normal; font-weight: 400; font-size: 16px; opacity: 1;
+}
+.ai-search-v2__submit {
+  background: transparent; border: 0; color: var(--bt-blue);
+  font-size: 18px; cursor: pointer; padding: 0 8px;
+}
+.or-divider {
+  text-align: center; color: #cfd9e5; font-size: 12px;
+  margin: 4px 0 10px; position: relative;
+}
+.or-divider::before, .or-divider::after {
+  content: ""; position: absolute; top: 50%; width: 40%;
+  height: 1px; background: rgba(255,255,255,0.18);
+}
+.or-divider::before { left: 0; }
+.or-divider::after  { right: 0; }
+.or-divider span { background: transparent; padding: 0 8px; }
+.filter-block { display: block; margin-bottom: 8px; }
+/* Filter inputs / selects — matched to real BT: 1px solid #ededed,
+   8px radius, 40px height. */
+.filter-select, .filter-input {
+  width: 100%;
+  background: #fff;
+  border: 1px solid #ededed;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--bt-text);
+  height: 40px;
+  box-sizing: border-box;
+}
+.filter-select:focus, .filter-input:focus {
+  outline: 2px solid var(--bt-blue-3); outline-offset: 1px;
+}
+.zip-note {
+  color: #d8e1ec; font-size: 13px; margin: 6px 0 8px;
+}
+.zip-inline {
+  display: inline-block;
+  background: transparent; color: #fff; border: 0;
+  border-bottom: 1px solid rgba(255,255,255,0.4);
+  padding: 2px 0;
+  font: inherit; font-size: 13px;
+}
+#hero-zip-link {
+  color: #fff; text-decoration: underline;
+}
+.hero-sell-card {
+  margin-top: 18px; padding-top: 14px;
+  border-top: 1px solid rgba(255,255,255,0.18);
+  text-align: center;
+}
+.hero-sell-icon { font-size: 26px; }
+.hero-sell-h2 {
+  color: #fff; font-size: 15px; margin: 4px 0; font-weight: 700;
+}
+.hero-sell-card p { color: #cfd9e5; font-size: 13px; margin: 0 0 10px; }
+.btn-primary {
+  background: var(--bt-blue);
+  color: #fff;
+  border: 0;
+  border-radius: 50px;
+  padding: 8px 20px;
+  font: inherit; font-size: 16px; font-weight: 700;
+  cursor: pointer;
+  display: inline-block; text-align: center;
+  transition: background 120ms ease;
+  line-height: 1.4;
+}
+.btn-primary:hover { background: var(--bt-blue-3); text-decoration: none; color: #fff; }
+.btn-block { display: block; width: 100%; }
+/* Real BT outline button (Get Pre-Qualified, Call, etc.) — 2px blue border,
+   pill radius, 14/700 blue text on white. */
+.btn-secondary {
+  background: #fff; color: var(--bt-blue);
+  border: 2px solid var(--bt-blue);
+  border-radius: 999px;
+  padding: 8px 20px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.btn-tertiary {
+  background: transparent;
+  color: var(--bt-blue);
+  border: 1px solid var(--bt-blue);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Carousel */
+.home-hero-carousel {
+  position: relative;
+  background: #052036;
+}
+.carousel-slide { display: block; position: relative; }
+.carousel-slide img { width: 100%; height: 100%; object-fit: cover; max-height: 470px; }
+.sponsor-tag {
+  position: absolute; top: 8px; right: 12px;
+  background: rgba(0,0,0,0.55); color: #fff;
+  font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 3px;
+}
+.carousel-dots {
+  position: absolute; bottom: 10px; left: 50%;
+  transform: translateX(-50%); display: flex; gap: 6px; list-style: none;
+  padding: 0; margin: 0;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.5); }
+.dot.active { background: #fff; }
+
+/* ── Ad strips ─ Real BT BDP top sponsor: bg #f7f7f7, padding 16px 0,
+   ad image inside is fixed 728×90 leaderboard. ─────────────────── */
+.ad-strip {
+  background: #f7f7f7;
+  padding: 16px 0;
+  display: flex; justify-content: center;
+  margin: 24px 0;
+}
+.ad-banner {
+  position: relative; max-width: 728px; width: 100%; height: 90px;
+  border-radius: var(--bt-radius); overflow: hidden;
+}
+.ad-banner img { width: 100%; display: block; }
+.ad-card {
+  display: block; position: relative;
+  border-radius: var(--bt-radius); overflow: hidden;
+  box-shadow: var(--bt-shadow);
+  background: var(--bt-bg-alt);
+}
+.ad-card img { width: 100%; }
+
+/* ── Home sections ────────────────────────────────────────────── */
+.home-section {
+  margin: 36px 0;
+}
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.section-header h2 {
+  font-size: 22px; font-weight: 700;
+}
+.section-sub {
+  color: var(--bt-text-dim); font-weight: 400; font-size: 14px; margin-left: 6px;
+}
+.section-link { font-size: 14px; }
+
+.card-rail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+/* Real BT SRP card grid: 3 columns with 10px gap between cards. */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.brand-tile-row {
+  list-style: none; padding: 0; margin: 0;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px;
+}
+.brand-tile a {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 18px 8px; background: #fff;
+  border: 1px solid var(--bt-border);
+  border-radius: var(--bt-radius-lg);
+  color: var(--bt-navy);
+}
+.brand-tile a:hover { box-shadow: var(--bt-shadow); text-decoration: none; }
+.brand-tile-mark {
+  width: 56px; height: 56px; border-radius: 50%;
+  background: var(--bt-navy); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--bt-font-serif); font-size: 24px; font-weight: 700;
+  margin-bottom: 8px;
+}
+.brand-tile-name { font-weight: 600; font-size: 13px; }
+.brand-tile-count { color: var(--bt-text-dim); font-size: 12px; }
+
+.type-tile-row {
+  list-style: none; padding: 0; margin: 0;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+}
+.type-tile a {
+  display: block;
+  background: #fff;
+  border: 1px solid var(--bt-border);
+  border-radius: var(--bt-radius-lg);
+  overflow: hidden;
+  color: var(--bt-navy);
+  transition: box-shadow 120ms ease;
+}
+.type-tile a:hover { box-shadow: var(--bt-shadow); text-decoration: none; }
+.type-tile img {
+  width: 100%; height: 130px;
+  object-fit: cover;
+  display: block;
+}
+.type-name { display: block; padding: 10px 14px 0; font-weight: 700; font-size: 14px; }
+.type-count { display: block; padding: 2px 14px 12px; color: var(--bt-text-dim); font-size: 12px; }
+
+.article-grid {
+  list-style: none; padding: 0; margin: 18px 0;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+}
+.article-card {
+  background: var(--bt-bg-alt); padding: 18px; border-radius: var(--bt-radius-lg);
+}
+.article-card h3 { font-size: 16px; margin-bottom: 6px; }
+.article-card p { color: var(--bt-text-dim); font-size: 13px; margin: 0; }
+
+/* ── Listing card — matched to real BT desktop: white bg, 1px
+   solid #e0e0e0 border, 4px radius, filter: drop-shadow(...)
+   instead of box-shadow. */
+.listing-card {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: none;
+  filter: drop-shadow(rgba(0, 0, 0, 0.2) 0px 2px 1px);
+  padding: 0;
+  display: flex; flex-direction: column;
+}
+.listing-card-link { color: inherit; }
+.listing-card-link:hover { text-decoration: none; }
+.listing-card-media {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  background: #e8eef3;
+  border-radius: 0;
+  overflow: hidden;
+}
+.listing-card-media img { width: 100%; height: 100%; object-fit: cover; }
+.listing-tag {
+  background: #fff;
+  color: #404040;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: none;
+  padding: 4px;
+  border-radius: 16px;
+  display: inline-block;
+  line-height: 1;
+}
+/* Only the listing-card variant uses absolute positioning over the image. */
+.listing-card-media .listing-tag {
+  position: absolute; top: 8px; left: 8px;
+}
+.listing-card-media .listing-tag + .listing-tag { left: auto; top: 8px; right: 36px; }
+/* In the BDP summary the badges sit inline above the title. */
+.bdp-badges .listing-tag {
+  margin-right: 6px;
+}
+/* Real BT badge: small white pill, 10/500 #404040 text, 16px radius,
+   4px tight padding. All badge variants use the same neutral styling. */
+.listing-tag-featured       { background: #fff; color: #404040; }
+.listing-tag-new-arrival    { background: #fff; color: #404040; }
+.listing-tag-price-drop     { background: #fff; color: #404040; }
+.listing-tag-in-stock       { background: #fff; color: #404040; }
+.listing-tag-sponsored      { background: #fff; color: #404040; }
+
+/* Real BT does NOT add an extra colored border on sponsored cards — they
+   render with the same 1px gray border as dealer/owner cards. */
+.listing-card-sponsored {
+  border: 1px solid #e0e0e0;
+}
+.listing-card-owner .listing-card-media {
+  background: linear-gradient(180deg, #f3f6f9, #dde4ec);
+}
+.listing-original-price {
+  color: var(--bt-text-dim);
+  font-size: 13px;
+}
+.listing-original-price s { color: var(--bt-text-dim); }
+.listing-private-seller-pill {
+  display: inline-block;
+  background: #eef2f5;
+  color: var(--bt-text);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+  margin-left: 6px;
+  letter-spacing: 0.3px;
+}
+.liked-boat-btn {
+  position: absolute; top: 8px; right: 8px;
+  background: rgba(255,255,255,0.85); border: 0;
+  width: 28px; height: 28px; border-radius: 50%;
+  font-size: 16px; cursor: pointer; color: var(--bt-navy);
+}
+/* Listing card text — matched to real BT desktop ground truth:
+   title H2 18px / 700 #404040 (BOLD!), price 16/400 #404040,
+   monthly 14/700 #139af5 (blue bold), location+dealer 12px.
+   Contact Seller button: white bg + 1px solid #2566b0 + 50px radius. */
+.listing-card-body { padding: 8px 14px 6px; }
+.listing-title {
+  font-size: 18px; font-weight: 700; color: #404040;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin: 0 0 2px;
+  line-height: 1.3;
+}
+.listing-price {
+  font-size: 16px; font-weight: 400; color: #404040;
+  margin: 0 0 4px;
+}
+.listing-monthly {
+  color: #139af5; font-size: 14px; font-weight: 700;
+  margin: 0 0 4px;
+  display: flex; align-items: center; gap: 4px;
+}
+/* Info button next to monthly price — small circled "i" that opens a
+   sticky tooltip pinned to the bottom of the card on click. */
+.listing-monthly-info {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px;
+  border: 1px solid #9e9e9e; border-radius: 50%;
+  background: #fff; color: #9e9e9e;
+  padding: 0; margin: 0;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.listing-monthly-info .info-mark {
+  font-family: var(--bt-font-serif);
+  font-size: 9px; font-weight: 700; line-height: 1;
+  font-style: italic;
+}
+/* Sticky tooltip pinned to bottom of card: blue rounded banner with
+   white text and close × button. Hidden by default; toggled via JS. */
+.listing-card { position: relative; }
+.listing-monthly-tooltip {
+  position: absolute;
+  left: 8px; right: 8px; bottom: 8px;
+  background: var(--bt-blue);
+  color: #fff;
+  border-radius: 8px;
+  padding: 14px 40px 14px 16px;
+  font-size: 13px; font-weight: 700;
+  line-height: 1.3;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  z-index: 10;
+}
+.listing-monthly-tooltip[hidden] { display: none; }
+.listing-monthly-tooltip-text { margin: 0; }
+.listing-monthly-tooltip-close {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 24px; height: 24px;
+  background: transparent; border: 0;
+  color: #fff;
+  font-size: 18px; line-height: 1;
+  cursor: pointer; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+/* Real BT uses #9e9e9e for meta, not #404040 — lighter dim gray. */
+.listing-meta { color: #9e9e9e; font-size: 12px; margin: 0; line-height: 1.4; }
+.listing-card-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 14px 6px; margin-top: auto;
+  gap: 10px;
+  border-top: 1px solid #e0e0e0;
+}
+/* Dealer logo placeholder in card footer — small dark rectangle with
+   white text, mirrors real BT's dealership-logo display. */
+.listing-dealer-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #1c1f2a;
+  color: #fff;
+  padding: 6px 8px;
+  border-radius: 2px;
+  max-width: 130px;
+  overflow: hidden;
+}
+.listing-dealer-logo-mark {
+  font-family: var(--bt-font-serif);
+  font-weight: 700;
+  font-size: 14px;
+  flex: 0 0 auto;
+}
+.listing-dealer-logo-name {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.1;
+}
+.listing-card-owner .listing-card-footer { justify-content: flex-end; }
+.contact-seller-btn {
+  font-size: 14px;
+  font-weight: 700;
+  padding: 4px 16px;
+  border-radius: 50px;
+  background: #fff;
+  color: #2566b0;
+  border: 1px solid #2566b0;
+  width: 123px;
+  height: 34px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  line-height: 1;
+}
+.contact-seller-btn:hover {
+  background: #f3f6fb;
+  text-decoration: none;
+}
+
+/* ── Breadcrumb ───────────────────────────────────────────────── */
+/* Real BT SRP breadcrumb: 12/400 #757575 / Roboto with vertical padding
+   7px top/bottom and NO margin — sits flush right under the blue ribbon.
+   The visible gap to the H1 below comes from this padding + the H1's
+   own 12px top padding (~19px text-to-text). */
+.breadcrumb {
+  font-size: 12px; font-weight: 400; color: #757575;
+  margin: 0;
+  padding: 7px 0;
+}
+.breadcrumb a { color: #757575; }
+.breadcrumb a:hover { color: var(--bt-blue); }
+
+/* ── SRP (Search Results Page) — matched to real boattrader desktop:
+   sidebar 300px, results ~1075px, h1 32/700, legends 15/400, listing
+   title 15/400, listing price 16/400, sort label 12/400. */
+/* Real BT SRP H1: 32/700 #404040 with 32px line-height. Top padding 12px
+   creates the visible gap from breadcrumb above. */
+.srp-h1 {
+  font-size: 32px; font-weight: 700; line-height: 32px; color: #404040;
+  margin: 0 0 4px;
+  padding: 12px 0;
+}
+.srp-grid {
+  display: grid; grid-template-columns: 300px 1fr; gap: 26px;
+}
+.srp-sidebar { background: transparent; padding: 0; }
+/* Real boattrader uses a box-shadow (not a 1px border) on the filter
+   panel — 0 1px 4px 1px rgba(0,0,0,0.1) with border-radius 5px,
+   white background, no border. */
+/* Real BT filter card: white bg, ~5px radius, thin gray border outline,
+   15px inner padding, no shadow. */
+.filters-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  box-shadow: none;
+  padding: 15px 15px 18px;
+}
+.search-alerts-button {
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+  margin: 0 0 18px;
+}
+/* The Save Search button row gets its own bottom divider so it sits
+   above the first filter group cleanly. Real BT uses a thin 1px divider. */
+.search-alerts-button + .filter-group { border-top: 1px solid #ededed; }
+/* The last filter group shouldn't have a divider below (it's the
+   outer card's bottom edge). */
+.filter-group:last-of-type { border-bottom: 0; }
+
+/* Filter group — <details> element so each section is independently
+   collapsible. The chevron rotates with [open]. */
+.filter-group {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #ededed;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+}
+.filter-group summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  padding: 18px 0 14px;
+  list-style: none;
+  user-select: none;
+}
+.filter-group summary::-webkit-details-marker { display: none; }
+.filter-group-label {
+  font-weight: 400;
+  color: var(--bt-text);
+  font-size: 15px;
+}
+.filter-chevron {
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--bt-text);
+  border-bottom: 2px solid var(--bt-text);
+  transform: rotate(-45deg);
+  transition: transform 180ms ease;
+}
+.filter-group[open] > summary .filter-chevron {
+  transform: rotate(45deg);
+}
+.filter-group-body {
+  padding: 0 0 18px;
+}
+/* Zip / City / Other pill — light-gray outer container with a WHITE
+   thumb on the active segment (drop shadow). Matches real BT —
+   background rgb(237,237,237), 1px border #e0e0e0, 50px radius. */
+.zip-toggle {
+  display: inline-flex; gap: 0;
+  margin: 0 0 14px;
+  background: rgb(237, 237, 237);
+  border: 1px solid rgb(224, 224, 224);
+  border-radius: 50px;
+  padding: 4px;
+  width: 100%;
+}
+.zip-tab {
+  flex: 1; background: transparent; border: 0;
+  font: inherit; font-size: 14px; padding: 8px 12px;
+  cursor: pointer;
+  color: var(--bt-text);
+  border-radius: 50px;
+  text-align: center;
+  line-height: 1.2;
+  /* Allow the label to wrap to two lines so "Zip Code", "City / State",
+     and "Other ▾" all sit nicely in narrow sidebar — matches real BT. */
+  white-space: normal;
+  word-break: normal;
+  min-width: 0;
+}
+.zip-tab.active {
+  background: #fff;
+  color: var(--bt-text);
+  font-weight: 400;
+  box-shadow: 0 1px 3px rgba(10, 30, 60, 0.12), 0 1px 2px rgba(10, 30, 60, 0.08);
+}
+.zip-row { display: flex; gap: 8px; align-items: center; }
+.zip-select-wrap { flex: 0 0 auto; }
+.zip-row .filter-select { padding: 8px 12px 8px 8px; font-size: 14px; height: 40px; width: 106px; }
+.zip-row .zip-input { flex: 1; min-width: 0; height: 40px; }
+.zip-from { color: var(--bt-text); font-size: 14px; }
+.zip-use-location {
+  display: block;
+  text-align: right;
+  font-size: 13px;
+  margin-top: 10px;
+  color: var(--bt-blue);
+}
+/* Condition pill — same shape as zip-toggle, gray outer + white thumb */
+.seg-control {
+  display: inline-flex; gap: 0;
+  background: rgb(237, 237, 237);
+  border: 1px solid rgb(224, 224, 224);
+  border-radius: 50px;
+  padding: 4px;
+  width: 100%;
+}
+.seg {
+  flex: 1; padding: 8px 12px; border: 0;
+  font-size: 14px; text-align: center; cursor: pointer;
+  background: transparent;
+  border-radius: 999px;
+  color: var(--bt-text);
+  line-height: 1.2;
+}
+.seg input { display: none; }
+.seg.active {
+  background: #fff;
+  color: var(--bt-text);
+  font-weight: 400;
+  box-shadow: 0 1px 3px rgba(10, 30, 60, 0.12), 0 1px 2px rgba(10, 30, 60, 0.08);
+}
+
+/* Range slider — visual presentation only; the actual filtering still
+   happens through the min/max number inputs below. */
+/* Real BT range slider (rc-slider): 4px rail bg #e9e9e9, blue fill,
+   22×22 blue handle with 2px white border. */
+.range-slider-wrap {
+  position: relative;
+  height: 28px;
+  margin: 8px 0 14px;
+}
+.range-track {
+  position: absolute; left: 0; right: 0; top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  background: #e9e9e9;
+  border-radius: 6px;
+}
+.range-fill {
+  position: absolute; left: 8%; right: 8%; top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  background: var(--bt-blue);
+  border-radius: 6px;
+}
+.range-handle {
+  position: absolute; top: 50%;
+  width: 22px; height: 22px;
+  margin-top: -11px;
+  background: var(--bt-blue);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(10,30,60,0.25);
+  cursor: pointer;
+  box-sizing: border-box;
+}
+.range-handle-min { left: 6%; }
+.range-handle-max { left: calc(94% - 22px); }
+
+.range-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.range-row .filter-input { flex: 1; min-width: 0; height: 40px; padding: 8px 12px; font-size: 14px; }
+.range-row span { font-size: 14px; color: var(--bt-text); }
+.range-unit { color: var(--bt-text-dim); }
+.checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; }
+.apply-filters { margin-top: 14px; }
+.filter-clear { display: block; text-align: center; font-size: 14px; margin-top: 10px; }
+.filters-form > .btn-primary { margin: 10px 0 14px; }
+
+.srp-results { min-width: 0; }
+/* AI search bar — blue gradient outer card (12px radius) wraps a
+   white inner field (10px radius). Matches real boattrader exactly. */
+.srp-search {
+  display: flex; align-items: center;
+  background: linear-gradient(135deg, rgb(37,102,176), rgb(43,130,217) 45%, rgb(51,145,252));
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  height: 60px;
+  box-sizing: border-box;
+  position: relative;
+}
+.srp-search::before {
+  content: "";
+  position: absolute;
+  left: 16px; right: 16px; top: 12px; bottom: 12px;
+  background: #fff;
+  border-radius: 10px;
+  z-index: 0;
+}
+.srp-search > * { position: relative; z-index: 1; }
+.srp-search .ai-search-v2__icon {
+  color: var(--bt-blue);
+  font-size: 18px;
+  margin-left: 6px;
+  margin-right: 8px;
+}
+.srp-search .ai-search-v2__input {
+  font-size: 16px;
+  background: transparent;
+  padding: 6px 0;
+}
+.srp-search .ai-search-v2__submit {
+  background: transparent;
+  color: #555;
+  font-size: 18px;
+  margin-right: 4px;
+}
+.srp-search .ai-search-v2__input { padding: 6px 0; }
+.prequal-banner {
+  display: flex; align-items: center; gap: 14px;
+  background: linear-gradient(180deg, #f0f6fc 0%, #e5eef7 100%);
+  border-radius: var(--bt-radius-lg);
+  padding: 14px 20px;
+  margin-bottom: 16px;
+  height: 79px;
+  box-sizing: border-box;
+}
+/* Real BT prequal banner copy — title 14/700 #101828, subtext 11/400 #4a5565. */
+/* Real BT pre-qualify banner icon: rounded SQUARE (8px radius) with a
+   subtle blue gradient, white SVG inside — not a circle. */
+.prequal-icon {
+  width: 40px; height: 40px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #3b78c0, #2566b0 55%, #1d569a);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+}
+.prequal-copy { flex: 1; }
+.prequal-copy strong {
+  display: block;
+  font-size: 14px; font-weight: 700; color: #101828;
+  line-height: 17.5px;
+}
+.prequal-copy span {
+  display: block;
+  font-size: 11px; font-weight: 400; color: #4a5565;
+  line-height: 13.75px;
+}
+.banner-prequal-button {
+  font-size: 13px; font-weight: 700; color: #fff;
+  background: var(--bt-blue);
+  border: 0; border-radius: 100px;
+  padding: 0 24px;
+  height: 36px;
+  display: inline-flex; align-items: center;
+  white-space: nowrap;
+}
+.banner-prequal-button:hover { text-decoration: none; opacity: 0.9; }
+.srp-results-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 12px 0 14px;
+}
+.srp-results-count { color: #404040; font-size: 14px; font-weight: 400; }
+.srp-results-count strong { font-weight: 400; }
+/* Real BT sort row: inline 14px / 500 medium 'Sort:' + 14/500 value,
+   both #404040, with a separate ⌄ chevron. No border, no pad, no bg. */
+.sort-row {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: #404040; font-size: 14px; font-weight: 500;
+  cursor: pointer;
+}
+.sort-label strong { font-weight: 700; color: #404040; }
+.sort-select {
+  border: 0; background: transparent; padding: 0 22px 0 0;
+  font-size: 14px; font-weight: 500; color: #404040;
+  font-family: inherit;
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 8' fill='none' stroke='%23757575' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M1 1l6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: 14px 8px;
+}
+.sort-select:focus { outline: none; }
+/* Real BT SRP grid: 10px gap between cards. */
+.srp-grid-results {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;
+}
+.srp-empty {
+  background: #fff; border: 1px dashed var(--bt-border);
+  padding: 32px; border-radius: var(--bt-radius-lg);
+  text-align: center;
+}
+.srp-empty strong { display: block; font-size: 18px; margin-bottom: 6px; color: var(--bt-navy); }
+.pagination {
+  display: flex; align-items: center; justify-content: center;
+  gap: 6px; margin: 26px 0;
+  font-size: 14px;
+}
+.pagination a {
+  padding: 6px 12px; border: 1px solid var(--bt-border);
+  border-radius: var(--bt-radius); color: var(--bt-blue);
+  text-decoration: none;
+}
+.pagination a.active { background: var(--bt-blue); color: #fff; border-color: var(--bt-blue); }
+.page-total { color: var(--bt-text-dim); }
+
+/* ── Boat Detail Page (BDP) ───────────────────────────────────── */
+
+/* Sticky header bar — slides in on scroll. */
+.bdp-sticky-bar {
+  position: sticky;
+  top: 0;
+  background: rgba(255, 255, 255, 0.98);
+  z-index: 100;
+  border-bottom: 1px solid var(--bt-border);
+  margin: 0 calc(50% - 50vw);
+  display: none;
+}
+body.bdp-scrolled .bdp-sticky-bar { display: block; }
+.bdp-sticky-bar-inner {
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 13px;
+}
+.sticky-meta {
+  flex: 1;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: var(--bt-text);
+  min-width: 0;
+}
+.sticky-title {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sticky-sep { color: var(--bt-border); }
+.sticky-price { font-weight: 700; }
+.sticky-save {
+  background: transparent;
+  border: 0;
+  color: var(--bt-blue);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+.sticky-actions {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.sticky-contact-btn {
+  font-size: 13px;
+  padding: 8px 18px;
+}
+/* Real BT BDP breadcrumb (inside bdp-nav-row): 15/400 #333. */
+.sticky-breadcrumb {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 400;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sticky-breadcrumb a { color: #333; }
+.sticky-breadcrumb a:hover { color: var(--bt-blue); }
+
+.bdp-nav-row {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 8px 0 14px;
+  font-size: 13px; color: var(--bt-blue);
+}
+/* Real BT BDP top links 'Back to Search' / 'Next Boat': 12/400 #139af5. */
+.bdp-back, .bdp-next { font-size: 12px; font-weight: 400; color: #139af5; }
+.bdp-back:hover, .bdp-next:hover { color: var(--bt-blue); text-decoration: underline; }
+/* Real BT BDP uses ~890 gallery + ~80 gap + 366 rail at 1512 viewport.
+   That's ratio gallery:rail ≈ 2.43:1, with ~80px gap. */
+.bdp-grid {
+  display: grid; grid-template-columns: 1fr 366px; gap: 80px;
+  align-items: start;
+}
+
+/* Stacked variant: all sections live in column 1 stacked vertically.
+   The .bdp-summary aside is positioned absolutely over the right rail
+   so its tall content doesn't blow up the gallery row's height. */
+.bdp-grid-stack {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr);
+  padding-right: calc(366px + 80px);
+}
+.bdp-grid-stack > .bdp-gallery,
+.bdp-grid-stack > .bdp-stats-strip,
+.bdp-grid-stack > .bdp-owners-card,
+.bdp-grid-stack > .bdp-details-section,
+.bdp-grid-stack > .ad-strip,
+.bdp-grid-stack > .bdp-loan-card,
+.bdp-grid-stack > .bdp-listed-by,
+.bdp-grid-stack > .bdp-more-from-dealer,
+.bdp-grid-stack > .bdp-question-card,
+.bdp-grid-stack > .bdp-other-services {
+  grid-column: 1;
+  min-width: 0;
+}
+
+/* Full-width Similar Boats below the grid — cards get proper 3-up
+   spacing across the full content area. */
+.bdp-similar-full { margin: 32px 0; }
+.bdp-similar-full .card-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+/* Make ad-strip inside the left col compact (it was full-page padding before). */
+.bdp-grid-stack > .ad-strip { margin: 24px 0; padding: 0; background: transparent; }
+.bdp-grid-stack > .ad-strip .ad-banner { max-width: 100%; }
+.bdp-grid-stack > .bdp-summary {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 366px;
+  margin: 0;
+}
+.bdp-main-image {
+  position: relative;
+  background: #000; border-radius: var(--bt-radius-lg); overflow: hidden;
+}
+.bdp-main-image img { width: 100%; max-height: 520px; object-fit: cover; }
+.gallery-prev, .gallery-next, .gallery-share, .gallery-like {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  background: rgba(0,0,0,0.35); color: #fff; border: 0;
+  width: 36px; height: 36px; border-radius: 50%;
+  font-size: 18px; cursor: pointer;
+}
+.gallery-prev { left: 12px; }
+.gallery-next { right: 12px; }
+.gallery-share { top: 16px; right: 56px; transform: none; }
+.gallery-like  { top: 16px; right: 12px; transform: none; }
+.bdp-thumbs {
+  list-style: none; padding: 0; margin: 12px 0 0;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
+}
+.bdp-thumb {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #000;
+  border: 3px solid transparent;
+  transition: border-color 120ms ease;
+}
+.bdp-thumb img {
+  width: 100%; aspect-ratio: 16 / 11; object-fit: cover;
+  display: block;
+}
+.bdp-thumb.is-active {
+  border-color: var(--bt-blue);
+}
+.thumb-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 30, 60, 0.55);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  text-align: center;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  letter-spacing: 0.3px;
+}
+
+/* Real BT BDP right rail: 1px #ededed border, 8px radius, 16px padding,
+   soft 2px shadow. */
+.bdp-summary {
+  background: #fff;
+  border: 1px solid #ededed;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: rgba(0, 0, 0, 0.2) 0px 2px 2px 0px;
+}
+.bdp-badges { margin-bottom: 10px; }
+/* Right-rail typography matched to real boattrader desktop (1512px probe):
+   title 20/700, location 16/400, price 20/700, own-link 16/400. */
+.bdp-title { font-size: 20px; line-height: 1.25; margin: 8px 0 6px; color: var(--bt-text); font-weight: 700; }
+.bdp-length { color: var(--bt-text); font-weight: 700; font-size: 20px; }
+.bdp-location { color: var(--bt-text); font-size: 16px; margin: 0 0 10px; font-weight: 400; }
+.bdp-price { margin: 0 0 4px; font-size: 16px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.bdp-price strong { font-size: 20px; color: var(--bt-text); font-weight: 700; }
+.bdp-price-drop {
+  display: inline-flex; align-items: baseline; gap: 4px;
+  font-size: 16px; font-weight: 700; color: var(--bt-text);
+}
+.bdp-price-drop-arrow {
+  font-size: 14px; font-weight: 700; color: var(--bt-text);
+}
+.bdp-monthly { color: var(--bt-blue); font-size: 13px; margin-left: 10px; }
+.bdp-engagement { color: var(--bt-text-dim); font-size: 13px; margin: 4px 0 14px; }
+.engagement + .engagement { margin-left: 14px; }
+
+.bdp-own-line {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 16px;
+  margin: 8px 0 14px;
+}
+.bdp-own-link { color: var(--bt-blue); text-decoration: none; font-weight: 400; font-size: 16px; }
+.bdp-own-link strong { color: var(--bt-blue); font-weight: 400; }
+.info-tip {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px;
+  background: #c4cdd6;
+  color: #fff;
+  border-radius: 50%;
+  font-size: 11px;
+  font-style: normal;
+  cursor: help;
+}
+.bdp-customize-link { color: var(--bt-blue); font-weight: 500; font-size: 16px; }
+.bdp-engagement-row {
+  list-style: none;
+  padding: 12px 0 14px;
+  margin: 0;
+  border-top: 1px solid var(--bt-border);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--bt-text-dim);
+  flex-wrap: wrap;
+}
+.bdp-engagement-row .engagement-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+}
+.bdp-engagement-row .engagement-item:not(:last-child)::after {
+  content: "|";
+  color: var(--bt-border);
+  margin-left: 12px;
+  font-weight: 300;
+}
+.bdp-engagement-row .ico {
+  font-size: 13px;
+  color: var(--bt-text-dim);
+  display: inline-flex; align-items: center;
+  margin-right: 4px;
+}
+.bdp-engagement-row .ico svg { display: block; }
+/* Inline phone SVG in dealer-phone link should align with the number. */
+.dealer-phone .ico-phone,
+.show-phone-btn .ico-phone { vertical-align: middle; margin-right: 4px; }
+.bdp-engagement-row strong { font-weight: 600; font-size: 12px; color: var(--bt-text); }
+.visit-seller-link {
+  display: inline-block;
+  margin: 14px 0;
+  color: var(--bt-blue);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.prequal-card {
+  background: var(--bt-bg-alt);
+  border-radius: var(--bt-radius-lg);
+  padding: 16px;
+  margin: 14px 0;
+}
+/* Real BT right-rail "Get pre-qualified in minutes" heading: 18/700. */
+.prequal-card-heading {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin-bottom: 10px;
+}
+.prequal-bullets {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.prequal-bullets li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 13px;
+  color: var(--bt-text);
+}
+.prequal-check {
+  color: var(--bt-blue);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.prequal-btn {
+  background: #fff;
+  border: 2px solid var(--bt-blue);
+  color: var(--bt-blue);
+  border-radius: 999px;
+  padding: 11px 22px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.dealer-headshot {
+  width: 60px; height: 60px; border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.dealer-headshot svg { display: block; width: 60px; height: 60px; }
+
+/* ── Dealership card (right-rail, separate from salesperson card) ── */
+.bdp-dealership-card {
+  background: var(--bt-bg-alt);
+  border-radius: var(--bt-radius-lg);
+  padding: 18px;
+  margin-top: 14px;
+}
+.dealership-logo-wrap {
+  display: flex; justify-content: center;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid var(--bt-border);
+  margin-bottom: 14px;
+}
+.dealership-logo {
+  display: flex; flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.dealership-logo .logo-mark {
+  font-family: var(--bt-font-serif);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--bt-navy);
+  line-height: 1;
+}
+.dealership-logo .logo-name {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--bt-navy);
+  font-weight: 700;
+}
+.dealership-address {
+  font-size: 14px;
+  color: var(--bt-blue);
+  margin: 0 0 8px;
+}
+.dealership-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 14px 0;
+}
+.dealership-stat-box {
+  background: #fff;
+  border: 1px solid var(--bt-border);
+  border-radius: var(--bt-radius);
+  padding: 14px 8px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dealership-stat-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--bt-text);
+}
+.dealership-stat-label {
+  font-size: 12px;
+  color: var(--bt-text);
+}
+.dealership-link {
+  display: block;
+  text-align: center;
+  color: var(--bt-blue);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: underline;
+  margin-top: 6px;
+}
+
+/* ── Top stats strip — 4 columns × 2 rows (8 cells total) ───── */
+.bdp-stats-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: auto;
+  column-gap: 18px;
+  row-gap: 14px;
+  margin: 22px 0 14px;
+  padding: 22px 8px;
+  border-bottom: 1px solid var(--bt-border);
+}
+.stat-card {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.stat-icon {
+  flex-shrink: 0;
+  width: 44px; height: 44px;
+  display: flex; align-items: center; justify-content: center;
+}
+.stat-text {
+  display: flex; flex-direction: column;
+  min-width: 0;
+}
+.stat-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #303030;
+  letter-spacing: 0.2px;
+}
+.stat-value {
+  font-size: 14px;
+  font-weight: 400;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── What Owners Say card ─────────────────────────────────── */
+.bdp-owners-card {
+  background: #eef4fb;
+  border-radius: var(--bt-radius-lg);
+  padding: 26px 28px;
+  margin: 24px 0;
+}
+.owners-card-grid {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 28px;
+  align-items: flex-start;
+}
+.owners-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin: 0 0 12px;
+}
+.sparkle-icon {
+  color: var(--bt-blue);
+  font-size: 18px;
+}
+.owners-card-paragraph {
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--bt-text);
+  margin: 0;
+}
+.owners-card-tags-heading {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin: 0 0 12px;
+}
+.owner-tags-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* Real BT Owner Highlights pill: bg #e3f1fe, blue text, 12/700, pad 4px 8px. */
+.owner-tag {
+  background: #e3f1fe;
+  color: var(--bt-blue);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ── Boat Details accordion — bg #f5f9ff (very light blue), pad 20px 16px,
+   8px radius, matches real BT. */
+.bdp-details-section {
+  background: #f5f9ff;
+  border-radius: 8px;
+  padding: 20px 16px;
+  margin: 24px 0;
+}
+.bdp-details-h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin: 0 0 16px;
+}
+.bdp-accordion summary { font-size: 16px; font-weight: 700; }
+.accordion-body { font-size: 15px; line-height: 1.45; }
+.bdp-accordion {
+  background: #fff;
+  border-radius: var(--bt-radius);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.bdp-accordion summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 22px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--bt-text);
+  cursor: pointer;
+  list-style: none;
+}
+.bdp-accordion summary::-webkit-details-marker { display: none; }
+.accordion-chevron {
+  width: 10px; height: 10px;
+  border-right: 2px solid var(--bt-text);
+  border-bottom: 2px solid var(--bt-text);
+  transform: rotate(45deg);
+  transition: transform 200ms ease;
+}
+.bdp-accordion[open] .accordion-chevron { transform: rotate(-135deg); }
+.accordion-body {
+  padding: 0 22px 18px;
+  font-size: 14px;
+  color: var(--bt-text);
+  line-height: 1.55;
+}
+.bdp-seller-blurb {
+  margin: 0 0 14px;
+}
+.bdp-map-placeholder {
+  margin-top: 12px;
+  height: 220px;
+  background: linear-gradient(135deg, #e8f0f8, #c8dcec);
+  border-radius: var(--bt-radius);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--bt-text-dim);
+  font-style: italic;
+}
+
+/* ── Loan calculator ─────────────────────────────────────── */
+.bdp-loan-card {
+  background: #fff;
+  border: 1px solid var(--bt-border);
+  border-radius: var(--bt-radius-lg);
+  padding: 26px;
+  margin: 24px 0;
+}
+.loan-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+}
+.loan-form-heading, .loan-preview-heading {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--bt-text);
+  text-align: center;
+  margin: 0 0 8px;
+}
+.loan-form-sub {
+  text-align: center;
+  color: var(--bt-text-dim);
+  font-size: 13px;
+  margin: 0 0 18px;
+}
+.loan-field {
+  display: block;
+  margin-bottom: 14px;
+}
+.loan-field span {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin-bottom: 6px;
+}
+.loan-preview {
+  background: var(--bt-bg-alt);
+  border-radius: var(--bt-radius);
+  padding: 22px;
+  text-align: center;
+}
+.loan-apr {
+  font-size: 16px;
+  color: var(--bt-text);
+  margin: 18px 0 0;
+}
+.loan-apr strong { font-size: 18px; font-weight: 700; }
+.loan-payment {
+  font-size: 48px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin: 4px 0 8px;
+  letter-spacing: -1px;
+}
+.loan-total {
+  font-size: 13px;
+  color: var(--bt-text);
+  letter-spacing: 0.8px;
+  margin: 8px 0;
+}
+.loan-term {
+  font-size: 13px;
+  color: var(--bt-text);
+  letter-spacing: 0.8px;
+  margin: 4px 0 18px;
+}
+.loan-term strong { font-weight: 700; }
+.loan-prequal-btn {
+  display: inline-block;
+  border: 2px solid var(--bt-blue);
+  background: #fff;
+  color: var(--bt-blue);
+  border-radius: 999px;
+  padding: 12px 36px;
+  font-weight: 700;
+  font-size: 15px;
+}
+.loan-divider {
+  border: 0;
+  border-top: 1px solid var(--bt-border);
+  margin: 22px 0 14px;
+}
+.loan-bullets-heading {
+  text-align: center;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin: 0 0 12px;
+}
+.loan-preview .prequal-bullets li {
+  text-align: left;
+}
+.loan-disclosure-link {
+  display: block;
+  text-align: center;
+  margin-top: 14px;
+  text-decoration: underline;
+  color: var(--bt-text);
+  font-size: 12px;
+}
+
+/* ── Listed By section ───────────────────────────────────── */
+.bdp-listed-by {
+  background: #eef4fb;
+  border-radius: var(--bt-radius-lg);
+  padding: 24px 26px;
+  margin: 24px 0;
+}
+.enhanced-seller-details-card-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  align-items: start;
+}
+.enhanced-dealer-logo {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 6px 0 14px;
+  border-bottom: 1px solid var(--bt-border);
+  margin-bottom: 14px;
+}
+.enhanced-dealer-logo .logo-mark {
+  font-family: var(--bt-font-serif);
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--bt-navy);
+  line-height: 1;
+}
+.enhanced-dealer-logo .logo-name {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--bt-navy);
+  font-weight: 700;
+  margin-top: 2px;
+}
+.enhanced-dealer-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin: 0 0 6px;
+}
+.enhanced-dealer-address a { color: var(--bt-blue); }
+.enhanced-dealer-address { margin: 0 0 6px; font-size: 14px; }
+.enhanced-dealer-phone { margin: 6px 0; }
+.enhanced-dealer-phone a { color: var(--bt-blue); font-weight: 600; }
+.enhanced-dealer-link {
+  display: inline-block;
+  color: var(--bt-blue);
+  font-weight: 600;
+  margin-top: 8px;
+}
+.enhanced-trusted {
+  font-size: 14px;
+  color: var(--bt-text);
+  margin: 0 0 14px;
+}
+.enhanced-stat-row {
+  border-top: 1px solid var(--bt-border);
+  padding: 12px 0;
+}
+.enhanced-stat-row:last-child { border-bottom: 1px solid var(--bt-border); }
+.enhanced-stat-num {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--bt-text);
+  line-height: 1.2;
+}
+.enhanced-stat-label {
+  font-size: 13px;
+  color: var(--bt-text);
+}
+
+/* ── More From This Dealer rail ───────────────────────────── */
+.bdp-more-from-dealer {
+  background: #eef4fb;
+  border-radius: var(--bt-radius-lg);
+  padding: 24px 28px 18px;
+  margin: 24px 0;
+}
+.more-from-dealer-h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin: 0 0 16px;
+}
+.more-from-dealer-rail-wrap {
+  position: relative;
+}
+.more-from-dealer-rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 12px;
+  scroll-snap-type: x mandatory;
+  /* Show a visible horizontal scrollbar (matches real BT). */
+  scrollbar-width: thin;
+  scrollbar-color: #5b6671 #d4dde6;
+}
+.more-from-dealer-rail::-webkit-scrollbar { height: 8px; }
+.more-from-dealer-rail::-webkit-scrollbar-track {
+  background: #d4dde6;
+  border-radius: 4px;
+}
+.more-from-dealer-rail::-webkit-scrollbar-thumb {
+  background: #5b6671;
+  border-radius: 4px;
+}
+.dealer-rail-card {
+  background: #fff;
+  border-radius: var(--bt-radius);
+  overflow: hidden;
+  color: inherit;
+  scroll-snap-align: start;
+  display: flex;
+  flex-direction: column;
+}
+.dealer-rail-card:hover { text-decoration: none; box-shadow: 0 4px 14px rgba(10,30,60,0.14); }
+.dealer-rail-media { background: #cfdde8; }
+.dealer-rail-media img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; }
+.dealer-rail-body { padding: 12px 14px 14px; }
+.dealer-rail-title {
+  font-weight: 700;
+  font-size: 17px;
+  color: var(--bt-navy);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-bottom: 6px;
+}
+.dealer-rail-price {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--bt-navy);
+  margin-bottom: 6px;
+}
+.dealer-rail-loc {
+  font-size: 13px;
+  color: var(--bt-text-dim);
+}
+.more-from-dealer-next {
+  position: absolute;
+  right: -10px; top: calc(50% - 18px);
+  transform: translateY(-50%);
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--bt-border);
+  color: var(--bt-text);
+  font-size: 18px;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(10,30,60,0.18);
+  z-index: 2;
+}
+.more-from-dealer-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--bt-blue);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ── Still have a question? card ──────────────────────────── */
+/* "Still have a question?" — matched to real BT: h3 24/700 #303030,
+   body 18px regular, button 20/700 in a large pill. */
+.bdp-question-card {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 28px 32px;
+  margin: 24px 0;
+}
+.question-card-h2 {
+  font-size: 24px;
+  font-weight: 700;
+  color: #303030;
+  margin: 0;
+  line-height: 1.2;
+}
+.question-card-rule {
+  display: block;
+  width: 60px;
+  height: 3px;
+  background: var(--bt-blue);
+  margin: 14px 0 24px;
+}
+.bdp-question-card p { margin: 0 0 18px; font-size: 18px; color: #303030; line-height: 1.4; }
+.question-contact-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+  border: 2px solid var(--bt-blue);
+  background: #fff;
+  color: var(--bt-blue);
+  border-radius: 50px;
+  padding: 12px 36px;
+  font-weight: 700;
+  font-size: 20px;
+  line-height: 1;
+}
+
+/* ── OTHER SERVICES tiles ─────────────────────────────────── */
+.bdp-other-services {
+  margin: 24px 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--bt-border);
+}
+.other-services-label {
+  font-size: 14px;
+  letter-spacing: 1.5px;
+  font-weight: 700;
+  color: #4d4d4d;
+  text-transform: uppercase;
+  margin: 0 0 14px;
+}
+.other-services-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.other-service-tile {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 18px 22px;
+  color: #4d4d4d;
+}
+.other-service-tile:hover { text-decoration: none; box-shadow: var(--bt-shadow); }
+.other-service-name { font-size: 14px; font-weight: 400; color: #4d4d4d; }
+.bdp-listed-by-h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--bt-text);
+  margin: 0 0 16px;
+}
+.listed-by-card {
+  background: #fff;
+  border-radius: var(--bt-radius);
+  padding: 22px;
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+}
+.listed-by-logo {
+  width: 80px; height: 80px; border-radius: 50%;
+  background: var(--bt-navy);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--bt-font-serif);
+  font-size: 34px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.listed-by-logo.private { background: #7d8a96; }
+.listed-by-dealer {
+  font-size: 17px;
+  margin: 0 0 4px;
+  color: var(--bt-navy);
+}
+.listed-by-address {
+  font-size: 13px;
+  color: var(--bt-text-dim);
+  margin: 0 0 8px;
+}
+.listed-by-link {
+  display: inline-block;
+  margin-top: 10px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.listed-by-private-note {
+  font-size: 13px;
+  color: var(--bt-text-dim);
+  margin: 0;
+}
+.listed-by-phone {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+
+/* Pricing block on detail page */
+.bdp-price-block { margin: 12px 0 14px; }
+.bdp-original-price {
+  color: var(--bt-text-dim);
+  font-size: 13px;
+  margin: 0 0 2px;
+}
+.bdp-original-price s { color: var(--bt-text-dim); }
+.price-drop-amount {
+  background: #c0392b;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  margin-left: 6px;
+}
+.bdp-monthly-disclaimer {
+  font-size: 11px;
+  color: var(--bt-text-dim);
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+.sponsored-strip {
+  display: inline-block;
+  background: #f6c500;
+  color: #1c2c3a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  margin-bottom: 8px;
+}
+
+/* Private-seller card */
+.bdp-private-seller-card {
+  border-top: 1px solid var(--bt-border);
+  padding-top: 14px;
+}
+.private-seller-tag {
+  display: inline-block;
+  background: var(--bt-bg-alt-2);
+  color: var(--bt-navy);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  margin-bottom: 6px;
+}
+.private-seller-note {
+  font-size: 12px;
+  color: var(--bt-text-dim);
+  margin: 6px 0 14px;
+  line-height: 1.45;
+}
+.private-seller-phone-row {
+  background: var(--bt-bg-alt);
+  border-radius: var(--bt-radius);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.show-phone-btn {
+  font-size: 13px;
+  align-self: flex-start;
+}
+.phone-svg {
+  max-width: 240px;
+  width: auto;
+  height: 34px;
+}
+.phone-note {
+  font-size: 11px;
+  color: var(--bt-text-dim);
+}
+
+/* Description section */
+.bdp-description-section .bdp-description p { margin: 0 0 12px; }
+.bdp-feature-h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--bt-navy);
+  margin: 18px 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.bdp-feature-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 18px;
+}
+.bdp-feature-list li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 13px;
+  color: var(--bt-text);
+}
+.bdp-feature-list li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--bt-blue);
+  font-weight: 700;
+}
+.bdp-disclaimer-text {
+  font-size: 12px;
+  color: var(--bt-text-dim);
+  margin: 18px 0 0;
+  padding: 10px 14px;
+  background: #fff8e6;
+  border-left: 3px solid #f6c500;
+  border-radius: 3px;
+}
+
+.bdp-dealer-card { border-top: 1px solid var(--bt-border); padding-top: 14px; }
+.dealer-card-heading { font-size: 18px; font-weight: 500; color: var(--bt-text); margin: 0 0 10px; }
+.dealer-card-meta { display: flex; gap: 12px; align-items: center; margin: 0 0 12px; }
+.dealer-logo {
+  width: 60px; height: 60px; border-radius: 50%;
+  background: var(--bt-bg-alt-2); color: var(--bt-navy);
+  font-family: var(--bt-font-serif); font-weight: 700; font-size: 24px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.dealer-address { font-style: normal; font-size: 14px; color: var(--bt-text); line-height: 1.4; }
+.dealer-phone { color: var(--bt-blue); font-size: 14px; font-weight: 400; display: inline-block; margin-top: 2px; }
+.trusted-partner { font-size: 13px; color: var(--bt-text-dim); margin: 0 0 12px; }
+.trusted-partner strong { color: var(--bt-navy); }
+.dealer-lead-form { display: flex; flex-direction: column; gap: 8px; }
+/* Real BT lead form input: 40px tall, 4px radius, 1px #c2c2c2 border,
+   8px 12px 4px padding (asymmetric so floating label sits properly). */
+.lead-input, .lead-textarea {
+  width: 100%; border: 1px solid #c2c2c2;
+  border-radius: 4px; padding: 8px 12px 4px; font: inherit; font-size: 14px;
+  color: var(--bt-text);
+  height: 40px;
+  box-sizing: border-box;
+}
+.lead-textarea { height: auto; padding: 10px 12px; }
+.lead-input::placeholder, .lead-textarea::placeholder { color: #9ba5af; }
+.lead-row { display: flex; gap: 8px; }
+.lead-row .lead-input { flex: 1; min-width: 0; }
+.contact-seller-btn.btn-block {
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 50px;
+}
+
+.bdp-section { background: #fff; padding: 18px; border-bottom: 1px solid var(--bt-border); }
+.bdp-section h2 { font-size: 18px; margin-bottom: 12px; }
+.bdp-description { color: var(--bt-text); max-width: 780px; }
+.highlight-list { list-style: none; padding: 0; margin: 0; display: flex; gap: 18px; flex-wrap: wrap; }
+.highlight-list li { display: flex; gap: 6px; align-items: center; }
+.hl-check {
+  background: var(--bt-blue);
+  color: #fff;
+  width: 20px; height: 20px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px;
+}
+.spec-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 8px 18px; font-size: 14px; margin: 0;
+}
+.spec-grid > div { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--bt-bg-alt-2); }
+.spec-grid dt { color: var(--bt-text-dim); width: 130px; flex: 0 0 130px; }
+.spec-grid dd { margin: 0; color: var(--bt-text); font-weight: 600; }
+
+.lead-confirm {
+  background: #ddf3e6; color: #1a6f3f;
+  padding: 12px 16px; border-radius: var(--bt-radius);
+  margin: 12px 0;
+}
+
+/* ── Footer ───────────────────────────────────────────────────── */
+.site-footer {
+  background: var(--bt-navy-strong);
+  color: #cdd5df;
+  margin-top: 60px;
+  padding: 36px 16px 16px;
+}
+.footer-cols {
+  max-width: var(--container); margin: 0 auto;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px;
+}
+.footer-col h4 { color: #fff; margin-bottom: 10px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
+.footer-col ul { list-style: none; padding: 0; margin: 0; }
+.footer-col li { padding: 4px 0; font-size: 13px; }
+.footer-col a { color: #cdd5df; }
+.footer-bottom {
+  max-width: var(--container); margin: 24px auto 0;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding-top: 14px;
+  display: flex; justify-content: space-between;
+  font-size: 12px;
+}
+.footer-legal a { color: #cdd5df; margin-left: 4px; }
+
+/* ── OneTrust-style cookie banner ─────────────────────────────── */
+.ot-banner {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  background: #ffffff; color: var(--bt-text);
+  border-top: 1px solid var(--bt-border);
+  box-shadow: 0 -8px 24px rgba(10,30,60,0.10);
+  z-index: 1000;
+}
+.ot-banner-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 32px;
+  align-items: center;
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 18px 20px;
+}
+.ot-banner-text { min-width: 0; }
+.ot-banner-title {
+  font-family: var(--bt-font);
+  font-size: 15px; font-weight: 700; color: var(--bt-text);
+  margin: 0 0 4px;
+}
+.ot-banner-body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--bt-text);
+  margin: 0;
+  max-height: 4.5em;
+  overflow: hidden;
+}
+.ot-link { color: var(--bt-blue); text-decoration: underline; }
+.ot-banner-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ot-btn {
+  font-family: var(--bt-font);
+  font-size: 13px; font-weight: 600;
+  padding: 10px 16px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ot-btn-link {
+  background: transparent;
+  color: var(--bt-text);
+  border: 0;
+  text-decoration: underline;
+  padding: 10px 10px;
+}
+.ot-btn-secondary {
+  background: #ffffff;
+  color: var(--bt-text);
+  border-color: var(--bt-text);
+}
+.ot-btn-secondary:hover { background: var(--bt-bg-alt); }
+.ot-btn-primary {
+  background: var(--bt-text);
+  color: #ffffff;
+  border-color: var(--bt-text);
+}
+.ot-btn-primary:hover { background: #000; }
+
+/* ── Misc ─────────────────────────────────────────────────────── */
+.visuallyhidden {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0,0,0,0); border: 0;
+}
+
+/* Responsive */
+@media (max-width: 980px) {
+  .header-inner { gap: 12px; }
+  .main-nav .nav-list { display: none; }
+  .navbar-toggle { display: inline-block; background: transparent; border: 0; font-size: 24px; }
+  .home-hero { grid-template-columns: 1fr; }
+  .srp-grid { grid-template-columns: 1fr; }
+  .srp-grid-results, .card-grid { grid-template-columns: repeat(2, 1fr); }
+  .card-rail { grid-template-columns: repeat(2, 1fr); }
+  .brand-tile-row, .type-tile-row { grid-template-columns: repeat(2, 1fr); }
+  .bdp-grid { grid-template-columns: 1fr; }
+  .footer-cols { grid-template-columns: repeat(2, 1fr); }
+  .ot-banner-row { grid-template-columns: 1fr; }
+  .ot-banner-actions { flex-wrap: wrap; }
+}
+@media (max-width: 560px) {
+  .srp-grid-results, .card-grid, .card-rail { grid-template-columns: 1fr; }
+  .brand-tile-row, .type-tile-row { grid-template-columns: repeat(2, 1fr); }
+  .footer-cols { grid-template-columns: 1fr; }
+}
