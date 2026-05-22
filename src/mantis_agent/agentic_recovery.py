@@ -69,8 +69,38 @@ RECOVERY_PROMPT_VERSION = "v1"
 # Per-step + per-run recovery budgets. The policy enforces these
 # before invoking the LLM call so a pathological page / step can't
 # burn the run on recovery alone.
+#
+# #567: a submission can override these via the
+# ``max_recoveries_per_step`` / ``max_recoveries_per_run`` runtime
+# fields (threaded through ``MicroPlanRunner.max_recoveries_per_step``
+# and ``.max_recoveries_per_run``). The DEFAULT_* values remain the
+# fallback when no override is supplied — preserves legacy behavior
+# for callers that don't set the runtime fields.
 DEFAULT_MAX_RECOVERIES_PER_STEP = 2
 DEFAULT_MAX_RECOVERIES_PER_RUN = 5
+
+
+def effective_max_recoveries(runner: Any) -> tuple[int, int]:
+    """Resolve the per-step + per-run recovery caps for this run.
+
+    Reads ``runner.max_recoveries_per_step`` / ``.max_recoveries_per_run``
+    when set (positive int), else falls back to the module DEFAULTS.
+    Defensive: handles ``None``, missing attr, non-positive values
+    by treating them as "use default" — never returns 0 (would brick
+    the recovery layer entirely).
+    """
+    per_step = DEFAULT_MAX_RECOVERIES_PER_STEP
+    per_run = DEFAULT_MAX_RECOVERIES_PER_RUN
+    try:
+        v = getattr(runner, "max_recoveries_per_step", None)
+        if isinstance(v, int) and v > 0:
+            per_step = v
+        v = getattr(runner, "max_recoveries_per_run", None)
+        if isinstance(v, int) and v > 0:
+            per_run = v
+    except Exception:  # noqa: BLE001 — never break recovery
+        pass
+    return per_step, per_run
 
 
 @dataclass

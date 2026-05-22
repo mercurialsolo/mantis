@@ -102,6 +102,8 @@ class MicroPlanRunner:
         brain_budgets: dict[str, int] | None = None,
         pause_on_captcha: bool | None = None,
         settle_ceiling_seconds: float | None = None,
+        max_recoveries_per_run: int | None = None,
+        max_recoveries_per_step: int | None = None,
     ):
         # Seed the global RNG so per-action human_speed delays
         # (random.uniform / random.randint in playwright_env.py +
@@ -132,6 +134,15 @@ class MicroPlanRunner:
         from . import adaptive_settle as _adaptive_settle
         self.settle_ceiling_seconds: float | None = settle_ceiling_seconds
         _adaptive_settle.set_runtime_ceiling(settle_ceiling_seconds)
+        # #567: per-run override for agentic-recovery budgets. ``None``
+        # → caller didn't override, callers fall back to
+        # ``DEFAULT_MAX_RECOVERIES_PER_*`` via
+        # ``agentic_recovery.effective_max_recoveries(runner)``. Positive
+        # int → caps raised or lowered for this submission. Read by
+        # ``StepRecoveryPolicy`` + ``FrontierCritic`` before each
+        # recovery / critic dispatch.
+        self.max_recoveries_per_run: int | None = max_recoveries_per_run
+        self.max_recoveries_per_step: int | None = max_recoveries_per_step
         # #570: per-run override for the cf_challenge auto-pause loop
         # (PR #555). ``None`` → env var fallback
         # (``MANTIS_PAUSE_ON_CAPTCHA``, default on); ``False`` → fail

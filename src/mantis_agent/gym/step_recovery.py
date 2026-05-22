@@ -930,22 +930,22 @@ class StepRecoveryPolicy:
                 type(total_attempts).__name__,
             )
             return None
-        from ..agentic_recovery import (
-            DEFAULT_MAX_RECOVERIES_PER_RUN,
-            DEFAULT_MAX_RECOVERIES_PER_STEP,
-        )
+        # #567: per-run override via runtime fields wins over the
+        # module DEFAULT_* fallback. Same shape as #560/#561/#571.
+        from ..agentic_recovery import effective_max_recoveries
+        max_per_step, max_per_run = effective_max_recoveries(self.parent)
         per_step = per_step_dict.get(step_index, 0)
         per_run = total_attempts
-        if per_step >= DEFAULT_MAX_RECOVERIES_PER_STEP:
+        if per_step >= max_per_step:
             logger.warning(
                 "  [%d] recovery_skipped: per-step budget exhausted (%d/%d)",
-                step_index, per_step, DEFAULT_MAX_RECOVERIES_PER_STEP,
+                step_index, per_step, max_per_step,
             )
             return None
-        if per_run >= DEFAULT_MAX_RECOVERIES_PER_RUN:
+        if per_run >= max_per_run:
             logger.warning(
                 "  [%d] recovery_skipped: per-run budget exhausted (%d/%d)",
-                step_index, per_run, DEFAULT_MAX_RECOVERIES_PER_RUN,
+                step_index, per_run, max_per_run,
             )
             return None
 

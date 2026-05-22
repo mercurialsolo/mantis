@@ -887,6 +887,9 @@ def _run_holo3_executor(
             pause_on_captcha=task_suite.get("_pause_on_captcha"),
             # #561: ``None`` → no ceiling, each settle uses its own max.
             settle_ceiling_seconds=task_suite.get("_settle_ceiling_seconds"),
+            # #567: ``None`` → fall back to DEFAULT_MAX_RECOVERIES_PER_*.
+            max_recoveries_per_run=task_suite.get("_max_recoveries_per_run"),
+            max_recoveries_per_step=task_suite.get("_max_recoveries_per_step"),
         )
 
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
@@ -1592,6 +1595,9 @@ def _build_suite_from_payload(payload: dict) -> str:
         pause_on_captcha=payload.get("pause_on_captcha"),
         # #561: per-run ceiling on adaptive_settle waits.
         settle_ceiling_seconds=payload.get("settle_ceiling_seconds"),
+        # #567: per-run agentic-recovery budget overrides.
+        max_recoveries_per_run=payload.get("max_recoveries_per_run"),
+        max_recoveries_per_step=payload.get("max_recoveries_per_step"),
     )
     return json.dumps(suite)
 
