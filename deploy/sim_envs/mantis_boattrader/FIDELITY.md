@@ -1,0 +1,317 @@
+# `mantis_boattrader` — Fidelity match log
+
+Working doc tracking each element's match status against
+`https://www.boattrader.com/`. Update as iterations land.
+
+Last updated: **v=81** (2026-05-22)
+
+Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
+(token rotates per sandbox restart; current: `yw28zp1uej5nibwnhgx_trmu8w8k8qin`)
+
+## Methodology
+
+Each row records the element/region, the real BT measurement
+(via Chrome MCP `getComputedStyle` / `getBoundingClientRect`), and
+the current state. Status legend:
+
+- ✅ exact (within 1-2px rendering tolerance)
+- 🟡 close (matches structurally; minor pixel diff)
+- ⏳ partial (some pieces match, more work needed)
+- ❌ missing / broken
+- 🚫 intentionally not matched (e.g. real photos vs SVG placeholders)
+
+## Global
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Font family | Roboto, -apple-system, ... (system fallback; no actual Roboto loaded) | same — no Google Fonts link, system fallback | ✅ |
+| Nav weight | 500 medium via system font | 500 medium via system font | ✅ |
+| Page container width (SRP/home) | 1440px max, 36px side margin | same | ✅ |
+| Page container width (BDP) | ~1335px content | 1400px content (mine 65px wider) | 🟡 |
+
+## Header
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Logo SVG | 150×19 at x=30, y=20 | 150×19 at x=30 | ✅ |
+| Header bg | white | white | ✅ |
+| First nav item x (Find) | 338 | 338 | ✅ |
+| Nav item padding | 23px 20px 26px 25px | 23px 20px 26px 25px | ✅ |
+| Nav item color | rgb(7,50,79) navy | rgb(7,50,79) navy | ✅ |
+| Nav item font-size | 15px | 15px | ✅ |
+| Nav item weight | 500 | 500 | ✅ |
+| Sign up / Log in (right) | rendered at x≈1437/1497 | same position | ✅ |
+
+## Blue prequal ribbon
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Height | 40px | 40px | ✅ |
+| Bg | rgb(37,102,176) | same | ✅ |
+| Inner padding | 10px 16px | 10px 16px | ✅ |
+| "Get started" CTA | plain inline bold text | plain inline bold text | ✅ |
+| Hidden on BDP | yes (no ribbon on BDP) | hidden via `{% block ribbon %}{% endblock %}` | ✅ |
+
+## SRP page
+
+### Page header / breadcrumb / H1
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Breadcrumb font-size | 12px / 400 | 12px / 400 | ✅ |
+| Breadcrumb color | #757575 | #757575 | ✅ |
+| Breadcrumb padding | 7px 15px | 7px 0 (vertical) | ✅ |
+| H1 "Boats for sale" font-size | 32px | 32px | ✅ |
+| H1 weight | 700 | 700 | ✅ |
+| H1 color | rgb(64,64,64) #404040 | #404040 | ✅ |
+| H1 line-height | 32px | 32px | ✅ |
+| Bc → H1 visual gap | ~19px (via padding) | ~19px | ✅ |
+| Ribbon → bc gap | small (system padding) | small | ✅ |
+
+### Search bar ("Try" + quote)
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Outer card bg | linear-gradient(135deg, #2566b0, #2b82d9 45%, #3391fc) | same | ✅ |
+| Outer card border-radius | 12px | 12px | ✅ |
+| Outer card padding | 12.25px 16px | 12px 16px | ✅ |
+| Inner white field br | 10px | 10px | ✅ |
+| "Try" weight | 700 | 700 | ✅ |
+| "Try" font-size | 16px | 16px | ✅ |
+| "Try" color | rgb(100,116,139) #64748b | same | ✅ |
+| Quote placeholder | 16/400 #64748b | 16/400 #64748b | ✅ |
+| Sparkle icon | small SVG ai.svg (4-point star) | inline SVG 4-point star | ✅ |
+| Submit icon | magnifier SVG | inline SVG circle+handle | ✅ |
+
+### Pre-qualify banner
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Bg | light blue gradient | light blue gradient | ✅ |
+| Bank icon shape | rounded square 8px radius | rounded square 8px radius | ✅ |
+| Bank icon bg | blue gradient (135deg) | linear-gradient(135deg, #3b78c0, #2566b0 55%, #1d569a) | ✅ |
+| Bank icon size | 40×40 | 40×40 | ✅ |
+| Title font | 14/700 | 14/700 | ✅ |
+| Title color | rgb(16,24,40) #101828 | #101828 | ✅ |
+| Subtext | 11/400 #4a5565 | 11/400 #4a5565 | ✅ |
+| "Get Started" button | 13/700 white, 100px br, 0 24px pad, h=36 | same | ✅ |
+
+### Filter sidebar
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Outer card bg/border/radius | white, 1px gray, 5px br | white, 1px #e0e0e0, 6px br | ✅ |
+| Card padding | 15px sides | 15px 15px 18px | ✅ |
+| Save Search button | 270×40, blue pill, 16/700, 50px br | 268×38, same | ✅ |
+| Save Search → Location gap | ~50-60px | 51px | ✅ |
+| Section divider | 1px solid #ededed | 1px solid #ededed | ✅ |
+| Section label | 15/400 #333 | 15/400 #333 | ✅ |
+| Chevron | down arrow ~10px | down arrow ~10px via border trick | ✅ |
+| Zip/City/Other segmented | 282×59 gray track, 50px br, 4px pad | 268×60 same shape | ✅ |
+| 25 miles select | 106×40, 1px #ededed, 8px br | 106×40, same | ✅ |
+| All/New/Used segmented | same shape as zip toggle | same | ✅ |
+| Length / Year / Price sliders | 22×22 blue thumb w/ 2px white border, 4px rail #e9e9e9, blue fill | same exact spec | ✅ |
+| **Slider handle URL sync** | rc-slider auto-positions handles from URL | JS in base.html reads input min/max/value, sets handle positions | ✅ |
+| Beam filter | range slider + min/max ft | added | ✅ |
+| Max Draft filter | range slider + min/max ft | added | ✅ |
+| Fuel Type filter | dropdown | added (Gas/Diesel/Electric/Other) | ✅ |
+| Hull filter | dropdown | added (Fiberglass/Aluminum/Composite/Steel/Wood/Other) | ✅ |
+| Engines filter | Number (segmented) + Engine Type (radio list) | added | ✅ |
+| For Sale By filter | Any/Dealer/Private Seller radios | added | ✅ |
+
+### Boat Loan Calculator widget (below filter card)
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Title | "Boat Loan Calculator" 18/700 | same | ✅ |
+| Loan Amount field | input with $ | added | ✅ |
+| Loan Term dropdown | 240/180/120/60 months | added | ✅ |
+| Interest Rate (APR) | 6.49% default | added | ✅ |
+| Calculate button | blue outline | added | ✅ |
+| Monthly Payment result | "$0.00" centered | added | ✅ |
+| "Get Pre-Qualified" CTA | blue filled pill | added | ✅ |
+| Fineprint help text | small gray | added | ✅ |
+
+### Listing cards (SRP)
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Card dimensions | 351×389 | 351×388 | ✅ |
+| Card border | 1px #e0e0e0 | 1px #e0e0e0 | ✅ |
+| Card filter (drop-shadow) | drop-shadow(rgba(0,0,0,0.2) 0px 2px 1px) | same | ✅ |
+| Card border-radius | 4px | 4px | ✅ |
+| Grid gap | 10px | 10px | ✅ |
+| Image aspect | 3:2 (349×232) | 3:2 (347×231) | ✅ |
+| Title | 18/700 #404040, ellipsis | 18/700 #404040 | ✅ |
+| Price | 16/400 #404040 | 16/400 #404040 | ✅ |
+| Monthly | 14/700 rgb(19,154,245) blue | same | ✅ |
+| Monthly ⓘ info icon | small circled "i" | small circled "i" italic | ✅ |
+| Click ⓘ → sticky tooltip | bottom-card blue banner, white text, × close | implemented via JS toggle | ✅ |
+| Meta (city, dealer) | 12/400 #9e9e9e | 12/400 #9e9e9e | ✅ |
+| Footer dealer logo | dark badge + dealer name | dark badge + dealer initial+name | ✅ |
+| Footer divider above | 1px #e0e0e0 | 1px #e0e0e0 | ✅ |
+| "Contact Seller" pill | blue outline, 14/700 | blue outline, 14/700 | ✅ |
+| Owner cards | no dealer logo, "Contact Owner" | template uses `{% if not b.is_owner_listed %}` | ✅ |
+| Featured badge | white pill 4px pad 16px br | same | ✅ |
+| Heart icon (top-right of img) | SVG outline heart 16px in 28px circle | SVG outline heart, white-translucent circle | ✅ |
+| Sponsored card border | same as others (no special) | 1px #e0e0e0 | ✅ |
+
+### Sort row
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Layout | plain inline "Sort:[strong] Recommended ▾" | same | ✅ |
+| Border | none | none | ✅ |
+| Font | 14/500 #404040 | 14/500 #404040 | ✅ |
+| Chevron | inline SVG | inline SVG (bg-image data URL) | ✅ |
+
+### Pagination
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Style | plain text links | plain text links | ✅ |
+| Font | 14/400 #0a0a0a | 14/400 #0a0a0a | ✅ |
+| Active page | bold dark + underline | bold dark + 2px blue underline | ✅ |
+| Prev/Next | plain blue | plain blue | ✅ |
+| "of N" | dim gray | #757575 dim | ✅ |
+
+## BDP page
+
+### Top strip
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Sponsor ad strip | 728×90 leaderboard on #f7f7f7 strip, 122px tall | same exactly | ✅ |
+| Blue ribbon on BDP | not present | hidden via `{% block ribbon %}` override | ✅ |
+| Back to Search link | 12/400 #139af5 light blue | same | ✅ |
+| Sticky breadcrumb | 15/400 #333 | 15/400 #333 | ✅ |
+| Next Boat link | 12/400 #139af5 light blue | same | ✅ |
+
+### Gallery
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Main image aspect | 3:2 (890×593) | 3:2 (auto-scales by width) | ✅ |
+| Main image border-radius | 8px | 8px | ✅ |
+| Prev/Next/Share/Like buttons | 40×40 circle, rgba(0,0,0,0.3) bg | same | ✅ |
+| Thumbnail strip | 5 thumbs, 175×116, 8px br | 5 thumbs, ~181×123, 8px br | 🟡 |
+
+### Right rail (Featured card)
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Width | 366px | 366px | ✅ |
+| Bg / border / radius | white, 1px #ededed, 8px br | same | ✅ |
+| Padding | 16px | 16px | ✅ |
+| Drop-shadow | rgba(0,0,0,0.2) 0 2px 2px 0 | same | ✅ |
+| Featured badge | small white pill | same | ✅ |
+| H1 boat title | 20/700 rgb(51,51,51) | same | ✅ |
+| Address | 14/400 #757575 | similar | ✅ |
+| Price | 20/700 #333 | same | ✅ |
+| "Own this boat for $X/mo" | 16/400 BT blue link | 16/400 blue | ✅ |
+| Views/Saves/Listed strip | 12/400 with SVG icons | 12/400 with SVG eye/heart/calendar | ✅ |
+| Contact name (H3) | 18/500 dark | 18/500 dark | ✅ |
+| Lead form inputs | 40px h, 4px br, 1px #c2c2c2 | same | ✅ |
+| Lead form padding | 8px 12px 4px (floating-label friendly) | same | ✅ |
+| Contact Seller submit | blue pill | blue pill | ✅ |
+| Call (outline) button | 2px blue outline, 14/700, pill | same | ✅ |
+| "Show Phone Number" (owner) | hidden until click → SVG number reveal | implemented | ✅ |
+
+### Below-gallery content
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Stats strip (Length / Year / etc.) | label 14/700 #303030, value 14/400 #333 | same | ✅ |
+| "What Owners Say" + Owner Highlights | section heading + pill tags | implemented | ✅ |
+| Owner-highlight pills | bg #e3f1fe, color #2566b0, 12/700, 4px 8px pad, 5px br | same | ✅ |
+| Boat Details H2 section | 20/700 #333, bg #f5f9ff, 8px br, 20px 16px pad | same | ✅ |
+| Description accordion (H3) | open by default | open by default | ✅ |
+| Measurements accordion (H3) → Dimensions/Weights/Tanks (H4) | collapsed, h4 subgroups | added | ✅ |
+| Propulsion accordion (H3) | collapsed | implemented | ✅ |
+| More Details accordion (H3) | real BT uses H4 | implemented as H3 | 🟡 |
+| Location accordion (H3) | real BT uses H4 | implemented as H3 | 🟡 |
+| Dealership card | dealership-card with logo, address, stats | implemented | ✅ |
+| "Get pre-qualified in minutes" rail card | 18/700 heading + checkmarks + outline btn | implemented (heading bumped to 18px in v=56) | ✅ |
+| More From This Dealer carousel | horizontal scroll of small cards | implemented | ✅ |
+| Still have a question? card | 24/700 question h2, body 18px | implemented | ✅ |
+| Other Services tiles | 14/700 label, tile names 14/400 #4d4d4d | implemented | ✅ |
+
+## Home page
+
+| Element | Real BT | Mine | Status |
+|---|---|---|---|
+| Hero search panel (dark navy) | left column with "Find your perfect boat" header | implemented | ✅ |
+| Hero ad (right) | full-bleed sponsor banner | gradient placeholder ad | ✅ |
+| "Sell Your Boat Fast!" callout | sailboat icon + label + Sell pill | implemented | ✅ |
+
+## Behaviors
+
+| Behavior | Real BT | Mine | Status |
+|---|---|---|---|
+| Filter URL → state sync | sidebar reflects URL params | condition pill, length inputs sync; slider handles position via JS | ✅ |
+| Click ⓘ on monthly | opens sticky banner | implemented | ✅ |
+| Click outside tooltip | closes | implemented | ✅ |
+| Detail page sticky bar | appears on scroll | `bdp-scrolled` body class via scroll listener | ✅ |
+
+## Open work / known minor diffs
+
+- 🟡 **BDP content area width**: mine is 1400px, real BT is ~1335px (65px wider).
+  Decided not to narrow per page since the SRP container width is intentionally 1440.
+- 🟡 **Real photos vs SVG placeholder boats**: user accepted placeholder content.
+- 🟡 **More Details / Location H-level in Boat Details accordion**: mine uses H3,
+  real BT uses H4. Trivial fix when needed.
+- 🟡 **Thumbnail size**: 181×123 vs real 175×116 — auto-scales with column,
+  visually equivalent.
+
+## Data variety (fixtures)
+
+| Trait | Distribution |
+|---|---|
+| Listing type | 67% dealer / 25% owner / 8% sponsored |
+| POA boats | ~8% of dealers — `display_price="Request a Price"`, no monthly, no ⓘ |
+| Price drop badge | ~18% of dealer listings (rare for owners) |
+| Owner listings | "Contact Owner" CTA, no dealer logo, phone hidden behind click |
+| Engine hours | 0 (new) or 20-950 (used) |
+| Engine count | 1 / 2 / 3 by length |
+| Badges | Featured / In-Stock / Price Drop / New Arrival / Sponsored — variable subset |
+| Description blurbs | 5+ templates rotated by listing_type |
+| Days listed | 0-120 → "New to Market" / "Listed N days/months ago" |
+
+## Iteration log (versions)
+
+`v=46` BDP ribbon removed, SRP card heights, meta color
+`v=47` BDP grid 1fr+80+366
+`v=48` ribbon 40px
+`v=49` filter card border + padding
+`v=50` dealer logos in cards
+`v=51` badge color uniform, sponsored card border
+`v=52` SRP H1 color and line-height
+`v=53` owner-tag pills
+`v=54` BDP rail padding + shadow
+`v=55` lead form inputs 4px radius, outline button 2px
+`v=56` prequal heading 18/700, Boat Details bg
+`v=57` BDP back/next colors
+`v=58` sticky-breadcrumb 15/400/#333
+`v=59` ad-strip 728×90
+`v=60` brand margin → Find at x=338
+`v=61` logo 150×19 compact + system fallback
+`v=62` SRP breadcrumb 12/400/#757575
+`v=63` info icon + sticky tooltip
+`v=64` tooltip click-toggle JS
+`v=65` card grid gap 10px
+`v=66` breadcrumb padding 7px
+`v=67` removed breadcrumb top margin
+`v=68` Sort plain inline + SVG icons (sparkle/magnifier/heart)
+`v=69` SVG icons (eye/calendar/phone)
+`v=70` slider thumbs 22×22
+`v=71` sort weight 500, rounded square bank icon gradient
+`v=72` gallery buttons 40×40
+`v=73` slider handle JS URL sync
+`v=74` price input max attribute
+`v=75` pagination plain-text
+`v=76` Save Search bottom margin attempt
+`v=77` fixed margin specificity override
+`v=78` removed Google Fonts (use system font for nav weight)
+`v=79` BDP gallery 3:2 aspect
+`v=80` added Beam/Max Draft/Fuel Type/Hull/Engines/For Sale By + Boat Loan Calculator widget
+`v=81` accordion section h3 + measurements subsection h4

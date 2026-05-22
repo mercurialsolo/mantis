@@ -298,7 +298,7 @@
 
   <details class="bdp-accordion" open>
     <summary>
-      <span class="accordion-title">Description</span>
+      <h3 class="accordion-title">Description</h3>
       <span class="accordion-chevron"></span>
     </summary>
     <div class="accordion-body">
@@ -324,15 +324,22 @@
 
   <details class="bdp-accordion">
     <summary>
-      <span class="accordion-title">Measurements</span>
+      <h3 class="accordion-title">Measurements</h3>
       <span class="accordion-chevron"></span>
     </summary>
     <div class="accordion-body">
+      <h4 class="accordion-subhead">Dimensions</h4>
       <dl class="spec-grid">
         <div><dt>Length Overall</dt><dd>{{ boat.length_ft }} ft</dd></div>
         <div><dt>Beam</dt><dd>{{ boat.beam_ft }} ft</dd></div>
         <div><dt>Draft</dt><dd>{{ "%.1f"|format(boat.length_ft * 0.09) }} ft</dd></div>
+      </dl>
+      <h4 class="accordion-subhead">Weights</h4>
+      <dl class="spec-grid">
         <div><dt>Dry Weight</dt><dd>{{ (boat.length_ft * 280)|int }} lbs</dd></div>
+      </dl>
+      <h4 class="accordion-subhead">Tanks</h4>
+      <dl class="spec-grid">
         <div><dt>Fuel Capacity</dt><dd>{{ boat.fuel_capacity_gal }} gal</dd></div>
         <div><dt>Fresh Water Capacity</dt><dd>{{ (boat.length_ft * 1.2)|int }} gal</dd></div>
       </dl>
@@ -341,7 +348,7 @@
 
   <details class="bdp-accordion">
     <summary>
-      <span class="accordion-title">Propulsion</span>
+      <h3 class="accordion-title">Propulsion</h3>
       <span class="accordion-chevron"></span>
     </summary>
     <div class="accordion-body">
@@ -358,7 +365,7 @@
 
   <details class="bdp-accordion">
     <summary>
-      <span class="accordion-title">More Details</span>
+      <h3 class="accordion-title">More Details</h3>
       <span class="accordion-chevron"></span>
     </summary>
     <div class="accordion-body">
@@ -375,7 +382,7 @@
 
   <details class="bdp-accordion">
     <summary>
-      <span class="accordion-title">Location</span>
+      <h3 class="accordion-title">Location</h3>
       <span class="accordion-chevron"></span>
     </summary>
     <div class="accordion-body">

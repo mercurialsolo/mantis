@@ -666,7 +666,10 @@ header.main {
   width: 100%;
   max-width: 100%;
   align-self: stretch;
-  margin: 0 0 18px;
+  /* Real BT leaves ~50px between Save Search button and Location label.
+     Combined with .filter-group summary's 18px top padding, this 32px
+     bottom margin yields ~50px gap. */
+  margin: 0 0 32px;
 }
 /* The Save Search button row gets its own bottom divider so it sits
    above the first filter group cleanly. Real BT uses a thin 1px divider. */
@@ -817,8 +820,11 @@ header.main {
   cursor: pointer;
   box-sizing: border-box;
 }
-.range-handle-min { left: 6%; }
-.range-handle-max { left: calc(94% - 22px); }
+/* Default handle positions (before JS sync). JS in base.html overrides
+   these via inline `style.left` based on the active min/max input values. */
+.range-handle-min { left: calc(0% - 11px); }
+.range-handle-max { left: calc(100% - 11px); }
+.range-fill { left: 0%; right: 0%; }
 
 .range-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .range-row .filter-input { flex: 1; min-width: 0; height: 40px; padding: 8px 12px; font-size: 14px; }
@@ -827,7 +833,91 @@ header.main {
 .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; }
 .apply-filters { margin-top: 14px; }
 .filter-clear { display: block; text-align: center; font-size: 14px; margin-top: 10px; }
-.filters-form > .btn-primary { margin: 10px 0 14px; }
+.filters-form > .btn-primary { margin: 10px 0 32px; }
+
+/* Sub-label inside Engines / etc — small bold heading above sub-controls. */
+.filter-sublabel {
+  display: block;
+  font-size: 14px; font-weight: 700; color: #303030;
+  margin: 0 0 8px;
+}
+.radio-list { display: flex; flex-direction: column; gap: 6px; }
+.radio-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; color: #333; cursor: pointer;
+}
+.radio-row input[type="radio"] {
+  appearance: none; -webkit-appearance: none;
+  width: 18px; height: 18px; min-width: 18px;
+  border: 1px solid #c2c2c2; border-radius: 50%;
+  background: #fff; position: relative;
+  cursor: pointer;
+}
+.radio-row input[type="radio"]:checked {
+  border-color: var(--bt-blue);
+}
+.radio-row input[type="radio"]:checked::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 10px; height: 10px;
+  background: var(--bt-blue); border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Boat Loan Calculator widget below filter card. */
+.loan-calc-card {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 18px 16px;
+  margin-top: 18px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.loan-calc-title {
+  font-size: 18px; font-weight: 700; color: #303030;
+  margin: 0;
+}
+.loan-calc-field { display: flex; flex-direction: column; gap: 4px; }
+.loan-calc-label { font-size: 13px; color: #4a5565; }
+.loan-calc-input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid #c2c2c2; border-radius: 4px;
+  padding: 8px 12px; font-size: 14px; color: #1f2937;
+  background: #fff; box-sizing: border-box;
+}
+.loan-calc-input-row {
+  display: flex; align-items: center; gap: 6px;
+}
+.loan-calc-input-row .loan-calc-input { flex: 1; }
+.loan-calc-unit { color: #4a5565; font-size: 14px; }
+.loan-calc-button {
+  align-self: stretch;
+  margin: 6px 0 4px;
+}
+.loan-calc-result {
+  text-align: center; padding: 10px 0;
+  border-top: 1px solid #ededed;
+}
+.loan-calc-result-label {
+  font-size: 18px; font-weight: 700; color: #303030;
+}
+.loan-calc-result-value {
+  font-size: 22px; font-weight: 700; color: #303030;
+  margin-top: 2px;
+}
+.loan-calc-prompt {
+  text-align: center; font-size: 14px; color: #303030;
+  margin: 0;
+}
+.loan-calc-cta {
+  align-self: stretch;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.loan-calc-fineprint {
+  font-size: 11px; color: #757575; line-height: 1.4;
+  margin: 0; text-align: center;
+}
+.loan-calc-fineprint a { color: var(--bt-blue); text-decoration: underline; }
 
 .srp-results { min-width: 0; }
 /* AI search bar — blue gradient outer card (12px radius) wraps a
@@ -947,18 +1037,27 @@ header.main {
   text-align: center;
 }
 .srp-empty strong { display: block; font-size: 18px; margin-bottom: 6px; color: var(--bt-navy); }
+/* Real BT pagination: plain text links, no border boxes. 14/400 dark
+   #0a0a0a; active page is bold-darker; "of N" total dimmer. */
 .pagination {
   display: flex; align-items: center; justify-content: center;
-  gap: 6px; margin: 26px 0;
-  font-size: 14px;
+  gap: 4px; margin: 26px 0;
+  font-size: 14px; font-weight: 400;
 }
 .pagination a {
-  padding: 6px 12px; border: 1px solid var(--bt-border);
-  border-radius: var(--bt-radius); color: var(--bt-blue);
+  padding: 8px 14px; border: 0;
+  border-radius: 0; color: #0a0a0a;
   text-decoration: none;
+  background: transparent;
 }
-.pagination a.active { background: var(--bt-blue); color: #fff; border-color: var(--bt-blue); }
-.page-total { color: var(--bt-text-dim); }
+.pagination a:hover { color: var(--bt-blue); }
+.pagination a.active {
+  color: #0a0a0a; font-weight: 700;
+  background: transparent;
+  border-bottom: 2px solid var(--bt-blue);
+}
+.page-prev, .page-next { color: var(--bt-blue) !important; font-weight: 400; }
+.page-total { color: #757575; margin: 0 4px; }
 
 /* ── Boat Detail Page (BDP) ───────────────────────────────────── */
 
@@ -1085,16 +1184,21 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
   width: 366px;
   margin: 0;
 }
+/* Real BT BDP main gallery image: 3:2 aspect ratio (890×593 at width 890,
+   or whatever the column width gives us — the image always scales to 3:2). */
 .bdp-main-image {
   position: relative;
   background: #000; border-radius: var(--bt-radius-lg); overflow: hidden;
+  aspect-ratio: 3 / 2;
 }
-.bdp-main-image img { width: 100%; max-height: 520px; object-fit: cover; }
+.bdp-main-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Real BT BDP gallery buttons: 40×40 circle, rgba(0,0,0,0.3) bg. */
 .gallery-prev, .gallery-next, .gallery-share, .gallery-like {
   position: absolute; top: 50%; transform: translateY(-50%);
-  background: rgba(0,0,0,0.35); color: #fff; border: 0;
-  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(0,0,0,0.3); color: #fff; border: 0;
+  width: 40px; height: 40px; border-radius: 50%;
   font-size: 18px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
 }
 .gallery-prev { left: 12px; }
 .gallery-next { right: 12px; }
@@ -1113,8 +1217,9 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
   border: 3px solid transparent;
   transition: border-color 120ms ease;
 }
+/* Real BT BDP thumbs: 175×116 ≈ 3:2 aspect, same as the main image. */
 .bdp-thumb img {
-  width: 100%; aspect-ratio: 16 / 11; object-fit: cover;
+  width: 100%; aspect-ratio: 3 / 2; object-fit: cover;
   display: block;
 }
 .bdp-thumb.is-active {
@@ -1457,6 +1562,15 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
   margin: 0 0 16px;
 }
 .bdp-accordion summary { font-size: 16px; font-weight: 700; }
+.bdp-accordion .accordion-title {
+  font-size: 16px; font-weight: 700; color: #303030;
+  margin: 0; padding: 0; flex: 1;
+}
+.bdp-accordion .accordion-subhead {
+  font-size: 14px; font-weight: 700; color: #303030;
+  margin: 14px 0 6px;
+}
+.bdp-accordion .accordion-subhead:first-child { margin-top: 0; }
 .accordion-body { font-size: 15px; line-height: 1.45; }
 .bdp-accordion {
   background: #fff;
