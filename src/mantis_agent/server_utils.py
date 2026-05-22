@@ -1005,6 +1005,14 @@ _RUNTIME_KEYS = (
     # Typical override is 2.0 — most pages stabilise in 1-1.5s; the 2-3s
     # tail past that is pure wall-clock tax.
     "settle_ceiling_seconds",
+    # #567: per-run agentic-recovery budgets. ``None`` (= key absent)
+    # falls back to ``DEFAULT_MAX_RECOVERIES_PER_*`` constants in
+    # ``agentic_recovery.py``. Positive int raises or lowers the cap
+    # for a single submission — useful for long-running plans that
+    # legitimately need more recovery cycles, or CI runs that want
+    # tighter fail-fast.
+    "max_recoveries_per_run",
+    "max_recoveries_per_step",
 )
 
 
@@ -1095,6 +1103,8 @@ def build_micro_suite(
     brain_budgets: dict[str, int] | None = None,
     pause_on_captcha: bool | None = None,
     settle_ceiling_seconds: float | None = None,
+    max_recoveries_per_run: int | None = None,
+    max_recoveries_per_step: int | None = None,
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
@@ -1163,6 +1173,11 @@ def build_micro_suite(
     # "no ceiling" (each call uses its own max_seconds).
     if settle_ceiling_seconds is not None:
         suite["_settle_ceiling_seconds"] = float(settle_ceiling_seconds)
+    # #567: same shape — persist only when caller supplied an override.
+    if max_recoveries_per_run is not None:
+        suite["_max_recoveries_per_run"] = int(max_recoveries_per_run)
+    if max_recoveries_per_step is not None:
+        suite["_max_recoveries_per_step"] = int(max_recoveries_per_step)
     return suite
 
 

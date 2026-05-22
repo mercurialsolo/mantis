@@ -956,6 +956,8 @@ class BasetenCUARuntime:
             brain_budgets=payload.get("brain_budgets"),
             pause_on_captcha=payload.get("pause_on_captcha"),
             settle_ceiling_seconds=payload.get("settle_ceiling_seconds"),
+            max_recoveries_per_run=payload.get("max_recoveries_per_run"),
+            max_recoveries_per_step=payload.get("max_recoveries_per_step"),
         )
 
     def _resolve_path(self, raw_path: str) -> Path:
@@ -1055,6 +1057,8 @@ class BasetenCUARuntime:
             brain_budgets=payload.get("brain_budgets"),
             pause_on_captcha=payload.get("pause_on_captcha"),
             settle_ceiling_seconds=payload.get("settle_ceiling_seconds"),
+            max_recoveries_per_run=payload.get("max_recoveries_per_run"),
+            max_recoveries_per_step=payload.get("max_recoveries_per_step"),
         )
         return suite
 
@@ -1542,6 +1546,8 @@ class BasetenCUARuntime:
                 brain_budgets=task_suite.get("_brain_budgets"),
                 pause_on_captcha=task_suite.get("_pause_on_captcha"),
                 settle_ceiling_seconds=task_suite.get("_settle_ceiling_seconds"),
+                max_recoveries_per_run=task_suite.get("_max_recoveries_per_run"),
+                max_recoveries_per_step=task_suite.get("_max_recoveries_per_step"),
                 extraction_cache=cache,
                 routing_policy=routing_policy,
             )

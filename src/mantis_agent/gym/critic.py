@@ -664,30 +664,28 @@ class ExecutionCritic:
                 step_index, type(per_step_dict).__name__, type(total_attempts).__name__,
             )
             return None
+        # #567: per-run override via runtime fields; fallback to DEFAULT_*.
         try:
-            from ..agentic_recovery import (
-                DEFAULT_MAX_RECOVERIES_PER_RUN,
-                DEFAULT_MAX_RECOVERIES_PER_STEP,
-            )
+            from ..agentic_recovery import effective_max_recoveries
         except Exception as exc:  # noqa: BLE001 — never break runs
             logger.warning(
                 "  [critic-frontier] step %d: skipped — agentic_recovery "
                 "import failed: %s", step_index, exc,
             )
             return None
-        if per_step_dict.get(step_index, 0) >= DEFAULT_MAX_RECOVERIES_PER_STEP:
+        max_per_step, max_per_run = effective_max_recoveries(self.runner)
+        if per_step_dict.get(step_index, 0) >= max_per_step:
             logger.warning(
                 "  [critic-frontier] step %d: skipped — per-step budget "
                 "exhausted (%d/%d) before critic could fire",
-                step_index, per_step_dict.get(step_index, 0),
-                DEFAULT_MAX_RECOVERIES_PER_STEP,
+                step_index, per_step_dict.get(step_index, 0), max_per_step,
             )
             return None
-        if total_attempts >= DEFAULT_MAX_RECOVERIES_PER_RUN:
+        if total_attempts >= max_per_run:
             logger.warning(
                 "  [critic-frontier] step %d: skipped — per-run budget "
                 "exhausted (%d/%d)",
-                step_index, total_attempts, DEFAULT_MAX_RECOVERIES_PER_RUN,
+                step_index, total_attempts, max_per_run,
             )
             return None
         # All gates passed — Claude call below logs result.
