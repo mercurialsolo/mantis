@@ -607,6 +607,47 @@ class XdotoolGymEnv(GymEnvironment):
         # as None too rather than KeyError-ing on the caller.
         return (payload.get("result") or {}).get("value")
 
+    def cdp_element_matches_selector(self, x: int, y: int, css_selector: str) -> bool:
+        """#586: True when ``document.elementFromPoint(x, y)`` or any
+        ancestor matches ``css_selector``.
+
+        Used by ``click.py`` to validate the proposed click target
+        BEFORE dispatch — reject when the coords sit on a non-listing
+        region (marketing CTA, ad, sidebar) instead of a real card.
+
+        Returns False on any CDP failure / empty result / element not
+        found at point. Callers treat False as "couldn't validate" and
+        fall back to the legacy "trust the brain" path — better to
+        dispatch a possibly-wrong click than to block on infra hiccup.
+
+        Memory note: per ``feedback_cua_no_dom_access.md``, DOM reads
+        for grounding (deriving where to click from the DOM) are
+        forbidden. This is DOM-read-for-action-VALIDATION — we already
+        decided where to click (from vision); we're checking whether
+        our chosen point lands on a legitimate target. Per
+        ``feedback_cua_cdp_post_action_verify.md``, action-side CDP
+        reads are allowed.
+        """
+        if not css_selector or not isinstance(x, int) or not isinstance(y, int):
+            return False
+        # Walk up via ``Element.closest()`` — defends against
+        # ``elementFromPoint`` returning a text node by checking
+        # ``closest`` exists before calling it.
+        sel_escaped = css_selector.replace("\\", "\\\\").replace("'", "\\'")
+        js = (
+            f"(function() {{"
+            f"  const el = document.elementFromPoint({x}, {y});"
+            f"  if (!el) return false;"
+            f"  return el.closest && el.closest('{sel_escaped}') !== null;"
+            f"}})()"
+        )
+        try:
+            result = self.cdp_evaluate(js)
+        except Exception as exc:  # noqa: BLE001 — never break the click path
+            logger.debug("cdp_element_matches_selector: %s", exc)
+            return False
+        return bool(result)
+
     def cdp_click_at_point(self, x: int, y: int) -> bool:
         """SoM-anchored click: find the element at SCREEN (x, y) and call
         ``el.click()`` via Runtime.evaluate.

@@ -277,19 +277,36 @@ class ClaudeExtractor:
         )
 
     def _get_find_listings_prompt(self, skip_titles: list[str] | None = None) -> str:
-        """Return find-all-listings prompt."""
+        """Return find-all-listings prompt.
+
+        #584: when the schema declares ``listing_card_exclusions``, enumerate
+        them explicitly as an EXCLUDE block so Claude vision doesn't return
+        marketing CTAs (financing prompts, insurance quotes, sponsored
+        boats, etc.) as "listings". Without this, a click step picks
+        coords on a CTA card → navigates to a marketing page → wrong-page
+        extract → halt_reason cycle.
+        """
         if not self.schema:
             return ""  # Legacy path uses hardcoded prompt inline
         s = self.schema
         skip = ""
         if skip_titles:
             skip = "\n\nSKIP these already-processed items:\n" + "\n".join(f"- {t}" for t in skip_titles[:20])
+        exclusions_block = ""
+        if s.listing_card_exclusions:
+            exclusions_block = (
+                "\n\nEXCLUDE these specifically (they look like listings "
+                "but aren't):\n"
+                + "\n".join(f"- {e}" for e in s.listing_card_exclusions)
+            )
         return (
             f"Look at this screenshot of a search results page.\n\n"
             f"Find ALL visible {s.entity_name} cards/items on this page.\n"
             f"For each, report the center coordinates and title text.\n\n"
-            f"SKIP: sponsored, advertisement, {s.spam_label} inventory.\n"
-            f"ONLY include organic {s.entity_name} results."
+            f"SKIP: sponsored, advertisement, {s.spam_label} inventory."
+            f"{exclusions_block}\n"
+            f"ONLY include organic {s.entity_name} results that show a "
+            f"product identity (year/make/title) AND a price."
             f"{skip}\n\n"
             f"Output ONLY valid JSON:\n"
             f"{{\"listings\": [[x, y, \"title text\"], ...], \"pagination_y\": null_or_number}}"
