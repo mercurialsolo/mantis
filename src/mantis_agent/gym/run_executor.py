@@ -1384,7 +1384,20 @@ class RunExecutor:
     def _handle_duplicate(self, plan: "MicroPlan", state: RunState) -> None:
         """extract_url returned DUPLICATE → return to results, jump to loop."""
         runner = self.parent
-        logger.info(f"  [{state.step_index}] DEDUP — skipping to next listing")
+        # WARNING-level (#600 follow-up): the dedup branch dominates
+        # the "0 leads, halt=duplicate_listing" outcome; surface it in
+        # production logs where INFO is suppressed. Carries the step
+        # index + the data payload so we can see which URL fired and
+        # whether it was extract_url or extract_data that flagged it.
+        last_data = ""
+        try:
+            last_data = (state.results[-1].data or "") if state.results else ""
+        except (AttributeError, IndexError):
+            pass
+        logger.warning(
+            "  [%d] DEDUP — skipping to next listing (data=%s)",
+            state.step_index, last_data[:160],
+        )
         try:
             runner._return_to_results_page()
         except Exception:
