@@ -7,7 +7,6 @@ helpers here so route handlers stay thin.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
 
 from . import seed
 from .seed import AdCreative, Boat, Dealer

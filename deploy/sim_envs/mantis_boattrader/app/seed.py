@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import random
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
 
 FAKE_NOW_DEFAULT = "2026-01-15T09:00:00Z"
@@ -494,6 +494,21 @@ def _gen_boats(rng: random.Random, dealers: list[Dealer], count: int, now: datet
             "Personal Watercraft": 14_000,
         }[boat_type]
         price = int(base * (length_ft / lo) * (1.0 if condition == "new" else 0.65) * rng.uniform(0.85, 1.25))
+
+        # Listing type — three real BT shapes:
+        #   ~8% sponsored (dealer-paid, boosted placement)
+        #   ~67% dealer    (standard dealer listing, phone shown plain)
+        #   ~25% owner     (private seller, phone gated behind reveal)
+        # Computed BEFORE the POA branch below because that branch reads
+        # ``listing_type`` (owner listings always carry a price).
+        r = rng.random()
+        if r < 0.08:
+            listing_type = "sponsored"
+        elif r < 0.75:
+            listing_type = "dealer"
+        else:
+            listing_type = "owner"
+
         # Some boats are POA (~10%, only dealers — owners always list a price)
         if rng.random() < 0.08 and listing_type != "owner":
             price_final: int | None = None
@@ -508,18 +523,6 @@ def _gen_boats(rng: random.Random, dealers: list[Dealer], count: int, now: datet
         engine_hp = int(length_ft * rng.uniform(11, 18))
         hours = 0 if condition == "new" else rng.randint(20, 950)
         listed_days_ago = rng.randint(0, 120)
-
-        # Listing type — three real BT shapes:
-        #   ~8% sponsored (dealer-paid, boosted placement)
-        #   ~67% dealer    (standard dealer listing, phone shown plain)
-        #   ~25% owner     (private seller, phone gated behind reveal)
-        r = rng.random()
-        if r < 0.08:
-            listing_type = "sponsored"
-        elif r < 0.75:
-            listing_type = "dealer"
-        else:
-            listing_type = "owner"
 
         # Badges
         badges: list[str] = []

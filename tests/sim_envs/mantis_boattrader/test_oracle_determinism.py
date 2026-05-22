@@ -17,7 +17,7 @@ import pytest
 
 @pytest.fixture
 def seeded_store():
-    from app import db, seed as seed_mod  # noqa: PLC0415
+    from app import db  # noqa: PLC0415
 
     # Force a fresh in-memory store seeded deterministically.
     db._store = None  # type: ignore[attr-defined]
