@@ -955,6 +955,7 @@ class BasetenCUARuntime:
             proxy_disabled=bool(payload.get("proxy_disabled", False)),
             brain_budgets=payload.get("brain_budgets"),
             pause_on_captcha=payload.get("pause_on_captcha"),
+            settle_ceiling_seconds=payload.get("settle_ceiling_seconds"),
         )
 
     def _resolve_path(self, raw_path: str) -> Path:
@@ -1053,6 +1054,7 @@ class BasetenCUARuntime:
             objective=objective_dict,
             brain_budgets=payload.get("brain_budgets"),
             pause_on_captcha=payload.get("pause_on_captcha"),
+            settle_ceiling_seconds=payload.get("settle_ceiling_seconds"),
         )
         return suite
 
@@ -1539,6 +1541,7 @@ class BasetenCUARuntime:
                 max_time_minutes=task_suite.get("_max_time_minutes", 180),
                 brain_budgets=task_suite.get("_brain_budgets"),
                 pause_on_captcha=task_suite.get("_pause_on_captcha"),
+                settle_ceiling_seconds=task_suite.get("_settle_ceiling_seconds"),
                 extraction_cache=cache,
                 routing_policy=routing_policy,
             )

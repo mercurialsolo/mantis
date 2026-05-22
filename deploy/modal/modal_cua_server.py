@@ -885,6 +885,8 @@ def _run_holo3_executor(
             # #570: ``None`` → runner falls back to
             # ``MANTIS_PAUSE_ON_CAPTCHA`` env (default on).
             pause_on_captcha=task_suite.get("_pause_on_captcha"),
+            # #561: ``None`` → no ceiling, each settle uses its own max.
+            settle_ceiling_seconds=task_suite.get("_settle_ceiling_seconds"),
         )
 
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
@@ -1588,6 +1590,8 @@ def _build_suite_from_payload(payload: dict) -> str:
         # #570: per-run cf_challenge auto-pause override. ``None`` →
         # runner falls back to MANTIS_PAUSE_ON_CAPTCHA env.
         pause_on_captcha=payload.get("pause_on_captcha"),
+        # #561: per-run ceiling on adaptive_settle waits.
+        settle_ceiling_seconds=payload.get("settle_ceiling_seconds"),
     )
     return json.dumps(suite)
 

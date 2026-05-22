@@ -31,6 +31,11 @@ _SETTLE_TEST_FILES: frozenset[str] = frozenset({
     # cases trigger a real wait (they call adaptive_settle directly
     # with tiny budgets), so the suite stays fast.
     "test_time_meter.py",
+    # #561: settle_ceiling tests verify the runtime ceiling actually
+    # clamps real settle_after_action calls; instant-return stub would
+    # bypass the assertions. Tests mock ``time.sleep`` themselves so
+    # the suite stays fast.
+    "test_settle_ceiling_runtime_field.py",
 })
 
 
