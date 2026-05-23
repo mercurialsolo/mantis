@@ -420,6 +420,23 @@ def test_prepare_modal_partitions_drops_pagination_loop() -> None:
         assert types.count("loop") == 1
 
 
+def test_prepare_modal_partitions_preserves_inner_extraction_body() -> None:
+    """Regression for the first deploy: my rewriter was dropping the
+    entire pagination-loop body_range (steps 2..loop_idx), which also
+    deletes the inner extraction body. Each worker then ran only the
+    setup-navigate + verify step → 0 leads per partition. The fix:
+    drop ONLY the outer loop step + any paginate inside the body.
+    Keep click/extract_url/scroll/extract_data/navigate_back/loop —
+    that's the per-page extraction work the worker actually does."""
+    suite = _pagination_plan_suite()
+    partitions = prepare_modal_partitions(suite, workers=2)
+    expected = ["navigate", "click", "extract_url", "scroll", "extract_data",
+                "navigate_back", "loop"]
+    for p in partitions:
+        types = [s["type"] for s in p["_micro_plan"]]
+        assert types == expected, types
+
+
 def test_prepare_modal_partitions_returns_empty_without_loop_groups() -> None:
     """Plans with no parallelizable group → empty list → caller falls
     through to single-worker dispatch."""

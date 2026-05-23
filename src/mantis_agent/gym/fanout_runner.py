@@ -433,16 +433,39 @@ def prepare_modal_partitions(
 
     # Build per-partition sub-suites. Each sub-suite is a deep-ish copy
     # of the parent — only ``_micro_plan`` is rewritten.
+    #
+    # Two surgical edits to the per-worker sub-plan:
+    #
+    #   1. Drop the outer pagination loop step itself — each worker
+    #      processes a single assigned page, so the outer loop is
+    #      replaced by partition slicing.
+    #   2. Drop any ``paginate`` step that sits between body_start
+    #      and the outer loop — pagination is done by the orchestrator
+    #      via the partition URL list, the worker must not click
+    #      "Next page".
+    #
+    # The INNER extraction loop body (click → extract_url → scroll →
+    # extract_data → navigate_back → loop) is preserved verbatim so
+    # each worker iterates over the ~25 listings on its assigned page.
+    # The earlier version dropped the entire body_range which left
+    # workers with only the setup-navigate step — verified empirically
+    # by the first deploy producing 0 leads × 5 partitions.
     sub_suites: list[dict] = []
     body_start, _body_end = pagination_group.body_range
     loop_idx = pagination_group.loop_step_idx
     for partition_url in partition_urls:
         sub_plan_steps: list[dict] = []
         for i, step_dict in enumerate(steps):
-            # Drop the pagination loop body steps + the loop step
-            # itself — each worker is single-page, no pagination
-            # iteration needed.
-            if i >= body_start and i <= loop_idx:
+            # Drop the outer pagination loop step itself.
+            if i == loop_idx:
+                continue
+            # Drop ``paginate`` steps that live inside the pagination
+            # body — the orchestrator owns pagination via partition
+            # URLs.
+            if (
+                body_start <= i < loop_idx
+                and step_dict.get("type") == "paginate"
+            ):
                 continue
             cloned = dict(step_dict)
             # Rewrite the first navigate's URL to this partition.
