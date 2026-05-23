@@ -687,12 +687,89 @@ def test_dedup_handles_empty_partition_lists() -> None:
     assert dedup_count == 1
 
 
-def test_dedup_ignores_non_dict_lead_entries() -> None:
-    """Defensive — a malformed lead row (string / None) shouldn't crash
-    the merge. Skip it; keep going."""
+def test_dedup_ignores_malformed_lead_entries() -> None:
+    """Defensive — None / int / unknown types shouldn't crash the
+    merge. They pass through unchanged ("no key" path)."""
     per_partition = [
-        [{"listing_url": "https://example.com/boat/1/"}, "garbage", None],
+        [{"listing_url": "https://example.com/boat/1/"}, None, 42],
     ]
     deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
     assert raw == 3
+    # None + 42 yield no URL → pass through (no dedup); dict has URL → counts.
+    assert dedup_count == 3
+
+
+# ── Real production string-lead format (#621 verification regression) ─
+
+
+def _viable_lead(url: str, year: int = 2023, make: str = "Acme") -> str:
+    """Build a lead row in the actual format build_micro_result emits
+    (server_utils.py:820, leads list). VIABLE prefix + pipe-delimited
+    fields + ``URL: <url>``. Matches what ListingDedup.lead_key parses
+    so cross-partition keys match per-container keys."""
+    return (
+        f"VIABLE | Year: {year} | Make: {make} | Model: X | "
+        f"Price: $99,000 | Phone: none | URL: {url}"
+    )
+
+
+def test_dedup_collapses_string_leads_across_partitions() -> None:
+    """The Modal verification run for #621 surfaced this: leads are
+    strings (not dicts), so the dict-only first pass dropped all 87.
+    Fix: extract URL via ListingDedup.lead_key for string leads."""
+    per_partition = [
+        [
+            _viable_lead("boattrader.com/boat/1/", year=2023, make="Pershing"),
+            _viable_lead("boattrader.com/boat/2/", year=2022, make="Freeman"),
+        ],
+        [
+            _viable_lead("boattrader.com/boat/1/", year=2023, make="Pershing"),  # dup
+            _viable_lead("boattrader.com/boat/3/", year=2021, make="Azimut"),
+        ],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 4
+    assert dedup_count == 3
+    # First-seen wins (partition 1's Pershing row, not partition 2's)
+    pershing_rows = [
+        d for d in deduped if isinstance(d, str) and "Pershing" in d
+    ]
+    assert len(pershing_rows) == 1
+
+
+def test_dedup_string_leads_collapse_trailing_slash_variants() -> None:
+    """Cross-page emit of the same URL with/without trailing slash is
+    the most common cross-partition overlap case — must collapse to one."""
+    per_partition = [
+        [_viable_lead("boattrader.com/boat/1/")],
+        [_viable_lead("boattrader.com/boat/1")],  # no trailing slash
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 2
+    assert dedup_count == 1
+
+
+def test_dedup_string_lead_without_url_passes_through() -> None:
+    """A lead row missing the ``URL:`` token (rare partial-extract case)
+    has no dedup key — pass through unchanged rather than collapsing
+    all keyless rows under a single fallback bucket."""
+    no_url = "VIABLE | Year: 2023 | Make: X | Phone: none"
+    per_partition = [[no_url, no_url]]  # two identical keyless rows
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 2
+    # Both pass through — better to over-report than silently collapse
+    # rows we can't authoritatively identify as duplicates.
+    assert dedup_count == 2
+
+
+def test_dedup_mixed_string_and_dict_leads() -> None:
+    """Defensive — if a future caller mixes string and dict leads in
+    one partition list, dedup should still work consistently across
+    both shapes by extracted URL."""
+    per_partition = [
+        [_viable_lead("boattrader.com/boat/1/")],
+        [{"listing_url": "boattrader.com/boat/1/", "make": "dict-shaped"}],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 2
     assert dedup_count == 1

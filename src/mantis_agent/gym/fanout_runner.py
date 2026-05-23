@@ -322,33 +322,65 @@ def _normalize_listing_url(url: str) -> str:
     return s
 
 
+def _lead_url(lead: Any) -> str:
+    """Pull the listing URL from a lead row, regardless of its shape.
+
+    Two formats coexist in the codebase — the verification run for
+    #621 surfaced this when the dict-only first pass treated all 87
+    string-shaped leads as non-dict and dropped them:
+
+      * **String** (the actual production shape from
+        ``build_micro_result``): ``"VIABLE | Year: ... | URL: ..."``.
+        Parsed with ``ListingDedup.lead_key`` — the same helper
+        per-container dedup uses, so cross-partition keys match
+        per-container keys.
+      * **Dict** (defensive — host integrations / future structured
+        paths): ``{"listing_url": "..."}`` or ``{"url": "..."}``.
+
+    Returns the empty string when neither shape yields a URL. The
+    dedup pass treats such leads as "no key" and passes them through
+    unchanged.
+    """
+    if isinstance(lead, str):
+        from .listing_dedup import ListingDedup
+        # lead_key falls back to the row's first 100 chars when no
+        # URL regex match — that fallback isn't a URL and would
+        # collide all no-URL rows under one bucket. Gate on the
+        # ``URL:`` token explicitly.
+        if "URL:" not in lead:
+            return ""
+        return ListingDedup.lead_key(lead)
+    if isinstance(lead, dict):
+        return str(lead.get("listing_url") or lead.get("url") or "")
+    return ""
+
+
 def dedup_leads_by_url(
-    per_partition_leads: list[list[dict]],
-) -> tuple[list[dict], int, int]:
+    per_partition_leads: list[list[Any]],
+) -> tuple[list[Any], int, int]:
     """Cross-partition lead-list merge with URL dedup (#621).
 
     Each worker returns its own ``leads`` list — concatenated naively
     that gives a ``raw`` total, but featured / sponsored listings can
     repeat across pages and pagination drift mid-run can shift the
     same listing onto two adjacent pages. The dedup pass collapses
-    duplicates by normalized ``listing_url``, preserving first-seen
+    duplicates by normalized listing URL, preserving first-seen
     partition order.
 
     Returns ``(deduped, raw_count, deduped_count)``.
 
-    Leads without a ``listing_url`` key (or with an empty value) pass
-    through unchanged — those are typically partial-extract envelopes
-    or already-deduped placeholders the per-container scanner emitted.
+    Lead rows are heterogeneous (str from ``build_micro_result``;
+    dict from host paths). URL extraction is delegated to
+    :func:`_lead_url` which handles both shapes; rows that yield no
+    URL pass through unchanged.
     """
     seen: set[str] = set()
-    deduped: list[dict] = []
+    deduped: list[Any] = []
     raw = 0
     for chunk in per_partition_leads:
         for lead in chunk:
             raw += 1
-            if not isinstance(lead, dict):
-                continue
-            url = _normalize_listing_url(str(lead.get("listing_url", "")))
+            url = _normalize_listing_url(_lead_url(lead))
             if not url:
                 deduped.append(lead)
                 continue
