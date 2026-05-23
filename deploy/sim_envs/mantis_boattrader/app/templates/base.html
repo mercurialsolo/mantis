@@ -180,6 +180,22 @@
       }
     });
   })();
+  // Auto-submit filters form once the Zip input has a complete 5-digit
+  // value — matches real boattrader behavior (typing "10001" navigates
+  // to /boats/?zip=10001 without a separate submit click).
+  (function(){
+    var zip = document.querySelector('.zip-input');
+    var form = document.getElementById('filters-form');
+    if (!zip || !form) return;
+    var t = null;
+    zip.addEventListener('input', function(){
+      if (t) clearTimeout(t);
+      if (/^\d{5}$/.test(zip.value)) {
+        // Debounce briefly so the last keystroke renders before submit.
+        t = setTimeout(function(){ form.submit(); }, 250);
+      }
+    });
+  })();
 </script>
 
 <footer class="site-footer">
