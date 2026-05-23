@@ -261,7 +261,17 @@ class ClaudeStepHandler:
                     success=False, data=f"DUPLICATE|{url}",
                 )
             if url:
-                runner.scanner.mark_seen(url)
+                # Issue #603: do NOT mark_seen here. extract_url is a
+                # PRE-extraction probe; the URL hasn't been deep-extracted
+                # yet, only navigated to. Marking seen here causes the
+                # next plan step (``extract_data``) to fire DUPLICATE
+                # against the same URL we're about to extract, dropping
+                # the lead on every first iteration. extract_data's
+                # success path (below) is the sole mark-seen authority
+                # — that way ``mark_seen`` semantically means "lead
+                # data captured", and cross-iteration dedup still works
+                # because iteration N+1's extract_url sees iteration N's
+                # extract_data mark.
                 runner._last_known_url = url
                 runner._last_extracted = {
                     **runner._last_extracted,

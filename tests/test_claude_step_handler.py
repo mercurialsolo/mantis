@@ -97,6 +97,13 @@ def _ctx(runner: _FakeRunner, *, env=None, extractor=None, cache=None) -> StepCo
 
 
 def test_extract_url_returns_url_payload():
+    """Issue #603: extract_url no longer marks the URL seen. That's
+    the job of extract_data's success path — otherwise extract_data
+    would fire DUPLICATE against the same URL on every first iteration
+    (the bug that produced 0-leads / halt=duplicate_listing in
+    20260523_000000_e4bf9cf3). The runner still tracks the URL via
+    _last_known_url and _last_extracted so downstream steps can read
+    it; only _seen_urls (the cross-iteration dedup gate) stays clean."""
     runner = _FakeRunner()
     extractor = MagicMock()
     extractor.extract.return_value = MagicMock(url="https://example.com/listing/42")
@@ -107,8 +114,11 @@ def test_extract_url_returns_url_payload():
 
     assert result.success is True
     assert result.data == "URL:https://example.com/listing/42"
-    assert "https://example.com/listing/42" in runner._seen_urls
+    # Critical (#603): extract_url does NOT mark seen — that's
+    # extract_data's job, after the deep extract succeeds.
+    assert "https://example.com/listing/42" not in runner._seen_urls
     assert runner._last_known_url == "https://example.com/listing/42"
+    assert runner._last_extracted["last_attempted_url"] == "https://example.com/listing/42"
 
 
 def test_extract_url_dedup_returns_DUPLICATE_marker():
@@ -318,3 +328,101 @@ def test_unknown_step_type_returns_failure(monkeypatch):
 def test_step_type_property():
     handler = ClaudeStepHandler(_FakeRunner())
     assert handler.step_type == "extract_url"
+
+
+# ── Issue #603: extract_url + extract_data sequencing ──────────────
+
+
+def test_extract_url_then_extract_data_does_not_dedup_same_url(monkeypatch):
+    """Issue #603 regression: extract_url followed by extract_data on
+    the SAME URL (the normal intra-iteration flow: navigate to a
+    listing, read its URL, then deep-extract the page content) must
+    NOT fire DUPLICATE.
+
+    Before the fix, extract_url's success path called
+    ``runner.scanner.mark_seen(url)``, so the very next extract_data
+    step saw the URL in ``_seen_urls`` and returned ``DUPLICATE|...``,
+    dropping the lead. Every first iteration of every listing was
+    lost this way — observed in run 20260523_000000_e4bf9cf3 which
+    halted with 0 leads after one click."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.claude_step.time.sleep", lambda *_: None)
+    monkeypatch.setattr("mantis_agent.gym._runner_helpers.adaptive_content_settle", lambda *a, **kw: 0.0)
+
+    url = "https://example.com/listing/603-caroff"
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.extract.return_value = MagicMock(url=url)
+    extractor.find_listing_content_control.return_value = None  # no expand controls
+    extractor.extract_multi.return_value = MagicMock(
+        url=url,
+        is_viable=lambda: True,
+        dealer_reason=lambda: None,
+        missing_required_reason=lambda *_a, **_k: None,
+        to_summary=lambda: "VIABLE | year:1997 | make:Caroff | model:CHATAM 52",
+        extracted_fields={"year": "1997", "make": "Caroff", "model": "CHATAM 52"},
+    )
+    ctx = _ctx(runner, env=MagicMock(), extractor=extractor)
+
+    # Step A: extract_url reads the URL of the page we just navigated to.
+    url_step = MicroIntent(intent="Read URL", type="extract_url", claude_only=True)
+    url_result = ClaudeStepHandler(runner).execute(url_step, ctx)
+    assert url_result.success is True
+    assert url_result.data == f"URL:{url}"
+    # Critical: the URL is NOT in _seen_urls yet — extract_data is
+    # the one that should mark it after the deep extract succeeds.
+    assert url not in runner._seen_urls
+
+    # Step B: extract_data deep-extracts the same listing page.
+    data_step = MicroIntent(intent="Extract listing", type="extract_data", claude_only=True)
+    data_result = ClaudeStepHandler(runner).execute(data_step, ctx)
+
+    # The lead must be saved — no DUPLICATE on the first iteration.
+    assert data_result.success is True
+    assert "VIABLE | year:1997" in data_result.data
+    assert not data_result.data.startswith("DUPLICATE")
+    # And extract_data DOES mark seen, so iteration N+1's extract_url
+    # will catch a repeat visit.
+    assert url in runner._seen_urls
+
+
+def test_cross_iteration_dedup_still_works_after_extract_data_marks(monkeypatch):
+    """Issue #603: after removing extract_url's mark_seen, cross-
+    iteration dedup must still fire. Sequence:
+
+    - Iteration 1: extract_url(X) success → extract_data(X) success,
+      marks X seen.
+    - Iteration 2: extract_url(X) → checks seen → DUPLICATE.
+
+    This pins that the dedup gate moves from extract_url to
+    extract_data without losing the cross-iteration guarantee."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.claude_step.time.sleep", lambda *_: None)
+    monkeypatch.setattr("mantis_agent.gym._runner_helpers.adaptive_content_settle", lambda *a, **kw: 0.0)
+
+    url = "https://example.com/listing/603-repeat"
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.extract.return_value = MagicMock(url=url)
+    extractor.find_listing_content_control.return_value = None
+    extractor.extract_multi.return_value = MagicMock(
+        url=url,
+        is_viable=lambda: True,
+        dealer_reason=lambda: None,
+        missing_required_reason=lambda *_a, **_k: None,
+        to_summary=lambda: "VIABLE | year:2010",
+        extracted_fields={"year": "2010"},
+    )
+    ctx = _ctx(runner, env=MagicMock(), extractor=extractor)
+
+    # Iteration 1: full flow succeeds and marks seen.
+    url_step = MicroIntent(intent="Read URL", type="extract_url", claude_only=True)
+    data_step = MicroIntent(intent="Extract listing", type="extract_data", claude_only=True)
+    ClaudeStepHandler(runner).execute(url_step, ctx)
+    iter1_data = ClaudeStepHandler(runner).execute(data_step, ctx)
+    assert iter1_data.success is True
+    assert url in runner._seen_urls  # extract_data marked seen
+
+    # Iteration 2: extract_url on the SAME URL must short-circuit
+    # with DUPLICATE — proving the cross-iteration gate still fires.
+    iter2_url = ClaudeStepHandler(runner).execute(url_step, ctx)
+    assert iter2_url.success is False
+    assert iter2_url.data == f"DUPLICATE|{url}"
