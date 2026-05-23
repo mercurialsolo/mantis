@@ -61,7 +61,15 @@ metrics = [
 # augur_sdk lazily and no-ops when the package isn't installed, so
 # this extra is purely opt-in — no base-install footprint change.
 observability = [
-    "augur-sdk>=0.1.9",
+    # 0.1.10 added live modelio streaming via DebugSession.record_modelio
+    # — the same call that stages the local bundle record now also POSTs
+    # to /api/v1/runs/<id>/modelio/<relpath> when AUGUR_DSN is set. The
+    # SDK latches the streaming sink off on first 403 (tenant not opted
+    # in) so bundle-only consumers see no change. 0.1.11 is docs-only.
+    # Existing AugurAdapter.record_modelio wrapper forwards verbatim so
+    # the streaming behavior comes for free across all five wired layers
+    # (planner / grounding / model / verifier / step_recovery).
+    "augur-sdk>=0.1.11",
 ]
 # Self-host the FastAPI server that fronts /predict and /v1/chat/completions.
 # Used by the Baseten / EKS / GKE deployments.
