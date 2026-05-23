@@ -1009,7 +1009,10 @@ class PlanDecomposer:
                 section = "setup"
             elif step_type in ("paginate",):
                 section = "pagination"
-            elif step_type in ("click", "scroll", "extract_url", "extract_data", "navigate_back", "right_click"):
+            elif step_type in (
+                "click", "scroll", "extract_url", "extract_data",
+                "navigate_back", "right_click", "collect_urls",
+            ):
                 section = "extraction"
             elif step_type in PlanDecomposer.FORM_STEP_TYPES:
                 # Form steps default to "setup" — login + form-fill happens before extraction.

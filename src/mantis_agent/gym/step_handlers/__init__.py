@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 from ..step_context import HandlerRegistry
 from .claude_step import ClaudeStepHandler
 from .click import ClaudeGuidedClickHandler
+from .collect_urls import CollectUrlsHandler
 from .filter import ClaudeGuidedFilterHandler
 from .form import ClaudeGuidedFormHandler
 from .holo3 import Holo3StepHandler
@@ -46,6 +47,7 @@ __all__ = [
     "ClaudeGuidedFilterHandler",
     "ClaudeGuidedFormHandler",
     "ClaudeStepHandler",
+    "CollectUrlsHandler",
     "Holo3StepHandler",
     "MechanicalNavigateBackHandler",
     "MechanicalScrollHandler",
@@ -94,6 +96,10 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
     reg.register(ClaudeGuidedClickHandler(runner))
     reg.register(PaginateHandler(runner))
     reg.register(ClaudeGuidedFilterHandler(runner))
+    # #615: single-pass URL harvest for the fan-out runner (#616, #617).
+    # Stashes urls on runner._collected_urls; safe to run standalone too
+    # (sequential plan can use it for a URL-list dump).
+    reg.register(CollectUrlsHandler(runner))
     reg.register_for_types(
         ClaudeGuidedFormHandler(runner),
         ("fill_field", "submit", "select_option", "right_click"),
