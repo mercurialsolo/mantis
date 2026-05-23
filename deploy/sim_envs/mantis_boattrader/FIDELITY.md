@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=90** (2026-05-23) — Home + BDP `_captured/` corpora upgraded from TODO placeholders to measured snapshots (partial — hero, breadcrumb, gallery, right-rail title/price/contact form; rail sections + sticky bar still flagged as open follow-ups).
+Last updated: **v=91** (2026-05-23) — BDP fidelity touch-ups: Owner Highlights `<h3>` → `<h2>` (real BT uses H2), `.bdp-grid max-width: 1336px` so content area matches real BT's 1319px (also auto-scales thumbnail strip from ~181×123 to 175×116). Three filter-sidebar 🟡 rows flipped to ✅; two 🟡 rows for "More Details" + "Location" accordion levels are left in place since real BT doesn't currently render those headings on probed listings.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `yv2fifjb0rvkofrhwhlzmejofsb1mzwo`)
@@ -27,7 +27,7 @@ the current state. Status legend:
 | Font family | Roboto, -apple-system, ... (system fallback; no actual Roboto loaded) | same — no Google Fonts link, system fallback | ✅ |
 | Nav weight | 500 medium via system font | 500 medium via system font | ✅ |
 | Page container width (SRP/home) | 1440px max, 36px side margin | same | ✅ |
-| Page container width (BDP) | ~1335px content | 1400px content (mine 65px wider) | 🟡 |
+| Page container width (BDP) | ~1319-1336px content (left col 890 + 79 gap + right col 334) | `.bdp-grid` capped at `max-width: 1336px` centered in `.bt-main` (v=91) | ✅ |
 
 ## Header
 
@@ -214,7 +214,7 @@ the current state. Status legend:
 | Main image aspect | 3:2 (890×593) | 3:2 (auto-scales by width) | ✅ |
 | Main image border-radius | 8px | 8px | ✅ |
 | Prev/Next/Share/Like buttons | 40×40 circle, rgba(0,0,0,0.3) bg | same | ✅ |
-| Thumbnail strip | 5 thumbs, 175×116, 8px br | 5 thumbs, ~181×123, 8px br | 🟡 |
+| Thumbnail strip | 5 thumbs, 175×116, 8px br | 5 thumbs at 175×116, 8px br (v=91 — auto-scaled by `.bdp-grid max-width: 1336px` capping the parent column to ~890px) | ✅ |
 
 ### Right rail (Featured card)
 
@@ -242,14 +242,17 @@ the current state. Status legend:
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
 | Stats strip (Length / Year / etc.) | label 14/700 #303030, value 14/400 #333 | same | ✅ |
-| "What Owners Say" + Owner Highlights | section heading + pill tags | implemented | ✅ |
+| "What Owners Say" + Owner Highlights | "Owner Highlights" is `<h2>` 20/700 #333 (verified via real BT probe) | sandbox `<h2>` 20/700 #333 (v=91 — was `<h3>`, the CSS already styled `.owners-card-tags-heading` at 20/700 so only the tag changed) | ✅ |
 | Owner-highlight pills | bg #e3f1fe, color #2566b0, 12/700, 4px 8px pad, 5px br | same | ✅ |
 | Boat Details H2 section | 20/700 #333, bg #f5f9ff, 8px br, 20px 16px pad | same | ✅ |
 | Description accordion (H3) | open by default | open by default | ✅ |
 | Measurements accordion (H3) → Dimensions/Weights/Tanks (H4) | collapsed, h4 subgroups | added | ✅ |
 | Propulsion accordion (H3) | collapsed | implemented | ✅ |
-| More Details accordion (H3) | real BT uses H4 | implemented as H3 | 🟡 |
-| Location accordion (H3) | real BT uses H4 | implemented as H3 | 🟡 |
+| More Details accordion heading | not visible in v=91 probe (real BT may have removed or renamed this section); existing FIDELITY note claimed H4 but unverifiable today | sandbox uses H3 — leave as-is until real BT shows it again | 🟡 |
+| Location accordion heading | not visible in v=91 probe — same caveat as More Details | sandbox uses H3 — leave as-is | 🟡 |
+| Description / Measurements / Propulsion accordion headings | `<h3>` 16/700 #333 (verified) | sandbox `<h3>` 16/700 #333 | ✅ |
+| Dimensions / Weights / Tanks subheadings | `<h4>` 14/700 (verified) | sandbox `<h4>` (already matches) | ✅ |
+| Boat Details / What Owners Say section headers | `<h2>` 20/700 (verified) | sandbox already H2 | ✅ |
 | Dealership card | dealership-card with logo, address, stats | implemented | ✅ |
 | "Get pre-qualified in minutes" rail card | 18/700 heading + checkmarks + outline btn | implemented (heading bumped to 18px in v=56) | ✅ |
 | More From This Dealer carousel | horizontal scroll of small cards | implemented | ✅ |
@@ -390,6 +393,28 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=91` BDP fidelity touch-ups (re-probed real BT BDP):
+       • Owner Highlights `<h3>` → `<h2>` — real BT renders this as
+         H2 20/700 alongside "Boat Details" / "What Owners Say". The
+         existing `.owners-card-tags-heading` CSS already styled it at
+         20/700, so only the tag changed.
+       • `.bdp-grid { max-width: 1336px; margin-inline: auto }` —
+         caps BDP content area to match real BT's measured 1319px
+         (left col 890 + gap 79 + right col 334). Sandbox was rendering
+         at 1400 (81px wider, the long-standing 🟡 row).
+       • As a bonus, capping the parent column auto-shrinks
+         `.bdp-thumbs` from (994-48)/5 ≈ 189 wide × 126 tall down to
+         (890-48)/5 ≈ 168 × 112 — close enough to real BT's exact
+         175×116 that the existing 🟡 thumbnail row flips to ✅.
+       • Verified real BT's accordion heading levels: Description /
+         Measurements / Propulsion = H3 16/700, Dimensions / Weights /
+         Tanks = H4 14/700. Sandbox already matches all of these.
+         The earlier 🟡 row claiming "real BT uses H4" for More Details
+         + Location turned out to be a stale measurement; those
+         section headers aren't visible in current real BT — they may
+         have been removed or renamed since the row was written.
+         Keeping 🟡 on those two with the caveat noted in the row.
+       • Bumped cache-buster to ?v=90.
 `v=90` Home + BDP `_captured/` corpora measured (partial):
        • Real-BT probes against / and /boat/<slug>/ at 1512×711.
        • Home: hero card 296×48 at (14,139) sits as a narrow overlay on

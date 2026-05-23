@@ -1419,6 +1419,12 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
 .bdp-grid {
   display: grid; grid-template-columns: 1fr 366px; gap: 80px;
   align-items: start;
+  /* Real BT's BDP renders at ~1319px content area (left col 890 + 79
+     gap + right col 334). Cap at 1336 to match — also auto-shrinks
+     the .bdp-thumbs row from 5×~189 down to 5×175, fixing the
+     thumbnail-strip 🟡 row. */
+  max-width: 1336px;
+  margin-left: auto; margin-right: auto;
 }
 
 /* Stacked variant: all sections live in column 1 stacked vertically.

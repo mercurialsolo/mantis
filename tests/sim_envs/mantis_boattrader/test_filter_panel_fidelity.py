@@ -338,6 +338,40 @@ def test_app_css_cache_buster_is_current(srp_html):
     )
 
 
+# ── BDP fidelity anchors (v=91) ───────────────────────────────────────
+
+
+@pytest.fixture
+def bdp_html(client) -> str:
+    # Pick any boat detail page — TestClient hits the same handler.
+    r = client.get("/")
+    # Find a BDP slug from a listing card on the home page.
+    import re
+    m = re.search(r'href="(/boat/[^"]+)"', r.text)
+    assert m, "no BDP link found on home"
+    slug_url = m.group(1)
+    r2 = client.get(slug_url)
+    assert r2.status_code == 200, r2.text[:300]
+    return r2.text
+
+
+def test_owner_highlights_is_h2(bdp_html):
+    """v=91: real BT renders 'Owner Highlights' as H2 20/700 alongside
+    'Boat Details' and 'What Owners Say'. Sandbox had it as H3 — flipped."""
+    # The heading uses the class `owners-card-tags-heading` regardless of tag,
+    # so check both that the class is on an H2 and not on an H3.
+    assert '<h2 class="owners-card-tags-heading">Owner Highlights</h2>' in bdp_html
+    assert '<h3 class="owners-card-tags-heading">' not in bdp_html
+
+
+def test_bdp_grid_capped_at_real_bt_width(base_css):
+    """v=91: real BT renders BDP content at ~1319px (left col 890 + gap
+    79 + right col 334). Cap .bdp-grid at max-width: 1336px so sandbox
+    matches and the thumbnail strip auto-scales to 175×116."""
+    block = _rule_block(base_css, ".bdp-grid {")
+    assert "max-width: 1336px" in block
+
+
 # ── SCOPE.md + prompt docs ────────────────────────────────────────────
 
 
