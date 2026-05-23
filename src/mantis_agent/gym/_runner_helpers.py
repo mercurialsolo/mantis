@@ -913,6 +913,21 @@ def execute_step(
             )
         runner.costs["claude_extract"] += 1
         print(f"  [gate] Result: {'PASS' if passed else 'FAIL'} — {reason[:80]}")
+        # #634: surface the verifier's rationale to the Augur
+        # Reasoning-trace tab. ``reason`` is the Claude PASS/FAIL
+        # justification — already shipped to operators via the
+        # StepResult.data, also worth surfacing as structured
+        # reasoning for cohort analysis.
+        augur = getattr(runner, "_augur", None)
+        if augur is not None and reason:
+            try:
+                augur.record_reasoning(
+                    step_index=index,
+                    format="verifier",
+                    content=f"{'PASS' if passed else 'FAIL'}: {reason}",
+                )
+            except Exception:  # noqa: BLE001 — never break gate path
+                pass
         return StepResult(
             step_index=index, intent=step.intent, success=passed,
             data=f"gate:{'PASS' if passed else 'FAIL'}:{reason[:100]}",

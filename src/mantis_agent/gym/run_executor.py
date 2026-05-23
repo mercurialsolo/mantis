@@ -438,6 +438,12 @@ class RunExecutor:
         # screen populates. url_host from the runner's last-known URL;
         # viewport_hash from a stable hash of the viewport tuple.
         self._emit_augur_env_fingerprint(step_index)
+        # #634: emit reasoning text from the brain's Action.reasoning
+        # so the Augur Reasoning-trace tab populates. brain_claude
+        # combines extended-thinking blocks + assistant text into
+        # ``action.reasoning`` (brain_claude.py:444-449); other brains
+        # leave it empty unless they have a short rationale to surface.
+        self._emit_augur_action_reasoning(step_index, step_result)
         # #524 + #530 — continuous verdict score. Derive primarily
         # from ``sr.success`` (the canonical runner-side truth), then
         # blend with ``verdict.confidence`` only when the two agree.
@@ -1854,6 +1860,46 @@ class RunExecutor:
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("attach_env_fingerprint emit failed: %s", exc)
+
+    def _emit_augur_action_reasoning(
+        self, step_index: int, step_result: StepResult,
+    ) -> None:
+        """Emit the brain's reasoning text for this step (#634).
+
+        Reads ``step_result.last_action.reasoning`` and forwards via
+        ``AugurAdapter.record_reasoning``. Format tag is ``"brain"`` to
+        distinguish from verifier / recovery reasoning emitted by other
+        call sites.
+
+        ``brain_claude`` combines extended-thinking blocks + assistant
+        text into Action.reasoning (brain_claude.py:444-449); Holo3 /
+        Fara / other brains leave it empty when they have no rationale
+        to surface, in which case this helper no-ops.
+        """
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        if augur is None:
+            return
+        last_action = getattr(step_result, "last_action", None)
+        if last_action is None:
+            return
+        reasoning = str(getattr(last_action, "reasoning", "") or "").strip()
+        if not reasoning:
+            return
+        # Truncate at 8KB so a runaway Claude thinking block can't blow
+        # up the bundle (SDK accepts arbitrary length but we want bounded
+        # bundle size). 8KB is enough for ~1500 tokens of thinking text,
+        # which covers every Claude extended-thinking budget we ship.
+        if len(reasoning) > 8192:
+            reasoning = reasoning[:8192] + "...[truncated]"
+        try:
+            augur.record_reasoning(
+                step_index=step_index,
+                format="brain",
+                content=reasoning,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("record_reasoning(brain) emit failed: %s", exc)
 
     def _emit_augur_finalize_outcome(self, results: list[StepResult]) -> None:
         """Emit a session-scope ``finalize_outcome`` to populate the
