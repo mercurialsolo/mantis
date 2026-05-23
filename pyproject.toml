@@ -83,7 +83,13 @@ observability = [
     #
     # Capped at <0.3 so a future 0.3 with another breaking change
     # doesn't silently land — operator should validate the upgrade.
-    "augur-sdk>=0.2,<0.3",
+    #
+    # 0.2.1 adds DebugSession.branch_from + the documented
+    # branch_context= kwarg surface that mantis uses to label fan-out
+    # partition sessions under a shared parent_run_id (see
+    # observability/augur.py). Pinning to 0.2.1 minimum so consumers
+    # don't accidentally downgrade past the branch surface.
+    "augur-sdk>=0.2.1,<0.3",
 ]
 # Self-host the FastAPI server that fronts /predict and /v1/chat/completions.
 # Used by the Baseten / EKS / GKE deployments.

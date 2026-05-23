@@ -300,6 +300,7 @@ class AugurAdapter:
         capture_mode: str | None = None,
         dsn: str | None = None,
         extra_tags: dict[str, str] | None = None,
+        branch_context: dict | None = None,
     ) -> None:
         self._session: Any = None
         self._emitted_event_count: int = 0
@@ -326,7 +327,7 @@ class AugurAdapter:
             if extra_tags:
                 tags.update({str(k): str(v) for k, v in extra_tags.items()})
             target_dir = Path(out_dir) if out_dir is not None else default_out_dir(run_id)
-            session = DebugSession(
+            session_kwargs: dict[str, Any] = dict(
                 run_id=run_id,
                 client_name="mantis",
                 client_version=os.environ.get("MANTIS_VERSION", "") or None,
@@ -336,6 +337,28 @@ class AugurAdapter:
                 dsn=dsn if dsn is not None else (os.environ.get("AUGUR_DSN") or None),
                 tags=tags,
             )
+            # augur-sdk 0.1.14+ ships ``branch_context=`` on DebugSession;
+            # 0.2.1 documents the ``mode`` resolution. Mantis fan-out
+            # partitions pass ``branch_context`` to label sessions under
+            # a shared ``parent_run_id`` so the Augur UI can group N
+            # partition rows under one logical fan-out parent. Mantis
+            # uses ``mutated_axis="action"`` (different URL per worker is
+            # an action mutation) — the SDK's auto-mode then resolves to
+            # ``sandbox`` (no prefix replay, executes from step 0 against
+            # a live target), which matches our actual semantics.
+            #
+            # Forwarded only when set so production runs (no fan-out)
+            # don't carry a branch_context label.
+            if branch_context:
+                session_kwargs["branch_context"] = dict(branch_context)
+                if _verbose:
+                    logger.warning(
+                        "AugurAdapter init: branch_context applied "
+                        "(parent_run_id=%s, branch_id=%s)",
+                        branch_context.get("parent_run_id", ""),
+                        branch_context.get("branch_id", ""),
+                    )
+            session = DebugSession(**session_kwargs)
             # DebugSession is designed as a context manager — ``__enter__``
             # flips the open flag and starts the streaming sink (if any).
             # We drive that explicitly because the Mantis run lifecycle

@@ -145,6 +145,58 @@ class _ModalDictSharedSeenSet:
             return 0
 
 
+# ── #631: augur branch_context per fan-out worker ──────────────────────
+
+
+def build_fanout_branch_context(suite_dict: dict) -> dict | None:
+    """Construct the ``branch_context`` payload for one fan-out worker.
+
+    Reads orchestrator-injected metadata from the suite:
+
+      * ``_fanout_parent_run_id``  — shared across all workers
+      * ``_fanout_phase``          — ``"phase1_collect"`` / ``"phase2_extract"``
+                                     / ``"pagination_partition"`` (or empty
+                                     for the legacy pagination path without
+                                     a phase tag).
+      * ``_fanout_branch_id``      — per-worker id (orchestrator sets this).
+      * ``_fanout_url_count``      — # URLs this worker is assigned (Phase 2).
+
+    Returns the dict that gets forwarded to ``AugurAdapter(branch_context=)``,
+    which in turn passes it to ``DebugSession``. Per augur-sdk 0.2.1, mantis
+    fan-out uses ``mutated_axis="action"`` (different URL per worker = action
+    mutation); the SDK's auto-mode resolves to ``sandbox`` (no replay
+    prefix; execute fresh).
+
+    Returns ``None`` for non-fanout / single-worker runs (no
+    ``_fanout_parent_run_id`` in the suite) so AugurAdapter opens the
+    session without a branch label, preserving today's shape.
+    """
+    parent_run_id = suite_dict.get("_fanout_parent_run_id", "")
+    if not parent_run_id:
+        return None
+    branch_id = (
+        suite_dict.get("_fanout_branch_id")
+        or f"{parent_run_id}:{suite_dict.get('session_name', 'worker')}"
+    )
+    phase = suite_dict.get("_fanout_phase", "")
+    mutation: dict[str, Any] = {}
+    if phase:
+        mutation["phase"] = phase
+    url_count = suite_dict.get("_fanout_url_count")
+    if url_count is not None:
+        mutation["url_count"] = int(url_count)
+    return {
+        "parent_run_id": str(parent_run_id),
+        "branch_point_step_index": 0,
+        # ``action`` axis = different URL / partition target per worker.
+        # SDK auto-resolves mode to ``sandbox`` for this axis (no prefix
+        # replay; each worker executes fresh against its assigned URL).
+        "mutated_axis": "action",
+        "mutation": mutation,
+        "branch_id": str(branch_id),
+    }
+
+
 def build_shared_seen_set(suite_dict: dict) -> SharedSeenSet:
     """Construct the right backend for a worker based on suite metadata.
 

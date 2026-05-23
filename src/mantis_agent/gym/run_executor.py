@@ -226,6 +226,12 @@ class RunExecutor:
                 "plan_signature": runner.plan_signature or "",
                 "model": model_name,
             },
+            # #631: fan-out workers carry a branch_context that labels
+            # their session under a shared parent_run_id so the Augur
+            # UI groups N partition rows under one logical run. The
+            # orchestrator (Modal main) sets ``_fanout_branch_context``
+            # on the runner before run() — None for non-fanout runs.
+            branch_context=getattr(runner, "_fanout_branch_context", None),
         )
 
         if not runner._results_base_url and plan.steps:

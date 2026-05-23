@@ -905,6 +905,19 @@ def _run_holo3_executor(
         except Exception as exc:  # noqa: BLE001 — never block a run
             print(f"  WARNING: shared seen-set init failed: {exc}")
 
+        # #631: bind a fan-out branch_context from the suite metadata so
+        # the AugurAdapter labels this worker's DebugSession under a
+        # shared parent_run_id. ``None`` (no fan-out / single worker) →
+        # the adapter opens without a branch label, preserving today's
+        # session shape.
+        try:
+            from mantis_agent.gym.fanout_runner import build_fanout_branch_context
+            micro_runner._fanout_branch_context = build_fanout_branch_context(
+                task_suite,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"  WARNING: fanout branch_context init failed: {exc}")
+
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
         # API container's ``action=reasoning_trace`` reads this file
         # so a viewer overlay can render a structured timeline of
@@ -2845,6 +2858,20 @@ def main(
         except Exception as exc:
             print(f"  WARNING: shared-seen Dict init failed ({exc}) — running without cross-worker dedup")
 
+        # #631: generate a parent run_id for Augur branch_context grouping.
+        # Every spawned worker labels its DebugSession with this parent
+        # so the Augur UI groups N partition rows under one logical
+        # fan-out parent. Per augur-sdk 0.2.1, mantis fan-out is
+        # ``mutated_axis="action"`` (different URL per worker = action
+        # mutation); the SDK's auto-mode resolves to ``sandbox``
+        # (execute fresh, no replay prefix).
+        fanout_parent_run_id = (
+            f"fanout-{task_suite.get('_plan_signature', 'unknown')[:12]}-"
+            f"{_uuid.uuid4().hex[:8]}"
+        )
+        task_suite["_fanout_parent_run_id"] = fanout_parent_run_id
+        print(f"  [fanout/augur] parent run_id: {fanout_parent_run_id}")
+
         # ── #628: Phase-1/Phase-2 path for parallelizable_url_collect ─
         # Prefer this over per-page partitioning when the plan exposes
         # a url-collect-shaped loop. Phase 1 runs the setup chain +
@@ -2857,6 +2884,10 @@ def main(
             executor_fn = EXECUTOR_MAP.get(model, run_holo3)
             print("\n  ═══ PHASE-1 (#628): URL collection on 1 container ═══")
             phase1_suite = prepare_phase1_suite(task_suite, url_collect_group)
+            # #631: per-partition branch_id for Augur grouping.
+            phase1_suite["_fanout_branch_id"] = (
+                f"{fanout_parent_run_id}:phase1"
+            )
             spawn_kwargs = {
                 "task_file_contents": json.dumps(phase1_suite),
                 "max_steps": max_steps,
@@ -2887,6 +2918,10 @@ def main(
                 )
                 phase2_handles = []
                 for i, sub_suite in enumerate(phase2_suites):
+                    # #631: per-partition branch_id for Augur grouping.
+                    sub_suite["_fanout_branch_id"] = (
+                        f"{fanout_parent_run_id}:phase2_w{i + 1}"
+                    )
                     kwargs = {
                         "task_file_contents": json.dumps(sub_suite),
                         "max_steps": max_steps,
@@ -2942,6 +2977,14 @@ def main(
             executor_fn = EXECUTOR_MAP.get(model, run_holo3)
             partition_handles = []
             for i, sub_suite in enumerate(partitions):
+                # #631: per-partition branch_id for Augur grouping;
+                # also tag the phase as ``pagination_partition`` so
+                # the branch_context.mutation distinguishes pagination
+                # workers from Phase-2 url-collect workers.
+                sub_suite["_fanout_branch_id"] = (
+                    f"{fanout_parent_run_id}:page{i + 1}"
+                )
+                sub_suite["_fanout_phase"] = "pagination_partition"
                 sub_contents = json.dumps(sub_suite)
                 spawn_kwargs = {
                     "task_file_contents": sub_contents,

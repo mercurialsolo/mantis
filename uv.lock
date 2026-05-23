@@ -241,7 +241,7 @@ wheels = [
 
 [[package]]
 name = "augur-sdk"
-version = "0.2.0"
+version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "augur-schema" },
@@ -249,9 +249,9 @@ dependencies = [
     { name = "referencing" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/57/02/5218f91acac76129b31cb81fc5b3f7b72b7a2553097fc26cec5747d1aaf6/augur_sdk-0.2.0.tar.gz", hash = "sha256:97b059f7a7b45105fa0e8174abed6eba4fce8051f1bfbc9fb491ac1e00d5c41d", size = 88535, upload-time = "2026-05-23T18:02:35.72Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/3e/f5a04612b80b9624e05756017537ca92d65beb216a86ad52721a3eedfc13/augur_sdk-0.2.1.tar.gz", hash = "sha256:0e9ab3438b3c114f44a52d0da3af9cc4ea4679d694650e469ac6cf16f85ca99b", size = 93340, upload-time = "2026-05-23T22:21:49.117Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b1/60/19a61f69e9fccadb4de0359156554a30f65d39aa7a7b28eed8289ebffb83/augur_sdk-0.2.0-py3-none-any.whl", hash = "sha256:52cd4480aeb26b51077b596f89456f3ed54b8dc6410ed8bc965fe27c621374ec", size = 64808, upload-time = "2026-05-23T18:02:34.278Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/b9/b02d8f19b6b728c0c262b001799d1f72243246f45192511ae4c6b2702ee0/augur_sdk-0.2.1-py3-none-any.whl", hash = "sha256:69f26079d6840b390e29ed0b2af8a1bf998646074616a819210ab178baf2a735", size = 66984, upload-time = "2026-05-23T22:21:47.22Z" },
 ]
 
 [[package]]
@@ -1551,7 +1551,7 @@ viewer = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", marker = "extra == 'gpu'", specifier = ">=0.30" },
-    { name = "augur-sdk", marker = "extra == 'observability'", specifier = ">=0.2,<0.3" },
+    { name = "augur-sdk", marker = "extra == 'observability'", specifier = ">=0.2.1,<0.3" },
     { name = "bitsandbytes", marker = "extra == 'gpu'", specifier = ">=0.43" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.100" },
     { name = "fastapi", marker = "extra == 'viewer'", specifier = ">=0.100" },
