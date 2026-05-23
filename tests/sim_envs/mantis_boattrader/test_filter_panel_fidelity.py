@@ -273,6 +273,18 @@ def test_rotator_animation_in_css(base_css):
     assert "height: 18px" in rotator_block
 
 
+def test_rotator_hides_on_focus(base_css):
+    """v=87: real BT clears the 'Try …' prefix the moment you click
+    into the input (before any typing). Sandbox uses `:focus-within`
+    on the form to set `display: none` on `.ai-search-v2__try`."""
+    # Find the rule that hides the prefix; must include :focus-within
+    idx = base_css.find(":focus-within .ai-search-v2__try")
+    assert idx >= 0, "missing :focus-within rule for the Try prefix"
+    # Also must hide on typed value (covers the blur-with-text case)
+    idx2 = base_css.find(":has(input:not(:placeholder-shown):not([value=\"\"])) .ai-search-v2__try")
+    assert idx2 >= 0, "missing :has(typed-value) rule for the Try prefix"
+
+
 # ── Cache-buster pin ──────────────────────────────────────────────────
 
 

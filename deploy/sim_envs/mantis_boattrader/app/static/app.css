@@ -225,8 +225,11 @@ header.main {
   37.5%, 62.5% { transform: translateY(-18px); }
   75%, 100% { transform: translateY(-36px); }
 }
-/* When the input has user-typed content, hide the rotating suggestion
-   so the prefix doesn't overlap the typed text. Matches real BT. */
+/* Hide the rotating "Try …" prefix when the user clicks into the
+   input (focus-within) OR when they've typed something. Real BT clears
+   the suggestion the instant you focus the field — empty cursor sits
+   between the sparkle and the magnifier. */
+.ai-search-v2__form:focus-within .ai-search-v2__try,
 .ai-search-v2__form:has(input:not(:placeholder-shown):not([value=""])) .ai-search-v2__try,
 .ai-search-v2__form.has-value .ai-search-v2__try {
   display: none;

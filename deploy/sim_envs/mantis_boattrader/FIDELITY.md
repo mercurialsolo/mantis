@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=86** (2026-05-23) — SRP search-box rotator animation (3 cycling "Try …" suggestions matching real BT's `9s ease-in-out infinite alternate ai-try-rotate`).
+Last updated: **v=87** (2026-05-23) — SRP search-box "Try …" prefix hides on focus (not just on typing) — matches real BT's instant clear when user clicks into the input.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `yv2fifjb0rvkofrhwhlzmejofsb1mzwo`)
@@ -81,7 +81,8 @@ the current state. Status legend:
 | "Try" color | rgb(100,116,139) #64748b | same | ✅ |
 | Quote placeholder | 16/400 #64748b | 16/400 #64748b | ✅ |
 | **"Try …" rotator** (SRP only) | 3-line vertical column inside `.ai-search-v2__rotator` (overflow:hidden, 18px tall), `@keyframes 9s ease-in-out infinite alternate ai-try-rotate` cycling translateY 0→-18→-36 across "fishing boats under $80k", "Sea Ray under 40 feet", "pontoon boats near me" | Same — 3 `.ai-search-v2__try-text` spans, same 9s alternate animation, same 3 example queries (v=86). Native input placeholder emptied; visible suggestion comes from the span overlay. | ✅ |
-| Rotator hides on input fill | Real BT removes `.ai-search-v2__try` from DOM when user types | Sandbox uses `:has(input:not(:placeholder-shown))` to set `display: none` (v=86) | ✅ |
+| Rotator hides on focus | Real BT clears `.ai-search-v2__try` the moment user clicks into the input (before any typing) | Sandbox uses `.ai-search-v2__form:focus-within .ai-search-v2__try { display: none }` (v=87) | ✅ |
+| Rotator hides on typed value | Real BT keeps prefix hidden when input has content (even if focus moved elsewhere) | Sandbox uses `:has(input:not(:placeholder-shown):not([value=""]))` (v=86) | ✅ |
 | Sparkle icon | small SVG ai.svg (4-point star) | inline SVG 4-point star | ✅ |
 | Submit icon | magnifier SVG | inline SVG circle+handle | ✅ |
 
@@ -387,6 +388,19 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=87` SRP search-box prefix hides on FOCUS, not just on typing:
+       • Bug found via user-supplied before/after screenshots — real BT
+         clears the "Try …" prefix the moment the user clicks into the
+         input, even before any typing. v=86 only hid it once the
+         input had typed content, so an empty-but-focused input still
+         showed "Try …" — wrong.
+       • Adds `.ai-search-v2__form:focus-within .ai-search-v2__try
+         { display: none }` so the prefix disappears on first click.
+         The `:has(input:not(:placeholder-shown))` rule from v=86 is
+         kept to cover the blur-with-text case.
+       • Adds `test_rotator_hides_on_focus` to the fidelity suite.
+       • Live-verified: `display: flex` (unfocused) → `display: none`
+         (focused) — exact match to real BT screenshot pair.
 `v=85` Phase 1 (Discovery) corpus checked in under `_captured/`:
        • `_captured/srp/structural.json` — full SRP spec: filter card, save-search,
          location section (switcher / miles row / zip input / use-my-location), all
