@@ -6,7 +6,7 @@ Working doc tracking each element's match status against
 Last updated: **v=83** (2026-05-22) — Price Drop toggle switch + info icon (replaces checkbox), continued from v=82's filter-panel fidelity pass.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `fb8g7s_onpwfzlewqnojzripth8s9e3q`)
+(token rotates per sandbox restart; current: `woytvzdntbjtmv7kz-4jzz-psltnq7jc`)
 
 ## Methodology
 
