@@ -112,7 +112,21 @@ class RunState:
     loop_counters: dict[int, int] = field(default_factory=dict)
     listings_on_page: int = 0
     step_retry_counts: dict[Any, int] = field(default_factory=dict)
-    max_loop_iterations: int = 200  # safety cap
+    # #622: section-aware loop ceiling. The pre-#622 single ``200``
+    # value was the wrong cap for both shapes — pages have ≤25 cards,
+    # scrapes cover ≤10 pages — and on fan-out runs the 200 ceiling
+    # let each per-page partition burn ~$2.50 on dedup-skipped re-clicks
+    # waiting for the budget to drain. Section-aware defaults:
+    #   extraction: 30   (typical page + 20% lazy-load / carousel pad)
+    #   pagination: 10   (typical scrape depth)
+    # Kept as a dict so per-run overrides can target one section
+    # without rebuilding the other. ``max_loop_iterations`` (singular)
+    # stays as a legacy alias that picks the largest value — used by
+    # any caller that didn't migrate to per-section reads.
+    max_loop_iterations_by_section: dict[str, int] = field(
+        default_factory=lambda: {"extraction": 30, "pagination": 10, "default": 50}
+    )
+    max_loop_iterations: int = 200  # legacy single-value cap; kept for tests/back-compat
 
     @classmethod
     def fresh(cls, run_key: str, session_name: str, plan_signature: str) -> RunState:
@@ -701,7 +715,22 @@ class RunExecutor:
             state.loop_counters.get(state.step_index, 0) + 1
         )
         count = state.loop_counters[state.step_index]
-        max_count = step.loop_count or state.max_loop_iterations
+        # #622: section-aware fallback. The legacy single ``max_loop_iterations``
+        # value (200) was the wrong cap for both extraction (pages ≤25) and
+        # pagination (scrapes ≤10) shapes. Resolve in priority order:
+        #   1. ``step.loop_count`` — plan-author / decomposer explicit count
+        #   2. ``max_loop_iterations_by_section[step.section]`` — section default
+        #   3. ``max_loop_iterations_by_section['default']`` — un-sectioned safety
+        #   4. ``max_loop_iterations`` — legacy single-value fallback (kept for
+        #      back-compat with tests/callers that haven't migrated)
+        max_count = step.loop_count
+        if not max_count:
+            section_caps = state.max_loop_iterations_by_section or {}
+            max_count = section_caps.get(step.section, 0) or section_caps.get(
+                "default", 0,
+            )
+        if not max_count:
+            max_count = state.max_loop_iterations
         if count < max_count:
             target = step.loop_target if step.loop_target >= 0 else state.step_index
             state.step_index = target
@@ -710,7 +739,11 @@ class RunExecutor:
                 f"step {state.step_index}"
             )
         else:
-            logger.info("  [loop] max iterations reached")
+            logger.info(
+                "  [loop] max iterations reached (%d/%d, section=%s, source=%s)",
+                count, max_count, step.section,
+                "step.loop_count" if step.loop_count else "section_default",
+            )
             state.step_index += 1
         self._persist(plan, state)
 
