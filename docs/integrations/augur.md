@@ -156,7 +156,20 @@ training-data record (one file per LLM invocation under the bundle).
 Mantis ships the plumbing in
 `src/mantis_agent/observability/modelio.py` plus a hook inside the
 shared `AnthropicToolUseClient`; per-layer call sites opt in by
-publishing a context:
+publishing a context.
+
+**Live streaming (augur-sdk 0.1.10+):** with the pin bumped to
+`augur-sdk>=0.1.10`, every `record_modelio` call ALSO POSTs the
+redacted record live to `/api/v1/runs/<run_id>/modelio/<relpath>`
+on a background thread (in addition to staging the file for the
+on-close bundle). The local bundle behavior is unchanged — streaming
+is purely additive. If the server returns `403` on the first POST
+(tenant not opted in to modelio streaming), the SDK latches the
+sink off for the rest of the session and bundle-only consumers see
+no regression. `AugurAdapter.record_modelio` is a verbatim forward
+to `DebugSession.record_modelio` so all five wired layers
+(planner / grounding / model / verifier / step_recovery) get the
+streaming behavior automatically with no per-site code changes.
 
 ```python
 from mantis_agent.observability.modelio import publish_modelio_context
