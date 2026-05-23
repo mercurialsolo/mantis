@@ -792,6 +792,112 @@ header.main {
   text-decoration: underline;
   text-decoration-color: var(--bt-blue);
 }
+/* Search-as-you-type filter list — matches real BT's Boat Type / Make
+   pattern. Search input with magnifier icon on the left, scrollable
+   <ul.opts> of checkbox-styled options below. Backend stays
+   single-select via `?type=foo&make=bar`; JS enforces single-select by
+   unchecking siblings on change. */
+.filter-search-wrap {
+  position: relative;
+  margin: 0 0 8px;
+}
+.filter-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  color: #5e5e5e;
+  pointer-events: none;
+}
+.filter-input.filter-search {
+  padding-left: 40px;
+  border-radius: 4px;
+  height: 40px;
+  font-size: 14px;
+}
+.filter-options {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: 270px;
+  overflow-y: auto;
+  border: 1px solid #ededed;
+  border-radius: 4px;
+}
+.filter-options li {
+  margin: 0;
+  padding: 0;
+  border-bottom: 1px solid #f4f4f4;
+}
+.filter-options li:last-child { border-bottom: 0; }
+.filter-options li.hidden { display: none; }
+.filter-options label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--bt-text);
+  line-height: 1.2;
+}
+.filter-options li:hover label { background: #f7f7f7; }
+.filter-options input[type="checkbox"] {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.filter-opt-checkbox {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #c2c2c2;
+  border-radius: 3px;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.filter-opt-checkbox::after {
+  content: "";
+  width: 10px;
+  height: 6px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg);
+  opacity: 0;
+  margin-top: -2px;
+}
+.filter-options input[type="checkbox"]:checked + .filter-opt-checkbox {
+  background: var(--bt-blue);
+  border-color: var(--bt-blue);
+}
+.filter-options input[type="checkbox"]:checked + .filter-opt-checkbox::after {
+  opacity: 1;
+}
+.filter-options input[type="checkbox"]:focus-visible + .filter-opt-checkbox {
+  box-shadow: 0 0 0 2px rgba(37, 102, 176, 0.4);
+}
+.filter-opt-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-opt-count {
+  flex: 0 0 auto;
+  color: #757575;
+  font-size: 13px;
+  margin-left: 8px;
+}
+
 /* Condition pill — same shape as zip-toggle, gray outer + white thumb */
 .seg-control {
   display: inline-flex; gap: 0;

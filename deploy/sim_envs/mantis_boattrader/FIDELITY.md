@@ -3,10 +3,10 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=83** (2026-05-22) — Price Drop toggle switch + info icon (replaces checkbox), continued from v=82's filter-panel fidelity pass.
+Last updated: **v=84** (2026-05-23) — Boat Type / Make / Fuel / Hull dropdowns reworked to search-as-you-type checkbox lists matching real BT; default-closed for Boat Type + Make.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `fb8g7s_onpwfzlewqnojzripth8s9e3q`)
+(token rotates per sandbox restart; current: `woytvzdntbjtmv7kz-4jzz-psltnq7jc`)
 
 ## Methodology
 
@@ -118,9 +118,12 @@ the current state. Status legend:
 | 5-digit zip auto-submit | typing 5 digits navigates to `?zip=NNNNN` | debounced 250ms form.submit() in base.html (v=82) | ✅ |
 | Price Drop control | `.switch.toggleButton` 50×26, white 22×22 thumb, slides on click; Material Icons `info` (24×24 #c2c2c2) next to label | `.switch` div with white thumb, `:has(input:checked)` toggles blue + slides right; inline SVG info icon 18×18 #c2c2c2 (v=83) | ✅ |
 | Price Drop label | "Price Drop" + info icon | "Price Drop" + info icon (v=83; was "Price Drop only" + checkbox) | ✅ |
-| Boat Type / Make filter UI | Search-as-you-type input + checkbox list (`ul.opts`) inside collapse | `<select>` dropdown — functionally equivalent for the agent but visually divergent | 🟡 |
-| Beam / Max Draft / Fuel Type / Hull | Same search-input + checkbox pattern as Boat Type | `<select>` dropdown | 🟡 |
-| Default collapsed sections | Boat Type/Make/Beam/Max Draft/Fuel/Hull start `closed` on real BT | sandbox starts Beam/Max Draft/Fuel/Hull `closed`; Boat Type/Make are `open` | 🟡 |
+| Boat Type / Make filter UI | Search input (270×40, 4px br, magnifier icon) + `ul.opts` (270 wide, 270 maxH, scroll) + 40px-tall checkbox `<li>` items | Same — `.filter-search-wrap` + `.filter-options` + custom-styled `.filter-opt-checkbox` (v=84) | ✅ |
+| Fuel Type / Hull filter UI | `ul.opts` checkbox list (no search input — small list) | Same — `.filter-options` only (v=84) | ✅ |
+| Beam / Max Draft | Range slider + No Min/No Max number inputs | Same | ✅ |
+| Default-closed sections | Boat Type / Make / Beam / Max Draft / Fuel / Hull / Engines / For Sale By all start `closed` | Beam / Max Draft / Fuel / Hull / Engines / For Sale By already closed; Boat Type + Make flipped to closed in v=84 | ✅ |
+| Search-as-you-type filter | Typing in search input hides non-matching `<li>` items | JS in base.html hides `<li>` whose `.filter-opt-label` doesn't include the query; "All …" option always visible (v=84) | ✅ |
+| Filter list selection submit | Checkbox check navigates to `/boats/?type=X` (single-select, since backend takes one value) | JS unchecks siblings + submits form on `change` (v=84) — visual checkboxes match real BT's checkbox UI even though backend is single-select | ✅ |
 | All/New/Used segmented | same shape as zip toggle | same | ✅ |
 | Length / Year / Price sliders | 22×22 blue thumb w/ 2px white border, 4px rail #e9e9e9, blue fill | same exact spec | ✅ |
 | **Slider handle URL sync** | rc-slider auto-positions handles from URL | JS in base.html reads input min/max/value, sets handle positions | ✅ |
@@ -346,3 +349,20 @@ the current state. Status legend:
        • Documents remaining 🟡 gaps in dropdown sections (Boat Type / Make / Beam /
          Max Draft / Fuel Type / Hull) — real BT uses search-as-you-type filter lists,
          sandbox keeps `<select>` for now; future v= will swap when needed
+`v=84` Dropdown sections reworked to match real BT search-list pattern:
+       • Boat Type + Make + Fuel Type + Hull: `<select>` → search-input
+         (Boat Type / Make only) + `ul.filter-options` checkbox list
+         (40px-tall li, custom-styled `.filter-opt-checkbox` with checkmark
+         pseudo-element, blue when `:checked`)
+       • `ul.filter-options` capped at `max-height: 270px; overflow-y: auto`
+         with 1px #ededed border + 4px radius (matches real BT spec exactly)
+       • JS in base.html: search-as-you-type hides non-matching `<li>` (keeps
+         "All …" option always visible); selecting a checkbox unchecks
+         siblings + auto-submits form to `?type=X` etc.
+       • Boat Type + Make `<details>` flipped from `open` → default-closed
+         (matches real BT — sections collapse on first load)
+       • Adds `SCOPE.md` per Phase 0 of `FIDELITY_BUILD_FROM_SCRATCH_PROMPT.md`
+         — in-scope pages + interactions, viewport, backend complexity,
+         out-of-scope (🚫), done bar, open follow-ups
+       • All filter-sidebar 🟡 rows now ✅ (or moved to SCOPE.md "Out-of-scope"
+         if intentionally divergent — e.g. multi-select, "more options" link)
