@@ -3,10 +3,10 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=81** (2026-05-22)
+Last updated: **v=83** (2026-05-22) — Price Drop toggle switch + info icon (replaces checkbox), continued from v=82's filter-panel fidelity pass.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `yw28zp1uej5nibwnhgx_trmu8w8k8qin`)
+(token rotates per sandbox restart; current: `fb8g7s_onpwfzlewqnojzripth8s9e3q`)
 
 ## Methodology
 
@@ -100,15 +100,27 @@ the current state. Status legend:
 
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
-| Outer card bg/border/radius | white, 1px gray, 5px br | white, 1px #e0e0e0, 6px br | ✅ |
+| Outer card bg/border/radius | white, 1px gray (real BT actually has no border; sandbox keeps the chrome) | white, 1px #e0e0e0, 6px br | ✅ |
+| Outer card drop shadow | sandbox-style (real BT has none) | `var(--bt-shadow)` — matches `.loan-calc-card` recipe | ✅ |
 | Card padding | 15px sides | 15px 15px 18px | ✅ |
-| Save Search button | 270×40, blue pill, 16/700, 50px br | 268×38, same | ✅ |
+| Save Search button | 270×40, blue pill, 16/700, 50px br | 270×40, same | ✅ |
 | Save Search → Location gap | ~50-60px | 51px | ✅ |
-| Section divider | 1px solid #ededed | 1px solid #ededed | ✅ |
+| Section divider | 2px solid #ededed | 2px solid #ededed (v=82) | ✅ |
 | Section label | 15/400 #333 | 15/400 #333 | ✅ |
 | Chevron | down arrow ~10px | down arrow ~10px via border trick | ✅ |
-| Zip/City/Other segmented | 282×59 gray track, 50px br, 4px pad | 268×60 same shape | ✅ |
+| Zip/City/Other segmented | 282×59 gray track, 50px br, 4px pad | 280×59 same shape (v=82: flex layout) | ✅ |
+| Active tab label wrap | "Zip\nCode" (2 lines), forced by narrow cell | explicit `<br>` in markup (v=82) — Roboto's narrow rendering would wrap naturally, but sandbox's system font doesn't | ✅ |
 | 25 miles select | 106×40, 1px #ededed, 8px br | 106×40, same | ✅ |
+| Zip input | 100×40 fixed (not flex) | 100×40 fixed (v=82) | ✅ |
+| "from" label | 16px #5E5E5E, margin 0 16px | 16px #5E5E5E, margin 0 16px (v=82) | ✅ |
+| "Use My Location" | underlined, 14/400, blue, right-aligned | underlined, 14/400, blue, right-aligned (v=82) | ✅ |
+| Zip input focus | border-color → blue, no outline | border 1.5px blue + 0.5px shadow ring (v=82) | ✅ |
+| 5-digit zip auto-submit | typing 5 digits navigates to `?zip=NNNNN` | debounced 250ms form.submit() in base.html (v=82) | ✅ |
+| Price Drop control | `.switch.toggleButton` 50×26, white 22×22 thumb, slides on click; Material Icons `info` (24×24 #c2c2c2) next to label | `.switch` div with white thumb, `:has(input:checked)` toggles blue + slides right; inline SVG info icon 18×18 #c2c2c2 (v=83) | ✅ |
+| Price Drop label | "Price Drop" + info icon | "Price Drop" + info icon (v=83; was "Price Drop only" + checkbox) | ✅ |
+| Boat Type / Make filter UI | Search-as-you-type input + checkbox list (`ul.opts`) inside collapse | `<select>` dropdown — functionally equivalent for the agent but visually divergent | 🟡 |
+| Beam / Max Draft / Fuel Type / Hull | Same search-input + checkbox pattern as Boat Type | `<select>` dropdown | 🟡 |
+| Default collapsed sections | Boat Type/Make/Beam/Max Draft/Fuel/Hull start `closed` on real BT | sandbox starts Beam/Max Draft/Fuel/Hull `closed`; Boat Type/Make are `open` | 🟡 |
 | All/New/Used segmented | same shape as zip toggle | same | ✅ |
 | Length / Year / Price sliders | 22×22 blue thumb w/ 2px white border, 4px rail #e9e9e9, blue fill | same exact spec | ✅ |
 | **Slider handle URL sync** | rc-slider auto-positions handles from URL | JS in base.html reads input min/max/value, sets handle positions | ✅ |
@@ -315,3 +327,22 @@ the current state. Status legend:
 `v=79` BDP gallery 3:2 aspect
 `v=80` added Beam/Max Draft/Fuel Type/Hull/Engines/For Sale By + Boat Loan Calculator widget
 `v=81` accordion section h3 + measurements subsection h4
+`v=82` filter-panel fidelity pass:
+       • "Zip Code" wraps via explicit `<br>` (matches real BT's natural Roboto wrap)
+       • Zip-row layout: fixed `[miles 106] 16px [from] 16px [zip 100]` (was flex:1 stretch)
+       • "from" → 16px / #5E5E5E / margin 0 16px
+       • `.zip-use-location` underlined, 14px (was 13px, no underline)
+       • Section dividers 2px (was 1px) — matches real BT `.collapse-content` bottom border
+       • Outer card now uses `var(--bt-shadow)` drop shadow (paired with `.loan-calc-card`)
+       • Focus state on `.filter-input` / `.zip-input`: blue border + 0.5px ring (was 2px outline)
+       • 5-digit Zip input auto-submits the filters form (matches real BT's auto-navigation)
+       • Adds `deploy/sim_envs/mantis_boattrader/scripts/perceptual_diff.py` harness
+       • Adds `deploy/sim_envs/mantis_boattrader/FIDELITY_AGENT_PROMPT.md` — repeatable workflow
+`v=83` Price Drop toggle switch replaces checkbox:
+       • New `.price-drop-row` with label + inline-SVG info icon (18×18 #c2c2c2)
+       • New `.switch` (50×26 grey track, white 22×22 thumb) + `:has(input:checked)`
+         flips background to `--bt-blue` and slides thumb 24px right with `transition: left 0.2s`
+       • Label changed from "Price Drop only" → "Price Drop" (matches real BT)
+       • Documents remaining 🟡 gaps in dropdown sections (Boat Type / Make / Beam /
+         Max Draft / Fuel Type / Hull) — real BT uses search-as-you-type filter lists,
+         sandbox keeps `<select>` for now; future v= will swap when needed
