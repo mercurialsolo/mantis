@@ -17,6 +17,7 @@ from mantis_agent.gym.step_handlers import (
     ClaudeGuidedFormHandler,
     ClaudeStepHandler,
     Holo3StepHandler,
+    MechanicalNavigateBackHandler,
     MechanicalScrollHandler,
     NavigateHandler,
     PaginateHandler,
@@ -86,10 +87,50 @@ def test_claude_step_types_share_one_handler_instance():
     assert url is data
 
 
-def test_navigate_back_binds_to_Holo3StepHandler():
-    """``navigate_back`` is a goal-shaped step type — it stays on the
-    brain. Only ``scroll`` was peeled off into the dispatcher."""
-    assert isinstance(_registry().get("navigate_back"), Holo3StepHandler)
+def test_navigate_back_uses_dispatcher_routing_to_mechanical_or_holo3():
+    """``navigate_back`` was promoted from a Holo3-only step type to
+    a dispatcher (issue #608). Mechanical CDP-back fires first when
+    the env supports it; Holo3 owns the fall-through (no CDP, new-tab
+    mode, no URL change, landed on another detail page).
+
+    Previously the brain ran an N-step loop on every navigate_back
+    step, declared failure, and step_recovery did 3× CDP+Alt+Left
+    attempts. The mechanical primary skips ~$0.04 + ~8 sec / iter.
+    """
+    reg = _registry()
+    dispatcher = reg.get("navigate_back")
+    assert dispatcher is not None
+    # Dispatcher is NOT the Holo3 instance directly.
+    assert not isinstance(dispatcher, Holo3StepHandler)
+    # Dispatcher exposes the right step_type marker for registry binding.
+    assert dispatcher.step_type == "navigate_back"
+
+
+def test_mechanical_navigate_back_handler_applies_to_predicate():
+    """The mechanical handler claims a navigate_back step when the
+    env exposes ``cdp_history_back`` AND the runner isn't in new-tab
+    mode AND the plan didn't opt out via ``params.brain_required``."""
+    runner = MagicMock()
+    runner._opened_detail_in_new_tab = False
+    runner.env = MagicMock()
+    runner.env.cdp_history_back = lambda **_: True
+    mech = MechanicalNavigateBackHandler(runner)
+
+    assert mech.applies_to(MicroIntent(intent="x", type="navigate_back"))
+    # New-tab mode → existing close-tab path owns it.
+    runner._opened_detail_in_new_tab = True
+    assert not mech.applies_to(MicroIntent(intent="x", type="navigate_back"))
+    runner._opened_detail_in_new_tab = False
+    # Opt-out via params.brain_required.
+    assert not mech.applies_to(
+        MicroIntent(
+            intent="x", type="navigate_back",
+            params={"brain_required": True},
+        )
+    )
+    # Env without cdp_history_back → fall through to Holo3.
+    runner.env = type("E", (), {})()  # plain object, no cdp_history_back
+    assert not mech.applies_to(MicroIntent(intent="x", type="navigate_back"))
 
 
 def test_scroll_uses_dispatcher_routing_to_mechanical_or_holo3():

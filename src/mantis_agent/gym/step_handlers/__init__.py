@@ -33,6 +33,7 @@ from .filter import ClaudeGuidedFilterHandler
 from .form import ClaudeGuidedFormHandler
 from .holo3 import Holo3StepHandler
 from .navigate import NavigateHandler
+from .navigate_back import MechanicalNavigateBackHandler
 from .paginate import PaginateHandler
 from .scroll import MechanicalScrollHandler
 
@@ -46,6 +47,7 @@ __all__ = [
     "ClaudeGuidedFormHandler",
     "ClaudeStepHandler",
     "Holo3StepHandler",
+    "MechanicalNavigateBackHandler",
     "MechanicalScrollHandler",
     "NavigateHandler",
     "PaginateHandler",
@@ -104,10 +106,13 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
     # MechanicalScrollHandler when the plan supplies ``params.count``
     # (deterministic, no brain), falling through to Holo3StepHandler
     # for goal-shaped scroll intents that need vision mediation
-    # ("scroll until X is visible"). ``navigate_back`` stays on
-    # Holo3 — it's a goal-shaped step type by nature.
+    # ("scroll until X is visible"). ``navigate_back`` does the same:
+    # mechanical CDP-back first (one history.back() + URL-change
+    # poll), falling through to Holo3 when CDP back is unavailable,
+    # didn't move the URL, or landed on another detail page (#608).
     holo3 = Holo3StepHandler(runner)
     mechanical_scroll = MechanicalScrollHandler(runner)
+    mechanical_back = MechanicalNavigateBackHandler(runner)
 
     class _ScrollDispatcher:
         step_type = "scroll"
@@ -117,6 +122,20 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
                 return mechanical_scroll.execute(step, ctx)
             return holo3.execute(step, ctx)
 
+    class _NavigateBackDispatcher:
+        step_type = "navigate_back"
+
+        def execute(self, step, ctx):
+            if not mechanical_back.applies_to(step):
+                return holo3.execute(step, ctx)
+            result = mechanical_back.execute(step, ctx)
+            if result.success:
+                return result
+            # Mechanical CDP back didn't work (no history, dispatch
+            # failure, landed on another detail page). Let the brain
+            # try via its action vocabulary.
+            return holo3.execute(step, ctx)
+
     reg.register(_ScrollDispatcher())
-    reg.register_for_types(holo3, ("navigate_back",))
+    reg.register(_NavigateBackDispatcher())
     return reg
