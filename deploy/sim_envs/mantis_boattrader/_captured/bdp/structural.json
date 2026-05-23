@@ -1,0 +1,71 @@
+{
+  "_meta": {
+    "captured_at": null,
+    "url": "https://www.boattrader.com/boat/<slug>/",
+    "status": "TODO — placeholder, not yet probed",
+    "note": "BDP corpus. Run a Chrome MCP probe against any real BDP page to fill in concrete measurements. SRP corpus is the template (../srp/structural.json)."
+  },
+
+  "_todo_sections": [
+    {
+      "name": "gallery",
+      "note": "Carousel of boat photos. Real BT uses real images; sandbox uses procedural SVG placeholders (Out-of-scope §3 in SCOPE.md). FIDELITY.md row 'BDP gallery 3:2 aspect' covers the existing match."
+    },
+    {
+      "name": "badges",
+      "note": "Top-left tags: 'Saved', 'New to Market', 'Price Drop', etc. FIDELITY.md 'Days listed' row covers the 'Listed N days ago' badge."
+    },
+    {
+      "name": "price_and_monthly",
+      "note": "Bold price + 'Est. $X/mo' link. Listing-card info icon + sticky-tooltip pattern is captured in FIDELITY.md (matched ✅)."
+    },
+    {
+      "name": "view_save_counters",
+      "note": "'12,345 views, 67 saves' inline counters."
+    },
+    {
+      "name": "dealer_card",
+      "note": "Right-rail card with dealer name, location, contact form (Name/Email/Phone/Message)."
+    },
+    {
+      "name": "contact_form_fields",
+      "note": "Real BT uses 4px br inputs. FIDELITY.md row 'lead form inputs 4px radius, outline button 2px' covers the matched spec."
+    },
+    {
+      "name": "show_phone_reveal",
+      "note": "Phone is hidden behind a 'Show phone' button. POST /boat/<slug>/show-phone is already wired + mutates Store.phone_revealed."
+    },
+    {
+      "name": "owner_highlights",
+      "note": "Bullet list of key features (e.g. 'Twin Volvo Penta engines, low hours, fresh bottom paint')."
+    },
+    {
+      "name": "spec_grid",
+      "note": "Two-column key/value grid: Length, Year, Make, Model, Hull Material, Fuel Type, Engine, etc."
+    },
+    {
+      "name": "propulsion_block",
+      "note": "Engine details: type, horsepower, hours, drive type."
+    },
+    {
+      "name": "similar_boats_rail",
+      "note": "Card rail at bottom — same shape as SRP listing card."
+    },
+    {
+      "name": "sticky_title_bar",
+      "note": "Appears on scroll past 320px. Holds title + price + 'Contact' CTA. Wired in base.html via .bdp-scrolled body class toggle."
+    }
+  ],
+
+  "_known_matches_in_fidelity_md": [
+    "BDP grid 1fr+80+366 (v=47)",
+    "BDP back/next colors (v=57)",
+    "BDP gallery 3:2 aspect (v=79)",
+    "Sticky breadcrumb 15/400/#333 (v=58)",
+    "Boat Details bg (v=56)",
+    "BDP description max-width 780px",
+    "Lead form inputs 4px radius, outline button 2px (v=55)"
+  ],
+
+  "_capture_methodology": "Open any BDP (e.g. https://www.boattrader.com/boat/<slug>/) in Chrome MCP, scroll through each section to make it visible, then run the structural probe per section. Save measurements + style tokens here."
+}

@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=84** (2026-05-23) — Boat Type / Make / Fuel / Hull dropdowns reworked to search-as-you-type checkbox lists matching real BT; default-closed for Boat Type + Make.
+Last updated: **v=85** (2026-05-23) — `_captured/` spec corpus checked in (Phase 1 discovery output) — SRP `structural.json` is the measured snapshot; Home + BDP are TODO placeholders.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `woytvzdntbjtmv7kz-4jzz-psltnq7jc`)
@@ -370,3 +370,16 @@ the current state. Status legend:
          23 structural-anchor assertions covering v=82..v=84 changes. Runs in
          the regular pytest matrix, no playwright needed (FastAPI TestClient).
          Phase 5 (verification harness) from FIDELITY_BUILD_FROM_SCRATCH_PROMPT.md.
+`v=85` Phase 1 (Discovery) corpus checked in under `_captured/`:
+       • `_captured/srp/structural.json` — full SRP spec: filter card, save-search,
+         location section (switcher / miles row / zip input / use-my-location), all
+         range-slider sections, price-drop toggle, dropdown sections (Boat Type /
+         Make / Fuel / Hull), engines, for-sale-by, interactions. Measurements +
+         computed-style tokens + interaction notes from Chrome MCP probes at
+         1512×711 viewport, captured 2026-05-23.
+       • `_captured/home/structural.json` — TODO placeholder; lists sections to
+         capture and points to FIDELITY.md rows where matched specs already exist.
+       • `_captured/bdp/structural.json` — same TODO placeholder for BDP.
+       • `_captured/README.md` — format spec, methodology, what's intentionally
+         not in the corpus (raw DOM, screenshots, HAR).
+       • Closes "Done bar" item: `_captured/` corpus checked in.

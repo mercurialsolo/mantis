@@ -1,0 +1,313 @@
+{
+  "_meta": {
+    "captured_at": "2026-05-23T16:32:27Z",
+    "url": "https://www.boattrader.com/boats/",
+    "viewport": {"width": 1512, "height": 711, "devicePixelRatio": 2},
+    "captured_via": "Chrome MCP getBoundingClientRect + getComputedStyle probes",
+    "note": "Spec snapshot of real boattrader.com SRP that the sandbox mirrors. Re-capture if real BT changes structurally. Status of each element in FIDELITY.md."
+  },
+
+  "filter_card": {
+    "outer_container": {
+      "_real_class": ".tool-set",
+      "width": 300, "height": 2485, "x": 56,
+      "background": "rgb(255, 255, 255)",
+      "border": "0px none",
+      "borderRadius": "0px",
+      "boxShadow": "none",
+      "padding": "15px 0px 0px",
+      "note": "Real BT has NO outer border. Sandbox keeps a 1px #e0e0e0 outline + 6px radius + var(--bt-shadow) intentionally (see SCOPE.md Out-of-scope §1)."
+    },
+    "inner_wrapper": {
+      "_real_class": ".inner",
+      "width": 300, "x": 56, "padding": "0px",
+      "background": "transparent", "border": "0px none"
+    },
+    "section_divider": {
+      "real": "border-bottom: 2px solid #ededed on .collapse-content",
+      "sandbox": "border-bottom: 2px solid #ededed on .filter-group",
+      "status": "✅"
+    }
+  },
+
+  "save_search": {
+    "_real_class": ".search-alerts-button (Pillar UI .style-module_action-primary)",
+    "rect": {"width": 270, "height": 40, "x": 71},
+    "style": {
+      "background": "rgb(37, 102, 176)",
+      "color": "rgb(255, 255, 255)",
+      "borderRadius": "50px",
+      "padding": "8px 20px",
+      "fontSize": "16px",
+      "fontWeight": "700",
+      "border": "0px none"
+    }
+  },
+
+  "save_to_location_gap_px": 50,
+
+  "location_section": {
+    "header": {
+      "_real_class": ".collapse-content .header (text='Location')",
+      "rect": {"width": 300, "height": 76, "x": 56},
+      "style": {
+        "fontSize": "15px",
+        "fontWeight": "400",
+        "color": "rgb(51, 51, 51)",
+        "padding": "16px 10px"
+      },
+      "parent_class": "collapse-content open"
+    },
+    "switcher_wrapper": {
+      "_real_class": ".style-module_switcher-wrapper__pcBx7.style-module_full-width__8j9KG",
+      "rect": {"width": 282, "height": 59, "x": 65},
+      "style": {
+        "background": "rgb(237, 237, 237)",
+        "border": "1px solid rgb(224, 224, 224)",
+        "borderRadius": "50px",
+        "padding": "4px"
+      }
+    },
+    "switcher_options_labels": ["Zip Code", "City / State", "Zip Only"],
+    "switcher_option_dimensions": {
+      "width": 88, "height": 49,
+      "x_positions": [70, 158, 246],
+      "note": "Each cell is exactly 1/3 of (wrapper - 2*4px padding)."
+    },
+    "active_label_wrap": {
+      "real_text": "Zip\\nCode (two lines, Roboto-narrow rendering naturally wraps)",
+      "sandbox_text": "Zip<br>Code (explicit <br> forces wrap since system font is wider)",
+      "status": "✅ — v=82"
+    },
+    "miles_row": {
+      "_real_class": ".search-filter-group",
+      "rect": {"width": 272, "height": 69, "x": 70},
+      "layout": "[miles 106px] [16px margin] [from text] [16px margin] [zip 100px]",
+      "display": "flex",
+      "justify_content": "center",
+      "align_items": "center"
+    },
+    "miles_select": {
+      "rect": {"width": 106, "height": 40, "x": 70},
+      "style": {
+        "borderRadius": "8px",
+        "border": "1px solid rgb(237, 237, 237)",
+        "fontSize": "14px",
+        "padding": "8px 12px 8px 8px"
+      }
+    },
+    "from_label": {
+      "rect": {"width": 33, "x": 192},
+      "style": {
+        "fontSize": "16px",
+        "fontWeight": "400",
+        "color": "rgb(94, 94, 94)",
+        "margin": "0px 16px"
+      }
+    },
+    "zip_input": {
+      "rect": {"width": 100, "height": 40, "x": 242},
+      "style": {
+        "borderRadius": "8px",
+        "border": "1px solid rgb(237, 237, 237)",
+        "fontSize": "14px",
+        "padding": "8px 12px 8px 8px",
+        "placeholder": "Zip",
+        "textAlign": "start"
+      },
+      "interaction": {
+        "auto_submit": "Real BT navigates to /boats/state-XX/city-YYY/zip-NNNNN/ on 5-digit input. Sandbox debounces 250ms then form.submit() to /boats/?zip=NNNNN."
+      },
+      "focus_state": {
+        "border": "1.5px solid rgb(37, 102, 176)",
+        "outline": "none (real BT) / box-shadow ring (sandbox)"
+      }
+    },
+    "use_my_location": {
+      "_real_class": ".search-user-location",
+      "rect": {"width": 103, "height": 19, "x": 238},
+      "style": {
+        "fontSize": "14px",
+        "fontWeight": "400",
+        "color": "rgb(37, 102, 176)",
+        "textDecoration": "underline rgb(37, 102, 176)",
+        "textAlign": "start",
+        "parent_alignment": "right (via flex / margin-left:auto in real BT)"
+      }
+    }
+  },
+
+  "condition_section": {
+    "segmented_control": {
+      "labels": ["All", "New", "Used"],
+      "shape": "Same as switcher_wrapper — 282×59 grey track, 50px radius, 4px padding",
+      "active_option": "White pill thumb with layered drop-shadow (0 1px 3px rgba(10,30,60,0.12), 0 1px 2px rgba(10,30,60,0.08))",
+      "status": "✅"
+    }
+  },
+
+  "range_slider_sections": {
+    "applies_to": ["Length", "Year", "Price", "Beam", "Max Draft"],
+    "rail": {"height": "4px", "background": "#e9e9e9", "borderRadius": "6px"},
+    "fill": {"height": "4px", "background": "var(--bt-blue)"},
+    "handle": {
+      "size": "22x22 px",
+      "background": "var(--bt-blue)",
+      "border": "2px solid #fff",
+      "borderRadius": "50%",
+      "boxShadow": "0 1px 4px rgba(10,30,60,0.25)"
+    },
+    "min_max_row": {
+      "inputs": "filter-input number, 40px tall, 8px br, 1px #ededed",
+      "separator": "to (14px #333)",
+      "unit_suffix": "ft. (for Length/Beam/Max Draft) / blank (Year) / blank (Price)"
+    }
+  },
+
+  "price_drop_row": {
+    "_real_class": ".search-filter-group (containing label + .tooltip + .switch)",
+    "real_html_excerpt": "<a>Price Drop<div class='tooltip'><i class='material-icons'>info</i></div></a><div class='switch enabled toggleButton'><div class='switch-toggle'></div></div>",
+    "label": {
+      "text": "Price Drop",
+      "info_icon": {
+        "real": "Material Icons 'info' glyph, 24x24, color #c2c2c2",
+        "sandbox": "Inline SVG circle+i path, 18x18, color #c2c2c2"
+      }
+    },
+    "switch": {
+      "rect": {"width": 50, "height": 26, "x": 289},
+      "off_state": {
+        "background": "rgb(204, 204, 204)",
+        "border": "1px solid rgb(204, 204, 204)",
+        "borderRadius": "24px"
+      },
+      "on_state": "background → var(--bt-blue), thumb slides to left:25px (sandbox via :has(input:checked))"
+    },
+    "thumb": {
+      "rect": {"width": 22, "height": 22},
+      "background": "rgb(255, 255, 255)",
+      "borderRadius": "12px",
+      "position": "relative",
+      "top": "1px",
+      "left": "0px (off) / 25px (on)",
+      "transition": "left 0.2s ease-in-out"
+    },
+    "row_layout": {
+      "_real": "display: flex, justifyContent: center (but contents spread via flex-grow on label)",
+      "_sandbox": "display: flex, justifyContent: space-between (simpler)",
+      "status": "✅ — v=83"
+    }
+  },
+
+  "dropdown_sections": {
+    "boat_type": {
+      "_real_testid": "srp-filter-boatType",
+      "default_state": "closed",
+      "open_height": 427,
+      "search_input": {
+        "rect": {"width": 270, "height": 40},
+        "style": {
+          "borderRadius": "4px",
+          "border": "1px solid rgb(237, 237, 237)",
+          "padding": "8px 15px 8px 44px",
+          "fontSize": "14px",
+          "placeholder": "Search Boat Type",
+          "background": "rgb(255, 255, 255)"
+        },
+        "icon": "Magnifier SVG, absolute-positioned left:12px, 18x18 #5e5e5e"
+      },
+      "options_list": {
+        "_real_class": "ul.opts",
+        "rect": {"width": 270, "height": 288},
+        "style": {
+          "maxHeight": "270px",
+          "overflowY": "auto",
+          "padding": "8px",
+          "margin": "0px 0px 15px"
+        },
+        "item_height": 40,
+        "custom_checkbox": {
+          "real_class": "[data-custom-option]",
+          "size": "199x19 px visible (label+box+text)",
+          "checkbox_state_on": "Background fills, white checkmark glyph",
+          "sandbox": ".filter-opt-checkbox 18x18, 2px #c2c2c2 border → bg var(--bt-blue) on :checked"
+        }
+      },
+      "selection_model": "Real BT supports multi-select; sandbox enforces single-select via JS (backend takes one value). Both render checkboxes."
+    },
+    "make": {
+      "_real_testid": "srp-filter-make",
+      "default_state": "closed",
+      "shape": "Same as boat_type (search input + ul.opts)",
+      "more_options_link": "Real BT shows '2,044 more Makes…' after a threshold. Sandbox shows full list (25 makes). Out-of-scope per SCOPE.md."
+    },
+    "fuel_type": {
+      "_real_testid": "srp-filter-fuel",
+      "default_state": "closed",
+      "shape": "ul.opts only (no search input — small list)",
+      "status": "✅"
+    },
+    "hull": {
+      "_real_testid": "srp-filter-hull",
+      "default_state": "closed",
+      "shape": "ul.opts only (no search input — small list)",
+      "status": "✅"
+    }
+  },
+
+  "engines_section": {
+    "default_state": "closed",
+    "subcontrols": ["Number of Engines (segmented Any/1/2/3/4+)", "Engine Type (radio list: Direct Drive, Jet Drive, None, Other, Single Inboard, Outboard)"]
+  },
+
+  "for_sale_by_section": {
+    "default_state": "closed",
+    "options": ["Any (Dealers and Private Sellers)", "Dealer", "Private Seller"]
+  },
+
+  "apply_filters_row": {
+    "buttons": ["Apply Filters (primary pill, blue)", "Clear all (text link, center-aligned)"],
+    "status": "🟡 — sandbox renders both; real BT only Apply Filters appears in some states. Functional parity sufficient."
+  },
+
+  "interactions": {
+    "captured": [
+      {
+        "name": "zip_input_5_digit_autosubmit",
+        "trigger": "type 5 digits in zip input",
+        "real_bt": "navigates to /boats/state-XX/city-YYY/zip-NNNNN/",
+        "sandbox": "navigates to /boats/?zip=NNNNN (form auto-submit, debounced 250ms)",
+        "status": "✅ — v=82"
+      },
+      {
+        "name": "price_drop_toggle",
+        "trigger": "click .switch (anywhere on track or thumb)",
+        "real_bt": "checkbox toggles; UI flips to blue; form remains (no auto-submit captured)",
+        "sandbox": "checkbox toggles via label/input; :has(input:checked) flips background to blue + slides thumb; submits form on change",
+        "status": "✅ — v=83"
+      },
+      {
+        "name": "dropdown_search_filter",
+        "trigger": "type into .filter-search input",
+        "real_bt": "hides non-matching <li> in the same section's ul.opts",
+        "sandbox": "same — JS in base.html toggles .hidden on <li> whose .filter-opt-label doesn't contain the query; 'All …' option always visible",
+        "status": "✅ — v=84"
+      },
+      {
+        "name": "dropdown_option_select",
+        "trigger": "click a checkbox in ul.opts / ul.filter-options",
+        "real_bt": "navigates to /boats/?type=X / multi-select adds &type=Y",
+        "sandbox": "unchecks siblings + form.submit() to /boats/?type=X (single-select via backend)",
+        "status": "✅ — v=84"
+      }
+    ],
+    "uncaptured_but_in_scope": [
+      "Save Search button click (real BT pops a sign-in modal; sandbox no-op)",
+      "Section collapse/expand on header click (already covered by <details> default behavior)",
+      "Cookie consent accept/reject (POST /__site/consent already wired)",
+      "Sort dropdown change (sandbox uses native <select>)",
+      "Apply Filters button click (form submit)",
+      "Clear all link click (resets to /boats/)"
+    ]
+  }
+}
