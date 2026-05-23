@@ -45,6 +45,9 @@ def test_registry_covers_every_step_type_phase2_lifted():
         "fill_field", "submit", "select_option", "right_click",
         "extract_url", "extract_data",
         "scroll", "navigate_back",
+        # #615: collect_urls primitive — single-pass listing URL harvest
+        # for the fan-out runner (#616, #617).
+        "collect_urls",
     }
     assert set(reg.types()) == expected
 
