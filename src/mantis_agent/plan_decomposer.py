@@ -1163,6 +1163,16 @@ class PlanDecomposer:
 
         The decomposer often generates loop→extract_url instead of loop→click.
         Find the first extraction click step and retarget all loops to it.
+
+        Issue #605: Claude also frequently OMITS ``loop_target`` entirely
+        on loop steps, so the field defaults to ``-1`` at parse time
+        (line ``loop_target=s.get("loop_target", -1)``). The runner's
+        loop handler then computes ``target = state.step_index`` (the
+        loop step's own index), causing the loop to self-spin instead
+        of jumping back into the iteration body. Only one pass through
+        the body ever runs and the plan extracts at most one lead.
+        Default unset targets to ``click_idx`` so listings-extraction
+        plans loop on click→extract→back→loop as designed.
         """
         click_idx = None
         for i, s in enumerate(plan.steps):
@@ -1174,11 +1184,24 @@ class PlanDecomposer:
             return
 
         for s in plan.steps:
-            if s.loop_target >= 0 and s.loop_target != click_idx:
-                # Only fix if the target is close (off by 1-2, typical decomposer error)
-                if abs(s.loop_target - click_idx) <= 2:
-                    logger.info(f"  [fix] Loop target {s.loop_target} → {click_idx} (click step)")
-                    s.loop_target = click_idx
+            if s.type != "loop":
+                continue
+            if s.loop_target < 0:
+                # Claude omitted loop_target; default to the extraction
+                # click step. Without this the loop self-spins
+                # (see issue #605).
+                logger.info(
+                    "  [fix] Loop target unset (-1) → %d (click step)",
+                    click_idx,
+                )
+                s.loop_target = click_idx
+            elif s.loop_target != click_idx and abs(s.loop_target - click_idx) <= 2:
+                # Only fix close targets (off by 1-2, typical decomposer error)
+                logger.info(
+                    "  [fix] Loop target %d → %d (click step)",
+                    s.loop_target, click_idx,
+                )
+                s.loop_target = click_idx
 
     # ── Plan-shape extraction (parsed from Claude's JSON output) ────────
 
