@@ -434,6 +434,10 @@ class RunExecutor:
             costs=per_step_costs,
             latency=per_step_latency,
         )
+        # #633 §4: stamp the env fingerprint so the Augur Env-drift
+        # screen populates. url_host from the runner's last-known URL;
+        # viewport_hash from a stable hash of the viewport tuple.
+        self._emit_augur_env_fingerprint(step_index)
         # #524 + #530 — continuous verdict score. Derive primarily
         # from ``sr.success`` (the canonical runner-side truth), then
         # blend with ``verdict.confidence`` only when the two agree.
@@ -1793,8 +1797,134 @@ class RunExecutor:
             # uses this as the run-level failure class chip).
             self._emit_augur_aggregate_metrics(state.results)
             self._emit_augur_failure_class_tag(state.results)
+            # #633 §2: emit a session-level outcome record so the Augur
+            # Cost-per-outcome + Cohorts screens populate. Verdict +
+            # cost summary come from the runner's terminal state +
+            # cost meter; task_class falls back to session_name when
+            # the plan doesn't carry an explicit task identifier.
+            self._emit_augur_finalize_outcome(state.results)
             augur.close(status=runner._final_status or None)
             runner._augur = None
+
+    def _emit_augur_env_fingerprint(self, step_index: int) -> None:
+        """Stamp the current step's env fingerprint (#633 §4).
+
+        Pulls ``url_host`` from the runner's last-known URL and computes
+        a stable ``viewport_hash`` from the viewport tuple available on
+        the env. Both are cheap; no extra browser interaction.
+
+        No-op when no URL has been observed yet (first step before
+        navigate) — keeps the workspace's Env-drift screen clean of
+        fingerprintless entries.
+        """
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        if augur is None:
+            return
+        try:
+            from urllib.parse import urlparse
+            last_url = str(getattr(runner, "_last_known_url", "") or "")
+            host = ""
+            if last_url:
+                try:
+                    host = urlparse(last_url).hostname or ""
+                except Exception:  # noqa: BLE001
+                    host = ""
+            if not host:
+                return
+
+            # Viewport hash — stable across steps that hit the same
+            # window dimensions. Reads (width, height, dpr) from
+            # whatever the env exposes; defensive about missing attrs.
+            viewport_hash = ""
+            env = getattr(runner, "env", None)
+            if env is not None:
+                w = int(getattr(env, "viewport_width", 0) or 0)
+                h = int(getattr(env, "viewport_height", 0) or 0)
+                dpr = float(getattr(env, "device_pixel_ratio", 1.0) or 1.0)
+                if w and h:
+                    import hashlib
+                    viewport_hash = hashlib.sha1(
+                        f"{w}x{h}@{dpr:.2f}".encode(),
+                    ).hexdigest()[:12]
+            augur.attach_env_fingerprint(
+                step_index=step_index,
+                url_host=host,
+                viewport_hash=viewport_hash,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("attach_env_fingerprint emit failed: %s", exc)
+
+    def _emit_augur_finalize_outcome(self, results: list[StepResult]) -> None:
+        """Emit a session-scope ``finalize_outcome`` to populate the
+        Augur Cost-per-outcome + Cohorts screens (#633 §2).
+
+        Composes the verdict + cost summary from the runner's terminal
+        state + cost meter snapshot. Best-effort — adapter swallows
+        internal errors; this helper additionally swallows the
+        composition to keep run termination resilient.
+        """
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        if augur is None:
+            return
+        try:
+            terminal = str(runner._final_status or "unknown")
+            halt_reason = str(getattr(runner, "_final_halt_reason", "") or "")
+            # Map mantis terminal labels onto a coarser outcome status
+            # the Augur cohort scorecard renders cleanly.
+            if terminal == "completed":
+                # Honest "completed with failures" when any step failed.
+                if any(not getattr(r, "success", False) for r in results):
+                    status = "completed_with_failures"
+                else:
+                    status = "completed"
+            else:
+                status = terminal or "unknown"
+            verdict = {"status": status}
+            if halt_reason:
+                verdict["reason"] = halt_reason
+
+            # Cost summary — pull from the cost meter's totals().
+            cost_summary: dict[str, Any] = {}
+            meter = getattr(runner, "cost_meter", None)
+            if meter is not None:
+                try:
+                    gpu, claude, proxy, total = meter.totals()
+                    cost_summary = {
+                        "total_usd": round(float(total), 4),
+                        "gpu_usd": round(float(gpu), 4),
+                        "claude_usd": round(float(claude), 4),
+                        "proxy_usd": round(float(proxy), 4),
+                    }
+                    costs = getattr(meter, "costs", {}) or {}
+                    if costs.get("claude_input_tokens") is not None:
+                        cost_summary["tokens_in"] = int(
+                            costs.get("claude_input_tokens", 0) or 0,
+                        )
+                    if costs.get("claude_output_tokens") is not None:
+                        cost_summary["tokens_out"] = int(
+                            costs.get("claude_output_tokens", 0) or 0,
+                        )
+                    if costs.get("claude_cached_input_tokens") is not None:
+                        cost_summary["cache_hit_tokens"] = int(
+                            costs.get("claude_cached_input_tokens", 0) or 0,
+                        )
+                except Exception:  # noqa: BLE001 — never block close
+                    pass
+
+            task_class = (
+                str(getattr(runner, "session_name", "") or "")
+                or str(runner.plan_signature or "unknown")
+            )
+            augur.finalize_outcome(
+                verdict=verdict,
+                task_class=task_class,
+                cost_summary=cost_summary,
+                scope="session",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AugurAdapter.finalize_outcome composition failed: %s", exc)
 
     def _emit_augur_aggregate_metrics(self, results: list[StepResult]) -> None:
         """Send cost-meter totals as both session tags and metric

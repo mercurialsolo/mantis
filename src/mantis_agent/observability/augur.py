@@ -892,6 +892,106 @@ class AugurAdapter:
         except Exception as exc:  # noqa: BLE001
             logger.debug("AugurAdapter.set_live_endpoints failed: %s", exc)
 
+    # ── #633 follow-up: Sentry-for-CUA producer primitives ─────────────
+
+    def finalize_outcome(
+        self,
+        *,
+        verdict: dict[str, Any],
+        task_class: str = "",
+        cost_summary: dict[str, Any] | None = None,
+        scope: str = "session",
+    ) -> None:
+        """Emit a session-level outcome (#633 §2 — populates the Cost-
+        per-outcome + Cohorts screens). Wraps ``DebugSession.finalize_outcome``
+        (augur-sdk 0.1.14+).
+
+        Call once at the end of a Mantis run with the planner's terminal
+        verdict + cost summary; the Augur workspace renders per-task-class
+        cohort scorecards from this.
+
+        Tolerant of SDK builds without the method — silently no-ops when
+        unavailable so production runs never break on missing surface.
+        """
+        if not self.active or not hasattr(self._session, "finalize_outcome"):
+            return
+        try:
+            self._session.finalize_outcome(
+                scope=scope,
+                verdict=dict(verdict),
+                task_class=str(task_class),
+                cost_summary=dict(cost_summary or {}),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AugurAdapter.finalize_outcome failed: %s", exc)
+
+    def attach_env_fingerprint(
+        self,
+        step_index: int,
+        *,
+        url_host: str = "",
+        viewport_hash: str = "",
+        api_shapes: dict[str, Any] | None = None,
+    ) -> None:
+        """Stamp a step with the environment fingerprint Augur uses for
+        the Env-drift screen (#633 §4). Wraps
+        ``DebugSession.attach_env_fingerprint`` (augur-sdk 0.1.13+).
+
+        Mantis call site: per-step emit, with url_host derived from the
+        browser's current page URL and viewport_hash from a stable hash
+        of (width, height, dpr). api_shapes only when Mantis has a
+        network sniffer attached (today: never).
+
+        No-op when ``url_host`` is empty (first step before navigate)
+        so we don't pollute the workspace with fingerprintless entries.
+        """
+        if not self.active or not hasattr(self._session, "attach_env_fingerprint"):
+            return
+        if not url_host:
+            return
+        try:
+            self._session.attach_env_fingerprint(
+                step_index=int(step_index),
+                url_host=str(url_host),
+                viewport_hash=str(viewport_hash or ""),
+                api_shapes=dict(api_shapes or {}),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AugurAdapter.attach_env_fingerprint failed: %s", exc)
+
+    def record_reasoning(
+        self,
+        step_index: int,
+        *,
+        format: str,
+        content: str,
+    ) -> None:
+        """Persist a reasoning trace (extended-thinking text, OpenAI
+        reasoning summary, etc) alongside a step. Wraps
+        ``DebugSession.record_reasoning`` (augur-sdk 0.1.14+).
+
+        Mantis call site: wherever the planner already has reasoning
+        text in hand — Claude extended-thinking response blocks, the
+        critic's rationale, the verifier's PASS/FAIL reason. No
+        additional inference, just an extra emit on the side.
+
+        ``format`` is a free-form tag the workspace surfaces in the
+        Reasoning tab (e.g. ``"claude-thinking"``, ``"critic"``,
+        ``"verifier"``). ``content`` is the raw text.
+        """
+        if not self.active or not hasattr(self._session, "record_reasoning"):
+            return
+        if not content:
+            return
+        try:
+            self._session.record_reasoning(
+                step_index=int(step_index),
+                format=str(format),
+                content=str(content),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AugurAdapter.record_reasoning failed: %s", exc)
+
     def close(self, status: str | None = None) -> Any:
         """Flush the bundle. Returns the BundleManifest or None.
 
