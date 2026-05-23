@@ -210,6 +210,46 @@ def test_loop_target_negative_treated_as_self_index() -> None:
     assert g.body_range == (1, 1)
 
 
+def test_nested_loops_with_fix_loop_targets_rewriting() -> None:
+    """Real boattrader-shaped output of PlanDecomposer.
+
+    ``_fix_loop_targets`` rewinds BOTH the inner extraction loop AND
+    the outer pagination loop's ``loop_target`` to the same extraction
+    click step (the first one in section=extraction). So the outer
+    loop's body span covers the entire extraction loop body PLUS the
+    inner loop step PLUS the paginate step.
+
+    A naive "body has extract_data → not pagination" classifier
+    mis-tags the outer loop as url_collect. The right signal is the
+    presence of a ``paginate`` step in the body — only pagination
+    loops carry one.
+    """
+    plan = MicroPlan(source_plan="", domain="boattrader.com")
+    plan.steps = [
+        MicroIntent(intent="Navigate", type="navigate", section="setup"),
+        MicroIntent(intent="Click", type="click", section="extraction"),
+        MicroIntent(intent="Read URL", type="extract_url", section="extraction"),
+        MicroIntent(intent="Scroll", type="scroll", section="extraction"),
+        MicroIntent(intent="Extract", type="extract_data", section="extraction"),
+        MicroIntent(intent="Back", type="navigate_back", section="extraction"),
+        MicroIntent(
+            intent="Inner loop", type="loop", section="extraction",
+            loop_target=1, loop_count=25,
+        ),
+        MicroIntent(intent="Paginate", type="paginate", section="pagination"),
+        MicroIntent(
+            intent="Outer loop", type="loop", section="pagination",
+            loop_target=1, loop_count=10,  # rewound to click_idx by _fix_loop_targets
+        ),
+    ]
+    PlanDecomposer._fix_loop_targets(plan)
+    PlanDecomposer._classify_loop_groups(plan)
+    shapes = [g.shape for g in plan.loop_groups]
+    # Inner loop body has no paginate → url_collect.
+    # Outer loop body has paginate (and extract_data too) → pagination.
+    assert shapes == ["parallelizable_url_collect", "parallelizable_pagination"]
+
+
 def test_multiple_loops_each_classified_independently() -> None:
     """A plan can have a pagination loop wrapping an extraction loop
     (the canonical marketplace_listings shape). Each gets its own

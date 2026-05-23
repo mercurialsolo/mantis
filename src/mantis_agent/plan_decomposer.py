@@ -1330,12 +1330,19 @@ class PlanDecomposer:
         if not body:
             return "sequential"
         types = [s.type for s in body]
-        # Pagination outer loop: a body whose only meaningful step is
-        # ``paginate`` (other steps may bracket it for filter cleanup,
-        # but ``paginate`` is the terminal action that defines the loop
-        # unit). Check this BEFORE the url-collect case so a loop body
-        # of just ``paginate → loop`` doesn't fall through.
-        if "paginate" in types and "extract_data" not in types:
+        # Pagination outer loop: the body contains a ``paginate`` step.
+        # The canonical shape (``plan_decomposer.py:588-592``) is
+        # ``... → paginate → loop`` — the pagination loop's body
+        # frequently includes the inner extraction body because
+        # ``_fix_loop_targets`` rewinds BOTH loop_targets to the
+        # extraction click step. So presence-of-paginate is a stronger
+        # signal than "body looks like extraction" for the outer loop:
+        # only the outer loop will ever have a paginate step in its
+        # body (the inner extraction loop body is click → extract_url
+        # → scroll → extract_data → navigate_back, no paginate).
+        # Check this BEFORE the url-collect case so a nested
+        # outer-pagination loop doesn't get mis-tagged as url-collect.
+        if "paginate" in types:
             return "parallelizable_pagination"
         # URL-collect extraction loop: body opens on a ``click`` in the
         # extraction section AND contains ``extract_url``. This is the
