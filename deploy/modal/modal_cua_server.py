@@ -2422,36 +2422,17 @@ def _gemma4_planner_url() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# E) Parallel extraction — fan-out across N workers
+# E) Parallel extraction — fan-out across N workers (#617)
 # ═══════════════════════════════════════════════════════════════════
-
-def _make_page_task(original_task: dict, worker_id: int, page: int) -> dict:
-    """Create an extraction task for one page of results.
-
-    Each worker processes ALL listings on a single page (~25 per page).
-    No pagination needed — one worker, one page, all listings.
-    """
-    base_url = original_task.get("start_url", "")
-    if page > 1:
-        # BoatTrader pagination: /page-N/ suffix
-        base_url = base_url.rstrip("/") + f"/page-{page}/"
-
-    loop = dict(original_task.get("loop", {}))
-    loop["max_iterations"] = 30  # ~25 listings per page + buffer
-    loop["max_pages"] = 1        # Stay on assigned page, no pagination
-
-    return {
-        "session_name": f"bt_worker_{worker_id}_page_{page}",
-        "base_url": base_url,
-        "tasks": [
-            {
-                "task_id": f"extract_p{page}_w{worker_id}",
-                "intent": original_task["intent"],
-                "loop": loop,
-                "start_url": base_url,
-            }
-        ],
-    }
+#
+# Per-page partition tasks are built by
+# ``mantis_agent.gym.fanout_runner.prepare_modal_partitions`` from the
+# plan's ``MicroPlan.loop_groups`` (#614). The legacy
+# ``_make_page_task`` helper — which hardcoded the BoatTrader
+# ``{base}/page-{n}/`` URL pattern and the ``task.loop`` schema — was
+# removed in #618. Pagination URL synthesis now flows through
+# ``fanout_runner.partition_urls_for_pagination`` with the per-plan
+# ``paginate.params['url_template']`` override.
 
 
 @app.function(
@@ -2853,147 +2834,13 @@ def main(
             print(f"  Total leads: {merged_total}")
             return
 
-    # ── Auto-parallelize looped tasks (legacy task.loop path) ───────
-    tasks = task_suite.get("tasks", [])
-    loop_tasks = [t for t in tasks if t.get("loop")]
-    non_loop_tasks = [t for t in tasks if not t.get("loop")]
-
-    # Auto-detect: if workers > 1 and there are looped tasks, fan out
-    # Works with any model — routes to the correct executor per model type
-    if workers > 1 and loop_tasks:
-        print(f"\n  ═══ PARALLEL MODE: {workers} concurrent workers ═══")
-
-        for loop_task in loop_tasks:
-            max_pages = loop_task["loop"].get("max_pages", 5)
-
-            print(f"  Task: {loop_task['task_id']}")
-            print(f"    Pages: {max_pages} | Workers: {workers}")
-            print("    Strategy: 1 worker = 1 page, dynamic queue")
-
-            # Page queue — workers pull from this
-            import queue
-            import threading
-
-            page_queue = queue.Queue()
-            for p in range(1, max_pages + 1):
-                page_queue.put(p)
-
-            total_viable = 0
-            total_scanned = 0
-            results_lock = threading.Lock()
-            worker_results = []
-
-            def process_worker(worker_id: int):
-                """Worker loop: grab page → process → grab next until queue empty."""
-                nonlocal total_viable, total_scanned
-                while True:
-                    try:
-                        page = page_queue.get_nowait()
-                    except queue.Empty:
-                        break
-
-                    print(f"    Worker {worker_id}: starting page {page}")
-                    page_task = _make_page_task(loop_task, worker_id, page)
-                    page_contents = json.dumps(page_task)
-
-                    try:
-                        result = run_gemma4_cua_worker.remote(
-                            task_file_contents=page_contents,
-                            worker_id=worker_id,
-                            max_steps=max_steps,
-                        )
-                        passed = result.get("passed", 0)
-                        total = result.get("total", 0)
-                        with results_lock:
-                            total_viable += passed
-                            total_scanned += total
-                            worker_results.append({
-                                "worker": worker_id, "page": page,
-                                "passed": passed, "total": total,
-                            })
-                        print(f"    Worker {worker_id}: page {page} done — {passed}/{total} viable")
-                    except Exception as e:
-                        print(f"    Worker {worker_id}: page {page} ERROR — {e}")
-
-            # Launch worker pool — each grabs pages from the queue
-            # Use .spawn() for parallel Modal execution, then collect
-            # Simpler: spawn all pages upfront, workers=min(workers, pages)
-            active_workers = min(workers, max_pages)
-            page_handles = []
-
-            # Route to the right worker function based on model
-            worker_fn_map = {
-                "gemma4-cua": run_gemma4_cua_worker,
-                "evocua-8b": run_cua_1gpu,
-                "evocua-32b": run_cua_2gpu,
-                "opencua-32b": run_cua_4gpu,
-                "holo3": run_holo3,
-                "fara": run_fara,
-            }
-            worker_fn = worker_fn_map.get(model, run_gemma4_cua_worker)
-
-            for page in range(1, max_pages + 1):
-                w = (page - 1) % active_workers
-                page_task = _make_page_task(loop_task, worker_id=w, page=page)
-                page_contents = json.dumps(page_task)
-                print(f"    → Page {page} → Worker {w}")
-
-                spawn_kwargs = {
-                    "task_file_contents": page_contents,
-                    "max_steps": max_steps,
-                }
-                if model == "gemma4-cua":
-                    spawn_kwargs["worker_id"] = w
-                    handle = run_gemma4_cua_worker.spawn(**spawn_kwargs)
-                else:
-                    spawn_kwargs["cua_model"] = model
-                    handle = worker_fn.spawn(**spawn_kwargs)
-                page_handles.append((page, w, handle))
-
-            # Collect results as workers complete
-            print(f"\n  Waiting for {len(page_handles)} page workers...")
-            total_viable = 0
-            total_scanned = 0
-
-            for page, w, handle in page_handles:
-                try:
-                    result = handle.get()
-                    passed = result.get("passed", 0)
-                    total = result.get("total", 0)
-                    total_viable += passed
-                    total_scanned += total
-                    print(f"    Page {page} (W{w}): {passed}/{total} viable")
-                except Exception as e:
-                    print(f"    Page {page} (W{w}): ERROR — {e}")
-
-            # Summary
-            print("\n  ═══ PARALLEL RESULTS ═══")
-            print(f"  Pages:     {max_pages}")
-            print(f"  Workers:   {active_workers}")
-            print(f"  Scanned:   {total_scanned}")
-            print(f"  Viable:    {total_viable}")
-            print(f"  Hit rate:  {total_viable/max(total_scanned,1)*100:.0f}%")
-
-        # Run non-loop tasks sequentially (login, lead entry)
-        if non_loop_tasks:
-            print(f"\n  Running {len(non_loop_tasks)} sequential tasks...")
-            seq_suite = dict(task_suite)
-            seq_suite["tasks"] = non_loop_tasks
-            seq_contents = json.dumps(seq_suite)
-
-            executor_fn = EXECUTOR_MAP.get(model, run_cua_1gpu)
-            kwargs = {
-                "task_file_contents": seq_contents,
-                "max_steps": max_steps, "max_retries": max_retries,
-            }
-            if model == "claude":
-                kwargs["claude_model"] = claude_model
-            result = executor_fn.remote(**kwargs)
-            print(f"  Sequential: {json.dumps(result, indent=2)}")
-
-        return
-
     # ── Single worker (default) ──────────────────────────────────
+    # The legacy ``task.loop`` + ``_make_page_task`` parallel path
+    # (#598) was removed in #618 in favor of the loop_groups-driven
+    # fan-out above. Plans that used the hand-authored ``task.loop``
+    # schema with ``--task-file`` now run on a single worker; convert
+    # to the micro-plan + ``--micro`` path to opt back into parallel
+    # extraction.
     executor_fn = EXECUTOR_MAP.get(model, run_cua_1gpu)
     gpu_desc = f"{cua_config['tp']}× A100" if cua_config['tp'] > 0 else "no GPU (API)"
     print(f"\n  Launching {cua_config['name']} on Modal ({gpu_desc})...")
