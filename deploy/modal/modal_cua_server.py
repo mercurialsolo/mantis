@@ -892,6 +892,19 @@ def _run_holo3_executor(
             max_recoveries_per_step=task_suite.get("_max_recoveries_per_step"),
         )
 
+        # #627: bind a cross-worker shared seen-URL set from the suite
+        # metadata. Modal orchestrator sets ``_fanout_seen_dict_name``
+        # before spawning; workers re-attach to the same modal.Dict by
+        # that name so a listing already extracted by one worker won't
+        # be re-extracted by a sibling. Defaults to NullSharedSeenSet
+        # (no-op) when the field is absent — preserves single-worker
+        # behaviour.
+        try:
+            from mantis_agent.gym.fanout_runner import build_shared_seen_set
+            micro_runner._shared_seen_set = build_shared_seen_set(task_suite)
+        except Exception as exc:  # noqa: BLE001 — never block a run
+            print(f"  WARNING: shared seen-set init failed: {exc}")
+
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
         # API container's ``action=reasoning_trace`` reads this file
         # so a viewer overlay can render a structured timeline of
@@ -2803,6 +2816,28 @@ def main(
             find_url_collect_group, prepare_modal_partitions,
             prepare_phase1_suite, prepare_phase2_suites,
         )
+
+        # #627: create a per-run shared seen-URL set keyed by a unique
+        # dict name. The name lands on every spawned sub-suite via
+        # ``_fanout_seen_dict_name`` so workers attach to the same
+        # modal.Dict on their side. Modal Dicts created with
+        # ``create_if_missing=True`` are GC'd by Modal after a TTL —
+        # we don't explicitly delete here.
+        import uuid as _uuid
+        shared_dict_name = (
+            f"mantis-fanout-seen-{_uuid.uuid4().hex[:12]}"
+        )
+        # Pre-create the dict so spawn-time attach is guaranteed to
+        # find it (the worker's ``modal.Dict.from_name(name,
+        # create_if_missing=True)`` would also work, but pre-creating
+        # surfaces wiring errors here instead of in every worker.
+        try:
+            import modal as _modal
+            _modal.Dict.from_name(shared_dict_name, create_if_missing=True)
+            task_suite["_fanout_seen_dict_name"] = shared_dict_name
+            print(f"\n  [shared-seen] created Modal Dict: {shared_dict_name}")
+        except Exception as exc:
+            print(f"  WARNING: shared-seen Dict init failed ({exc}) — running without cross-worker dedup")
 
         # ── #628: Phase-1/Phase-2 path for parallelizable_url_collect ─
         # Prefer this over per-page partitioning when the plan exposes

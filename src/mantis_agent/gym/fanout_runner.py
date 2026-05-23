@@ -32,12 +32,145 @@ import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from ..plan_decomposer import LoopGroup, MicroIntent, MicroPlan
 from .checkpoint import StepResult
 
 logger = logging.getLogger(__name__)
+
+
+# ── #627: shared seen-URL set across fan-out workers ────────────────────
+
+
+class SharedSeenSet(Protocol):
+    """Cross-worker seen-URL store.
+
+    Each fan-out worker reads from / writes to the same logical set so
+    a listing already extracted by one worker won't be re-clicked +
+    re-extracted by a sibling. Per-container dedup
+    (``ListingsScanner.is_duplicate``) catches within-container repeats;
+    this protocol catches cross-container repeats that featured /
+    sponsored listings cause when they appear on multiple result pages.
+    """
+
+    def contains(self, url: str) -> bool: ...
+    def add(self, url: str) -> None: ...
+    def size(self) -> int: ...
+
+
+class NullSharedSeenSet:
+    """Default implementation — every workload starts with this until a
+    real backend (Modal Dict) is wired. ``contains`` always returns
+    False, ``add`` is a no-op, ``size`` is always 0. Lets the dedup
+    plumbing exist on every code path without forcing every test
+    fixture to mock a real backend.
+    """
+
+    def contains(self, url: str) -> bool:  # noqa: ARG002
+        return False
+
+    def add(self, url: str) -> None:
+        pass
+
+    def size(self) -> int:
+        return 0
+
+
+class _InMemorySharedSeenSet:
+    """In-process backend — for tests and the local fan-out runner.
+    Backed by a plain ``set[str]``; no IPC, no thread safety.
+    """
+
+    def __init__(self) -> None:
+        self._urls: set[str] = set()
+
+    def contains(self, url: str) -> bool:
+        return _normalize_listing_url(url) in self._urls
+
+    def add(self, url: str) -> None:
+        normalized = _normalize_listing_url(url)
+        if normalized:
+            self._urls.add(normalized)
+
+    def size(self) -> int:
+        return len(self._urls)
+
+
+class _ModalDictSharedSeenSet:
+    """Modal Dict backend — used in production fan-out. Wraps
+    :class:`modal.Dict.from_name` keyed by a per-run dict name so all
+    spawned workers attach to the same logical set.
+
+    URL normalization matches :func:`_normalize_listing_url` so keys
+    line up with the orchestrator's :func:`dedup_leads_by_url` pass.
+
+    Modal Dicts are atomic on write but reads/writes are network calls;
+    cost per check is ~1-2 ms. Worth it because the alternative is a
+    full Claude extract (~$0.20, 30-60s) on a duplicate.
+    """
+
+    def __init__(self, dict_name: str) -> None:
+        import modal
+        self._name = dict_name
+        self._dict = modal.Dict.from_name(dict_name, create_if_missing=True)
+
+    def contains(self, url: str) -> bool:
+        normalized = _normalize_listing_url(url)
+        if not normalized:
+            return False
+        try:
+            return normalized in self._dict
+        except Exception as exc:  # noqa: BLE001 — never break a run
+            logger.warning("[shared-seen] contains() raised: %s", exc)
+            return False
+
+    def add(self, url: str) -> None:
+        normalized = _normalize_listing_url(url)
+        if not normalized:
+            return
+        try:
+            # ``put`` is atomic; value isn't read anywhere — using a
+            # tiny sentinel (1) keeps wire size minimal vs storing the
+            # URL again as both key and value.
+            self._dict.put(normalized, 1)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[shared-seen] add() raised: %s", exc)
+
+    def size(self) -> int:
+        try:
+            return len(self._dict)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[shared-seen] size() raised: %s", exc)
+            return 0
+
+
+def build_shared_seen_set(suite_dict: dict) -> SharedSeenSet:
+    """Construct the right backend for a worker based on suite metadata.
+
+    Resolution order:
+
+      * ``_fanout_seen_dict_name`` in suite + ``modal`` importable →
+        :class:`_ModalDictSharedSeenSet` keyed by that name.
+      * Otherwise (no fan-out, no Modal, tests) → :class:`NullSharedSeenSet`.
+
+    The Modal orchestrator generates the dict name once per run (UUID
+    or run_id) and writes it into every spawned worker's task_suite
+    BEFORE spawning. Workers re-attach via ``from_name`` so all see
+    the same logical set.
+    """
+    dict_name = suite_dict.get("_fanout_seen_dict_name", "")
+    if not dict_name:
+        return NullSharedSeenSet()
+    try:
+        return _ModalDictSharedSeenSet(str(dict_name))
+    except Exception as exc:  # noqa: BLE001 — Modal not importable / not on Modal
+        logger.warning(
+            "[shared-seen] modal.Dict.from_name(%s) failed (%s) — "
+            "falling back to NullSharedSeenSet",
+            dict_name, exc,
+        )
+        return NullSharedSeenSet()
 
 
 def fanout_enabled() -> bool:

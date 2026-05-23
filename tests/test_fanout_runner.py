@@ -25,7 +25,10 @@ from mantis_agent.gym.checkpoint import StepResult
 from mantis_agent.gym.fanout_runner import (
     DEFAULT_PAGINATION_URL_TEMPLATE,
     LocalFanoutRunner,
+    NullSharedSeenSet,
+    _InMemorySharedSeenSet,
     _normalize_listing_url,
+    build_shared_seen_set,
     build_worker_subplan,
     dedup_leads_by_url,
     fanout_enabled,
@@ -985,3 +988,76 @@ def test_read_partition_result_collected_urls_defaults_empty() -> None:
     """Phase-2 / sequential workers have no collected_urls — empty list."""
     out = read_partition_result({"viable": 27, "leads_with_phone": 1})
     assert out["collected_urls"] == []
+
+
+# ── #627: shared seen-URL set ───────────────────────────────────────────
+
+
+def test_null_shared_seen_is_noop() -> None:
+    """Default backend on every runner. ``contains`` never hits;
+    ``add`` is silent; ``size`` is always zero — preserves single-worker
+    behaviour without conditional dedup branches on the hot path."""
+    s = NullSharedSeenSet()
+    s.add("https://x.com/boat/1/")
+    assert s.contains("https://x.com/boat/1/") is False
+    assert s.size() == 0
+
+
+def test_inmemory_shared_seen_basic_round_trip() -> None:
+    s = _InMemorySharedSeenSet()
+    s.add("https://x.com/boat/1/")
+    assert s.contains("https://x.com/boat/1/") is True
+    assert s.size() == 1
+
+
+def test_inmemory_shared_seen_normalizes_url() -> None:
+    """Trailing slash and case drift collapse — keys line up with
+    the merge-step ``dedup_leads_by_url`` normalization."""
+    s = _InMemorySharedSeenSet()
+    s.add("https://Example.com/Boat/1/")
+    assert s.contains("https://example.com/boat/1") is True
+    assert s.contains("https://example.com/boat/1/") is True
+    assert s.size() == 1
+
+
+def test_inmemory_shared_seen_ignores_empty_urls() -> None:
+    """Empty / whitespace-only URLs aren't keys — they pass through the
+    normalizer to ``""``, which we don't add (avoids a single 'no URL'
+    bucket swallowing everything that fails extract_url)."""
+    s = _InMemorySharedSeenSet()
+    s.add("")
+    s.add("   ")
+    assert s.size() == 0
+
+
+def test_build_shared_seen_set_returns_null_without_dict_name() -> None:
+    """No ``_fanout_seen_dict_name`` in suite → NullSharedSeenSet.
+    Pure local / non-fanout runs hit this path."""
+    s = build_shared_seen_set({})
+    assert isinstance(s, NullSharedSeenSet)
+    s2 = build_shared_seen_set({"_micro_plan": [{"type": "navigate"}]})
+    assert isinstance(s2, NullSharedSeenSet)
+
+
+def test_build_shared_seen_set_falls_back_when_modal_raises(monkeypatch) -> None:
+    """Suite has a dict name but ``modal.Dict.from_name`` raises (e.g.
+    not authenticated to Modal, or running outside a Modal container) →
+    fall back to NullSharedSeenSet with a WARNING. Prevents fan-out
+    runs from crashing when the shared store can't be attached."""
+    import modal
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated: not on Modal")
+
+    monkeypatch.setattr(modal.Dict, "from_name", _boom)
+    s = build_shared_seen_set({"_fanout_seen_dict_name": "test-name"})
+    assert isinstance(s, NullSharedSeenSet)
+
+
+def test_build_shared_seen_set_returns_modal_backend_when_available() -> None:
+    """When modal is importable AND from_name succeeds (test env can
+    do this since modal ships its in-process Dict stub), the build
+    helper returns the Modal backend, not Null."""
+    from mantis_agent.gym.fanout_runner import _ModalDictSharedSeenSet
+    s = build_shared_seen_set({"_fanout_seen_dict_name": "test-unit-noop"})
+    assert isinstance(s, _ModalDictSharedSeenSet)
