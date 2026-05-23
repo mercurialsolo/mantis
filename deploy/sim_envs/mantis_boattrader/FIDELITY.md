@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=87** (2026-05-23) — SRP search-box "Try …" prefix hides on focus (not just on typing) — matches real BT's instant clear when user clicks into the input.
+Last updated: **v=89** (2026-05-23) — Search-box sparkle icon resized to 16×16 (was 20×20) using real BT's exact ai.svg paths + tightened wrapper; click anywhere in the search field (sparkle, "Try …" overlay, empty area) now focuses the input.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `yv2fifjb0rvkofrhwhlzmejofsb1mzwo`)
@@ -83,7 +83,9 @@ the current state. Status legend:
 | **"Try …" rotator** (SRP only) | 3-line vertical column inside `.ai-search-v2__rotator` (overflow:hidden, 18px tall), `@keyframes 9s ease-in-out infinite alternate ai-try-rotate` cycling translateY 0→-18→-36 across "fishing boats under $80k", "Sea Ray under 40 feet", "pontoon boats near me" | Same — 3 `.ai-search-v2__try-text` spans, same 9s alternate animation, same 3 example queries (v=86). Native input placeholder emptied; visible suggestion comes from the span overlay. | ✅ |
 | Rotator hides on focus | Real BT clears `.ai-search-v2__try` the moment user clicks into the input (before any typing) | Sandbox uses `.ai-search-v2__form:focus-within .ai-search-v2__try { display: none }` (v=87) | ✅ |
 | Rotator hides on typed value | Real BT keeps prefix hidden when input has content (even if focus moved elsewhere) | Sandbox uses `:has(input:not(:placeholder-shown):not([value=""]))` (v=86) | ✅ |
-| Sparkle icon | small SVG ai.svg (4-point star) | inline SVG 4-point star | ✅ |
+| Sparkle icon | `<img src="/static/legacy/img/icons/ai.svg" width="16" height="16">` — 4-point star + two small "+" accents (top-right, bottom-left), all stroked/filled `#2566B0` | Inline SVG transcribed from real BT's ai.svg, 16×16 viewBox, same paths + same `#2566B0` (v=88 — previously 20×20 with different path data) | ✅ |
+| Sparkle wrapper geometry | natural 16px line, no padding | `.ai-search-v2__icon { width:16; height:16; line-height:0; inline-flex }` so the 18px parent font-size doesn't expand it to 20×26 (v=88) | ✅ |
+| Click anywhere → focus input | Real BT overlays `.ai-search-v2__try` via `position:absolute` + `pointer-events:none`; click on the span passes through to the input | Sandbox uses inline-flex layout (span takes real space), so adds a `mousedown` handler in base.html: any click in the form that isn't on submit/links calls `inp.focus()` + moves caret to end. CSS `cursor: text` + `user-select: none` on the span match the affordance (v=89). | ✅ |
 | Submit icon | magnifier SVG | inline SVG circle+handle | ✅ |
 
 ### Pre-qualify banner
@@ -388,6 +390,30 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=89` Search box: click anywhere focuses the input:
+       • User reported screenshot showing "Try" text getting highlight-
+         selected instead of focusing input when clicked. On real BT,
+         clicks anywhere in the search field (sparkle, "Try …" overlay,
+         empty area) focus the input. Real BT achieves this via
+         `position:absolute` + `pointer-events:none` on the overlay.
+       • Sandbox uses inline-flex layout (the overlay actually takes
+         space), so a `mousedown` handler in base.html intercepts any
+         click in `.ai-search-v2__form` not landing on the submit button
+         and calls `inp.focus()` + `setSelectionRange(end, end)`.
+       • CSS: `.ai-search-v2__try { cursor: text; user-select: none }`
+         so the visual affordance matches and dragging across the
+         overlay doesn't select text.
+`v=88` Search-box sparkle icon resized to 16×16:
+       • Real BT's `/static/legacy/img/icons/ai.svg` is 16×16. Sandbox
+         was using a 20×20 inline SVG with different path data.
+       • Replaced sandbox's SVG path with the exact path data from
+         real BT (4-point burst star + two "+" accent marks at
+         top-right and bottom-left, all `#2566B0` stroke+fill).
+       • `.ai-search-v2__icon` wrapper: `width: 16px; height: 16px;
+         line-height: 0; display: inline-flex` so the 18px parent
+         font-size (from `.srp-search`) doesn't expand the wrapper to
+         the 20×26 it was before this fix.
+       • Cache-buster bumped to `?v=88` then `?v=89`.
 `v=87` SRP search-box prefix hides on FOCUS, not just on typing:
        • Bug found via user-supplied before/after screenshots — real BT
          clears the "Try …" prefix the moment the user clicks into the

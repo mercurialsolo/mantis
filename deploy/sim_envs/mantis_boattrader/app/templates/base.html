@@ -9,7 +9,7 @@
      (San Francisco on macOS, Segoe UI on Windows). Loading Roboto Medium
      from Google Fonts makes our text render heavier than real BT, so we
      match by NOT loading Roboto and letting the system fallback render. #}
-  <link rel="stylesheet" href="/static/app.css?v=87" />
+  <link rel="stylesheet" href="/static/app.css?v=89" />
   <meta name="description" content="{% block description %}Buy and sell new & used boats. Find boats, yachts, sailboats, fishing boats, pontoons, and more.{% endblock %}" />
 </head>
 <body class="bt-body">
@@ -194,6 +194,28 @@
         // Debounce briefly so the last keystroke renders before submit.
         t = setTimeout(function(){ form.submit(); }, 250);
       }
+    });
+  })();
+  // Click anywhere in the AI-search field (sparkle icon, "Try …"
+  // overlay, empty area) focuses the input — matches real boattrader.
+  // Without this, clicks on the .ai-search-v2__try span just select
+  // the text and never reach the input cursor.
+  (function(){
+    document.querySelectorAll('.ai-search-v2__form').forEach(function(form){
+      var inp = form.querySelector('.ai-search-v2__input');
+      if (!inp) return;
+      form.addEventListener('mousedown', function(ev){
+        // Submit button + any links stay as-is.
+        if (ev.target.closest('button, a, [type="submit"]')) return;
+        if (document.activeElement === inp) return;
+        ev.preventDefault();
+        inp.focus();
+        // Move caret to end on focus (real BT does this implicitly via
+        // its overlay-with-pointer-events:none approach; we replicate
+        // the user-visible result).
+        var v = inp.value;
+        try { inp.setSelectionRange(v.length, v.length); } catch (e) {}
+      });
     });
   })();
   // Search-as-you-type filter for Boat Type / Make lists — hides

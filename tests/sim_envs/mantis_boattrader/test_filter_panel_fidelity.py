@@ -273,6 +273,44 @@ def test_rotator_animation_in_css(base_css):
     assert "height: 18px" in rotator_block
 
 
+def test_sparkle_icon_is_16x16(srp_html, base_css):
+    """v=88: sparkle icon resized from sandbox's old 20×20 inline SVG to
+    match real BT's 16×16 ai.svg. Wrapper uses line-height:0 +
+    inline-flex so the 18px parent font-size doesn't add vertical
+    padding (was rendering at 20×26 instead of 16×16)."""
+    # SVG width/height attrs must be 16
+    assert 'width="16" height="16" viewBox="0 0 16 16"' in srp_html, (
+        "sparkle SVG must be 16x16 (real BT uses ai.svg at this size); "
+        "if you see width=\"20\", v=87's 20x20 inline SVG regressed back in"
+    )
+    # Wrapper rule pins to 16x16 with line-height:0
+    block = _rule_block(base_css, ".ai-search-v2__icon {")
+    assert "width: 16px" in block
+    assert "height: 16px" in block
+    assert "line-height: 0" in block
+
+
+def test_search_form_focuses_input_on_any_click(client, base_css):
+    """v=89: clicks anywhere in the .ai-search-v2__form (sparkle, "Try …"
+    overlay, empty area) must focus the input. Without this fix, clicks
+    on the .ai-search-v2__try span just selected its text. The fix is a
+    `mousedown` handler in base.html that calls `inp.focus()` for any
+    non-submit-button target, plus `cursor: text` on the span so the
+    affordance is visible."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    # JS handler must exist
+    assert ".ai-search-v2__form" in html
+    assert "form.addEventListener('mousedown'" in html
+    assert "inp.focus()" in html
+    # The span gets `cursor: text` so users don't see the I-beam → text
+    # cursor mismatch (CSS).
+    try_block = _rule_block(base_css, ".ai-search-v2__try {")
+    assert "cursor: text" in try_block
+    assert "user-select: none" in try_block
+
+
 def test_rotator_hides_on_focus(base_css):
     """v=87: real BT clears the 'Try …' prefix the moment you click
     into the input (before any typing). Sandbox uses `:focus-within`

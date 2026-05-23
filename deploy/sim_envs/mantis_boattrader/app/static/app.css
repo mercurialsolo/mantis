@@ -188,7 +188,25 @@ header.main {
   padding: 6px 6px 6px 12px;
   margin-bottom: 10px;
 }
-.ai-search-v2__icon { color: var(--bt-blue); font-size: 16px; margin-right: 6px; }
+/* The AI sparkle is a 16×16 SVG copied from real BT's
+   /static/legacy/img/icons/ai.svg (a 4-point star + two small "+"
+   accents at top-right and bottom-left, all #2566B0). The wrapper
+   uses inline-flex with line-height:0 so the icon stays at exact
+   16×16 and centers cleanly with the input baseline — without this
+   the parent .srp-search's 18px font-size pushed the wrapper to
+   ~26px tall. */
+.ai-search-v2__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin-right: 8px;
+  color: var(--bt-blue);
+  line-height: 0;
+}
+.ai-search-v2__icon svg { display: block; width: 16px; height: 16px; }
 /* Real BT renders "Try" + a vertically-rotating quoted suggestion in a
    clipped 18px-tall window — the inner column has 3 suggestion lines
    and animates with `9s ease-in-out infinite alternate ai-try-rotate`
@@ -200,6 +218,11 @@ header.main {
   line-height: 1; margin-right: 6px;
   white-space: nowrap;
   flex: 0 0 auto;
+  /* Mirror real BT: clicks on the "Try …" overlay should focus the
+     input, not select the text. The form-level click handler in
+     base.html does the focus; this just makes the affordance match. */
+  cursor: text;
+  user-select: none;
 }
 .ai-search-v2__rotator {
   display: inline-block;
