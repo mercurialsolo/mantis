@@ -1,0 +1,49 @@
+{
+  "_meta": {
+    "captured_at": null,
+    "url": "https://www.boattrader.com/",
+    "status": "TODO — placeholder, not yet probed",
+    "note": "This file lists what needs to be captured. Run a Chrome MCP probe pass against the real BT home page to fill in concrete measurements. SRP corpus is the template (../srp/structural.json)."
+  },
+
+  "_todo_sections": [
+    {
+      "name": "hero_search_panel",
+      "note": "Main blue hero card with AI-search input ('Try …'), location field, condition+type quick filters. SRP search bar uses the same .ai-search-v2 pattern — see FIDELITY.md 'Search bar (Try + quote)' section for the matched spec we already have."
+    },
+    {
+      "name": "ad_carousel_hero",
+      "note": "Rotating hero ad strip. Sandbox uses 6 procedural SVG creatives. Out-of-scope per SCOPE.md — visual stub only."
+    },
+    {
+      "name": "boats_near_you_section",
+      "note": "Card rail of ~6 nearby boats based on geolocation. Sandbox uses fixed seed-deterministic list."
+    },
+    {
+      "name": "featured_brands",
+      "note": "Grid of brand logos (Boston Whaler, Sea Ray, Bayliner, etc.) linking to /boats/?make=X."
+    },
+    {
+      "name": "popular_boat_types",
+      "note": "Tile grid: Center Console, Bowrider, Yacht, Pontoon, etc."
+    },
+    {
+      "name": "popular_boats",
+      "note": "Listing card rail (4-5 cards) — same shape as SRP listing card."
+    },
+    {
+      "name": "mid_ad_strip",
+      "note": "728x90 banner ad. Sandbox stub."
+    },
+    {
+      "name": "footer_ad_strip",
+      "note": "728x90 banner ad above footer."
+    },
+    {
+      "name": "recent_articles",
+      "note": "Editorial card rail linking to /articles/..."
+    }
+  ],
+
+  "_capture_methodology": "Open https://www.boattrader.com/ in Chrome MCP, then run the same structural probe pattern as srp/structural.json. Reuse FIDELITY.md rows where the element shape matches what the SRP/BDP already captured (e.g. .ai-search-v2 panel, listing card)."
+}

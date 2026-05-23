@@ -9,7 +9,7 @@
      (San Francisco on macOS, Segoe UI on Windows). Loading Roboto Medium
      from Google Fonts makes our text render heavier than real BT, so we
      match by NOT loading Roboto and letting the system fallback render. #}
-  <link rel="stylesheet" href="/static/app.css?v=81" />
+  <link rel="stylesheet" href="/static/app.css?v=84" />
   <meta name="description" content="{% block description %}Buy and sell new & used boats. Find boats, yachts, sailboats, fishing boats, pontoons, and more.{% endblock %}" />
 </head>
 <body class="bt-body">
@@ -194,6 +194,50 @@
         // Debounce briefly so the last keystroke renders before submit.
         t = setTimeout(function(){ form.submit(); }, 250);
       }
+    });
+  })();
+  // Search-as-you-type filter for Boat Type / Make lists — hides
+  // <li> items whose label doesn't contain the typed substring.
+  // Also wires single-select submit: changing a checkbox in
+  // .filter-options unchecks the siblings under the same name=, then
+  // submits the form. Matches real boattrader behavior of navigating
+  // to /boats/?type=X on selection (backend is single-select; real BT's
+  // visual checkbox UI just renders the same selection model).
+  (function(){
+    var form = document.getElementById('filters-form');
+    if (!form) return;
+    document.querySelectorAll('.filter-search').forEach(function(input){
+      var targetId = input.getAttribute('data-search-target');
+      var list = targetId && document.getElementById(targetId);
+      if (!list) return;
+      input.addEventListener('input', function(){
+        var q = input.value.trim().toLowerCase();
+        list.querySelectorAll('li').forEach(function(li){
+          var lbl = li.querySelector('.filter-opt-label');
+          var text = lbl ? lbl.textContent.toLowerCase() : '';
+          var cb = li.querySelector('input[type="checkbox"]');
+          var isAll = cb && !cb.value;
+          if (!q || isAll || text.indexOf(q) !== -1) li.classList.remove('hidden');
+          else li.classList.add('hidden');
+        });
+      });
+    });
+    document.querySelectorAll('.filter-options').forEach(function(ul){
+      var name = ul.getAttribute('data-filter-name');
+      if (!name) return;
+      ul.addEventListener('change', function(ev){
+        var target = ev.target;
+        if (!target.matches || !target.matches('input[type="checkbox"][name="'+name+'"]')) return;
+        if (!target.checked) {
+          // Unchecking falls back to selecting "All" (empty value).
+          ul.querySelectorAll('input[type="checkbox"]').forEach(function(cb){ cb.checked = !cb.value; });
+        } else {
+          ul.querySelectorAll('input[type="checkbox"]').forEach(function(cb){
+            if (cb !== target) cb.checked = false;
+          });
+        }
+        form.submit();
+      });
     });
   })();
 </script>

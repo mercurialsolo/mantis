@@ -112,7 +112,7 @@
               <a class="price-drop-label">
                 Price Drop<span class="info-icon" aria-label="What is Price Drop?"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></span>
               </a>
-              <label class="switch" aria-label="Price Drop only">
+              <label class="switch" aria-label="Price Drop">
                 <input type="checkbox" name="price_drop" value="1" {% if f.price_drop %}checked{% endif %} />
                 <span class="switch-toggle"></span>
               </label>
@@ -120,27 +120,43 @@
           </div>
         </details>
 
-        <details class="filter-group" data-testid="filter-type" open>
+        <details class="filter-group" data-testid="filter-type">
           <summary><span class="filter-group-label">Boat Type</span><span class="filter-chevron"></span></summary>
           <div class="filter-group-body">
-            <select class="filter-select" name="type">
-              <option value="">All Boat Types</option>
+            <div class="filter-search-wrap">
+              <span class="filter-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
+              <input class="filter-input filter-search" type="text" placeholder="Search Boat Type" data-search-target="type-list" />
+            </div>
+            <ul class="filter-options" id="type-list" data-filter-name="type">
+              <li class="{% if not f.type %}selected{% endif %}">
+                <label><input type="checkbox" name="type" value="" {% if not f.type %}checked{% endif %} /><span class="filter-opt-checkbox" aria-hidden="true"></span><span class="filter-opt-label">All Boat Types</span></label>
+              </li>
               {% for t, n in facets.by_type.items() %}
-                <option value="{{ t }}" {% if f.type==t %}selected{% endif %}>{{ t }} ({{ n }})</option>
+              <li class="{% if f.type==t %}selected{% endif %}">
+                <label><input type="checkbox" name="type" value="{{ t }}" {% if f.type==t %}checked{% endif %} /><span class="filter-opt-checkbox" aria-hidden="true"></span><span class="filter-opt-label">{{ t }}</span><span class="filter-opt-count">({{ n }})</span></label>
+              </li>
               {% endfor %}
-            </select>
+            </ul>
           </div>
         </details>
 
-        <details class="filter-group" data-testid="filter-make" open>
+        <details class="filter-group" data-testid="filter-make">
           <summary><span class="filter-group-label">Make</span><span class="filter-chevron"></span></summary>
           <div class="filter-group-body">
-            <select class="filter-select" name="make">
-              <option value="">All Makes</option>
+            <div class="filter-search-wrap">
+              <span class="filter-search-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></span>
+              <input class="filter-input filter-search" type="text" placeholder="Search Make" data-search-target="make-list" />
+            </div>
+            <ul class="filter-options" id="make-list" data-filter-name="make">
+              <li class="{% if not f.make %}selected{% endif %}">
+                <label><input type="checkbox" name="make" value="" {% if not f.make %}checked{% endif %} /><span class="filter-opt-checkbox" aria-hidden="true"></span><span class="filter-opt-label">All Makes</span></label>
+              </li>
               {% for m, n in facets.by_make.items() %}
-                <option value="{{ m }}" {% if f.make==m %}selected{% endif %}>{{ m }} ({{ n }})</option>
+              <li class="{% if f.make==m %}selected{% endif %}">
+                <label><input type="checkbox" name="make" value="{{ m }}" {% if f.make==m %}checked{% endif %} /><span class="filter-opt-checkbox" aria-hidden="true"></span><span class="filter-opt-label">{{ m }}</span><span class="filter-opt-count">({{ n }})</span></label>
+              </li>
               {% endfor %}
-            </select>
+            </ul>
           </div>
         </details>
 
@@ -183,28 +199,32 @@
         <details class="filter-group" data-testid="filter-fuel">
           <summary><span class="filter-group-label">Fuel Type</span><span class="filter-chevron"></span></summary>
           <div class="filter-group-body">
-            <select class="filter-select" name="fuel">
-              <option value="">All Fuel Types</option>
-              <option value="gas">Gas</option>
-              <option value="diesel">Diesel</option>
-              <option value="electric">Electric</option>
-              <option value="other">Other</option>
-            </select>
+            <ul class="filter-options" data-filter-name="fuel">
+              <li class="{% if not f.fuel %}selected{% endif %}">
+                <label><input type="checkbox" name="fuel" value="" {% if not f.fuel %}checked{% endif %} /><span class="filter-opt-checkbox" aria-hidden="true"></span><span class="filter-opt-label">All Fuel Types</span></label>
+              </li>
+              {% for v, lbl in [('gas','Gas'),('diesel','Diesel'),('electric','Electric'),('other','Other')] %}
+              <li class="{% if f.fuel==v %}selected{% endif %}">
+                <label><input type="checkbox" name="fuel" value="{{ v }}" {% if f.fuel==v %}checked{% endif %} /><span class="filter-opt-checkbox" aria-hidden="true"></span><span class="filter-opt-label">{{ lbl }}</span></label>
+              </li>
+              {% endfor %}
+            </ul>
           </div>
         </details>
 
         <details class="filter-group" data-testid="filter-hull">
           <summary><span class="filter-group-label">Hull</span><span class="filter-chevron"></span></summary>
           <div class="filter-group-body">
-            <select class="filter-select" name="hull">
-              <option value="">All Hull Types</option>
-              <option value="fiberglass">Fiberglass</option>
-              <option value="aluminum">Aluminum</option>
-              <option value="composite">Composite</option>
-              <option value="steel">Steel</option>
-              <option value="wood">Wood</option>
-              <option value="other">Other</option>
-            </select>
+            <ul class="filter-options" data-filter-name="hull">
+              <li class="{% if not f.hull %}selected{% endif %}">
+                <label><input type="checkbox" name="hull" value="" {% if not f.hull %}checked{% endif %} /><span class="filter-opt-checkbox" aria-hidden="true"></span><span class="filter-opt-label">All Hull Types</span></label>
+              </li>
+              {% for v, lbl in [('fiberglass','Fiberglass'),('aluminum','Aluminum'),('composite','Composite'),('steel','Steel'),('wood','Wood'),('other','Other')] %}
+              <li class="{% if f.hull==v %}selected{% endif %}">
+                <label><input type="checkbox" name="hull" value="{{ v }}" {% if f.hull==v %}checked{% endif %} /><span class="filter-opt-checkbox" aria-hidden="true"></span><span class="filter-opt-label">{{ lbl }}</span></label>
+              </li>
+              {% endfor %}
+            </ul>
           </div>
         </details>
 

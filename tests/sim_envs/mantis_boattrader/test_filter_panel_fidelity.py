@@ -1,0 +1,308 @@
+"""Structural fidelity tests for the SRP filter panel.
+
+These tests don't pixel-diff against real boattrader.com — that's the
+job of ``deploy/sim_envs/mantis_boattrader/scripts/perceptual_diff.py``
+(developer-local). Instead they assert the DOM has the structural
+anchors that the v=82..v=84 fidelity passes locked in: the toggle
+switch, the search-as-you-type filter list, the explicit Zip<br>Code
+wrap, default-closed Boat Type / Make, the cache-buster pin, etc.
+
+The idea is to catch silent regressions when someone refactors the
+template or CSS — e.g. accidentally putting back the old ``<select>``
+or removing the ``.switch`` wrapper.
+
+Per ``FIDELITY_BUILD_FROM_SCRATCH_PROMPT.md`` Phase 5, this is the CI
+gate that runs on every PR. The expensive perceptual harness stays
+opt-in for local fidelity work.
+"""
+
+from __future__ import annotations
+
+import re
+
+import pytest
+
+
+pytest.importorskip("fastapi")
+pytest.importorskip("httpx")
+pytest.importorskip("jinja2")
+pytest.importorskip("multipart")
+
+
+@pytest.fixture
+def client():
+    from fastapi.testclient import TestClient  # noqa: PLC0415
+
+    from app.main import create_app  # noqa: PLC0415
+
+    app = create_app()
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture
+def srp_html(client) -> str:
+    r = client.get("/boats/")
+    assert r.status_code == 200, r.text[:400]
+    return r.text
+
+
+@pytest.fixture
+def base_css(client) -> str:
+    r = client.get("/static/app.css")
+    assert r.status_code == 200
+    return r.text
+
+
+# ── Save Search + outer card chrome (v=82) ────────────────────────────
+
+
+def test_srp_renders(srp_html):
+    assert 'class="srp"' in srp_html
+    assert 'data-testid="save-search"' in srp_html
+
+
+def test_filter_card_uses_canonical_shadow(base_css):
+    """Outer filter card chrome — 1px outline + 6px radius + project
+    shadow var. Set in v=82 to pair with the loan-calc card."""
+    assert ".filters-form {" in base_css
+    # Pull the .filters-form rule block.
+    block = _rule_block(base_css, ".filters-form {")
+    assert "background: #fff" in block.replace(" ", "").replace("\n", "") or \
+           "background:#fff" in block.replace(" ", "")
+    assert "border: 1px solid #e0e0e0" in block
+    assert "border-radius: 6px" in block
+    assert "var(--bt-shadow)" in block
+
+
+def test_section_divider_is_2px(base_css):
+    """v=82: section dividers bumped from 1px to 2px to match real BT."""
+    block = _rule_block(base_css, ".filter-group {")
+    assert "border-bottom: 2px solid #ededed" in block
+
+
+# ── Location segmented control (v=82) ─────────────────────────────────
+
+
+def test_zip_code_label_wraps_on_two_lines(srp_html):
+    """v=82: 'Zip Code' label carries an explicit <br> so it wraps to two
+    lines like real BT's narrower Roboto rendering. Plain 'Zip Code' text
+    in the active tab would mean the wrap regressed."""
+    assert 'class="zip-tab active" data-tab="zip">Zip<br>Code<' in srp_html
+
+
+def test_zip_row_has_fixed_widths(base_css):
+    """v=82: Zip input pinned to 100px (was flex:1 stretch), miles 106px."""
+    zip_input_block = _rule_block(base_css, ".zip-row .zip-input {")
+    assert "width: 100px" in zip_input_block
+    assert "flex: 0 0 100px" in zip_input_block
+
+
+def test_use_my_location_underlined(base_css):
+    block = _rule_block(base_css, ".zip-use-location {")
+    assert "text-decoration: underline" in block
+    assert "font-size: 14px" in block
+
+
+def test_zip_input_focus_state_is_blue_border(base_css):
+    """v=82: focus uses a blue border + 0.5px ring (was 2px outline)."""
+    block = _rule_block(base_css, ".filter-select:focus, .filter-input:focus {")
+    assert "border-color: var(--bt-blue)" in block
+    assert "outline: none" in block
+
+
+# ── 5-digit zip auto-submit (v=82) ────────────────────────────────────
+
+
+def test_zip_auto_submit_js_present(client):
+    """The auto-submit JS lives in base.html. If it gets ripped out,
+    typing a 5-digit zip on the live site stops navigating."""
+    r = client.get("/")
+    assert r.status_code == 200
+    # The auto-submit regex is the unique signature.
+    assert "/^\\d{5}$/.test(zip.value)" in r.text
+    assert "form.submit()" in r.text
+
+
+# ── Price Drop toggle (v=83) ──────────────────────────────────────────
+
+
+def test_price_drop_is_toggle_not_checkbox(srp_html):
+    """v=83: replaced <label class="checkbox-row"> with a div containing
+    the new .switch toggle. The old checkbox-row in the price section
+    would be a regression."""
+    # The new structure
+    assert 'class="price-drop-row"' in srp_html
+    assert 'class="price-drop-label"' in srp_html
+    assert 'class="switch"' in srp_html
+    assert 'class="switch-toggle"' in srp_html
+    # The label text is "Price Drop" (not "Price Drop only" — v=83 fix)
+    assert ">Price Drop<" in srp_html
+    assert "Price Drop only" not in srp_html
+
+
+def test_price_drop_info_icon_present(srp_html):
+    """Inline-SVG info glyph next to the label."""
+    # Must contain the info-icon span + svg
+    assert 'class="info-icon"' in srp_html
+
+
+def test_switch_uses_has_input_checked(base_css):
+    """v=83: :has(input:checked) toggles bg → blue + slides thumb 24px."""
+    assert ".switch:has(input:checked)" in base_css
+    assert ".switch:has(input:checked) .switch-toggle" in base_css
+
+
+def test_switch_geometry_50x26(base_css):
+    """50×26 grey track matches real BT exactly."""
+    block = _rule_block(base_css, ".switch {")
+    assert "width: 50px" in block
+    assert "height: 26px" in block
+    assert "background: #cccccc" in block
+    assert "border-radius: 24px" in block
+
+
+def test_switch_thumb_22x22(base_css):
+    block = _rule_block(base_css, ".switch-toggle {")
+    assert "width: 22px" in block
+    assert "height: 22px" in block
+    assert "background: #ffffff" in block
+    assert "transition: left 0.2s" in block
+
+
+# ── Search-as-you-type dropdowns (v=84) ───────────────────────────────
+
+
+def test_boat_type_uses_search_list_not_select(srp_html):
+    """v=84: <select name="type"> was replaced with .filter-search input
+    + ul.filter-options. A regressed <select name="type"> would mean
+    the rework was reverted."""
+    assert '<select class="filter-select" name="type">' not in srp_html
+    assert 'data-search-target="type-list"' in srp_html
+    assert 'id="type-list"' in srp_html
+    assert 'placeholder="Search Boat Type"' in srp_html
+
+
+def test_make_uses_search_list_not_select(srp_html):
+    assert '<select class="filter-select" name="make">' not in srp_html
+    assert 'data-search-target="make-list"' in srp_html
+    assert 'id="make-list"' in srp_html
+    assert 'placeholder="Search Make"' in srp_html
+
+
+def test_fuel_uses_filter_options_not_select(srp_html):
+    assert '<select class="filter-select" name="fuel">' not in srp_html
+    assert 'data-filter-name="fuel"' in srp_html
+
+
+def test_hull_uses_filter_options_not_select(srp_html):
+    assert '<select class="filter-select" name="hull">' not in srp_html
+    assert 'data-filter-name="hull"' in srp_html
+
+
+def test_filter_options_scrollable_with_max_height(base_css):
+    """ul.filter-options must cap at 270px with overflow-y: auto to
+    match real BT's `<ul.opts>` spec."""
+    block = _rule_block(base_css, ".filter-options {")
+    assert "max-height: 270px" in block
+    assert "overflow-y: auto" in block
+
+
+def test_filter_opt_checkbox_styling(base_css):
+    """18×18 custom-styled checkbox with checkmark::after that flips to
+    blue when the underlying <input> is :checked."""
+    block = _rule_block(base_css, ".filter-opt-checkbox {")
+    assert "width: 18px" in block
+    assert "height: 18px" in block
+    after_block = _rule_block(base_css, ".filter-opt-checkbox::after {")
+    assert "transform: rotate(-45deg)" in after_block
+    checked_block = _rule_block(
+        base_css,
+        '.filter-options input[type="checkbox"]:checked + .filter-opt-checkbox {',
+    )
+    assert "background: var(--bt-blue)" in checked_block
+
+
+def test_boat_type_and_make_default_closed(srp_html):
+    """v=84: real BT renders these sections collapsed by default. The
+    `open` attribute on <details> would mean the regression came back."""
+    # Re-locate the filter-type / filter-make blocks and confirm no `open`.
+    type_block = _details_block(srp_html, 'data-testid="filter-type"')
+    make_block = _details_block(srp_html, 'data-testid="filter-make"')
+    assert "data-testid=\"filter-type\" open" not in type_block
+    assert "data-testid=\"filter-make\" open" not in make_block
+
+
+# ── Cache-buster pin ──────────────────────────────────────────────────
+
+
+def test_app_css_cache_buster_is_current(srp_html):
+    """The base template pins ?v=NN on app.css so a CSS edit invalidates
+    the browser cache. v=84 is the current pin. If a contributor adds CSS
+    without bumping this, deployed browsers will serve the stale file."""
+    m = re.search(r"/static/app\.css\?v=(\d+)", srp_html)
+    assert m, "app.css cache-buster not found in template"
+    version = int(m.group(1))
+    assert version >= 84, (
+        f"app.css cache-buster is at v={version}; bump it when shipping CSS edits"
+    )
+
+
+# ── SCOPE.md + prompt docs ────────────────────────────────────────────
+
+
+def test_scope_md_exists():
+    """Phase 0 doc per FIDELITY_BUILD_FROM_SCRATCH_PROMPT.md."""
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[3] / "deploy" / "sim_envs" / "mantis_boattrader" / "SCOPE.md"
+    assert p.exists(), f"missing {p}"
+    text = p.read_text()
+    # Should list at least the SRP route + filter interactions.
+    assert "/boats/" in text
+    assert "Out-of-scope" in text
+    assert "Done bar" in text
+
+
+def test_fidelity_agent_prompt_exists():
+    """Gap-fix playbook present (build-from-scratch lives in a separate
+    PR branch until it lands on main; once merged, add an assert for
+    FIDELITY_BUILD_FROM_SCRATCH_PROMPT.md too)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3] / "deploy" / "sim_envs" / "mantis_boattrader"
+    assert (root / "FIDELITY_AGENT_PROMPT.md").exists()
+
+
+# ── helpers ───────────────────────────────────────────────────────────
+
+
+def _rule_block(css: str, selector_line: str) -> str:
+    """Pull the body of a single CSS rule. selector_line should include
+    the trailing '{', e.g. '.filters-form {'. Returns everything from
+    that selector through the matching '}'.
+
+    Anchors to start-of-line so '.filter-group {' doesn't match the
+    sibling-combinator rule '.search-alerts-button + .filter-group {'.
+    """
+    anchor = "\n" + selector_line
+    idx = css.find(anchor)
+    if idx < 0 and css.startswith(selector_line):
+        idx = 0
+    else:
+        idx = idx + 1  # skip the leading \n
+    assert idx >= 0, f"selector {selector_line!r} not found in CSS"
+    end = css.find("}", idx)
+    assert end > idx
+    return css[idx:end + 1]
+
+
+def _details_block(html: str, anchor: str) -> str:
+    """Pull the <details ...anchor...> block up to (and including) its
+    </details>. Anchor is a substring like 'data-testid="filter-type"'."""
+    idx = html.find(anchor)
+    assert idx >= 0, f"anchor {anchor!r} not found in HTML"
+    # Find the surrounding <details ...> opening
+    start = html.rfind("<details", 0, idx)
+    assert start >= 0
+    end = html.find("</details>", idx)
+    assert end > start
+    return html[start:end + len("</details>")]
