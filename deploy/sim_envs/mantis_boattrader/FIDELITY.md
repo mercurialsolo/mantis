@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=91** (2026-05-23) — BDP fidelity touch-ups: Owner Highlights `<h3>` → `<h2>` (real BT uses H2), `.bdp-grid max-width: 1336px` so content area matches real BT's 1319px (also auto-scales thumbnail strip from ~181×123 to 175×116). Three filter-sidebar 🟡 rows flipped to ✅; two 🟡 rows for "More Details" + "Location" accordion levels are left in place since real BT doesn't currently render those headings on probed listings.
+Last updated: **v=92** (2026-05-23) — FIDELITY.md cleanup: stale "Open work" rows for items already fixed are flipped to ✅ (BDP width, thumbnail size); Home page table expanded with measured rows from v=90 corpus; Behaviors table grew from 4 → 11 rows to cover the v=82..v=91 interaction work; remaining 🟡 follow-ups (Home tile geometry, BDP below-fold, mobile viewport) consolidated under "Open work".
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `yv2fifjb0rvkofrhwhlzmejofsb1mzwo`)
@@ -263,9 +263,17 @@ the current state. Status legend:
 
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
-| Hero search panel (dark navy) | left column with "Find your perfect boat" header | implemented | ✅ |
-| Hero ad (right) | full-bleed sponsor banner | gradient placeholder ad | ✅ |
+| Hero card layout | 296×48 narrow overlay card at (14, 139) on hero image (NOT a full-width search bar) | implemented as narrow card overlay | ✅ |
+| Hero H1 "Find your perfect boat" | 296×19 at (14, 108), 16/700 #fff over hero image | implemented | ✅ |
+| Hero search form | same `.ai-search-v2__form` as SRP — sparkle + Try-rotator + magnifier | shared component, same rotator (v=86) | ✅ |
 | "Sell Your Boat Fast!" callout | sailboat icon + label + Sell pill | implemented | ✅ |
+| "Boats Near You" section heading | full-width h2 at y=586, 15/700 #333, with "Based on your location" subtext inline | implemented | ✅ |
+| Hero ad (right side strip) | full-bleed sponsor banner | gradient placeholder ad | 🚫 (placeholder by design) |
+| Featured Brands tiles | brand logo grid below the rails | implemented per `.brand-tile` | ✅ |
+| Popular Boat Types tiles | type-tile rail | implemented per `.type-tile` | ✅ |
+| Popular Boats card rail | listing-card rail (same shape as SRP listing card) | implemented (shares `.card-grid` patterns) | ✅ |
+| Recent Articles card rail | editorial card rail linking to /articles/... | implemented | ✅ |
+| Per-tile geometry on rail sections | individual brand-tile / type-tile / article-card sizes + gaps | not individually probed — corpus marks as open follow-up in `_captured/home/structural.json` | 🟡 |
 
 ## Behaviors
 
@@ -275,16 +283,35 @@ the current state. Status legend:
 | Click ⓘ on monthly | opens sticky banner | implemented | ✅ |
 | Click outside tooltip | closes | implemented | ✅ |
 | Detail page sticky bar | appears on scroll | `bdp-scrolled` body class via scroll listener | ✅ |
+| 5-digit Zip auto-submit | typing complete zip navigates to filtered SRP | debounced 250ms `form.submit()` in base.html (v=82) | ✅ |
+| Price Drop toggle click | flips checkbox + visual track turns blue | `.switch` + `:has(input:checked)` slides thumb (v=83) | ✅ |
+| Boat Type / Make search-as-you-type filter | typing hides non-matching `<li>` items | JS in base.html toggles `.hidden` on non-matching `<li>` (v=84) | ✅ |
+| Filter checkbox single-select submit | clicking a Boat Type / Make / Fuel / Hull checkbox auto-navigates | JS unchecks siblings + `form.submit()` (v=84) | ✅ |
+| Search-box prefix hides on focus | "Try …" disappears the moment input is clicked | `.ai-search-v2__form:focus-within .ai-search-v2__try { display: none }` (v=87) | ✅ |
+| Search-box prefix hides on typed value | "Try …" stays hidden when value present (even after blur) | `:has(input:not(:placeholder-shown):not([value=""]))` (v=86) | ✅ |
+| Click anywhere in search field → focus input | clicks on sparkle / "Try …" overlay / empty area all focus input | `mousedown` handler on `.ai-search-v2__form` calls `inp.focus()` (v=89) | ✅ |
+| Search-box "Try …" suggestions rotate | 3 example queries cycle through a 18px clipped window | `@keyframes ai-try-rotate` 9s ease-in-out alternate (v=86) | ✅ |
 
 ## Open work / known minor diffs
 
-- 🟡 **BDP content area width**: mine is 1400px, real BT is ~1335px (65px wider).
-  Decided not to narrow per page since the SRP container width is intentionally 1440.
-- 🟡 **Real photos vs SVG placeholder boats**: user accepted placeholder content.
-- 🟡 **More Details / Location H-level in Boat Details accordion**: mine uses H3,
-  real BT uses H4. Trivial fix when needed.
-- 🟡 **Thumbnail size**: 181×123 vs real 175×116 — auto-scales with column,
-  visually equivalent.
+- ✅ ~~BDP content area width~~ — fixed in v=91 via `.bdp-grid { max-width: 1336px }`.
+- 🚫 **Real photos vs SVG placeholder boats**: out-of-scope per `SCOPE.md` —
+  sandbox uses procedural SVG by design. Re-classified from 🟡.
+- 🟡 **More Details / Location H-level in Boat Details accordion**: real BT
+  doesn't currently render these headings on probed listings — earlier
+  claim that real BT uses H4 is unverifiable today. Sandbox uses H3.
+  Re-probe + decide once real BT shows these sections again.
+- ✅ ~~Thumbnail size~~ — auto-fixed by v=91's `.bdp-grid max-width`.
+- 🟡 **Per-tile geometry on Home page rails**: Featured Brands /
+  Popular Types / Popular Boats / Articles rails are present and
+  visually plausible, but individual tile sizes + gaps haven't been
+  measured against real BT. Open follow-up in `_captured/home/structural.json`.
+- 🟡 **BDP below-fold elements**: sticky title bar threshold, Similar Boats
+  card rail dimensions, Show-Phone reveal state — wired functionally
+  but not measured against real BT. Open follow-up in
+  `_captured/bdp/structural.json`.
+- 🟡 **Mobile viewport**: no mobile pass yet. CSS has `@media (max-width: 980px)`
+  responsive rules but they're not verified against real BT mobile rendering.
 
 ## Data variety (fixtures)
 
@@ -393,6 +420,23 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=92` FIDELITY.md cleanup pass (no code changes):
+       • "Open work / known minor diffs" cleaned: BDP width and
+         thumbnail size were fixed in v=91 but still listed as 🟡 —
+         flipped to ✅ with strikethrough. "Real photos" re-classified
+         from 🟡 to 🚫 (out-of-scope per SCOPE.md, not a fidelity gap).
+       • New consolidated 🟡 rows for Home tile geometry, BDP below-fold
+         elements, and mobile viewport — each pointing at the open
+         follow-up in the matching `_captured/<page>/structural.json`.
+       • Home page table expanded from 3 → 11 rows using the measured
+         data captured in v=90 (hero card 296×48 narrow overlay, H1
+         16/700 #fff, "Boats Near You" h2 at y=586, etc.).
+       • Behaviors table expanded from 4 → 11 rows to cover the
+         interactions wired in v=82..v=91 (5-digit zip auto-submit,
+         price-drop toggle, search-as-you-type filter, single-select
+         submit, focus-hide / typed-hide, click-anywhere-focus,
+         try-text rotator).
+       • Code unchanged; this is doc-only.
 `v=91` BDP fidelity touch-ups (re-probed real BT BDP):
        • Owner Highlights `<h3>` → `<h2>` — real BT renders this as
          H2 20/700 alongside "Boat Details" / "What Owners Say". The
