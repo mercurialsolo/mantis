@@ -274,10 +274,22 @@ class ClaudeStepHandler:
             # this gate and silently turn every URL into a DUPLICATE.
             shared = getattr(runner, "_shared_seen_set", None)
             if url and shared is not None and shared.contains(url) is True:
+                # #631 follow-up: increment the per-worker hit counter
+                # so the orchestrator can aggregate cross-worker dedup
+                # savings without grepping container logs. Modal trims
+                # stopped-ephemeral container log tails, so log-only
+                # signals aren't durable evidence.
+                try:
+                    runner._shared_seen_hits = int(
+                        getattr(runner, "_shared_seen_hits", 0) or 0,
+                    ) + 1
+                except Exception:  # noqa: BLE001 — never break extract
+                    pass
                 logger.warning(
                     "  [shared-seen] cross-worker dedup hit: %s "
-                    "(step=%d, shared set size=%d)",
+                    "(step=%d, shared set size=%d, worker hits=%d)",
                     url[:80], index, shared.size(),
+                    getattr(runner, "_shared_seen_hits", 0),
                 )
                 dynamic_verifier.record_item_completed(
                     page=runner._current_page,

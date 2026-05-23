@@ -825,6 +825,14 @@ def build_micro_result(
         # list to partition Phase-2 workers. Empty list for runs that
         # didn't include a ``collect_urls`` step (which is most runs).
         "collected_urls": list(getattr(runner, "_collected_urls", []) or []),
+        # #631 follow-up: per-worker count of cross-worker dedup hits.
+        # Incremented by ClaudeStepHandler when the shared seen-set
+        # short-circuits a URL another worker already extracted. The
+        # orchestrator aggregates across workers to report cumulative
+        # hits without needing per-container log archaeology (Modal
+        # trims tails on stopped ephemeral containers). Always 0 for
+        # non-fanout / single-worker runs.
+        "shared_seen_hits": int(getattr(runner, "_shared_seen_hits", 0) or 0),
         "artifacts": artifacts,
         "executor_backend_counts": executor_backend_counts,
         "step_details": [

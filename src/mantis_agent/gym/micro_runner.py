@@ -238,6 +238,20 @@ class MicroPlanRunner:
         # to short-circuit when a sibling worker already extracted the URL.
         from .fanout_runner import NullSharedSeenSet
         self._shared_seen_set: Any = NullSharedSeenSet()
+        # #631 follow-up: per-worker counter of cross-worker dedup hits.
+        # Incremented by ClaudeStepHandler when the shared seen-set short-
+        # circuits a URL another worker already extracted. Surfaces in
+        # build_micro_result so the orchestrator can aggregate across
+        # workers and report ``[shared-seen] cumulative hits: N``
+        # without needing per-container log archaeology.
+        self._shared_seen_hits: int = 0
+        # #631: per-augur-sdk-0.2.1 branch_context payload for fan-out
+        # workers. Set by the Modal orchestrator from suite metadata
+        # (``_fanout_parent_run_id`` + the worker's slice info) so
+        # AugurAdapter labels the DebugSession under a shared parent.
+        # ``None`` for non-fanout / single-worker runs — AugurAdapter
+        # opens without branch_context, preserving today's shape.
+        self._fanout_branch_context: dict | None = None
         self._active_checkpoint_context = None
         self._pre_step_snapshot, self._final_status = None, "running"
         # #audit item 4: halt_reason last set by ``_persist`` — read by

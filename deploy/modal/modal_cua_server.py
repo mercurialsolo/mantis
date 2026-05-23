@@ -905,6 +905,19 @@ def _run_holo3_executor(
         except Exception as exc:  # noqa: BLE001 — never block a run
             print(f"  WARNING: shared seen-set init failed: {exc}")
 
+        # #631: bind a fan-out branch_context from the suite metadata so
+        # the AugurAdapter labels this worker's DebugSession under a
+        # shared parent_run_id. ``None`` (no fan-out / single worker) →
+        # the adapter opens without a branch label, preserving today's
+        # session shape.
+        try:
+            from mantis_agent.gym.fanout_runner import build_fanout_branch_context
+            micro_runner._fanout_branch_context = build_fanout_branch_context(
+                task_suite,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"  WARNING: fanout branch_context init failed: {exc}")
+
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
         # API container's ``action=reasoning_trace`` reads this file
         # so a viewer overlay can render a structured timeline of
@@ -2529,6 +2542,45 @@ def run_gemma4_cua_worker(task_file_contents: str, worker_id: int = 0, **kwargs)
     return {"passed": 0, "total": 0, "score": 0.0}
 
 
+def _print_shared_seen_metrics(
+    task_suite: dict, cumulative_hits: int,
+) -> None:
+    """Print the cross-worker shared-seen aggregate (#631 follow-up).
+
+    Two signals operators need after a fan-out run:
+
+      * ``cumulative_hits`` — number of times a worker short-circuited
+        an extract because a sibling worker had already extracted the
+        URL. Each hit avoided the ~$0.20 Claude extract cost.
+      * ``final dict size`` — total unique URLs the fan-out has seen
+        across all workers. Queried from the Modal Dict by name; this
+        is the ground-truth unique-URL count without the per-worker
+        log archaeology Modal makes hard on stopped containers.
+
+    Print-only — no exception escapes, never breaks the fan-out
+    summary even when Modal Dict isn't reachable.
+    """
+    dict_name = task_suite.get("_fanout_seen_dict_name", "")
+    final_size = 0
+    if dict_name:
+        try:
+            import modal as _modal
+            _shared = _modal.Dict.from_name(dict_name)
+            final_size = len(_shared)
+        except Exception as exc:
+            print(
+                f"  [shared-seen] could not query final dict size "
+                f"({dict_name}): {exc}"
+            )
+    estimated_savings = cumulative_hits * 0.20  # ~$0.20 per skipped Claude extract
+    print(
+        f"  [shared-seen] cumulative cross-worker hits: {cumulative_hits} "
+        f"(~${estimated_savings:.2f} avoided extract cost)"
+    )
+    if dict_name:
+        print(f"  [shared-seen] final dict size: {final_size} unique URLs")
+
+
 @app.local_entrypoint()
 def main(
     task_file: str = "",
@@ -2845,6 +2897,20 @@ def main(
         except Exception as exc:
             print(f"  WARNING: shared-seen Dict init failed ({exc}) — running without cross-worker dedup")
 
+        # #631: generate a parent run_id for Augur branch_context grouping.
+        # Every spawned worker labels its DebugSession with this parent
+        # so the Augur UI groups N partition rows under one logical
+        # fan-out parent. Per augur-sdk 0.2.1, mantis fan-out is
+        # ``mutated_axis="action"`` (different URL per worker = action
+        # mutation); the SDK's auto-mode resolves to ``sandbox``
+        # (execute fresh, no replay prefix).
+        fanout_parent_run_id = (
+            f"fanout-{task_suite.get('_plan_signature', 'unknown')[:12]}-"
+            f"{_uuid.uuid4().hex[:8]}"
+        )
+        task_suite["_fanout_parent_run_id"] = fanout_parent_run_id
+        print(f"  [fanout/augur] parent run_id: {fanout_parent_run_id}")
+
         # ── #628: Phase-1/Phase-2 path for parallelizable_url_collect ─
         # Prefer this over per-page partitioning when the plan exposes
         # a url-collect-shaped loop. Phase 1 runs the setup chain +
@@ -2857,6 +2923,10 @@ def main(
             executor_fn = EXECUTOR_MAP.get(model, run_holo3)
             print("\n  ═══ PHASE-1 (#628): URL collection on 1 container ═══")
             phase1_suite = prepare_phase1_suite(task_suite, url_collect_group)
+            # #631: per-partition branch_id for Augur grouping.
+            phase1_suite["_fanout_branch_id"] = (
+                f"{fanout_parent_run_id}:phase1"
+            )
             spawn_kwargs = {
                 "task_file_contents": json.dumps(phase1_suite),
                 "max_steps": max_steps,
@@ -2887,6 +2957,10 @@ def main(
                 )
                 phase2_handles = []
                 for i, sub_suite in enumerate(phase2_suites):
+                    # #631: per-partition branch_id for Augur grouping.
+                    sub_suite["_fanout_branch_id"] = (
+                        f"{fanout_parent_run_id}:phase2_w{i + 1}"
+                    )
                     kwargs = {
                         "task_file_contents": json.dumps(sub_suite),
                         "max_steps": max_steps,
@@ -2901,16 +2975,19 @@ def main(
                     )
 
                 merged_phone = 0
+                merged_shared_seen_hits = 0
                 per_worker_leads: list[list[dict]] = []
                 for i, handle in phase2_handles:
                     try:
                         summary = read_partition_result(handle.get())
                         merged_phone += summary["with_phone"]
+                        merged_shared_seen_hits += summary["shared_seen_hits"]
                         per_worker_leads.append(summary["leads"])
                         print(
                             f"    [phase2] worker {i + 1}: "
                             f"viable={summary['viable']} "
-                            f"phone={summary['with_phone']}"
+                            f"phone={summary['with_phone']} "
+                            f"shared_seen_hits={summary['shared_seen_hits']}"
                         )
                     except Exception as exc:
                         print(f"    [phase2] worker {i + 1}: ERROR — {exc}")
@@ -2931,6 +3008,15 @@ def main(
                         f"(unexpected — Phase 1 URLs were already unique)"
                     )
                 print(f"  With phone:                {merged_phone}")
+                # #631 follow-up: shared-seen aggregate visibility.
+                # ``shared_seen_hits`` = sum of per-worker proactive
+                # skips (a sibling worker had already extracted the URL,
+                # so this worker short-circuited before paying the
+                # ~$0.20 Claude extract cost). Final dict size = unique
+                # URLs the fan-out has seen across all workers.
+                _print_shared_seen_metrics(
+                    task_suite, merged_shared_seen_hits,
+                )
                 return
 
             print("    [phase1] no URLs harvested — falling through to single worker")
@@ -2942,6 +3028,14 @@ def main(
             executor_fn = EXECUTOR_MAP.get(model, run_holo3)
             partition_handles = []
             for i, sub_suite in enumerate(partitions):
+                # #631: per-partition branch_id for Augur grouping;
+                # also tag the phase as ``pagination_partition`` so
+                # the branch_context.mutation distinguishes pagination
+                # workers from Phase-2 url-collect workers.
+                sub_suite["_fanout_branch_id"] = (
+                    f"{fanout_parent_run_id}:page{i + 1}"
+                )
+                sub_suite["_fanout_phase"] = "pagination_partition"
                 sub_contents = json.dumps(sub_suite)
                 spawn_kwargs = {
                     "task_file_contents": sub_contents,
@@ -2958,15 +3052,19 @@ def main(
                 dedup_leads_by_url, read_partition_result,
             )
             merged_phone = 0
+            merged_shared_seen_hits = 0
             per_partition_leads: list[list[dict]] = []
             for i, handle in partition_handles:
                 try:
                     summary = read_partition_result(handle.get())
                     merged_phone += summary["with_phone"]
+                    merged_shared_seen_hits += summary["shared_seen_hits"]
                     per_partition_leads.append(summary["leads"])
                     print(
                         f"    [fanout] partition {i + 1}: "
-                        f"viable={summary['viable']} phone={summary['with_phone']}"
+                        f"viable={summary['viable']} "
+                        f"phone={summary['with_phone']} "
+                        f"shared_seen_hits={summary['shared_seen_hits']}"
                     )
                 except Exception as e:
                     print(f"    [fanout] partition {i + 1}: ERROR — {e}")
@@ -2989,6 +3087,8 @@ def main(
                     f"(cross-partition URL overlap)"
                 )
             print(f"  With phone:    {merged_phone}")
+            # #631 follow-up: shared-seen aggregate metric line.
+            _print_shared_seen_metrics(task_suite, merged_shared_seen_hits)
             return
 
     # ── Single worker (default) ──────────────────────────────────

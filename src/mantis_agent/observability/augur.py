@@ -300,6 +300,7 @@ class AugurAdapter:
         capture_mode: str | None = None,
         dsn: str | None = None,
         extra_tags: dict[str, str] | None = None,
+        branch_context: dict | None = None,
     ) -> None:
         self._session: Any = None
         self._emitted_event_count: int = 0
@@ -326,7 +327,7 @@ class AugurAdapter:
             if extra_tags:
                 tags.update({str(k): str(v) for k, v in extra_tags.items()})
             target_dir = Path(out_dir) if out_dir is not None else default_out_dir(run_id)
-            session = DebugSession(
+            session_kwargs: dict[str, Any] = dict(
                 run_id=run_id,
                 client_name="mantis",
                 client_version=os.environ.get("MANTIS_VERSION", "") or None,
@@ -336,6 +337,28 @@ class AugurAdapter:
                 dsn=dsn if dsn is not None else (os.environ.get("AUGUR_DSN") or None),
                 tags=tags,
             )
+            # augur-sdk 0.1.14+ ships ``branch_context=`` on DebugSession;
+            # 0.2.1 documents the ``mode`` resolution. Mantis fan-out
+            # partitions pass ``branch_context`` to label sessions under
+            # a shared ``parent_run_id`` so the Augur UI can group N
+            # partition rows under one logical fan-out parent. Mantis
+            # uses ``mutated_axis="action"`` (different URL per worker is
+            # an action mutation) — the SDK's auto-mode then resolves to
+            # ``sandbox`` (no prefix replay, executes from step 0 against
+            # a live target), which matches our actual semantics.
+            #
+            # Forwarded only when set so production runs (no fan-out)
+            # don't carry a branch_context label.
+            if branch_context:
+                session_kwargs["branch_context"] = dict(branch_context)
+                if _verbose:
+                    logger.warning(
+                        "AugurAdapter init: branch_context applied "
+                        "(parent_run_id=%s, branch_id=%s)",
+                        branch_context.get("parent_run_id", ""),
+                        branch_context.get("branch_id", ""),
+                    )
+            session = DebugSession(**session_kwargs)
             # DebugSession is designed as a context manager — ``__enter__``
             # flips the open flag and starts the streaming sink (if any).
             # We drive that explicitly because the Mantis run lifecycle
@@ -868,6 +891,106 @@ class AugurAdapter:
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("AugurAdapter.set_live_endpoints failed: %s", exc)
+
+    # ── #633 follow-up: Sentry-for-CUA producer primitives ─────────────
+
+    def finalize_outcome(
+        self,
+        *,
+        verdict: dict[str, Any],
+        task_class: str = "",
+        cost_summary: dict[str, Any] | None = None,
+        scope: str = "session",
+    ) -> None:
+        """Emit a session-level outcome (#633 §2 — populates the Cost-
+        per-outcome + Cohorts screens). Wraps ``DebugSession.finalize_outcome``
+        (augur-sdk 0.1.14+).
+
+        Call once at the end of a Mantis run with the planner's terminal
+        verdict + cost summary; the Augur workspace renders per-task-class
+        cohort scorecards from this.
+
+        Tolerant of SDK builds without the method — silently no-ops when
+        unavailable so production runs never break on missing surface.
+        """
+        if not self.active or not hasattr(self._session, "finalize_outcome"):
+            return
+        try:
+            self._session.finalize_outcome(
+                scope=scope,
+                verdict=dict(verdict),
+                task_class=str(task_class),
+                cost_summary=dict(cost_summary or {}),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AugurAdapter.finalize_outcome failed: %s", exc)
+
+    def attach_env_fingerprint(
+        self,
+        step_index: int,
+        *,
+        url_host: str = "",
+        viewport_hash: str = "",
+        api_shapes: dict[str, Any] | None = None,
+    ) -> None:
+        """Stamp a step with the environment fingerprint Augur uses for
+        the Env-drift screen (#633 §4). Wraps
+        ``DebugSession.attach_env_fingerprint`` (augur-sdk 0.1.13+).
+
+        Mantis call site: per-step emit, with url_host derived from the
+        browser's current page URL and viewport_hash from a stable hash
+        of (width, height, dpr). api_shapes only when Mantis has a
+        network sniffer attached (today: never).
+
+        No-op when ``url_host`` is empty (first step before navigate)
+        so we don't pollute the workspace with fingerprintless entries.
+        """
+        if not self.active or not hasattr(self._session, "attach_env_fingerprint"):
+            return
+        if not url_host:
+            return
+        try:
+            self._session.attach_env_fingerprint(
+                step_index=int(step_index),
+                url_host=str(url_host),
+                viewport_hash=str(viewport_hash or ""),
+                api_shapes=dict(api_shapes or {}),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AugurAdapter.attach_env_fingerprint failed: %s", exc)
+
+    def record_reasoning(
+        self,
+        step_index: int,
+        *,
+        format: str,
+        content: str,
+    ) -> None:
+        """Persist a reasoning trace (extended-thinking text, OpenAI
+        reasoning summary, etc) alongside a step. Wraps
+        ``DebugSession.record_reasoning`` (augur-sdk 0.1.14+).
+
+        Mantis call site: wherever the planner already has reasoning
+        text in hand — Claude extended-thinking response blocks, the
+        critic's rationale, the verifier's PASS/FAIL reason. No
+        additional inference, just an extra emit on the side.
+
+        ``format`` is a free-form tag the workspace surfaces in the
+        Reasoning tab (e.g. ``"claude-thinking"``, ``"critic"``,
+        ``"verifier"``). ``content`` is the raw text.
+        """
+        if not self.active or not hasattr(self._session, "record_reasoning"):
+            return
+        if not content:
+            return
+        try:
+            self._session.record_reasoning(
+                step_index=int(step_index),
+                format=str(format),
+                content=str(content),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("AugurAdapter.record_reasoning failed: %s", exc)
 
     def close(self, status: str | None = None) -> Any:
         """Flush the bundle. Returns the BundleManifest or None.
