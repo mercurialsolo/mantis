@@ -61,15 +61,29 @@ metrics = [
 # augur_sdk lazily and no-ops when the package isn't installed, so
 # this extra is purely opt-in — no base-install footprint change.
 observability = [
-    # 0.1.10 added live modelio streaming via DebugSession.record_modelio
-    # — the same call that stages the local bundle record now also POSTs
-    # to /api/v1/runs/<id>/modelio/<relpath> when AUGUR_DSN is set. The
-    # SDK latches the streaming sink off on first 403 (tenant not opted
-    # in) so bundle-only consumers see no change. 0.1.11 is docs-only.
-    # Existing AugurAdapter.record_modelio wrapper forwards verbatim so
-    # the streaming behavior comes for free across all five wired layers
-    # (planner / grounding / model / verifier / step_recovery).
-    "augur-sdk>=0.1.11",
+    # 0.2.x — public surface (DebugSession, record_step, record_event,
+    # attach_observation, record_modelio, set_score, …) is backwards-
+    # compatible with the 0.1.x adapter wiring in observability/augur.py
+    # and observability/modelio.py. ONE breaking change in 0.2: the
+    # private ``augur_sdk._schema`` re-export moved to the standalone
+    # ``augur-schema`` package (installed automatically as a runtime
+    # dep). We don't import _schema in this repo (verified by grep)
+    # so the migration is a pure pin bump.
+    #
+    # New surfaces available for adoption (not yet wired):
+    #   - attach_verifier (0.1.5)
+    #   - set_costs / set_step_costs (0.1.8)
+    #   - ModelApiAdapterBase (0.1.7)
+    #   - set_step_versions + auto-stamp from modelio (0.1.13)
+    #   - attach_env_fingerprint (0.1.13)
+    #   - record_judge_decision (0.1.13)
+    #   - mark_for_eval / finalize_outcome / record_reasoning (0.1.14)
+    #   - branch_context (DebugSession ctor) / declare_side_effect /
+    #     commit_side_effect / bind_intervention (0.1.14)
+    #
+    # Capped at <0.3 so a future 0.3 with another breaking change
+    # doesn't silently land — operator should validate the upgrade.
+    "augur-sdk>=0.2,<0.3",
 ]
 # Self-host the FastAPI server that fronts /predict and /v1/chat/completions.
 # Used by the Baseten / EKS / GKE deployments.
