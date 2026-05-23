@@ -818,6 +818,13 @@ def build_micro_result(
         "dynamic_verification": dynamic_verification,
         "dynamic_verification_summary": dynamic_verification_summary,
         "leads": leads,
+        # #628: Phase-1 fan-out workers stash harvested URLs on
+        # ``runner._collected_urls`` via the ``collect_urls`` step (#615).
+        # Surfacing them through the result envelope lets the Modal
+        # orchestrator read them after Phase-1 completes and use the
+        # list to partition Phase-2 workers. Empty list for runs that
+        # didn't include a ``collect_urls`` step (which is most runs).
+        "collected_urls": list(getattr(runner, "_collected_urls", []) or []),
         "artifacts": artifacts,
         "executor_backend_counts": executor_backend_counts,
         "step_details": [

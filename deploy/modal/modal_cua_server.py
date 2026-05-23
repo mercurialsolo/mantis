@@ -2799,7 +2799,102 @@ def main(
     # synthesizer in mantis_agent.gym.fanout_runner.
     task_suite = json.loads(task_file_contents)
     if workers > 1 and task_suite.get("_micro_plan"):
-        from mantis_agent.gym.fanout_runner import prepare_modal_partitions
+        from mantis_agent.gym.fanout_runner import (
+            find_url_collect_group, prepare_modal_partitions,
+            prepare_phase1_suite, prepare_phase2_suites,
+        )
+
+        # ── #628: Phase-1/Phase-2 path for parallelizable_url_collect ─
+        # Prefer this over per-page partitioning when the plan exposes
+        # a url-collect-shaped loop. Phase 1 runs the setup chain +
+        # collect_urls (one container) to harvest unique listing URLs;
+        # Phase 2 partitions those URLs across N workers, each running
+        # a one-shot navigate+scroll+extract sub-plan. No cross-partition
+        # duplicates by construction.
+        url_collect_group = find_url_collect_group(task_suite)
+        if url_collect_group is not None:
+            executor_fn = EXECUTOR_MAP.get(model, run_holo3)
+            print("\n  ═══ PHASE-1 (#628): URL collection on 1 container ═══")
+            phase1_suite = prepare_phase1_suite(task_suite, url_collect_group)
+            spawn_kwargs = {
+                "task_file_contents": json.dumps(phase1_suite),
+                "max_steps": max_steps,
+            }
+            if model == "claude":
+                spawn_kwargs["claude_model"] = claude_model
+            phase1_handle = executor_fn.spawn(**spawn_kwargs)
+            print("    [phase1] worker spawned")
+            from mantis_agent.gym.fanout_runner import (
+                dedup_leads_by_url, read_partition_result,
+            )
+            try:
+                phase1_summary = read_partition_result(phase1_handle.get())
+                collected_urls = phase1_summary["collected_urls"]
+            except Exception as exc:
+                print(f"    [phase1] ERROR: {exc} — aborting fan-out")
+                collected_urls = []
+            print(f"    [phase1] harvested {len(collected_urls)} unique URL(s)")
+
+            if collected_urls:
+                phase2_suites = prepare_phase2_suites(
+                    task_suite, collected_urls, url_collect_group, workers,
+                )
+                print(
+                    f"\n  ═══ PHASE-2 (#628): "
+                    f"{len(phase2_suites)} worker(s) × "
+                    f"{len(collected_urls)} URL(s) ═══"
+                )
+                phase2_handles = []
+                for i, sub_suite in enumerate(phase2_suites):
+                    kwargs = {
+                        "task_file_contents": json.dumps(sub_suite),
+                        "max_steps": max_steps,
+                    }
+                    if model == "claude":
+                        kwargs["claude_model"] = claude_model
+                    handle = executor_fn.spawn(**kwargs)
+                    phase2_handles.append((i, handle))
+                    print(
+                        f"    [phase2] worker {i + 1}/{len(phase2_suites)} "
+                        f"spawned ({sub_suite['_fanout_url_count']} URLs)"
+                    )
+
+                merged_phone = 0
+                per_worker_leads: list[list[dict]] = []
+                for i, handle in phase2_handles:
+                    try:
+                        summary = read_partition_result(handle.get())
+                        merged_phone += summary["with_phone"]
+                        per_worker_leads.append(summary["leads"])
+                        print(
+                            f"    [phase2] worker {i + 1}: "
+                            f"viable={summary['viable']} "
+                            f"phone={summary['with_phone']}"
+                        )
+                    except Exception as exc:
+                        print(f"    [phase2] worker {i + 1}: ERROR — {exc}")
+
+                # Dedup is defense-in-depth — URLs from Phase 1 should
+                # already be unique, but in case Phase 1 collected the
+                # same URL twice (e.g. featured listing rendered twice)
+                # or workers retried, this catches the residual.
+                _, raw_total, dedup_total = dedup_leads_by_url(per_worker_leads)
+                print("\n  ═══ PHASE-1/PHASE-2 RESULTS (#628) ═══")
+                print(f"  URLs collected (Phase 1):  {len(collected_urls)}")
+                print(f"  Workers (Phase 2):         {len(phase2_suites)}")
+                print(f"  Total leads (raw):         {raw_total}")
+                print(f"  Total leads (deduped):     {dedup_total}")
+                if raw_total > dedup_total:
+                    print(
+                        f"  Duplicates collapsed:      {raw_total - dedup_total} "
+                        f"(unexpected — Phase 1 URLs were already unique)"
+                    )
+                print(f"  With phone:                {merged_phone}")
+                return
+
+            print("    [phase1] no URLs harvested — falling through to single worker")
+
+        # ── #617: per-page partitioning for parallelizable_pagination ─
         partitions = prepare_modal_partitions(task_suite, workers)
         if partitions:
             print(f"\n  ═══ FANOUT (loop_groups, #617): {len(partitions)} partition(s) × {workers} workers ═══")
