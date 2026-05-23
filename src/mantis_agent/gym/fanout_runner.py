@@ -300,6 +300,65 @@ def _run_one_subplan(
 # ── #623: orchestrator-side worker result reader ──────────────────────
 
 
+def _normalize_listing_url(url: str) -> str:
+    """Canonical form for cross-partition lead-dedup keys (#621).
+
+    Rules:
+      - Strip surrounding whitespace.
+      - Lowercase (most marketplaces use case-insensitive paths).
+      - Drop a trailing slash (BoatTrader emits both ``/boat/<slug>``
+        and ``/boat/<slug>/`` interchangeably across pages).
+
+    No URL-parse / query-string dance — that's per-domain policy. The
+    listing URL primary key is opaque enough that simple normalization
+    catches the common duplication signals (path-case drift, trailing
+    slash) without overreaching.
+    """
+    if not url:
+        return ""
+    s = str(url).strip().lower()
+    if s.endswith("/"):
+        s = s[:-1]
+    return s
+
+
+def dedup_leads_by_url(
+    per_partition_leads: list[list[dict]],
+) -> tuple[list[dict], int, int]:
+    """Cross-partition lead-list merge with URL dedup (#621).
+
+    Each worker returns its own ``leads`` list — concatenated naively
+    that gives a ``raw`` total, but featured / sponsored listings can
+    repeat across pages and pagination drift mid-run can shift the
+    same listing onto two adjacent pages. The dedup pass collapses
+    duplicates by normalized ``listing_url``, preserving first-seen
+    partition order.
+
+    Returns ``(deduped, raw_count, deduped_count)``.
+
+    Leads without a ``listing_url`` key (or with an empty value) pass
+    through unchanged — those are typically partial-extract envelopes
+    or already-deduped placeholders the per-container scanner emitted.
+    """
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    raw = 0
+    for chunk in per_partition_leads:
+        for lead in chunk:
+            raw += 1
+            if not isinstance(lead, dict):
+                continue
+            url = _normalize_listing_url(str(lead.get("listing_url", "")))
+            if not url:
+                deduped.append(lead)
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            deduped.append(lead)
+    return deduped, raw, len(deduped)
+
+
 def read_partition_result(result: dict | None) -> dict:
     """Extract the lead-count fields from a worker's return dict.
 

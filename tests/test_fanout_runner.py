@@ -25,7 +25,9 @@ from mantis_agent.gym.checkpoint import StepResult
 from mantis_agent.gym.fanout_runner import (
     DEFAULT_PAGINATION_URL_TEMPLATE,
     LocalFanoutRunner,
+    _normalize_listing_url,
     build_worker_subplan,
+    dedup_leads_by_url,
     fanout_enabled,
     partition_urls,
     partition_urls_for_pagination,
@@ -581,3 +583,116 @@ def test_read_partition_result_coerces_string_counts() -> None:
     out = read_partition_result({"viable": "27", "leads_with_phone": "1"})
     assert out["viable"] == 27
     assert out["with_phone"] == 1
+
+
+# ── #621: cross-partition lead dedup ───────────────────────────────────
+
+
+def test_normalize_listing_url_strips_trailing_slash() -> None:
+    assert _normalize_listing_url("https://example.com/boat/1/") == "https://example.com/boat/1"
+
+
+def test_normalize_listing_url_lowercases() -> None:
+    """Path-case drift across pages (some marketplaces emit /Boat/Foo
+    on one page and /boat/foo on another) should collapse."""
+    assert (
+        _normalize_listing_url("https://Example.com/Boat/Foo/")
+        == "https://example.com/boat/foo"
+    )
+
+
+def test_normalize_listing_url_empty_input() -> None:
+    assert _normalize_listing_url("") == ""
+    assert _normalize_listing_url("   ") == ""
+
+
+def test_dedup_collapses_exact_url_duplicates() -> None:
+    """Featured / sponsored boat appears on two pages — collapse to one."""
+    per_partition = [
+        [
+            {"listing_url": "https://example.com/boat/1/", "make": "A"},
+            {"listing_url": "https://example.com/boat/2/", "make": "B"},
+        ],
+        [
+            {"listing_url": "https://example.com/boat/1/", "make": "A"},  # dup
+            {"listing_url": "https://example.com/boat/3/", "make": "C"},
+        ],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 4
+    assert dedup_count == 3
+    assert [d["make"] for d in deduped] == ["A", "B", "C"]
+
+
+def test_dedup_collapses_trailing_slash_variants() -> None:
+    """``/boat/1`` and ``/boat/1/`` are the same listing (BoatTrader emits
+    both interchangeably across pages)."""
+    per_partition = [
+        [{"listing_url": "https://example.com/boat/1/"}],
+        [{"listing_url": "https://example.com/boat/1"}],  # no slash
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 2
+    assert dedup_count == 1
+
+
+def test_dedup_no_collapse_when_urls_differ() -> None:
+    """Five distinct URLs across two partitions → 5 deduped leads."""
+    per_partition = [
+        [{"listing_url": f"https://example.com/boat/{i}/"} for i in range(3)],
+        [{"listing_url": f"https://example.com/boat/{i}/"} for i in range(3, 5)],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 5
+    assert dedup_count == 5
+
+
+def test_dedup_preserves_first_seen_partition_order() -> None:
+    """When the same URL appears in partition 1 first and partition 2
+    later, we keep partition 1's row (its data may be cleaner since
+    partition 1 likely ran first / had warmer cache)."""
+    per_partition = [
+        [{"listing_url": "https://example.com/boat/1/", "asking_price": "$100"}],
+        [{"listing_url": "https://example.com/boat/1/", "asking_price": "$999"}],
+    ]
+    deduped, _, _ = dedup_leads_by_url(per_partition)
+    assert len(deduped) == 1
+    assert deduped[0]["asking_price"] == "$100"
+
+
+def test_dedup_leads_without_url_pass_through() -> None:
+    """Leads without a listing_url key (partial extracts) are passed
+    through unchanged — the orchestrator shouldn't silently drop them
+    just because they lack a dedup key."""
+    per_partition = [
+        [{"listing_url": "https://example.com/boat/1/"}, {"asking_price": "$50"}],
+        [{"listing_url": "https://example.com/boat/1/"}, {"asking_price": "$99"}],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    # 4 raw, 1 URL-dup collapsed, 2 no-URL passed through, 1 unique URL = 3
+    assert raw == 4
+    assert dedup_count == 3
+
+
+def test_dedup_handles_empty_partition_lists() -> None:
+    """A partition that returned no leads (worker crashed early) leaves
+    the merge a no-op for that chunk."""
+    per_partition = [
+        [],
+        [{"listing_url": "https://example.com/boat/1/"}],
+        [],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 1
+    assert dedup_count == 1
+
+
+def test_dedup_ignores_non_dict_lead_entries() -> None:
+    """Defensive — a malformed lead row (string / None) shouldn't crash
+    the merge. Skip it; keep going."""
+    per_partition = [
+        [{"listing_url": "https://example.com/boat/1/"}, "garbage", None],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 3
+    assert dedup_count == 1
