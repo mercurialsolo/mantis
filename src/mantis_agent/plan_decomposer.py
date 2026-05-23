@@ -159,6 +159,36 @@ class MicroIntent:
 
 
 @dataclass
+class LoopGroup:
+    """A loop step + the body it iterates, with a parallelizability tag.
+
+    Produced by :meth:`PlanDecomposer._classify_loop_groups` after the loop
+    targets are normalized (#605). Consumers — the fan-out runner in
+    particular — read ``shape`` to decide whether the body is safe to
+    partition across workers (issue #614).
+
+    ``loop_step_idx`` is the index of the ``loop`` step itself.
+    ``body_range`` is the half-open ``[start, end)`` slice of plan.steps
+    covering the loop body (``loop_target`` … ``loop_step_idx``).
+    ``shape`` is one of:
+
+      * ``parallelizable_url_collect`` — body starts with ``click`` on a
+        listing card and contains ``extract_url``. Each iteration is
+        independent given the listing URL, so the body is safe to
+        rewrite as ``navigate(url) → scroll → extract_data`` and
+        partition across workers.
+      * ``parallelizable_pagination`` — body's terminal step is
+        ``paginate``. Each page is an independent unit.
+      * ``sequential`` — anything else (forms, login, stateful flows).
+        Don't fan out.
+    """
+
+    loop_step_idx: int
+    body_range: tuple[int, int]
+    shape: str = "sequential"
+
+
+@dataclass
 class MicroPlan:
     """Ordered list of micro-intents decomposed from a plain text plan."""
     steps: list[MicroIntent] = field(default_factory=list)
@@ -168,6 +198,12 @@ class MicroPlan:
     # ``PlanDecomposer.KNOWN_PLAN_SHAPES``). Empty when Claude returned the
     # legacy bare-array schema or when classification was unreliable.
     shapes: list[str] = field(default_factory=list)
+    # Loop bodies tagged with a parallelizability shape (issue #614).
+    # Populated by :meth:`PlanDecomposer._classify_loop_groups` after
+    # ``_fix_loop_targets`` has normalized ``loop_target``. Empty for
+    # plans with no ``loop`` steps. Pure analysis — runtime behaviour
+    # is unchanged until the fan-out runner (#616, #617) reads this.
+    loop_groups: list[LoopGroup] = field(default_factory=list)
 
     def summary(self) -> str:
         shape_tag = f" [{','.join(self.shapes)}]" if self.shapes else ""
@@ -192,6 +228,14 @@ class MicroPlan:
             "source_plan": self.source_plan,
             "domain": self.domain,
             "shapes": list(self.shapes),
+            "loop_groups": [
+                {
+                    "loop_step_idx": g.loop_step_idx,
+                    "body_range": list(g.body_range),
+                    "shape": g.shape,
+                }
+                for g in self.loop_groups
+            ],
         }
 
     @classmethod
@@ -215,6 +259,22 @@ class MicroPlan:
         plan.shapes = PlanDecomposer._normalize_shapes(shapes_raw)
         for s in steps_raw:
             plan.steps.append(PlanDecomposer._build_intent(s))
+        # Round-trip ``loop_groups`` when present (#614). Recompute when
+        # absent so plans persisted before this field existed still get
+        # classified on load.
+        groups_raw = payload.get("loop_groups") if isinstance(payload, dict) else None
+        if groups_raw:
+            plan.loop_groups = [
+                LoopGroup(
+                    loop_step_idx=int(g.get("loop_step_idx", -1)),
+                    body_range=tuple(g.get("body_range", (0, 0))),
+                    shape=str(g.get("shape", "sequential")),
+                )
+                for g in groups_raw
+                if isinstance(g, dict)
+            ]
+        else:
+            PlanDecomposer._classify_loop_groups(plan)
         return plan
 
 
@@ -757,6 +817,8 @@ class PlanDecomposer:
                 # and means we don't have to invalidate all existing
                 # cache files when shipping plan-normalization fixes.
                 self._fix_loop_targets(plan)
+                # #614: classify loop bodies for the fan-out runner.
+                self._classify_loop_groups(plan)
 
                 logger.info(f"Loaded cached micro-plan: {cache_path} ({len(plan.steps)} steps)")
                 return plan
@@ -853,6 +915,8 @@ class PlanDecomposer:
 
         # Fix 3: Validate and fix loop targets — must point to the click step
         self._fix_loop_targets(plan)
+        # #614: classify loop bodies for the fan-out runner.
+        self._classify_loop_groups(plan)
         # Fix 4 (#209 Symptom 4): repair urlless navigate steps by injecting
         # the matching source-plan URL into ``params.url``. The v20 prompt
         # asks Claude to mirror the URL there already; this pass catches
@@ -1211,6 +1275,80 @@ class PlanDecomposer:
                     s.loop_target, click_idx,
                 )
                 s.loop_target = click_idx
+
+    # ── #614 loop classifier ────────────────────────────────────────────
+
+    @staticmethod
+    def _classify_loop_groups(plan: MicroPlan) -> None:
+        """Tag every ``loop`` step's body with a parallelizability shape.
+
+        Must run AFTER :meth:`_fix_loop_targets` so ``loop_target`` is
+        normalized to point at the body's entry step.
+
+        Classification rules (#614):
+
+          * ``parallelizable_url_collect`` — body starts with a ``click``
+            step in section ``extraction`` AND the body contains an
+            ``extract_url`` step. This is the canonical extraction-loop
+            shape from the decomposer prompt: each iteration depends only
+            on the URL of one listing card.
+          * ``parallelizable_pagination`` — body's terminal action is
+            ``paginate``. Each page is an independent unit (this is the
+            shape ``deploy/modal/modal_cua_server.py:_make_page_task``
+            already partitions, just under a different rubric).
+          * ``sequential`` — fallback. Forms, login flows, anything with
+            stateful dependencies between iterations.
+
+        Pure analysis: writes only ``plan.loop_groups`` and never
+        mutates ``plan.steps`` or any other field.
+        """
+        plan.loop_groups = []
+        for idx, step in enumerate(plan.steps):
+            if step.type != "loop":
+                continue
+            target = step.loop_target if step.loop_target >= 0 else idx
+            # Guard against a loop that targets ahead of itself (Claude
+            # occasionally emits this when the body is empty); treat as
+            # zero-length body — un-fan-outable by definition.
+            start = max(0, min(target, idx))
+            end = idx  # half-open
+            body = plan.steps[start:end]
+            shape = PlanDecomposer._loop_body_shape(body)
+            plan.loop_groups.append(
+                LoopGroup(loop_step_idx=idx, body_range=(start, end), shape=shape)
+            )
+            logger.info(
+                "  [loop-classifier] step %d body=[%d, %d) → shape=%s",
+                idx, start, end, shape,
+            )
+
+    @staticmethod
+    def _loop_body_shape(body: list[MicroIntent]) -> str:
+        if not body:
+            return "sequential"
+        types = [s.type for s in body]
+        # Pagination outer loop: a body whose only meaningful step is
+        # ``paginate`` (other steps may bracket it for filter cleanup,
+        # but ``paginate`` is the terminal action that defines the loop
+        # unit). Check this BEFORE the url-collect case so a loop body
+        # of just ``paginate → loop`` doesn't fall through.
+        if "paginate" in types and "extract_data" not in types:
+            return "parallelizable_pagination"
+        # URL-collect extraction loop: body opens on a ``click`` in the
+        # extraction section AND contains ``extract_url``. This is the
+        # canonical shape the prompt produces for "find each listing →
+        # open → extract" plans. The presence of ``extract_url`` proves
+        # the per-iteration unit is anchored on a distinct URL — exactly
+        # the partition key the fan-out runner needs (#615 collects them
+        # up front so the fan-out workers can navigate directly).
+        first = body[0]
+        if (
+            first.type == "click"
+            and first.section == "extraction"
+            and "extract_url" in types
+        ):
+            return "parallelizable_url_collect"
+        return "sequential"
 
     # ── Plan-shape extraction (parsed from Claude's JSON output) ────────
 
