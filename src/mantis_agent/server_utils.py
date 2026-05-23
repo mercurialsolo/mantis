@@ -1105,6 +1105,7 @@ def build_micro_suite(
     settle_ceiling_seconds: float | None = None,
     max_recoveries_per_run: int | None = None,
     max_recoveries_per_step: int | None = None,
+    loop_groups: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
@@ -1178,6 +1179,13 @@ def build_micro_suite(
         suite["_max_recoveries_per_run"] = int(max_recoveries_per_run)
     if max_recoveries_per_step is not None:
         suite["_max_recoveries_per_step"] = int(max_recoveries_per_step)
+    # #617: persist plan-level loop classifications so the Modal fan-out
+    # orchestrator can route parallelizable loops without re-running the
+    # classifier on the deserialised plan. ``None`` (or empty) leaves
+    # the field off — the orchestrator falls back to recomputation in
+    # that case for plans persisted before this field existed.
+    if loop_groups:
+        suite["_loop_groups"] = list(loop_groups)
     return suite
 
 

@@ -2745,6 +2745,17 @@ def main(
             objective_dict = graph.objective.to_dict()
 
         steps_dicts = micro_plan_steps_to_dicts(micro_plan.steps)
+        # #617: serialize plan-level loop classifications so the Modal
+        # fan-out orchestrator can route parallelizable loops without
+        # re-running the classifier on the deserialised plan in-container.
+        loop_groups_dicts = [
+            {
+                "loop_step_idx": g.loop_step_idx,
+                "body_range": list(g.body_range),
+                "shape": g.shape,
+            }
+            for g in micro_plan.loop_groups
+        ]
         task_suite = build_micro_suite(
             steps_dicts,
             micro_plan.domain,
@@ -2755,6 +2766,7 @@ def main(
             profile_id=profile_id,
             workflow_id=workflow_id,
             objective=objective_dict,
+            loop_groups=loop_groups_dicts,
         )
 
         print(f"  Profile:  {task_suite['_profile_id']}")
@@ -2798,8 +2810,50 @@ def main(
         task_suite_obj["_proxy_state"] = proxy_state
         task_file_contents = json.dumps(task_suite_obj)
 
-    # ── Auto-parallelize looped tasks ──────────────────────────────
+    # ── #617: generic fan-out via plan-level loop_groups ──────────────
+    # Preferred path when the submitted micro_plan carries
+    # parallelizable_pagination loop_groups (set by PlanDecomposer's
+    # #614 classifier). Drops the BoatTrader-specific `_make_page_task`
+    # hardcode in favor of MicroPlan.loop_groups + the partition
+    # synthesizer in mantis_agent.gym.fanout_runner.
     task_suite = json.loads(task_file_contents)
+    if workers > 1 and task_suite.get("_micro_plan"):
+        from mantis_agent.gym.fanout_runner import prepare_modal_partitions
+        partitions = prepare_modal_partitions(task_suite, workers)
+        if partitions:
+            print(f"\n  ═══ FANOUT (loop_groups, #617): {len(partitions)} partition(s) × {workers} workers ═══")
+            executor_fn = EXECUTOR_MAP.get(model, run_holo3)
+            partition_handles = []
+            for i, sub_suite in enumerate(partitions):
+                sub_contents = json.dumps(sub_suite)
+                spawn_kwargs = {
+                    "task_file_contents": sub_contents,
+                    "max_steps": max_steps,
+                }
+                if model == "claude":
+                    spawn_kwargs["claude_model"] = claude_model
+                handle = executor_fn.spawn(**spawn_kwargs)
+                partition_handles.append((i, handle))
+                print(f"    [fanout] partition {i + 1}/{len(partitions)} spawned")
+
+            print(f"\n  Waiting for {len(partition_handles)} partition workers...")
+            merged_total = 0
+            for i, handle in partition_handles:
+                try:
+                    result = handle.get()
+                    score = result.get("score", 0)
+                    leads = result.get("leads_count", 0)
+                    merged_total += leads
+                    print(f"    [fanout] partition {i + 1}: score={score} leads={leads}")
+                except Exception as e:
+                    print(f"    [fanout] partition {i + 1}: ERROR — {e}")
+
+            print(f"\n  ═══ FANOUT RESULTS ═══")
+            print(f"  Partitions:  {len(partitions)}")
+            print(f"  Total leads: {merged_total}")
+            return
+
+    # ── Auto-parallelize looped tasks (legacy task.loop path) ───────
     tasks = task_suite.get("tasks", [])
     loop_tasks = [t for t in tasks if t.get("loop")]
     non_loop_tasks = [t for t in tasks if not t.get("loop")]

@@ -295,3 +295,184 @@ def _run_one_subplan(
     (ProcessPoolExecutor pickles the function reference)."""
     runner = runner_factory()
     return runner.run(plan)
+
+
+# ── Modal transport — partition prep (#617) ────────────────────────────
+
+
+DEFAULT_PAGINATION_URL_TEMPLATE = "{base}/page-{n}/"
+"""Per-page URL synthesis template. The boattrader convention is
+``{base}/page-{n}/`` — Zillow uses ``{base}?page={n}``, Facebook uses
+cursor-based pagination. Plans override via ``paginate.params['url_template']``
+in their decomposer output.
+
+The template is consumed by :func:`partition_urls_for_pagination`,
+which substitutes ``{base}`` (the setup-navigate URL stripped of any
+trailing slash) and ``{n}`` (the 1-indexed page number).
+"""
+
+
+def partition_urls_for_pagination(
+    base_url: str, max_pages: int,
+    *, template: str = DEFAULT_PAGINATION_URL_TEMPLATE,
+) -> list[str]:
+    """Synthesize one URL per page partition from a setup base URL.
+
+    Page 1 is the bare ``base_url`` (no template substitution) —
+    BoatTrader's first page is ``/by-owner/radius-25/``, not
+    ``/by-owner/radius-25/page-1/``. Pages 2..N use the template.
+
+    Returns a list of length ``max(1, max_pages)``. ``max_pages == 0``
+    is clamped to ``1`` so a misconfigured loop_count doesn't return
+    an empty partition list (which would silently produce zero
+    workers).
+    """
+    n = max(1, max_pages)
+    base = base_url.rstrip("/")
+    urls = [base_url]
+    for page in range(2, n + 1):
+        urls.append(template.format(base=base, n=page))
+    return urls
+
+
+def prepare_modal_partitions(
+    suite_dict: dict, workers: int,
+    *, max_pages: int | None = None,
+) -> list[dict]:
+    """Build per-partition task_suite dicts for the Modal fan-out path.
+
+    Reads:
+      - ``_micro_plan``: list of step dicts (PlanDecomposer.MicroIntent
+        form) — required.
+      - ``_loop_groups``: list of LoopGroup dicts (#614). Optional;
+        recomputed via the classifier when absent.
+
+    Behavior:
+      - If the plan has no parallelizable loop group, returns an
+        empty list (caller falls through to single-worker dispatch).
+      - For ``parallelizable_pagination``, synthesizes per-page URLs,
+        produces one sub-suite per page where the setup navigate URL
+        is rewritten and the outer pagination loop is dropped.
+      - For ``parallelizable_url_collect``, returns an empty list with
+        a WARNING — that shape needs the collect_urls → fan-out
+        bridge wired in a follow-up (see #618 follow-up).
+
+    ``max_pages`` overrides the loop step's ``loop_count`` when set
+    (operator can cap the parallelism without re-decomposing the plan).
+    """
+    from ..plan_decomposer import LoopGroup as _LG  # noqa: F401 — local for clarity
+
+    steps = suite_dict.get("_micro_plan") or []
+    if not steps:
+        return []
+
+    plan = MicroPlan(domain=str(suite_dict.get("session_name", "")))
+    from ..plan_decomposer import PlanDecomposer
+    for s in steps:
+        plan.steps.append(PlanDecomposer._build_intent(s))
+
+    groups_raw = suite_dict.get("_loop_groups")
+    if groups_raw:
+        plan.loop_groups = [
+            LoopGroup(
+                loop_step_idx=int(g.get("loop_step_idx", -1)),
+                body_range=tuple(g.get("body_range", (0, 0))),
+                shape=str(g.get("shape", "sequential")),
+            )
+            for g in groups_raw
+            if isinstance(g, dict)
+        ]
+    else:
+        PlanDecomposer._classify_loop_groups(plan)
+
+    pagination_group = next(
+        (g for g in plan.loop_groups if g.shape == "parallelizable_pagination"),
+        None,
+    )
+    if pagination_group is None:
+        url_collect = next(
+            (g for g in plan.loop_groups if g.shape == "parallelizable_url_collect"),
+            None,
+        )
+        if url_collect is not None:
+            logger.warning(
+                "  [fanout/modal] plan has parallelizable_url_collect group but "
+                "no pagination group — url-collect fan-out not yet wired into "
+                "the Modal transport (follow-up issue). Falling through to "
+                "single-worker dispatch."
+            )
+        return []
+
+    # Resolve the setup navigate URL (the first navigate step's URL).
+    base_url = ""
+    for step in plan.steps:
+        if step.type == "navigate":
+            base_url = (step.params or {}).get("url", "")
+            if base_url:
+                break
+    if not base_url:
+        logger.warning(
+            "  [fanout/modal] no setup navigate URL found — can't synthesize "
+            "partition URLs. Falling through to single-worker dispatch."
+        )
+        return []
+
+    paginate_step = plan.steps[pagination_group.body_range[0]] if pagination_group.body_range[0] < len(plan.steps) else None
+    template = DEFAULT_PAGINATION_URL_TEMPLATE
+    if paginate_step is not None and paginate_step.type == "paginate":
+        custom = (paginate_step.params or {}).get("url_template")
+        if isinstance(custom, str) and "{base}" in custom and "{n}" in custom:
+            template = custom
+
+    pages = max_pages if max_pages else (
+        plan.steps[pagination_group.loop_step_idx].loop_count or 5
+    )
+    partition_urls = partition_urls_for_pagination(
+        base_url, pages, template=template,
+    )
+
+    # Build per-partition sub-suites. Each sub-suite is a deep-ish copy
+    # of the parent — only ``_micro_plan`` is rewritten.
+    sub_suites: list[dict] = []
+    body_start, _body_end = pagination_group.body_range
+    loop_idx = pagination_group.loop_step_idx
+    for partition_url in partition_urls:
+        sub_plan_steps: list[dict] = []
+        for i, step_dict in enumerate(steps):
+            # Drop the pagination loop body steps + the loop step
+            # itself — each worker is single-page, no pagination
+            # iteration needed.
+            if i >= body_start and i <= loop_idx:
+                continue
+            cloned = dict(step_dict)
+            # Rewrite the first navigate's URL to this partition.
+            if (
+                cloned.get("type") == "navigate"
+                and cloned.get("section") in ("setup", "", None)
+                and cloned.get("params", {}).get("url") == base_url
+            ):
+                cloned_params = dict(cloned.get("params", {}))
+                cloned_params["url"] = partition_url
+                cloned["params"] = cloned_params
+                cloned["intent"] = f"Navigate to {partition_url}"
+            sub_plan_steps.append(cloned)
+        sub_suite = dict(suite_dict)
+        sub_suite["_micro_plan"] = sub_plan_steps
+        # The sub-suites are single-page now; drop loop_groups so the
+        # child container doesn't try to re-fan-out.
+        sub_suite.pop("_loop_groups", None)
+        sub_suite["session_name"] = (
+            f"{suite_dict.get('session_name', 'fanout')}_p{len(sub_suites) + 1}"
+        )
+        sub_suites.append(sub_suite)
+
+    if workers > 0:
+        # The caller may use fewer workers than partitions; we still
+        # return one sub-suite per partition (the Modal driver assigns
+        # them to workers as they free up).
+        logger.warning(
+            "  [fanout/modal] prepared %d partition(s) for %d worker(s) "
+            "(template=%s base=%s)",
+            len(sub_suites), workers, template, base_url[:80],
+        )
+    return sub_suites
