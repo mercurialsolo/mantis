@@ -749,6 +749,15 @@ class PlanDecomposer:
                 for s in cached_steps:
                     plan.steps.append(self._build_intent(s))
 
+                # Issue #605: re-run loop-target normalization on cache
+                # load too. Cached plans from before this fix have
+                # ``loop_target: null`` (-> -1) on loop steps, which
+                # causes the runner to self-spin. The fix is idempotent,
+                # so running it on every load (cached or fresh) is safe
+                # and means we don't have to invalidate all existing
+                # cache files when shipping plan-normalization fixes.
+                self._fix_loop_targets(plan)
+
                 logger.info(f"Loaded cached micro-plan: {cache_path} ({len(plan.steps)} steps)")
                 return plan
             except Exception:
