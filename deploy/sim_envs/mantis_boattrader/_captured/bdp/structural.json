@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "captured_at": "2026-05-23T17:40Z",
+    "captured_at": "2026-05-23T18:30Z",
     "url": "https://www.boattrader.com/boat/2015-pioneer-197-sportfish-10079002/",
     "viewport": {"width": 1512, "height": 711, "devicePixelRatio": 2},
     "captured_via": "Chrome MCP getBoundingClientRect + getComputedStyle probes",
-    "note": "Two-column layout. Left column = gallery + thumbs + below-the-fold accordions. Right column (sticky-ish) = title + price + monthly + contact form."
+    "note": "Two-column layout. Left column = gallery + thumbs + below-the-fold accordions. Right column = title + price + monthly + contact form. This particular listing is private-seller (no 'Show Phone' button); below-fold sections (Similar Boats) lazy-load on scroll and may not appear in a single probe."
   },
 
   "page_layout": {
@@ -13,7 +13,21 @@
     "content_width": 1319,
     "left_col": {"x": 70, "width": 890},
     "right_col": {"x": 1039, "width": 334, "gap_from_left_col": 79},
-    "note": "Sandbox's BDP renders at ~1400px content (65px wider per existing FIDELITY.md row). Acceptable 🟡 per SCOPE.md."
+    "note": "Sandbox `.bdp-grid` now capped at max-width: 1336px (v=91) — matches real BT."
+  },
+
+  "next_previous_sticky_bar": {
+    "_real_class": ".next-previous (.next-previous-top after scroll)",
+    "rect": {"width": 1512, "height": 54},
+    "position": "sticky",
+    "top": "0px",
+    "always_visible": true,
+    "note": "Real BT keeps this navigation bar (Previous Boat / Next Boat) ALWAYS sticky at top, full viewport width (1512px), 54px tall. After scrolling past ~100px, gets a `.next-previous-top` modifier class. Sandbox does NOT replicate this widget — sandbox's only sticky bar is the v=58 `.bdp-scrolled` body class that triggers after 320px scroll for a title+price+contact mini-bar. Different concept; documented as 🟡 if exact parity matters."
+  },
+
+  "right_rail_sticky": {
+    "_status": "NOT sticky on probed listing — sandbox doesn't make right-rail contact form sticky either",
+    "note": "Verified at scroll y=700 on real BT: no sticky right-rail elements between 0-80px from top with width 200-500px."
   },
 
   "breadcrumb": {
@@ -29,11 +43,8 @@
   "gallery_and_thumbs": {
     "_real_class": ".style-module_imageCarousel.style-module_thumbnails",
     "rect": {"width": 890, "height": 727, "x": 70},
-    "style": {
-      "background": "rgb(255, 255, 255)",
-      "borderRadius": "8px"
-    },
-    "note": "Container holds main image + thumbnail strip + 'View 22 Photos' overlay button. 890px wide, 727px tall. Thumbnail strip ~175×116 per FIDELITY.md row 'Thumbnail strip'."
+    "thumbnail_size": {"width": 175, "height": 116},
+    "note": "Container holds main image + 5-thumb strip + 'View 22 Photos' overlay. Sandbox auto-fits to 175×116 via .bdp-grid max-width capping (v=91)."
   },
 
   "title_block_right_rail": {
@@ -41,11 +52,7 @@
       "_real_class": ".style-module_heading.style-module_heading-1",
       "_real_text": "2015 Pioneer 197 Sportfish",
       "rect": {"width": 248, "height": 23, "x": 1039, "y": 263},
-      "style": {
-        "fontSize": "20px",
-        "fontWeight": "700",
-        "color": "rgb(51, 51, 51)"
-      }
+      "style": {"fontSize": "20px", "fontWeight": "700", "color": "rgb(51, 51, 51)"}
     },
     "main_price": {
       "_real_text": "$25,900",
@@ -57,48 +64,46 @@
       "_real_text": "$4,000",
       "rect": {"width": 54, "height": 24, "x": 1132, "y": 322},
       "style": {"fontSize": "18px"},
-      "_real_class": ".style-module_content.style-module_content-10",
       "tag": "P",
-      "note": "Sits directly to the right of main_price (x=1132 = price.x + price.w + ~20px gap). Real BT probably uses a flex row to hold both."
+      "note": "Sits inline-right of main price; both share a flex row."
     }
   },
 
-  "contact_form_right_rail": {
-    "_real_class": ".lead-form-basic__body",
-    "rect": {"width": 334, "height": 260, "x": 1055},
-    "style": {
-      "fontSize": "16px",
-      "color": "rgb(71, 76, 74)"
-    },
-    "note": "Sits below the title/price block in the right rail. 334px wide × 260px tall. Includes Name, Email, Phone, Message fields + submit button."
+  "below_fold_accordions_verified": {
+    "_note": "Verified heading levels via real BT 2026-05-23 probe at /boat/2015-pioneer-197-sportfish/",
+    "h2_20_700": ["What Owners Say", "Owner Highlights", "Boat Details"],
+    "h3_16_700": ["Description", "Measurements", "Propulsion"],
+    "h4_14_700": ["Dimensions", "Weights", "Tanks"],
+    "h3_24_700": ["Still have a question?"],
+    "h3_18_700": ["Contact Private Seller"],
+    "not_found_on_this_listing": ["More Details", "Location", "Similar Boats", "Show Phone"],
+    "note": "More Details / Location headings — earlier FIDELITY claim that they use H4 is unverifiable today (sections not visible on probed listings). Similar Boats appears to lazy-load below the viewport. Show Phone is dealer-only (this listing is private-seller)."
   },
 
-  "below_fold_accordions": {
-    "_layout": "Stacked H3 accordion sections in the left column under the gallery: Description, Measurements, Propulsion, More Details, Location, Boat Loan Calculator preview.",
-    "_known_matches_in_fidelity_md": [
-      "Measurements subsection uses H4 (Dimensions / Weights / Tanks)",
-      "Real BT may use H4 for More Details + Location headers; sandbox uses H3 — documented 🟡 gap"
-    ]
+  "right_rail_contact_form": {
+    "_real_class": ".lead-form-basic__body",
+    "rect": {"width": 334, "height": 260, "x": 1055},
+    "style": {"fontSize": "16px", "color": "rgb(71, 76, 74)"},
+    "note": "Below the title/price block. Includes Name / Email / Phone / Message fields + submit button."
   },
 
   "_known_matches_in_fidelity_md": [
-    "BDP grid 1fr+80+366 (v=47) — sandbox: grid-template-columns: 1fr 366px; gap: 80px",
+    "BDP grid 1fr+80+366 with max-width 1336px (v=91)",
     "BDP back/next colors (v=57)",
     "BDP gallery 3:2 aspect (v=79)",
     "Sticky breadcrumb 15/400/#333 (v=58)",
-    "Boat Details bg (v=56)",
-    "BDP description max-width 780px",
-    "Lead form inputs 4px radius, outline button 2px (v=55)",
-    "Days listed → 'Listed N days ago' (matched)"
+    "Description / Measurements / Propulsion accordion = H3 16/700 (verified v=91)",
+    "Dimensions / Weights / Tanks subheading = H4 14/700 (verified v=91)",
+    "Owner Highlights = H2 20/700 (v=91 — flipped from H3)",
+    "Lead form inputs 4px radius, outline button 2px (v=55)"
   ],
 
   "_open_followups": [
-    "Probe show-phone reveal flow (real BT uses 'Show phone' link that swaps to digits)",
-    "Probe sticky title bar that appears on scroll past gallery (likely 320px threshold per base.html JS)",
-    "Probe Similar Boats card rail (likely matches SRP listing card)",
-    "Capture POST /boat/<slug>/contact request shape (form fields, content-type)",
-    "Measure BDP content width gap: real 1319 vs sandbox 1400 (65-81px wider — accept or fix)"
+    "Probe Similar Boats card rail when it appears (lazy-loaded; not visible in a single-scroll probe)",
+    "Probe Show Phone button on a dealer listing (this listing was private-seller)",
+    "Decide whether to add real BT's `.next-previous` always-sticky navigation bar (Previous/Next Boat) to sandbox — currently absent",
+    "Measure dealer-card geometry on a dealer listing (real BT renders a 'Contact Dealer' card with phone + dealer logo; sandbox renders dealer info inline)"
   ],
 
-  "_capture_methodology": "Open any /boat/<slug>/ at 1512px, scroll to make each section visible, probe per element. The right rail is the canonical anchor: x=1039–1389 holds title + price + contact form. Left column 890px wide holds gallery + below-fold accordions."
+  "_capture_methodology": "Open any /boat/<slug>/ at 1512px, scroll to make each section visible, probe per element. The right rail (x=1039–1389) is the canonical anchor for title + price + contact form. Lazy-loaded sections require multiple scroll passes."
 }

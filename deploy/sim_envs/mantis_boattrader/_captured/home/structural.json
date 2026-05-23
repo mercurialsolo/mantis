@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "captured_at": "2026-05-23T17:40Z",
+    "captured_at": "2026-05-23T18:30Z",
     "url": "https://www.boattrader.com/",
     "viewport": {"width": 1512, "height": 711, "devicePixelRatio": 2},
     "captured_via": "Chrome MCP getBoundingClientRect + getComputedStyle probes",
-    "note": "Home page is a narrow hero card (~296px) overlaid on a full-bleed hero image, with full-width section rails below (Boats Near You, Featured Brands, Popular Types, Popular Boats, Articles). Hero card holds H1 + AI search form."
+    "note": "Home page is a narrow hero card (~296px) overlaid on a hero image, with full-width section rails below. Two heading sizes coexist: 15/700 for boat-listing subsections (Boats Near You) and 22.5/700 for major sections (Featured Brands, Popular Boats, Recent Articles)."
   },
 
   "hero_card": {
@@ -21,27 +21,57 @@
       "fontWeight": "700",
       "color": "rgb(255, 255, 255)"
     },
-    "note": "Bold white text directly above the search form, same 14px x inset. Implies the hero card contains both H1 and form stacked vertically over the hero image."
+    "note": "Bold white text directly above the search form, same 14px x inset. Hero card contains H1 + form stacked vertically over the hero image."
   },
 
-  "section_rails": {
-    "_layout": "Each section is a full-width row with an H2 header followed by a horizontal scrollable card rail.",
+  "section_headings": {
+    "_note": "Real BT uses two H2 sizes on home: 15/700 for boat-listing subsections, 22.5/700 for major content sections.",
     "boats_near_you": {
-      "_h2_text": "Boats Near You",
-      "_h2_subtext": "Based on your location",
-      "h2_rect": {"width": 1488, "height": 20, "x": 12, "y": 586},
-      "h2_style": {
-        "fontSize": "15px",
-        "fontWeight": "700",
-        "color": "rgb(51, 51, 51)"
-      },
-      "note": "Subtext 'Based on your location' renders inline after the heading text — same H2 element, separator likely a span or a hyphen."
+      "_real_text": "Boats Near You Based on your location",
+      "rect": {"width": 1488, "height": 20, "x": 12, "y": 586},
+      "style": {"fontSize": "15px", "fontWeight": "700", "color": "rgb(51, 51, 51)"},
+      "subtext_inline": "Based on your location (rendered inline after the heading)"
     },
-    "featured_brands": {"_status": "TODO — section present per headings_h2 enumeration, not individually probed"},
-    "popular_boat_types": {"_status": "TODO"},
-    "popular_boats": {"_status": "TODO"},
-    "recent_articles": {"_status": "TODO"},
-    "why_boattrader": {"_status": "TODO — present in section enumeration"}
+    "featured_brands": {
+      "_real_text": "Featured Brands",
+      "rect": {"x": 30, "width": 1452},
+      "style": {"fontSize": "22.5px", "fontWeight": "700"}
+    },
+    "popular_boats": {
+      "_real_text": "Popular Boats",
+      "rect": {"x": 75, "width": 1347},
+      "style": {"fontSize": "22.5px", "fontWeight": "700"}
+    },
+    "recent_articles": {
+      "_real_text": "Recent Articles",
+      "rect": {"x": 60, "width": 1392},
+      "style": {"fontSize": "22.5px", "fontWeight": "700"}
+    },
+    "popular_boat_types": {
+      "_status": "not found in 2026-05-23 probe — section may have been removed or renamed since the FIDELITY.md row was written"
+    }
+  },
+
+  "tile_geometry": {
+    "boats_near_you_card": {
+      "_real_class": "anchor in .recommended-boats",
+      "rect_per_tile": {"width": 363, "height": 120},
+      "layout": "Horizontal 4-up card row (1488/4 ≈ 372 per tile, slight 9px gap)",
+      "_known_match_in_fidelity_md": "Same listing-card shape as SRP (matched ✅)"
+    },
+    "featured_brand_tile": {
+      "_real_class": ".style-module_link__Q9Bge",
+      "rect_per_tile": {"width": 266, "height": 161},
+      "layout": "5-up grid (1452/5 ≈ 290 per slot, 24px gap → 266 tile width)"
+    },
+    "recent_article_card": {
+      "_real_class": "anchor wrapping article element",
+      "rect_per_tile": {"width": 325, "height": 317},
+      "layout": "4-up grid (1392/4 ≈ 348, with gaps → ~325 per tile)"
+    },
+    "popular_boats_tile": {
+      "_status": "Heading present at x=75 w=1347 but tiles not in 2026-05-23 probe scope (lazy-loaded below fold)"
+    }
   },
 
   "_known_matches_in_fidelity_md": [
@@ -50,13 +80,11 @@
     "Footer + columns match real BT layout"
   ],
 
-  "_capture_methodology": "Open https://www.boattrader.com/ at 1512px viewport, scroll through each section to make it visible, then run the structural probe per section. The top-of-page hero rendering is unusual — H1 + form are inside a narrow 296px card overlaid on the hero image, not full-width.",
+  "_capture_methodology": "Open https://www.boattrader.com/ at 1512px viewport, scroll through each section to make it visible, then run the structural probe per section. Tile measurements taken from the first 3 children of each section's container. Lazy-loaded sections (Similar Boats, etc.) may require additional scroll triggers.",
 
   "_open_followups": [
-    "Probe Featured Brands tile geometry (size, gap, brand-tile background)",
-    "Probe Popular Boat Types tile rail",
-    "Probe Popular Boats card rail (likely same as SRP listing card)",
-    "Probe Why BoatTrader section",
-    "Probe Recent Articles card rail"
+    "Probe Popular Boats card-rail tile dimensions (heading found but tiles not visible without lazy load)",
+    "Verify whether 'Popular Boat Types' section still exists on real BT (not found in 2026-05-23 probe)",
+    "Probe Why BoatTrader / Sell My Boat sections (if present)"
   ]
 }

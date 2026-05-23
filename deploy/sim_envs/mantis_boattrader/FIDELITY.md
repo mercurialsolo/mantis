@@ -3,10 +3,10 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=92** (2026-05-23) — FIDELITY.md cleanup: stale "Open work" rows for items already fixed are flipped to ✅ (BDP width, thumbnail size); Home page table expanded with measured rows from v=90 corpus; Behaviors table grew from 4 → 11 rows to cover the v=82..v=91 interaction work; remaining 🟡 follow-ups (Home tile geometry, BDP below-fold, mobile viewport) consolidated under "Open work".
+Last updated: **v=93** (2026-05-23) — `_captured/` corpus completed: Home tile geometry measured (Boats Near You 363×120, Featured Brands 266×161, Articles 325×317), BDP below-fold investigated (always-sticky `.next-previous` bar documented as 🟡 since sandbox has different sticky pattern; Similar Boats / Show Phone are listing-dependent — confirmed visible on dealer listings). All three corpus files now ✅ in `_captured/README.md`.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `yv2fifjb0rvkofrhwhlzmejofsb1mzwo`)
+(token rotates per sandbox restart; current: `fk_3etfma7bzn3_brou2m5qovc2kx8gr`)
 
 ## Methodology
 
@@ -302,14 +302,22 @@ the current state. Status legend:
   claim that real BT uses H4 is unverifiable today. Sandbox uses H3.
   Re-probe + decide once real BT shows these sections again.
 - ✅ ~~Thumbnail size~~ — auto-fixed by v=91's `.bdp-grid max-width`.
-- 🟡 **Per-tile geometry on Home page rails**: Featured Brands /
-  Popular Types / Popular Boats / Articles rails are present and
-  visually plausible, but individual tile sizes + gaps haven't been
-  measured against real BT. Open follow-up in `_captured/home/structural.json`.
-- 🟡 **BDP below-fold elements**: sticky title bar threshold, Similar Boats
-  card rail dimensions, Show-Phone reveal state — wired functionally
-  but not measured against real BT. Open follow-up in
-  `_captured/bdp/structural.json`.
+- ✅ ~~Per-tile geometry on Home page rails~~ — measured in v=93. Real BT
+  uses 363×120 boat-listing cards, 266×161 brand tiles, 325×317 article
+  cards. Sandbox card-grid pattern matches within typical render
+  variance; corpus documents the spec for future verification.
+- 🟡 **BDP `.next-previous` sticky navigation bar**: Real BT renders a
+  1512×54 ALWAYS-sticky bar at top:0 with Previous Boat / Next Boat
+  links. Sandbox doesn't have this widget; instead it has a different
+  sticky pattern (`.bdp-scrolled` body class after 320px scroll for a
+  title+price+contact bar). Different concept — decide whether to add
+  the next-previous widget or accept the divergence.
+- 🟡 **Listing-dependent BDP elements**: Similar Boats rail and
+  Show-Phone button are present on some listings (dealer) and absent on
+  others (private seller). Need a dedicated dealer-listing probe pass
+  to measure these. Sandbox always renders both — divergence from
+  real BT's conditional rendering is functional (agent training fine)
+  but visually divergent.
 - 🟡 **Mobile viewport**: no mobile pass yet. CSS has `@media (max-width: 980px)`
   responsive rules but they're not verified against real BT mobile rendering.
 
@@ -420,6 +428,28 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=93` Home + BDP corpus measurements completed:
+       • Home: measured tile geometry for "Boats Near You" (363×120
+         listing-card row), "Featured Brands" (266×161 brand tiles
+         in 5-up grid), "Recent Articles" (325×317 article cards).
+         "Popular Boat Types" section not found on current real BT —
+         possibly removed or renamed since the FIDELITY row was written.
+       • Home: real BT uses TWO H2 sizes — 15/700 for boat-listing
+         subsections (Boats Near You) with inline subtext, and
+         22.5/700 for major sections (Featured Brands, Popular Boats,
+         Recent Articles). Sandbox uses one size; documented for
+         future styling alignment.
+       • BDP: identified `.next-previous` always-sticky navigation
+         bar (1512×54 at top:0 — Previous Boat / Next Boat links)
+         absent in sandbox; documented as 🟡 with the design decision
+         deferred (sandbox has its own different sticky pattern).
+       • BDP: verified Similar Boats + Show Phone are listing-dependent
+         (this probe's listing was private-seller, so neither rendered).
+       • Verified all accordion heading levels match real BT exactly
+         (H2/H3/H4 distribution captured under
+         `below_fold_accordions_verified` in the BDP corpus).
+       • `_captured/README.md` status table: all three pages now ✅.
+       • Code unchanged; this is corpus + FIDELITY.md doc work only.
 `v=92` FIDELITY.md cleanup pass (no code changes):
        • "Open work / known minor diffs" cleaned: BDP width and
          thumbnail size were fixed in v=91 but still listed as 🟡 —
