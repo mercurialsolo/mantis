@@ -761,9 +761,9 @@ placeholders ``{base}`` (the setup-navigate URL stripped of trailing slash)
 and ``{n}`` (the 1-indexed page number). Common patterns observed in the
 wild:
 
-  * BoatTrader-style path segment:    "{base}/page-{n}/"
-  * Zillow / generic query parameter: "{base}?page={n}"
-  * Algolia-style ampersand append:   "{base}&p={n}"
+  * Path segment with prefix:         "{base}/page-{n}/"
+  * Generic query parameter:          "{base}?page={n}"
+  * Ampersand append (mid-query):     "{base}&p={n}"
   * Indexed page-N suffix:            "{base}/p/{n}"
 
 If the source plan shows either an example URL with a page number
@@ -838,7 +838,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v32_pagination_url_template"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v32_pagination_url_template_neutral"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

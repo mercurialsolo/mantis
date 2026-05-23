@@ -267,8 +267,13 @@ class ClaudeStepHandler:
             # extract_data Claude cost (~$0.20) on a confirmed duplicate.
             # NullSharedSeenSet.contains() returns False → unchanged
             # behaviour for single-worker / non-fanout runs.
+            #
+            # ``contains(url) is True`` rejects MagicMock fakes whose
+            # auto-generated .contains returns a truthy Mock — without
+            # that the test_listing_card_grounding fakes would trip
+            # this gate and silently turn every URL into a DUPLICATE.
             shared = getattr(runner, "_shared_seen_set", None)
-            if url and shared is not None and shared.contains(url):
+            if url and shared is not None and shared.contains(url) is True:
                 logger.warning(
                     "  [shared-seen] cross-worker dedup hit: %s "
                     "(step=%d, shared set size=%d)",
