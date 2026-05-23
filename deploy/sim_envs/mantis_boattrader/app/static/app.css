@@ -767,9 +767,15 @@ header.main {
 }
 .filter-group summary::-webkit-details-marker { display: none; }
 .filter-group-label {
-  font-weight: 400;
-  color: var(--bt-text);
-  font-size: 15px;
+  /* Real BT renders all section headings (Location / Condition /
+     Length / …) as 16/500 medium #404040 — verified across all
+     `.toggle-btn` elements in the .tool-set at 1512px viewport
+     (v=94 typography diff). Sandbox was 15/400 #333, visibly lighter
+     and 1px smaller. */
+  font-weight: 500;
+  color: #404040;
+  font-size: 16px;
+  line-height: 20px;
 }
 .filter-chevron {
   width: 10px;
@@ -855,7 +861,11 @@ header.main {
   text-align: right;
   font-size: 14px;
   font-weight: 400;
-  margin-top: 8px;
+  /* Real BT uses `margin: -16px 0 15px` so the link tucks UP against
+     the zip-row above (saves vertical space — the zip-row has ~30px
+     of bottom whitespace from its 19px top padding + the row content).
+     v=94 typography diff. */
+  margin: -16px 0 15px;
   color: var(--bt-blue);
   text-decoration: underline;
   text-decoration-color: var(--bt-blue);
@@ -887,17 +897,21 @@ header.main {
 }
 .filter-options {
   list-style: none;
-  margin: 0 0 12px;
-  padding: 0;
+  /* Real BT uses `background: #f7f7f7; padding: 8px; margin: 0 0 15px`
+     instead of a 1px outer border (v=94 typography diff). The light
+     grey backdrop groups the rows visually without a line. Inner row
+     separators come from a 1px #ededed border-bottom on each li. */
+  margin: 0 0 15px;
+  padding: 8px;
   max-height: 270px;
   overflow-y: auto;
-  border: 1px solid #ededed;
-  border-radius: 4px;
+  background: #f7f7f7;
+  border-radius: 8px;
 }
 .filter-options li {
   margin: 0;
   padding: 0;
-  border-bottom: 1px solid #f4f4f4;
+  border-bottom: 1px solid #ededed;
 }
 .filter-options li:last-child { border-bottom: 0; }
 .filter-options li.hidden { display: none; }
@@ -907,11 +921,14 @@ header.main {
   gap: 10px;
   padding: 10px 12px;
   cursor: pointer;
-  font-size: 14px;
+  /* Real BT renders the visible row text at 15/400 #333 (v=94). */
+  font-size: 15px;
   color: var(--bt-text);
   line-height: 1.2;
 }
-.filter-options li:hover label { background: #f7f7f7; }
+/* Parent is now #f7f7f7 (v=94), so hover uses a slightly cooler tint
+   to stay visible against the backdrop. */
+.filter-options li:hover label { background: #ededed; }
 .filter-options input[type="checkbox"] {
   position: absolute;
   width: 0;

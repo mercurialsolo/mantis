@@ -3,10 +3,10 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=93** (2026-05-23) — `_captured/` corpus completed: Home tile geometry measured (Boats Near You 363×120, Featured Brands 266×161, Articles 325×317), BDP below-fold investigated (always-sticky `.next-previous` bar documented as 🟡 since sandbox has different sticky pattern; Similar Boats / Show Phone are listing-dependent — confirmed visible on dealer listings). All three corpus files now ✅ in `_captured/README.md`.
+Last updated: **v=94** (2026-05-23) — Typography diff fixes from side-by-side probe: section headings 15/400 #333 → 16/500 #404040; `.zip-use-location` margin `8px 0 0` → `-16px 0 15px` (tightens against zip row, matches real BT); `.filter-options` outer border → `bg #f7f7f7; padding: 8px` (real BT's softer container); list-item label 14px → 15px.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `fk_3etfma7bzn3_brou2m5qovc2kx8gr`)
+(token rotates per sandbox restart; current: `-jpdhhyruvelh-h7yhep-czjfogk72vv`)
 
 ## Methodology
 
@@ -111,19 +111,19 @@ the current state. Status legend:
 | Save Search button | 270×40, blue pill, 16/700, 50px br | 270×40, same | ✅ |
 | Save Search → Location gap | ~50-60px | 51px | ✅ |
 | Section divider | 2px solid #ededed | 2px solid #ededed (v=82) | ✅ |
-| Section label | 15/400 #333 | 15/400 #333 | ✅ |
+| Section label (toggle-btn text) | 16/500 #404040 line-height 20px | 16/500 #404040 line-height 20px (v=94 — was 15/400 #333) | ✅ |
 | Chevron | down arrow ~10px | down arrow ~10px via border trick | ✅ |
 | Zip/City/Other segmented | 282×59 gray track, 50px br, 4px pad | 280×59 same shape (v=82: flex layout) | ✅ |
 | Active tab label wrap | "Zip\nCode" (2 lines), forced by narrow cell | explicit `<br>` in markup (v=82) — Roboto's narrow rendering would wrap naturally, but sandbox's system font doesn't | ✅ |
 | 25 miles select | 106×40, 1px #ededed, 8px br | 106×40, same | ✅ |
 | Zip input | 100×40 fixed (not flex) | 100×40 fixed (v=82) | ✅ |
 | "from" label | 16px #5E5E5E, margin 0 16px | 16px #5E5E5E, margin 0 16px (v=82) | ✅ |
-| "Use My Location" | underlined, 14/400, blue, right-aligned | underlined, 14/400, blue, right-aligned (v=82) | ✅ |
+| "Use My Location" | underlined, 14/400, blue, right-aligned, **margin: -16px 0 15px** (tucks up against zip row) | underlined, 14/400, blue, right-aligned, `margin: -16px 0 15px` (v=94 — was margin-top: 8px) | ✅ |
 | Zip input focus | border-color → blue, no outline | border 1.5px blue + 0.5px shadow ring (v=82) | ✅ |
 | 5-digit zip auto-submit | typing 5 digits navigates to `?zip=NNNNN` | debounced 250ms form.submit() in base.html (v=82) | ✅ |
 | Price Drop control | `.switch.toggleButton` 50×26, white 22×22 thumb, slides on click; Material Icons `info` (24×24 #c2c2c2) next to label | `.switch` div with white thumb, `:has(input:checked)` toggles blue + slides right; inline SVG info icon 18×18 #c2c2c2 (v=83) | ✅ |
 | Price Drop label | "Price Drop" + info icon | "Price Drop" + info icon (v=83; was "Price Drop only" + checkbox) | ✅ |
-| Boat Type / Make filter UI | Search input (270×40, 4px br, magnifier icon) + `ul.opts` (270 wide, 270 maxH, scroll) + 40px-tall checkbox `<li>` items | Same — `.filter-search-wrap` + `.filter-options` + custom-styled `.filter-opt-checkbox` (v=84) | ✅ |
+| Boat Type / Make filter UI | Search input (270×40, 4px br, magnifier icon) + `ul.opts` (270 wide, 270 maxH, scroll, **bg #f7f7f7, padding 8px, no outer border**) + 40px-tall `<li>` items with **15/400 #333** text | Same — `.filter-search-wrap` + `.filter-options` (bg #f7f7f7, padding 8px, v=94) + custom-styled `.filter-opt-checkbox`; label text 15px (v=94 — was 14px) | ✅ |
 | Fuel Type / Hull filter UI | `ul.opts` checkbox list (no search input — small list) | Same — `.filter-options` only (v=84) | ✅ |
 | Beam / Max Draft | Range slider + No Min/No Max number inputs | Same | ✅ |
 | Default-closed sections | Boat Type / Make / Beam / Max Draft / Fuel / Hull / Engines / For Sale By all start `closed` | Beam / Max Draft / Fuel / Hull / Engines / For Sale By already closed; Boat Type + Make flipped to closed in v=84 | ✅ |
@@ -428,6 +428,30 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=94` Typography diff fixes (side-by-side probe of filter panel):
+       • `.filter-group-label`: 15/400 #333 → **16/500 #404040** with
+         line-height 20px. Verified against all real BT section
+         `.toggle-btn` elements (Location / Condition / Length /
+         Year / Price / Boat Type / Make / Beam / Max Draft / Fuel /
+         Hull / Engines / For Sale By) — all render at the same spec.
+       • `.zip-use-location`: `margin-top: 8px` → **`margin: -16px 0
+         15px`**. Real BT pulls the link UP toward the zip-row above
+         using a negative top margin so it visually tucks under
+         the row instead of sitting below it.
+       • `.filter-options`: outer `1px #ededed border` → **`background:
+         #f7f7f7; padding: 8px`** with `border-radius: 8px`. Real BT
+         uses a soft grey backdrop instead of a hard border to group
+         the scrollable list.
+       • `.filter-options li:hover label`: hover bg #f7f7f7 → **#ededed**
+         so the hover stays visible against the new #f7f7f7 parent.
+       • `.filter-options label`: font-size 14 → **15px**. Real BT
+         renders the visible list-item text at 15px / weight 400 #333.
+       • Cache-buster bumped to `?v=94`.
+       • 4 new fidelity tests: section-heading 16/500/#404040,
+         use-my-location negative-top-margin, filter-options grey
+         backdrop, filter-options label 15px. Suite now **35 passing**.
+       • Live-verified via Chrome MCP probe — all 4 computed-style
+         values byte-match real BT.
 `v=93` Home + BDP corpus measurements completed:
        • Home: measured tile geometry for "Boats Near You" (363×120
          listing-card row), "Featured Brands" (266×161 brand tiles

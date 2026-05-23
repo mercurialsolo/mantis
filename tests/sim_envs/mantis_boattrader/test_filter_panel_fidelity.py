@@ -338,6 +338,43 @@ def test_app_css_cache_buster_is_current(srp_html):
     )
 
 
+# ── v=94 typography diff fixes ────────────────────────────────────────
+
+
+def test_section_heading_is_16_500_404040(base_css):
+    """v=94: all section headings (Location / Condition / Length / …)
+    on real BT use 16/500/#404040. Sandbox was 15/400 #333."""
+    block = _rule_block(base_css, ".filter-group-label {")
+    assert "font-weight: 500" in block
+    assert "font-size: 16px" in block
+    assert "color: #404040" in block
+
+
+def test_use_my_location_uses_negative_top_margin(base_css):
+    """v=94: real BT uses `margin: -16px 0 15px` on `.search-user-location`
+    to tuck the link up against the zip-row above. Sandbox was
+    `margin-top: 8px` (pushed below the row instead)."""
+    block = _rule_block(base_css, ".zip-use-location {")
+    assert "margin: -16px 0 15px" in block
+
+
+def test_filter_options_has_grey_backdrop(base_css):
+    """v=94: real BT's ul.opts uses `background: #f7f7f7; padding: 8px`
+    instead of a 1px outer border. Sandbox was bordered with no fill."""
+    block = _rule_block(base_css, ".filter-options {")
+    assert "background: #f7f7f7" in block
+    assert "padding: 8px" in block
+    # Outer border should be removed (rules don't mention `border:` line)
+    # but keep the radius
+    assert "border-radius: 8px" in block
+
+
+def test_filter_options_label_is_15px(base_css):
+    """v=94: list-item label text 14px → 15px to match real BT."""
+    block = _rule_block(base_css, ".filter-options label {")
+    assert "font-size: 15px" in block
+
+
 # ── BDP fidelity anchors (v=91) ───────────────────────────────────────
 
 
