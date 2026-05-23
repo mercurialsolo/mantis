@@ -1307,17 +1307,19 @@ header.main {
 }
 .srp-results-count { color: #404040; font-size: 14px; font-weight: 400; }
 .srp-results-count strong { font-weight: 400; }
-/* Real BT sort row: inline 14px / 500 medium 'Sort:' + 14/500 value,
-   both #404040, with a separate ⌄ chevron. No border, no pad, no bg. */
+/* Real BT sort row: inline 12px/400 'Sort:' + 12/400 value, both
+   #333, with a separate ⌄ chevron. No border, no pad, no bg.
+   v=96 typography fix — earlier 14/500 #404040 was wrong (probably
+   measured a different page state). Re-probed at /boats/. */
 .sort-row {
   display: inline-flex; align-items: center; gap: 6px;
-  color: #404040; font-size: 14px; font-weight: 500;
+  color: #333; font-size: 12px; font-weight: 400;
   cursor: pointer;
 }
-.sort-label strong { font-weight: 700; color: #404040; }
+.sort-label strong { font-weight: 400; color: #333; }
 .sort-select {
   border: 0; background: transparent; padding: 0 22px 0 0;
-  font-size: 14px; font-weight: 500; color: #404040;
+  font-size: 12px; font-weight: 400; color: #333;
   font-family: inherit;
   appearance: none; -webkit-appearance: none; -moz-appearance: none;
   cursor: pointer;
@@ -1337,27 +1339,31 @@ header.main {
   text-align: center;
 }
 .srp-empty strong { display: block; font-size: 18px; margin-bottom: 6px; color: var(--bt-navy); }
-/* Real BT pagination: plain text links, no border boxes. 14/400 dark
-   #0a0a0a; active page is bold-darker; "of N" total dimmer. */
+/* Real BT pagination: plain text links, no border boxes. 15/700
+   medium-grey #A5A5A5 — both active and inactive render at the same
+   color (real BT differentiates by font-weight only — page-link is
+   700, surrounding "of N" total is 400). 15px 0 vertical margin.
+   v=96 typography fix — earlier 14/400 #0a0a0a was wrong. */
 .pagination {
   display: flex; align-items: center; justify-content: center;
-  gap: 4px; margin: 26px 0;
-  font-size: 14px; font-weight: 400;
+  gap: 4px; margin: 15px 0;
+  font-size: 15px; font-weight: 400;
 }
 .pagination a {
-  padding: 8px 14px; border: 0;
-  border-radius: 0; color: #0a0a0a;
+  padding: 5px 10px; border: 0;
+  border-radius: 0; color: #A5A5A5;
   text-decoration: none;
   background: transparent;
+  font-weight: 700;
 }
 .pagination a:hover { color: var(--bt-blue); }
 .pagination a.active {
-  color: #0a0a0a; font-weight: 700;
+  color: #A5A5A5; font-weight: 700;
   background: transparent;
   border-bottom: 2px solid var(--bt-blue);
 }
 .page-prev, .page-next { color: var(--bt-blue) !important; font-weight: 400; }
-.page-total { color: #757575; margin: 0 4px; }
+.page-total { color: #757575; margin: 0 4px; font-weight: 400; }
 
 /* ── Boat Detail Page (BDP) ───────────────────────────────────── */
 

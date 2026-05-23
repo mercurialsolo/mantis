@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=95** (2026-05-23) — Color shade pass: `.filter-select` + `.filter-input` color `#333` → `#404040` (real BT inputs/selects); `.zip-tab` + `.seg` color `var(--bt-text)` → `#0a0a0a` (real BT switcher labels are noticeably darker than panel body).
+Last updated: **v=96** (2026-05-23) — SRP sort row + pagination typography re-measured: `.sort-row` 14/500/#404040 → 12/400/#333; `.pagination` 14/400 m=26px → 15/400 m=15px; `.page-link` color `#0a0a0a` → `#A5A5A5` (real BT pagination uses medium-grey, not near-black).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `rzsrm967ibbct7vgbgpzdzudgofezmmv`)
@@ -428,6 +428,25 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=96` SRP sort row + pagination re-measured:
+       • `.sort-row` 14/500 → 12/400; color #404040 → #333. Real BT's
+         "Sort: Recommended" inline label is much smaller and lighter
+         than the panel body. The existing CSS comment claimed 14/500
+         but a fresh probe at /boats/ shows 12/400.
+       • `.sort-label strong` font-weight 700 → 400 (no longer bolds
+         the "Sort:" prefix — matches real BT).
+       • `.sort-select` 14/500/#404040 → 12/400/#333.
+       • `.pagination` font 14/400 → 15/400; margin 26px 0 → 15px 0.
+       • `.pagination a` color #0a0a0a → **#A5A5A5** (medium grey);
+         padding 8px 14px → 5px 10px. Real BT page-links are bold
+         but use a light-grey color, not the near-black sandbox had.
+       • `.pagination a.active` color → #A5A5A5 (real BT's active and
+         inactive page-links share the same color — differentiated
+         only by the 2px bottom border which sandbox already had).
+       • 3 new fidelity tests: test_sort_row_is_12_400,
+         test_pagination_is_15_400, test_pagination_link_color_is_a5a5a5.
+         Suite now **40 passing**.
+       • Cache-buster bumped to `?v=96`.
 `v=95` Color shade pass (deferred 5th item from v=94 typography diff):
        • `.filter-select` + `.filter-input` color: `var(--bt-text)`
          (#333) → **`#404040`**. Verified against real BT's

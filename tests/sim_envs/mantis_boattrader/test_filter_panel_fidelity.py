@@ -395,6 +395,37 @@ def test_switcher_options_are_near_black(base_css):
     assert "color: #0a0a0a" in seg_block
 
 
+# ── v=96 sort row + pagination typography ─────────────────────────────
+
+
+def test_sort_row_is_12_400(base_css):
+    """v=96: real BT renders Sort: at 12/400/#333 — sandbox had 14/500/#404040
+    (oversized + bolded by the <strong> tag). Override sets the right weight."""
+    block = _rule_block(base_css, ".sort-row {")
+    assert "font-size: 12px" in block
+    assert "font-weight: 400" in block
+    strong = _rule_block(base_css, ".sort-label strong {")
+    assert "font-weight: 400" in strong
+
+
+def test_pagination_is_15_400(base_css):
+    """v=96: real BT pagination wrapper is 15/400 with margin 15px 0
+    (was 14/400 m=26px in sandbox)."""
+    block = _rule_block(base_css, ".pagination {")
+    assert "font-size: 15px" in block
+    assert "margin: 15px 0" in block
+
+
+def test_pagination_link_color_is_a5a5a5(base_css):
+    """v=96: real BT page-link color is rgb(165,165,165) = #A5A5A5 for
+    both active and inactive — they differ only by font-weight (700)
+    and a 2px bottom border on active."""
+    block = _rule_block(base_css, ".pagination a {")
+    assert "color: #A5A5A5" in block
+    active_block = _rule_block(base_css, ".pagination a.active {")
+    assert "color: #A5A5A5" in active_block
+
+
 # ── BDP fidelity anchors (v=91) ───────────────────────────────────────
 
 
