@@ -2818,20 +2818,25 @@ def main(
                 print(f"    [fanout] partition {i + 1}/{len(partitions)} spawned")
 
             print(f"\n  Waiting for {len(partition_handles)} partition workers...")
+            from mantis_agent.gym.fanout_runner import read_partition_result
             merged_total = 0
+            merged_phone = 0
             for i, handle in partition_handles:
                 try:
-                    result = handle.get()
-                    score = result.get("score", 0)
-                    leads = result.get("leads_count", 0)
-                    merged_total += leads
-                    print(f"    [fanout] partition {i + 1}: score={score} leads={leads}")
+                    summary = read_partition_result(handle.get())
+                    merged_total += summary["viable"]
+                    merged_phone += summary["with_phone"]
+                    print(
+                        f"    [fanout] partition {i + 1}: "
+                        f"viable={summary['viable']} phone={summary['with_phone']}"
+                    )
                 except Exception as e:
                     print(f"    [fanout] partition {i + 1}: ERROR — {e}")
 
             print("\n  ═══ FANOUT RESULTS ═══")
             print(f"  Partitions:  {len(partitions)}")
             print(f"  Total leads: {merged_total}")
+            print(f"  With phone:  {merged_phone}")
             return
 
     # ── Single worker (default) ──────────────────────────────────

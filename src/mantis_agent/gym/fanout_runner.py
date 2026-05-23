@@ -297,6 +297,41 @@ def _run_one_subplan(
     return runner.run(plan)
 
 
+# ── #623: orchestrator-side worker result reader ──────────────────────
+
+
+def read_partition_result(result: dict | None) -> dict:
+    """Extract the lead-count fields from a worker's return dict.
+
+    The Modal worker's return shape is whatever ``build_micro_result``
+    in ``server_utils`` produces — keys ``viable`` (count),
+    ``leads_with_phone`` (count), and ``leads`` (the list).
+
+    The original #617 orchestrator read ``leads_count`` / ``score``
+    instead — keys that no MicroPlanRunner-backed executor returns.
+    Both lookups silently defaulted to 0, so ``Total leads`` always
+    printed 0 even when every partition successfully extracted leads.
+
+    Returns a normalized dict with:
+
+      * ``viable``: total leads in the partition (int, defaults to 0).
+      * ``with_phone``: subset that carry a phone (int, defaults to 0).
+      * ``leads``: the raw lead rows list (used by #621's cross-partition
+        dedup pass; absent in worker shapes that elide the rows for
+        bandwidth — defaults to an empty list).
+
+    Tolerant of ``None`` input (when ``handle.get()`` itself failed
+    upstream) — returns the zero shape rather than raising.
+    """
+    if not isinstance(result, dict):
+        return {"viable": 0, "with_phone": 0, "leads": []}
+    viable = int(result.get("viable", 0) or 0)
+    with_phone = int(result.get("leads_with_phone", 0) or 0)
+    leads_raw = result.get("leads") or []
+    leads = list(leads_raw) if isinstance(leads_raw, list) else []
+    return {"viable": viable, "with_phone": with_phone, "leads": leads}
+
+
 # ── Modal transport — partition prep (#617) ────────────────────────────
 
 

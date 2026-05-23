@@ -30,6 +30,7 @@ from mantis_agent.gym.fanout_runner import (
     partition_urls,
     partition_urls_for_pagination,
     prepare_modal_partitions,
+    read_partition_result,
     rewrite_for_fanout,
 )
 from mantis_agent.plan_decomposer import (
@@ -519,3 +520,64 @@ def test_pagination_template_used_from_paginate_step_hint() -> None:
 
 def test_default_pagination_template_constant() -> None:
     assert DEFAULT_PAGINATION_URL_TEMPLATE == "{base}/page-{n}/"
+
+
+# ── #623: read_partition_result ────────────────────────────────────────
+
+
+def test_read_partition_result_canonical_shape() -> None:
+    """build_micro_result returns ``viable`` + ``leads_with_phone`` + ``leads``.
+    The reader must surface those — NOT the legacy ``leads_count`` /
+    ``score`` keys the gemma4 worker used to return."""
+    fake = {
+        "viable": 27,
+        "leads_with_phone": 1,
+        "leads": [{"listing_url": "https://example.com/boat/1/"}],
+        # Extra keys (cost, time, etc) must not interfere.
+        "cost": 10.03,
+        "score": 0.9,  # MUST be ignored — legacy field.
+    }
+    out = read_partition_result(fake)
+    assert out["viable"] == 27
+    assert out["with_phone"] == 1
+    assert out["leads"] == [{"listing_url": "https://example.com/boat/1/"}]
+
+
+def test_read_partition_result_legacy_keys_zeroed() -> None:
+    """A worker that returns only the legacy gemma4 shape (``leads_count``
+    / ``score``, no ``viable``) yields zeros — the orchestrator must NOT
+    silently confuse counts. This pins the bug #623 fixed: the legacy
+    reader saw ``leads_count`` and trusted it; the new reader requires
+    the canonical ``viable`` key."""
+    legacy = {"leads_count": 27, "score": 0.9}
+    out = read_partition_result(legacy)
+    assert out["viable"] == 0
+    assert out["with_phone"] == 0
+    assert out["leads"] == []
+
+
+def test_read_partition_result_none_input_safe() -> None:
+    """``handle.get()`` returning None (worker crash) shouldn't crash
+    the orchestrator — the reader returns the zero shape and the
+    orchestrator's exception handler logs the failure separately."""
+    out = read_partition_result(None)
+    assert out == {"viable": 0, "with_phone": 0, "leads": []}
+
+
+def test_read_partition_result_tolerates_missing_leads_list() -> None:
+    """A worker that returns counts but elides the leads list (some
+    paths drop it to save bandwidth) must not crash the dedup pass
+    (#621); ``leads`` defaults to an empty list."""
+    out = read_partition_result({"viable": 5, "leads_with_phone": 1})
+    assert out["viable"] == 5
+    assert out["with_phone"] == 1
+    assert out["leads"] == []
+
+
+def test_read_partition_result_coerces_string_counts() -> None:
+    """Defensive — some serialisation paths upcast ints to strings.
+    The reader must coerce to int so ``merged_total += summary['viable']``
+    doesn't TypeError on the orchestrator side."""
+    out = read_partition_result({"viable": "27", "leads_with_phone": "1"})
+    assert out["viable"] == 27
+    assert out["with_phone"] == 1
