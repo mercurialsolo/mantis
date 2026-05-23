@@ -226,6 +226,11 @@ class MicroPlanRunner:
         self._current_page, self._last_known_url = 1, ""
         self._scroll_state, self._last_extracted = {}, {}
         self._opened_detail_in_new_tab = False
+        # #615: URL list stashed by CollectUrlsHandler for the fan-out
+        # runner (#616, #617) to consume. Empty by default; consumers
+        # check ``len(runner._collected_urls)`` to decide whether to
+        # fan out vs fall back to the sequential extraction loop.
+        self._collected_urls: list[str] = []
         self._active_checkpoint_context = None
         self._pre_step_snapshot, self._final_status = None, "running"
         # #audit item 4: halt_reason last set by ``_persist`` — read by
