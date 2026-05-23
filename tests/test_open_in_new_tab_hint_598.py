@@ -221,6 +221,8 @@ def test_helper_middle_clicks_when_hint_set_and_landed_on_detail(monkeypatch) ->
     runner._last_click_title = "1997 Caroff CHATAM 52"
     env = MagicMock()
     env.screen_size = (1280, 800)
+    # Tabs go 1 → 2 (real new tab opened) so the flag is set.
+    env.cdp_count_pages = MagicMock(side_effect=[1, 2])
     ctx = _ctx(runner, env=env)
     ctx.site_config.is_detail_page = lambda url, base_url=None: "/boat/" in url
     runner._read_current_url = MagicMock(return_value="https://boattrader.com/boat/1997-caroff/")
@@ -246,6 +248,47 @@ def test_helper_middle_clicks_when_hint_set_and_landed_on_detail(monkeypatch) ->
     assert "1997 Caroff CHATAM 52" in runner._extracted_titles
 
 
+def test_helper_in_place_navigation_does_not_set_new_tab_flag(monkeypatch) -> None:
+    """Issue #598 follow-up: when middle-click NAVIGATES IN-PLACE
+    (some sites preventDefault on auxclick), tab count stays the same.
+    Helper must NOT set ``_opened_detail_in_new_tab=True`` — otherwise
+    the subsequent navigate_back would route via Ctrl+W and close the
+    SOURCE tab, breaking the session.
+
+    Observed in production run 20260523_055833_572c0b0e — 2 of 7 leads
+    had results-page URLs because the flag was set when middle-click
+    actually navigated in-place, and subsequent extract ran on the
+    wrong tab. The tab-count diff gates the flag now."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.click.time.sleep", lambda *_: None)
+
+    runner = _FakeRunner()
+    runner._last_click_title = "Caroff"
+    env = MagicMock()
+    env.screen_size = (1280, 800)
+    # Tabs stay at 1 — middle-click navigated in-place.
+    env.cdp_count_pages = MagicMock(side_effect=[1, 1])
+    ctx = _ctx(runner, env=env)
+    ctx.site_config.is_detail_page = lambda url, base_url=None: "/boat/" in url
+    runner._read_current_url = MagicMock(return_value="https://boattrader.com/boat/1997-caroff/")
+
+    result = _try_open_in_new_tab_primary(
+        handler=None, runner=runner, env=env, ctx=ctx,
+        step=_step(hint=True), index=4, x=499, y=187,
+        title="Caroff", site_config=ctx.site_config,
+        dynamic_verifier=ctx.dynamic_verifier,
+    )
+
+    assert result is not None
+    assert result.success is True
+    # Critical (#598 in-place fix): NO new tab → flag stays False so
+    # navigate_back routes via mechanical CDP back (#609) instead of
+    # Ctrl+W (which would close the source tab).
+    assert runner._opened_detail_in_new_tab is False
+    # Last-known URL still gets set (the runner needs it for dedup
+    # / mark-seen plumbing); only the new-tab routing flag is gated.
+    assert runner._last_known_url == "https://boattrader.com/boat/1997-caroff/"
+
+
 def test_helper_switches_to_new_tab_then_finds_detail(monkeypatch) -> None:
     """Middle-click opened a new tab; first URL read on the SOURCE
     tab is still the results page, so helper sends ctrl+Tab + retries
@@ -256,6 +299,8 @@ def test_helper_switches_to_new_tab_then_finds_detail(monkeypatch) -> None:
     runner = _FakeRunner()
     env = MagicMock()
     env.screen_size = (1280, 800)
+    # Tabs 1 → 2: a real new tab opened.
+    env.cdp_count_pages = MagicMock(side_effect=[1, 2])
     ctx = _ctx(runner, env=env)
     ctx.site_config.is_detail_page = lambda url, base_url=None: "/boat/" in url
     # First call (source tab): results page; second call (after
@@ -390,6 +435,9 @@ def test_execute_dispatches_middle_primary_when_hint_set(monkeypatch) -> None:
     extractor.find_all_listings.return_value = [(499, 187, "Caroff")]
     env = MagicMock()
     env.screen_size = (1280, 800)
+    # End-to-end through execute(): a real new tab is opened so the
+    # tab-count diff check passes and the routing flag is set.
+    env.cdp_count_pages = MagicMock(side_effect=[1, 1, 2])
     ctx = _ctx(runner, env=env, extractor=extractor)
     ctx.site_config.is_detail_page = lambda url, base_url=None: "/boat/" in url
     runner._read_current_url = MagicMock(return_value="https://boattrader.com/boat/caroff/")

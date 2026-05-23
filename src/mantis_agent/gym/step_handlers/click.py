@@ -904,6 +904,17 @@ def _try_open_in_new_tab_primary(
         x, y, (title or "")[:60],
     )
 
+    # Snapshot tab count BEFORE middle-click. Some sites convert
+    # middle-click to plain navigation (preventDefault on auxclick),
+    # which would put the detail page on the SOURCE tab without
+    # opening a new one. If we set ``_opened_detail_in_new_tab=True``
+    # unconditionally on URL match, the subsequent ``navigate_back``
+    # would route via ``execute_close_detail_tab`` (Ctrl+W) and close
+    # the SOURCE tab — losing the runner's session. Gate the flag on
+    # a real tab-count delta (#582 pattern used in the plain-click
+    # path).
+    tabs_before = _safe_tab_count(env)
+
     try:
         env.step(Action(action_type=ActionType.CLICK, params={
             "x": x, "y": y, "button": "middle",
@@ -928,11 +939,21 @@ def _try_open_in_new_tab_primary(
             after = env.screenshot()
             url = runner._read_current_url(after)
         if url and site_config.is_detail_page(url, base_url=runner._results_base_url):
+            tabs_after = _safe_tab_count(env)
+            opened_new_tab = tabs_after > tabs_before > 0
             logger.warning(
-                "  [claude-click] PRIMARY middle-click opened detail: %s",
-                url[:80],
+                "  [claude-click] PRIMARY middle-click opened detail: %s "
+                "(tabs %d → %d, new_tab=%s)",
+                url[:80], tabs_before, tabs_after, opened_new_tab,
             )
-            runner._opened_detail_in_new_tab = True
+            # Only set the new-tab flag when a real tab was opened.
+            # When the click navigated the source tab in-place (some
+            # sites preventDefault on auxclick), keeping the flag False
+            # routes ``navigate_back`` via the existing CDP-back path
+            # (#609) instead of Ctrl+W — which would otherwise close
+            # the source tab and leave the runner without a browser.
+            if opened_new_tab:
+                runner._opened_detail_in_new_tab = True
             runner._last_known_url = url
             dynamic_verifier.record_item_opened(
                 page=runner._current_page,
