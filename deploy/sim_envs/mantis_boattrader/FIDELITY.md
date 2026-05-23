@@ -366,3 +366,7 @@ the current state. Status legend:
          out-of-scope (🚫), done bar, open follow-ups
        • All filter-sidebar 🟡 rows now ✅ (or moved to SCOPE.md "Out-of-scope"
          if intentionally divergent — e.g. multi-select, "more options" link)
+       • Adds `tests/sim_envs/mantis_boattrader/test_filter_panel_fidelity.py` —
+         23 structural-anchor assertions covering v=82..v=84 changes. Runs in
+         the regular pytest matrix, no playwright needed (FastAPI TestClient).
+         Phase 5 (verification harness) from FIDELITY_BUILD_FROM_SCRATCH_PROMPT.md.
