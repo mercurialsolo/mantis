@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=89** (2026-05-23) — Search-box sparkle icon resized to 16×16 (was 20×20) using real BT's exact ai.svg paths + tightened wrapper; click anywhere in the search field (sparkle, "Try …" overlay, empty area) now focuses the input.
+Last updated: **v=90** (2026-05-23) — Home + BDP `_captured/` corpora upgraded from TODO placeholders to measured snapshots (partial — hero, breadcrumb, gallery, right-rail title/price/contact form; rail sections + sticky bar still flagged as open follow-ups).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `yv2fifjb0rvkofrhwhlzmejofsb1mzwo`)
@@ -390,6 +390,23 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=90` Home + BDP `_captured/` corpora measured (partial):
+       • Real-BT probes against / and /boat/<slug>/ at 1512×711.
+       • Home: hero card 296×48 at (14,139) sits as a narrow overlay on
+         the hero image, NOT a full-width search bar. H1 "Find your
+         perfect boat" white 16/700 directly above. First section
+         "Boats Near You" h2 at y=586, full-width 1488 #333 15/700.
+         Featured Brands / Popular Types / Popular Boats / Articles /
+         Why BoatTrader sections present but per-tile geometry still
+         TODO (open follow-ups).
+       • BDP: breadcrumb 332×40 at (137,191) 12/400 #616161. Gallery
+         container 890×727 at x=70, 8px br. Right rail at x=1039–1389
+         holds H1 "2015 Pioneer 197 Sportfish" (248×23, 20/700 #333),
+         main price "$25,900" (20px), monthly est "$4,000" (18px,
+         x=1132, sits inline-right of price), contact form
+         `.lead-form-basic__body` 334×260 at x=1055. Content area
+         ~1319px wide (sandbox is 1400 — 81px wider, accept 🟡).
+       • _captured/README.md status table: srp ✅ / home + bdp 🟡 partial.
 `v=89` Search box: click anywhere focuses the input:
        • User reported screenshot showing "Try" text getting highlight-
          selected instead of focusing input when clicked. On real BT,

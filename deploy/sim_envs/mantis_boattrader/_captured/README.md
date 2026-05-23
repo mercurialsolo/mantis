@@ -15,8 +15,8 @@ real site changes, then re-diff against the sandbox.
 | Path | Status | Source |
 |---|---|---|
 | `srp/structural.json`   | ✅ measured 2026-05-23 | Chrome MCP probes from real boattrader.com (1512×711 viewport) |
-| `home/structural.json`  | ⏳ TODO placeholder    | listing of sections to capture; sources from FIDELITY.md |
-| `bdp/structural.json`   | ⏳ TODO placeholder    | listing of sections to capture; sources from FIDELITY.md |
+| `home/structural.json`  | 🟡 partial 2026-05-23  | hero card + first section header measured; rail sections (Featured Brands, Popular Types, Popular Boats, Articles, Why) still need per-tile geometry |
+| `bdp/structural.json`   | 🟡 partial 2026-05-23  | breadcrumb, gallery container, right-rail title/price/monthly/contact-form measured; below-fold accordions + sticky title bar + Similar Boats rail still TODO |
 
 ## Format
 
