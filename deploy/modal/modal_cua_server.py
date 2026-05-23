@@ -2818,20 +2818,41 @@ def main(
                 print(f"    [fanout] partition {i + 1}/{len(partitions)} spawned")
 
             print(f"\n  Waiting for {len(partition_handles)} partition workers...")
-            merged_total = 0
+            from mantis_agent.gym.fanout_runner import (
+                dedup_leads_by_url, read_partition_result,
+            )
+            merged_phone = 0
+            per_partition_leads: list[list[dict]] = []
             for i, handle in partition_handles:
                 try:
-                    result = handle.get()
-                    score = result.get("score", 0)
-                    leads = result.get("leads_count", 0)
-                    merged_total += leads
-                    print(f"    [fanout] partition {i + 1}: score={score} leads={leads}")
+                    summary = read_partition_result(handle.get())
+                    merged_phone += summary["with_phone"]
+                    per_partition_leads.append(summary["leads"])
+                    print(
+                        f"    [fanout] partition {i + 1}: "
+                        f"viable={summary['viable']} phone={summary['with_phone']}"
+                    )
                 except Exception as e:
                     print(f"    [fanout] partition {i + 1}: ERROR — {e}")
 
+            # #621: cross-partition dedup by listing_url. Featured /
+            # sponsored listings repeat across pages, and pagination
+            # drift mid-run can shift listings onto adjacent pages —
+            # the orchestrator deduplicates so ``Total leads`` is the
+            # true unique-count, not a naive sum.
+            _deduped, raw_total, dedup_total = dedup_leads_by_url(
+                per_partition_leads,
+            )
             print("\n  ═══ FANOUT RESULTS ═══")
-            print(f"  Partitions:  {len(partitions)}")
-            print(f"  Total leads: {merged_total}")
+            print(f"  Partitions:    {len(partitions)}")
+            print(f"  Total leads (raw):     {raw_total}")
+            print(f"  Total leads (deduped): {dedup_total}")
+            if raw_total > dedup_total:
+                print(
+                    f"  Duplicates collapsed: {raw_total - dedup_total} "
+                    f"(cross-partition URL overlap)"
+                )
+            print(f"  With phone:    {merged_phone}")
             return
 
     # ── Single worker (default) ──────────────────────────────────

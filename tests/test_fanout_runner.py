@@ -25,11 +25,14 @@ from mantis_agent.gym.checkpoint import StepResult
 from mantis_agent.gym.fanout_runner import (
     DEFAULT_PAGINATION_URL_TEMPLATE,
     LocalFanoutRunner,
+    _normalize_listing_url,
     build_worker_subplan,
+    dedup_leads_by_url,
     fanout_enabled,
     partition_urls,
     partition_urls_for_pagination,
     prepare_modal_partitions,
+    read_partition_result,
     rewrite_for_fanout,
 )
 from mantis_agent.plan_decomposer import (
@@ -519,3 +522,254 @@ def test_pagination_template_used_from_paginate_step_hint() -> None:
 
 def test_default_pagination_template_constant() -> None:
     assert DEFAULT_PAGINATION_URL_TEMPLATE == "{base}/page-{n}/"
+
+
+# ── #623: read_partition_result ────────────────────────────────────────
+
+
+def test_read_partition_result_canonical_shape() -> None:
+    """build_micro_result returns ``viable`` + ``leads_with_phone`` + ``leads``.
+    The reader must surface those — NOT the legacy ``leads_count`` /
+    ``score`` keys the gemma4 worker used to return."""
+    fake = {
+        "viable": 27,
+        "leads_with_phone": 1,
+        "leads": [{"listing_url": "https://example.com/boat/1/"}],
+        # Extra keys (cost, time, etc) must not interfere.
+        "cost": 10.03,
+        "score": 0.9,  # MUST be ignored — legacy field.
+    }
+    out = read_partition_result(fake)
+    assert out["viable"] == 27
+    assert out["with_phone"] == 1
+    assert out["leads"] == [{"listing_url": "https://example.com/boat/1/"}]
+
+
+def test_read_partition_result_legacy_keys_zeroed() -> None:
+    """A worker that returns only the legacy gemma4 shape (``leads_count``
+    / ``score``, no ``viable``) yields zeros — the orchestrator must NOT
+    silently confuse counts. This pins the bug #623 fixed: the legacy
+    reader saw ``leads_count`` and trusted it; the new reader requires
+    the canonical ``viable`` key."""
+    legacy = {"leads_count": 27, "score": 0.9}
+    out = read_partition_result(legacy)
+    assert out["viable"] == 0
+    assert out["with_phone"] == 0
+    assert out["leads"] == []
+
+
+def test_read_partition_result_none_input_safe() -> None:
+    """``handle.get()`` returning None (worker crash) shouldn't crash
+    the orchestrator — the reader returns the zero shape and the
+    orchestrator's exception handler logs the failure separately."""
+    out = read_partition_result(None)
+    assert out == {"viable": 0, "with_phone": 0, "leads": []}
+
+
+def test_read_partition_result_tolerates_missing_leads_list() -> None:
+    """A worker that returns counts but elides the leads list (some
+    paths drop it to save bandwidth) must not crash the dedup pass
+    (#621); ``leads`` defaults to an empty list."""
+    out = read_partition_result({"viable": 5, "leads_with_phone": 1})
+    assert out["viable"] == 5
+    assert out["with_phone"] == 1
+    assert out["leads"] == []
+
+
+def test_read_partition_result_coerces_string_counts() -> None:
+    """Defensive — some serialisation paths upcast ints to strings.
+    The reader must coerce to int so ``merged_total += summary['viable']``
+    doesn't TypeError on the orchestrator side."""
+    out = read_partition_result({"viable": "27", "leads_with_phone": "1"})
+    assert out["viable"] == 27
+    assert out["with_phone"] == 1
+
+
+# ── #621: cross-partition lead dedup ───────────────────────────────────
+
+
+def test_normalize_listing_url_strips_trailing_slash() -> None:
+    assert _normalize_listing_url("https://example.com/boat/1/") == "https://example.com/boat/1"
+
+
+def test_normalize_listing_url_lowercases() -> None:
+    """Path-case drift across pages (some marketplaces emit /Boat/Foo
+    on one page and /boat/foo on another) should collapse."""
+    assert (
+        _normalize_listing_url("https://Example.com/Boat/Foo/")
+        == "https://example.com/boat/foo"
+    )
+
+
+def test_normalize_listing_url_empty_input() -> None:
+    assert _normalize_listing_url("") == ""
+    assert _normalize_listing_url("   ") == ""
+
+
+def test_dedup_collapses_exact_url_duplicates() -> None:
+    """Featured / sponsored boat appears on two pages — collapse to one."""
+    per_partition = [
+        [
+            {"listing_url": "https://example.com/boat/1/", "make": "A"},
+            {"listing_url": "https://example.com/boat/2/", "make": "B"},
+        ],
+        [
+            {"listing_url": "https://example.com/boat/1/", "make": "A"},  # dup
+            {"listing_url": "https://example.com/boat/3/", "make": "C"},
+        ],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 4
+    assert dedup_count == 3
+    assert [d["make"] for d in deduped] == ["A", "B", "C"]
+
+
+def test_dedup_collapses_trailing_slash_variants() -> None:
+    """``/boat/1`` and ``/boat/1/`` are the same listing (BoatTrader emits
+    both interchangeably across pages)."""
+    per_partition = [
+        [{"listing_url": "https://example.com/boat/1/"}],
+        [{"listing_url": "https://example.com/boat/1"}],  # no slash
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 2
+    assert dedup_count == 1
+
+
+def test_dedup_no_collapse_when_urls_differ() -> None:
+    """Five distinct URLs across two partitions → 5 deduped leads."""
+    per_partition = [
+        [{"listing_url": f"https://example.com/boat/{i}/"} for i in range(3)],
+        [{"listing_url": f"https://example.com/boat/{i}/"} for i in range(3, 5)],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 5
+    assert dedup_count == 5
+
+
+def test_dedup_preserves_first_seen_partition_order() -> None:
+    """When the same URL appears in partition 1 first and partition 2
+    later, we keep partition 1's row (its data may be cleaner since
+    partition 1 likely ran first / had warmer cache)."""
+    per_partition = [
+        [{"listing_url": "https://example.com/boat/1/", "asking_price": "$100"}],
+        [{"listing_url": "https://example.com/boat/1/", "asking_price": "$999"}],
+    ]
+    deduped, _, _ = dedup_leads_by_url(per_partition)
+    assert len(deduped) == 1
+    assert deduped[0]["asking_price"] == "$100"
+
+
+def test_dedup_leads_without_url_pass_through() -> None:
+    """Leads without a listing_url key (partial extracts) are passed
+    through unchanged — the orchestrator shouldn't silently drop them
+    just because they lack a dedup key."""
+    per_partition = [
+        [{"listing_url": "https://example.com/boat/1/"}, {"asking_price": "$50"}],
+        [{"listing_url": "https://example.com/boat/1/"}, {"asking_price": "$99"}],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    # 4 raw, 1 URL-dup collapsed, 2 no-URL passed through, 1 unique URL = 3
+    assert raw == 4
+    assert dedup_count == 3
+
+
+def test_dedup_handles_empty_partition_lists() -> None:
+    """A partition that returned no leads (worker crashed early) leaves
+    the merge a no-op for that chunk."""
+    per_partition = [
+        [],
+        [{"listing_url": "https://example.com/boat/1/"}],
+        [],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 1
+    assert dedup_count == 1
+
+
+def test_dedup_ignores_malformed_lead_entries() -> None:
+    """Defensive — None / int / unknown types shouldn't crash the
+    merge. They pass through unchanged ("no key" path)."""
+    per_partition = [
+        [{"listing_url": "https://example.com/boat/1/"}, None, 42],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 3
+    # None + 42 yield no URL → pass through (no dedup); dict has URL → counts.
+    assert dedup_count == 3
+
+
+# ── Real production string-lead format (#621 verification regression) ─
+
+
+def _viable_lead(url: str, year: int = 2023, make: str = "Acme") -> str:
+    """Build a lead row in the actual format build_micro_result emits
+    (server_utils.py:820, leads list). VIABLE prefix + pipe-delimited
+    fields + ``URL: <url>``. Matches what ListingDedup.lead_key parses
+    so cross-partition keys match per-container keys."""
+    return (
+        f"VIABLE | Year: {year} | Make: {make} | Model: X | "
+        f"Price: $99,000 | Phone: none | URL: {url}"
+    )
+
+
+def test_dedup_collapses_string_leads_across_partitions() -> None:
+    """The Modal verification run for #621 surfaced this: leads are
+    strings (not dicts), so the dict-only first pass dropped all 87.
+    Fix: extract URL via ListingDedup.lead_key for string leads."""
+    per_partition = [
+        [
+            _viable_lead("boattrader.com/boat/1/", year=2023, make="Pershing"),
+            _viable_lead("boattrader.com/boat/2/", year=2022, make="Freeman"),
+        ],
+        [
+            _viable_lead("boattrader.com/boat/1/", year=2023, make="Pershing"),  # dup
+            _viable_lead("boattrader.com/boat/3/", year=2021, make="Azimut"),
+        ],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 4
+    assert dedup_count == 3
+    # First-seen wins (partition 1's Pershing row, not partition 2's)
+    pershing_rows = [
+        d for d in deduped if isinstance(d, str) and "Pershing" in d
+    ]
+    assert len(pershing_rows) == 1
+
+
+def test_dedup_string_leads_collapse_trailing_slash_variants() -> None:
+    """Cross-page emit of the same URL with/without trailing slash is
+    the most common cross-partition overlap case — must collapse to one."""
+    per_partition = [
+        [_viable_lead("boattrader.com/boat/1/")],
+        [_viable_lead("boattrader.com/boat/1")],  # no trailing slash
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 2
+    assert dedup_count == 1
+
+
+def test_dedup_string_lead_without_url_passes_through() -> None:
+    """A lead row missing the ``URL:`` token (rare partial-extract case)
+    has no dedup key — pass through unchanged rather than collapsing
+    all keyless rows under a single fallback bucket."""
+    no_url = "VIABLE | Year: 2023 | Make: X | Phone: none"
+    per_partition = [[no_url, no_url]]  # two identical keyless rows
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 2
+    # Both pass through — better to over-report than silently collapse
+    # rows we can't authoritatively identify as duplicates.
+    assert dedup_count == 2
+
+
+def test_dedup_mixed_string_and_dict_leads() -> None:
+    """Defensive — if a future caller mixes string and dict leads in
+    one partition list, dedup should still work consistently across
+    both shapes by extracted URL."""
+    per_partition = [
+        [_viable_lead("boattrader.com/boat/1/")],
+        [{"listing_url": "boattrader.com/boat/1/", "make": "dict-shaped"}],
+    ]
+    deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
+    assert raw == 2
+    assert dedup_count == 1

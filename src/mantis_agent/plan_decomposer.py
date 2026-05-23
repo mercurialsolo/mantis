@@ -646,10 +646,19 @@ RULES:
   fields, scrape, harvest data) keeps gate=false.
 
 LOOP STRUCTURE:
-  Extraction loop: click → URL → scroll → extract → back → loop(target=click, count=N)
-  Pagination loop: paginate → loop(target=click, count=pages)
+  Extraction loop: click → URL → scroll → extract → back → loop(target=click, count=30)
+  Pagination loop: paginate → loop(target=click, count=10)
   The listing loop runs INSIDE the pagination loop.
   Form-only flows do not need loops.
+
+  ALWAYS emit a concrete loop_count integer — never 0, never omitted:
+    • Extraction-section loops: 30 (typical page has ≤25 cards; +20% covers
+      lazy-loaded carousel rotation and dedup-skipped re-clicks).
+    • Pagination-section loops: 10 (typical scrape covers ≤10 pages).
+  If the source plan mentions an explicit count ("scan 50 listings", "go
+  through all 8 pages"), use that number instead. Never default to 0 —
+  the runtime falls back to a 200-iter ceiling and burns ~$2.50/loop on
+  wasted dedup-skipped retries.
 
 PLAIN TEXT PLAN:
 {plan_text}
@@ -690,7 +699,10 @@ STEP TYPES:
                 verification extract_data, not just end-of-setup.
 - navigate_back: Go back (budget=3, section="extraction")
 - paginate: Click Next page (budget=10, grounding=true, section="pagination")
-- loop: Jump back to step index (loop_target=N, loop_count=max)
+- loop: Jump back to step index. ALWAYS emit a concrete loop_count integer:
+        extraction-section: 30 (or source plan's explicit listing count)
+        pagination-section: 10 (or source plan's explicit page count)
+        Never 0; never omit. See LOOP STRUCTURE above for full rationale.
 - fill_field: Click a labelled input and type a value
               (budget=4, params={"label": "<visible field label>", "value": "<text to type>"})
 - submit: Click a SINGLE LABELLED CLICKABLE on a non-listings page — buttons
@@ -786,7 +798,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v30_concrete_neutral_examples"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v31_loop_count_concrete_defaults"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)

@@ -297,6 +297,132 @@ def _run_one_subplan(
     return runner.run(plan)
 
 
+# ── #623: orchestrator-side worker result reader ──────────────────────
+
+
+def _normalize_listing_url(url: str) -> str:
+    """Canonical form for cross-partition lead-dedup keys (#621).
+
+    Rules:
+      - Strip surrounding whitespace.
+      - Lowercase (most marketplaces use case-insensitive paths).
+      - Drop a trailing slash (BoatTrader emits both ``/boat/<slug>``
+        and ``/boat/<slug>/`` interchangeably across pages).
+
+    No URL-parse / query-string dance — that's per-domain policy. The
+    listing URL primary key is opaque enough that simple normalization
+    catches the common duplication signals (path-case drift, trailing
+    slash) without overreaching.
+    """
+    if not url:
+        return ""
+    s = str(url).strip().lower()
+    if s.endswith("/"):
+        s = s[:-1]
+    return s
+
+
+def _lead_url(lead: Any) -> str:
+    """Pull the listing URL from a lead row, regardless of its shape.
+
+    Two formats coexist in the codebase — the verification run for
+    #621 surfaced this when the dict-only first pass treated all 87
+    string-shaped leads as non-dict and dropped them:
+
+      * **String** (the actual production shape from
+        ``build_micro_result``): ``"VIABLE | Year: ... | URL: ..."``.
+        Parsed with ``ListingDedup.lead_key`` — the same helper
+        per-container dedup uses, so cross-partition keys match
+        per-container keys.
+      * **Dict** (defensive — host integrations / future structured
+        paths): ``{"listing_url": "..."}`` or ``{"url": "..."}``.
+
+    Returns the empty string when neither shape yields a URL. The
+    dedup pass treats such leads as "no key" and passes them through
+    unchanged.
+    """
+    if isinstance(lead, str):
+        from .listing_dedup import ListingDedup
+        # lead_key falls back to the row's first 100 chars when no
+        # URL regex match — that fallback isn't a URL and would
+        # collide all no-URL rows under one bucket. Gate on the
+        # ``URL:`` token explicitly.
+        if "URL:" not in lead:
+            return ""
+        return ListingDedup.lead_key(lead)
+    if isinstance(lead, dict):
+        return str(lead.get("listing_url") or lead.get("url") or "")
+    return ""
+
+
+def dedup_leads_by_url(
+    per_partition_leads: list[list[Any]],
+) -> tuple[list[Any], int, int]:
+    """Cross-partition lead-list merge with URL dedup (#621).
+
+    Each worker returns its own ``leads`` list — concatenated naively
+    that gives a ``raw`` total, but featured / sponsored listings can
+    repeat across pages and pagination drift mid-run can shift the
+    same listing onto two adjacent pages. The dedup pass collapses
+    duplicates by normalized listing URL, preserving first-seen
+    partition order.
+
+    Returns ``(deduped, raw_count, deduped_count)``.
+
+    Lead rows are heterogeneous (str from ``build_micro_result``;
+    dict from host paths). URL extraction is delegated to
+    :func:`_lead_url` which handles both shapes; rows that yield no
+    URL pass through unchanged.
+    """
+    seen: set[str] = set()
+    deduped: list[Any] = []
+    raw = 0
+    for chunk in per_partition_leads:
+        for lead in chunk:
+            raw += 1
+            url = _normalize_listing_url(_lead_url(lead))
+            if not url:
+                deduped.append(lead)
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            deduped.append(lead)
+    return deduped, raw, len(deduped)
+
+
+def read_partition_result(result: dict | None) -> dict:
+    """Extract the lead-count fields from a worker's return dict.
+
+    The Modal worker's return shape is whatever ``build_micro_result``
+    in ``server_utils`` produces — keys ``viable`` (count),
+    ``leads_with_phone`` (count), and ``leads`` (the list).
+
+    The original #617 orchestrator read ``leads_count`` / ``score``
+    instead — keys that no MicroPlanRunner-backed executor returns.
+    Both lookups silently defaulted to 0, so ``Total leads`` always
+    printed 0 even when every partition successfully extracted leads.
+
+    Returns a normalized dict with:
+
+      * ``viable``: total leads in the partition (int, defaults to 0).
+      * ``with_phone``: subset that carry a phone (int, defaults to 0).
+      * ``leads``: the raw lead rows list (used by #621's cross-partition
+        dedup pass; absent in worker shapes that elide the rows for
+        bandwidth — defaults to an empty list).
+
+    Tolerant of ``None`` input (when ``handle.get()`` itself failed
+    upstream) — returns the zero shape rather than raising.
+    """
+    if not isinstance(result, dict):
+        return {"viable": 0, "with_phone": 0, "leads": []}
+    viable = int(result.get("viable", 0) or 0)
+    with_phone = int(result.get("leads_with_phone", 0) or 0)
+    leads_raw = result.get("leads") or []
+    leads = list(leads_raw) if isinstance(leads_raw, list) else []
+    return {"viable": viable, "with_phone": with_phone, "leads": leads}
+
+
 # ── Modal transport — partition prep (#617) ────────────────────────────
 
 
