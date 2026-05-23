@@ -233,6 +233,46 @@ def test_boat_type_and_make_default_closed(srp_html):
     assert "data-testid=\"filter-make\" open" not in make_block
 
 
+# ── SRP search box rotator (v=86) ─────────────────────────────────────
+
+
+def test_srp_search_uses_rotator_not_static_prefix(srp_html):
+    """v=86: replaced the static `<span>Try</span>` + single-suggestion
+    placeholder with `.ai-search-v2__rotator` cycling through 3 example
+    queries — matches real BT's vertical translate animation."""
+    assert 'class="ai-search-v2__rotator"' in srp_html
+    assert 'class="ai-search-v2__rotator-inner"' in srp_html
+    # Three suggestion lines
+    assert srp_html.count('class="ai-search-v2__try-text"') == 3
+    # All three example queries present
+    for needle in ("fishing boats under $80k", "Sea Ray under 40 feet", "pontoon boats near me"):
+        assert needle in srp_html
+
+
+def test_srp_search_input_placeholder_is_blank(srp_html):
+    """v=86: the visible 'Try …' text comes from the span overlay, so
+    the native input placeholder must be empty (real BT uses a single
+    space). A non-empty placeholder would double-render with the span."""
+    import re
+    m = re.search(r'<input class="ai-search-v2__input" type="search" name="q" placeholder="([^"]*)"', srp_html)
+    assert m, "ai-search-v2 input not found"
+    placeholder = m.group(1).strip()
+    assert placeholder == "", (
+        f"input placeholder should be blank (rotator handles the visible text); got {placeholder!r}"
+    )
+
+
+def test_rotator_animation_in_css(base_css):
+    """v=86: `@keyframes ai-try-rotate` with 9s ease-in-out alternate
+    animation on `.ai-search-v2__rotator-inner` — matches real BT."""
+    assert "@keyframes ai-try-rotate" in base_css
+    block = _rule_block(base_css, ".ai-search-v2__rotator-inner {")
+    assert "animation: ai-try-rotate 9s ease-in-out infinite alternate" in block
+    rotator_block = _rule_block(base_css, ".ai-search-v2__rotator {")
+    assert "overflow: hidden" in rotator_block
+    assert "height: 18px" in rotator_block
+
+
 # ── Cache-buster pin ──────────────────────────────────────────────────
 
 

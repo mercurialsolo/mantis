@@ -3,10 +3,10 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=85** (2026-05-23) — `_captured/` spec corpus checked in (Phase 1 discovery output) — SRP `structural.json` is the measured snapshot; Home + BDP are TODO placeholders.
+Last updated: **v=86** (2026-05-23) — SRP search-box rotator animation (3 cycling "Try …" suggestions matching real BT's `9s ease-in-out infinite alternate ai-try-rotate`).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `woytvzdntbjtmv7kz-4jzz-psltnq7jc`)
+(token rotates per sandbox restart; current: `yv2fifjb0rvkofrhwhlzmejofsb1mzwo`)
 
 ## Methodology
 
@@ -80,6 +80,8 @@ the current state. Status legend:
 | "Try" font-size | 16px | 16px | ✅ |
 | "Try" color | rgb(100,116,139) #64748b | same | ✅ |
 | Quote placeholder | 16/400 #64748b | 16/400 #64748b | ✅ |
+| **"Try …" rotator** (SRP only) | 3-line vertical column inside `.ai-search-v2__rotator` (overflow:hidden, 18px tall), `@keyframes 9s ease-in-out infinite alternate ai-try-rotate` cycling translateY 0→-18→-36 across "fishing boats under $80k", "Sea Ray under 40 feet", "pontoon boats near me" | Same — 3 `.ai-search-v2__try-text` spans, same 9s alternate animation, same 3 example queries (v=86). Native input placeholder emptied; visible suggestion comes from the span overlay. | ✅ |
+| Rotator hides on input fill | Real BT removes `.ai-search-v2__try` from DOM when user types | Sandbox uses `:has(input:not(:placeholder-shown))` to set `display: none` (v=86) | ✅ |
 | Sparkle icon | small SVG ai.svg (4-point star) | inline SVG 4-point star | ✅ |
 | Submit icon | magnifier SVG | inline SVG circle+handle | ✅ |
 
@@ -370,6 +372,21 @@ the current state. Status legend:
          23 structural-anchor assertions covering v=82..v=84 changes. Runs in
          the regular pytest matrix, no playwright needed (FastAPI TestClient).
          Phase 5 (verification harness) from FIDELITY_BUILD_FROM_SCRATCH_PROMPT.md.
+`v=86` SRP search-box "Try …" rotator animation matches real BT:
+       • Replaces static `<span>Try</span>` + single-suggestion placeholder
+         with `.ai-search-v2__rotator` (overflow:hidden, 18px tall window)
+         containing 3 `.ai-search-v2__try-text` lines
+       • New `@keyframes ai-try-rotate` — 0%/25% translateY(0), 37.5%/62.5%
+         translateY(-18), 75%/100% translateY(-36); animation runs
+         `9s ease-in-out infinite alternate` exactly as real BT does
+       • Native input placeholder is now `" "` (single space); visible
+         suggestion comes from the span overlay so it doesn't double-render
+       • `.ai-search-v2__form:has(input:not(:placeholder-shown))` hides
+         the rotator when user types — matches real BT's DOM removal
+       • Adds 3 new fidelity tests covering rotator structure + animation
+         + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
+       • `.ai-search-v2__try-prefix` kept as a legacy alias for the
+         non-rotating prefix used elsewhere (e.g. home hero search)
 `v=85` Phase 1 (Discovery) corpus checked in under `_captured/`:
        • `_captured/srp/structural.json` — full SRP spec: filter card, save-search,
          location section (switcher / miles row / zip input / use-my-location), all

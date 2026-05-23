@@ -189,8 +189,50 @@ header.main {
   margin-bottom: 10px;
 }
 .ai-search-v2__icon { color: var(--bt-blue); font-size: 16px; margin-right: 6px; }
-/* Real BT splits the placeholder so "Try" is bold (700) and the quoted
-   suggestion is regular (400). Both are 16px Roboto, #64748b slate grey. */
+/* Real BT renders "Try" + a vertically-rotating quoted suggestion in a
+   clipped 18px-tall window — the inner column has 3 suggestion lines
+   and animates with `9s ease-in-out infinite alternate ai-try-rotate`
+   so the window cycles through them. The native input placeholder is
+   empty; the visible text comes from this <span> overlay. */
+.ai-search-v2__try {
+  display: inline-flex; align-items: center;
+  font-size: 16px; font-weight: 700; color: #64748b;
+  line-height: 1; margin-right: 6px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.ai-search-v2__rotator {
+  display: inline-block;
+  height: 18px;
+  overflow: hidden;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.ai-search-v2__rotator-inner {
+  display: block;
+  animation: ai-try-rotate 9s ease-in-out infinite alternate;
+  will-change: transform;
+}
+.ai-search-v2__try-text {
+  display: block;
+  height: 18px;
+  line-height: 18px;
+  font-weight: 400;
+  color: #64748b;
+}
+@keyframes ai-try-rotate {
+  0%, 25%   { transform: translateY(0); }
+  37.5%, 62.5% { transform: translateY(-18px); }
+  75%, 100% { transform: translateY(-36px); }
+}
+/* When the input has user-typed content, hide the rotating suggestion
+   so the prefix doesn't overlap the typed text. Matches real BT. */
+.ai-search-v2__form:has(input:not(:placeholder-shown):not([value=""])) .ai-search-v2__try,
+.ai-search-v2__form.has-value .ai-search-v2__try {
+  display: none;
+}
+/* Legacy class kept as alias for the simple non-rotating prefix used
+   elsewhere (home hero); same styling. */
 .ai-search-v2__try-prefix {
   font-size: 16px; font-weight: 700; color: #64748b;
   margin-right: 6px; line-height: 1;

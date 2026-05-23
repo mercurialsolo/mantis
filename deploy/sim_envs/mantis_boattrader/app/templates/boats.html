@@ -312,10 +312,10 @@
     </aside>
 
     <section class="srp-results">
-      <form class="srp-search" action="/boats/" method="get" role="search">
+      <form class="srp-search ai-search-v2__form" action="/boats/" method="get" role="search">
         <span class="ai-search-v2__icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2 L13.5 8.5 L20 10 L13.5 11.5 L12 18 L10.5 11.5 L4 10 L10.5 8.5 Z M19 4 L19.7 6.3 L22 7 L19.7 7.7 L19 10 L18.3 7.7 L16 7 L18.3 6.3 Z"/></svg></span>
-        <span class="ai-search-v2__try-prefix" aria-hidden="true">Try</span>
-        <input class="ai-search-v2__input" type="search" name="q" placeholder='&ldquo;fishing boats under $80k&rdquo;' value="{{ f.q }}" />
+        <span class="ai-search-v2__try" aria-hidden="true">Try<span class="ai-search-v2__rotator" role="presentation"><span class="ai-search-v2__rotator-inner"><span class="ai-search-v2__try-text">&ldquo;fishing boats under $80k&rdquo;</span><span class="ai-search-v2__try-text">&ldquo;Sea Ray under 40 feet&rdquo;</span><span class="ai-search-v2__try-text">&ldquo;pontoon boats near me&rdquo;</span></span></span></span>
+        <input class="ai-search-v2__input" type="search" name="q" placeholder=" " value="{{ f.q }}" />
         <button type="submit" class="ai-search-v2__submit" aria-label="Search"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
       </form>
 
