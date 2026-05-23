@@ -571,7 +571,7 @@ def test_read_partition_result_none_input_safe() -> None:
     out = read_partition_result(None)
     assert out == {
         "viable": 0, "with_phone": 0,
-        "leads": [], "collected_urls": [],
+        "leads": [], "collected_urls": [], "shared_seen_hits": 0,
     }
 
 

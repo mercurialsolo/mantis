@@ -600,7 +600,10 @@ def read_partition_result(result: dict | None) -> dict:
     upstream) — returns the zero shape rather than raising.
     """
     if not isinstance(result, dict):
-        return {"viable": 0, "with_phone": 0, "leads": [], "collected_urls": []}
+        return {
+            "viable": 0, "with_phone": 0, "leads": [],
+            "collected_urls": [], "shared_seen_hits": 0,
+        }
     viable = int(result.get("viable", 0) or 0)
     with_phone = int(result.get("leads_with_phone", 0) or 0)
     leads_raw = result.get("leads") or []
@@ -613,9 +616,13 @@ def read_partition_result(result: dict | None) -> dict:
     collected_urls = (
         [str(u) for u in urls_raw if u] if isinstance(urls_raw, list) else []
     )
+    # #631 follow-up: per-worker cross-worker dedup hit count for the
+    # orchestrator's aggregate metric. Always 0 for non-fanout runs.
+    shared_seen_hits = int(result.get("shared_seen_hits", 0) or 0)
     return {
         "viable": viable, "with_phone": with_phone,
         "leads": leads, "collected_urls": collected_urls,
+        "shared_seen_hits": shared_seen_hits,
     }
 
 

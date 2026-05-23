@@ -2542,6 +2542,45 @@ def run_gemma4_cua_worker(task_file_contents: str, worker_id: int = 0, **kwargs)
     return {"passed": 0, "total": 0, "score": 0.0}
 
 
+def _print_shared_seen_metrics(
+    task_suite: dict, cumulative_hits: int,
+) -> None:
+    """Print the cross-worker shared-seen aggregate (#631 follow-up).
+
+    Two signals operators need after a fan-out run:
+
+      * ``cumulative_hits`` — number of times a worker short-circuited
+        an extract because a sibling worker had already extracted the
+        URL. Each hit avoided the ~$0.20 Claude extract cost.
+      * ``final dict size`` — total unique URLs the fan-out has seen
+        across all workers. Queried from the Modal Dict by name; this
+        is the ground-truth unique-URL count without the per-worker
+        log archaeology Modal makes hard on stopped containers.
+
+    Print-only — no exception escapes, never breaks the fan-out
+    summary even when Modal Dict isn't reachable.
+    """
+    dict_name = task_suite.get("_fanout_seen_dict_name", "")
+    final_size = 0
+    if dict_name:
+        try:
+            import modal as _modal
+            _shared = _modal.Dict.from_name(dict_name)
+            final_size = len(_shared)
+        except Exception as exc:
+            print(
+                f"  [shared-seen] could not query final dict size "
+                f"({dict_name}): {exc}"
+            )
+    estimated_savings = cumulative_hits * 0.20  # ~$0.20 per skipped Claude extract
+    print(
+        f"  [shared-seen] cumulative cross-worker hits: {cumulative_hits} "
+        f"(~${estimated_savings:.2f} avoided extract cost)"
+    )
+    if dict_name:
+        print(f"  [shared-seen] final dict size: {final_size} unique URLs")
+
+
 @app.local_entrypoint()
 def main(
     task_file: str = "",
@@ -2936,16 +2975,19 @@ def main(
                     )
 
                 merged_phone = 0
+                merged_shared_seen_hits = 0
                 per_worker_leads: list[list[dict]] = []
                 for i, handle in phase2_handles:
                     try:
                         summary = read_partition_result(handle.get())
                         merged_phone += summary["with_phone"]
+                        merged_shared_seen_hits += summary["shared_seen_hits"]
                         per_worker_leads.append(summary["leads"])
                         print(
                             f"    [phase2] worker {i + 1}: "
                             f"viable={summary['viable']} "
-                            f"phone={summary['with_phone']}"
+                            f"phone={summary['with_phone']} "
+                            f"shared_seen_hits={summary['shared_seen_hits']}"
                         )
                     except Exception as exc:
                         print(f"    [phase2] worker {i + 1}: ERROR — {exc}")
@@ -2966,6 +3008,15 @@ def main(
                         f"(unexpected — Phase 1 URLs were already unique)"
                     )
                 print(f"  With phone:                {merged_phone}")
+                # #631 follow-up: shared-seen aggregate visibility.
+                # ``shared_seen_hits`` = sum of per-worker proactive
+                # skips (a sibling worker had already extracted the URL,
+                # so this worker short-circuited before paying the
+                # ~$0.20 Claude extract cost). Final dict size = unique
+                # URLs the fan-out has seen across all workers.
+                _print_shared_seen_metrics(
+                    task_suite, merged_shared_seen_hits,
+                )
                 return
 
             print("    [phase1] no URLs harvested — falling through to single worker")
@@ -3001,15 +3052,19 @@ def main(
                 dedup_leads_by_url, read_partition_result,
             )
             merged_phone = 0
+            merged_shared_seen_hits = 0
             per_partition_leads: list[list[dict]] = []
             for i, handle in partition_handles:
                 try:
                     summary = read_partition_result(handle.get())
                     merged_phone += summary["with_phone"]
+                    merged_shared_seen_hits += summary["shared_seen_hits"]
                     per_partition_leads.append(summary["leads"])
                     print(
                         f"    [fanout] partition {i + 1}: "
-                        f"viable={summary['viable']} phone={summary['with_phone']}"
+                        f"viable={summary['viable']} "
+                        f"phone={summary['with_phone']} "
+                        f"shared_seen_hits={summary['shared_seen_hits']}"
                     )
                 except Exception as e:
                     print(f"    [fanout] partition {i + 1}: ERROR — {e}")
@@ -3032,6 +3087,8 @@ def main(
                     f"(cross-partition URL overlap)"
                 )
             print(f"  With phone:    {merged_phone}")
+            # #631 follow-up: shared-seen aggregate metric line.
+            _print_shared_seen_metrics(task_suite, merged_shared_seen_hits)
             return
 
     # ── Single worker (default) ──────────────────────────────────
