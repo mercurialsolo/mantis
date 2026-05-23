@@ -632,6 +632,12 @@ def _build_plan_from_suite(suite_dict: dict) -> MicroPlan:
         ]
     else:
         PlanDecomposer._classify_loop_groups(plan)
+    # #629: plan-level pagination URL template carried alongside the
+    # micro_plan / loop_groups payload. Empty when the decomposer
+    # didn't set one (which is most plans today).
+    plan.pagination_url_template = str(
+        suite_dict.get("_pagination_url_template", "") or ""
+    )
     return plan
 
 
@@ -868,30 +874,15 @@ def prepare_modal_partitions(
     ``max_pages`` overrides the loop step's ``loop_count`` when set
     (operator can cap the parallelism without re-decomposing the plan).
     """
-    from ..plan_decomposer import LoopGroup as _LG  # noqa: F401 — local for clarity
-
     steps = suite_dict.get("_micro_plan") or []
     if not steps:
         return []
 
-    plan = MicroPlan(domain=str(suite_dict.get("session_name", "")))
-    from ..plan_decomposer import PlanDecomposer
-    for s in steps:
-        plan.steps.append(PlanDecomposer._build_intent(s))
-
-    groups_raw = suite_dict.get("_loop_groups")
-    if groups_raw:
-        plan.loop_groups = [
-            LoopGroup(
-                loop_step_idx=int(g.get("loop_step_idx", -1)),
-                body_range=tuple(g.get("body_range", (0, 0))),
-                shape=str(g.get("shape", "sequential")),
-            )
-            for g in groups_raw
-            if isinstance(g, dict)
-        ]
-    else:
-        PlanDecomposer._classify_loop_groups(plan)
+    # #629: use the shared plan-builder so the plan-level
+    # ``pagination_url_template`` is picked up here too (was a real bug:
+    # the older copy-pasted inline build didn't read the field, so
+    # plan-level templates silently fell back to the default).
+    plan = _build_plan_from_suite(suite_dict)
 
     pagination_group = next(
         (g for g in plan.loop_groups if g.shape == "parallelizable_pagination"),
@@ -925,12 +916,35 @@ def prepare_modal_partitions(
         )
         return []
 
-    paginate_step = plan.steps[pagination_group.body_range[0]] if pagination_group.body_range[0] < len(plan.steps) else None
+    # #629: template resolution order — plan-level field first, then
+    # paginate-step params (back-compat), then default. The plan-level
+    # field is the right home: it's a property of the plan as a whole,
+    # not one step. Paginate-step params stay supported for plans
+    # authored before #629 landed.
     template = DEFAULT_PAGINATION_URL_TEMPLATE
-    if paginate_step is not None and paginate_step.type == "paginate":
-        custom = (paginate_step.params or {}).get("url_template")
-        if isinstance(custom, str) and "{base}" in custom and "{n}" in custom:
-            template = custom
+    plan_level_template = str(
+        getattr(plan, "pagination_url_template", "") or ""
+    )
+    if (
+        plan_level_template
+        and "{base}" in plan_level_template
+        and "{n}" in plan_level_template
+    ):
+        template = plan_level_template
+    else:
+        # The paginate step lives anywhere in the body range — the
+        # body's first step is the extraction click (per
+        # _fix_loop_targets which rewinds both inner + outer loop
+        # targets to the same click). Scan the body to find it.
+        body_start, body_end = pagination_group.body_range
+        paginate_step = next(
+            (s for s in plan.steps[body_start:body_end] if s.type == "paginate"),
+            None,
+        )
+        if paginate_step is not None:
+            custom = (paginate_step.params or {}).get("url_template")
+            if isinstance(custom, str) and "{base}" in custom and "{n}" in custom:
+                template = custom
 
     pages = max_pages if max_pages else (
         plan.steps[pagination_group.loop_step_idx].loop_count or 5

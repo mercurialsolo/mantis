@@ -1113,6 +1113,7 @@ def build_micro_suite(
     max_recoveries_per_run: int | None = None,
     max_recoveries_per_step: int | None = None,
     loop_groups: list[dict[str, Any]] | None = None,
+    pagination_url_template: str = "",
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
@@ -1193,6 +1194,14 @@ def build_micro_suite(
     # that case for plans persisted before this field existed.
     if loop_groups:
         suite["_loop_groups"] = list(loop_groups)
+    # #629: plan-level pagination URL template overrides the default
+    # ``{base}/page-{n}/`` in the fan-out orchestrator. Set when the
+    # decomposer infers a template from the source plan, or by an
+    # enhancer step that probes the site. Empty when neither — the
+    # orchestrator falls back to the paginate-step ``url_template``
+    # param then the default.
+    if pagination_url_template:
+        suite["_pagination_url_template"] = str(pagination_url_template)
     return suite
 
 

@@ -204,6 +204,17 @@ class MicroPlan:
     # plans with no ``loop`` steps. Pure analysis — runtime behaviour
     # is unchanged until the fan-out runner (#616, #617) reads this.
     loop_groups: list[LoopGroup] = field(default_factory=list)
+    # Per-plan pagination URL template (#629). When set, the Modal
+    # fan-out runner uses this to synthesize per-page partition URLs
+    # instead of the default ``{base}/page-{n}/``. Resolution order at
+    # dispatch time:
+    #   1. ``MicroPlan.pagination_url_template`` (this field)
+    #   2. ``paginate_step.params['url_template']`` (back-compat)
+    #   3. :data:`fanout_runner.DEFAULT_PAGINATION_URL_TEMPLATE`
+    # Populated by the LLM at decompose time when the source plan
+    # mentions a URL with a page indicator, OR set programmatically
+    # by a future enhancer step that probes the site.
+    pagination_url_template: str = ""
 
     def summary(self) -> str:
         shape_tag = f" [{','.join(self.shapes)}]" if self.shapes else ""
@@ -236,6 +247,7 @@ class MicroPlan:
                 }
                 for g in self.loop_groups
             ],
+            "pagination_url_template": self.pagination_url_template,
         }
 
     @classmethod
@@ -275,6 +287,11 @@ class MicroPlan:
             ]
         else:
             PlanDecomposer._classify_loop_groups(plan)
+        # #629: round-trip per-plan pagination URL template if present.
+        if isinstance(payload, dict):
+            plan.pagination_url_template = str(
+                payload.get("pagination_url_template", "") or ""
+            )
         return plan
 
 
@@ -730,12 +747,35 @@ Schema:
 
 {
   "shapes": ["listings" | "form" | "workflow" | "inspect", ...],
+  "pagination_url_template": "{base}/page-{n}/",   // OPTIONAL — see PAGINATION URL TEMPLATE below
   "steps": [ <list of step objects, same shape as before> ]
 }
 
 The "shapes" array MUST contain at least one of the four canonical tokens.
 Use multiple tokens when the plan mixes shapes (e.g. log in then extract
 listings → ["form", "listings"]).
+
+PAGINATION URL TEMPLATE — emit when the source plan contains an explicit
+example or hint about how pagination URLs are formed. Use the literal
+placeholders ``{base}`` (the setup-navigate URL stripped of trailing slash)
+and ``{n}`` (the 1-indexed page number). Common patterns observed in the
+wild:
+
+  * BoatTrader-style path segment:    "{base}/page-{n}/"
+  * Zillow / generic query parameter: "{base}?page={n}"
+  * Algolia-style ampersand append:   "{base}&p={n}"
+  * Indexed page-N suffix:            "{base}/p/{n}"
+
+If the source plan shows either an example URL with a page number
+(``...?page=2``, ``.../page-2/``, ``.../p/2``) OR explicit prose like
+"page URLs use the ?page=N query parameter", emit ``pagination_url_template``
+with the inferred form. When the source plan says nothing about URL
+shape (or pagination is cursor-based / JS-driven), OMIT the field
+entirely so the orchestrator falls back to the default
+``{base}/page-{n}/``.
+
+Never invent a template based on the domain alone — only emit when the
+source plan provides direct evidence of the URL shape.
 
 Backward-compatible fallback: if you cannot reliably classify the plan,
 emit a bare JSON array of step objects (no top-level "shapes"). The
@@ -798,7 +838,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v31_loop_count_concrete_defaults"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v32_pagination_url_template"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -813,11 +853,17 @@ class PlanDecomposer:
                 if isinstance(cached, dict):
                     cached_steps = cached.get("steps", [])
                     cached_shapes = cached.get("shapes", [])
+                    cached_template = str(
+                        cached.get("pagination_url_template", "") or ""
+                    )
                 else:
                     cached_steps = cached
                     cached_shapes = []
+                    cached_template = ""
                 plan = MicroPlan(source_plan=plan_text, domain=domain)
                 plan.shapes = self._normalize_shapes(cached_shapes)
+                if "{base}" in cached_template and "{n}" in cached_template:
+                    plan.pagination_url_template = cached_template
                 for s in cached_steps:
                     plan.steps.append(self._build_intent(s))
 
@@ -907,9 +953,13 @@ class PlanDecomposer:
         if isinstance(parsed, list):
             steps_raw = parsed
             shapes_raw: Any = []
+            template_raw = ""
         elif isinstance(parsed, dict):
             steps_raw = parsed.get("steps", [])
             shapes_raw = parsed.get("shapes", [])
+            # #629: optional pagination URL template — only present when
+            # the LLM inferred one from the source plan.
+            template_raw = str(parsed.get("pagination_url_template", "") or "")
         else:
             raise ValueError(
                 f"Decomposer returned unexpected JSON type: {type(parsed).__name__}"
@@ -917,6 +967,15 @@ class PlanDecomposer:
 
         plan = MicroPlan(source_plan=plan_text, domain=domain)
         plan.shapes = self._normalize_shapes(shapes_raw)
+        # Only accept the template when it contains both placeholders;
+        # otherwise it's malformed and the orchestrator will reject it
+        # anyway (better to surface in the decompose log).
+        if "{base}" in template_raw and "{n}" in template_raw:
+            plan.pagination_url_template = template_raw
+            logger.info(
+                "  [decomposer] inferred pagination_url_template=%s",
+                template_raw,
+            )
         for s in steps_raw:
             plan.steps.append(self._build_intent(s))
 
@@ -942,12 +1001,17 @@ class PlanDecomposer:
         self._inject_gate_url_hints(plan)
 
         # Cache the full parsed structure (object or legacy array) so the
-        # cached path round-trips through both schemas.
-        cache_payload: Any = (
-            {"shapes": plan.shapes, "steps": steps_raw}
-            if plan.shapes
-            else steps_raw
-        )
+        # cached path round-trips through both schemas. #629: also persist
+        # the inferred pagination URL template when set, so cached plans
+        # don't lose the inference on rehydration.
+        if plan.shapes or plan.pagination_url_template:
+            cache_payload: Any = {"shapes": plan.shapes, "steps": steps_raw}
+            if plan.pagination_url_template:
+                cache_payload["pagination_url_template"] = (
+                    plan.pagination_url_template
+                )
+        else:
+            cache_payload = steps_raw
         if cache_path:
             try:
                 with open(cache_path, "w") as f:

@@ -2761,6 +2761,12 @@ def main(
             workflow_id=workflow_id,
             objective=objective_dict,
             loop_groups=loop_groups_dicts,
+            # #629: thread the plan-level pagination URL template
+            # through to the orchestrator. Empty when the decomposer
+            # didn't infer one (which is most plans today).
+            pagination_url_template=getattr(
+                micro_plan, "pagination_url_template", "",
+            ) or "",
         )
 
         print(f"  Profile:  {task_suite['_profile_id']}")
