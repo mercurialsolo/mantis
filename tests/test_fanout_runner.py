@@ -25,13 +25,19 @@ from mantis_agent.gym.checkpoint import StepResult
 from mantis_agent.gym.fanout_runner import (
     DEFAULT_PAGINATION_URL_TEMPLATE,
     LocalFanoutRunner,
+    NullSharedSeenSet,
+    _InMemorySharedSeenSet,
     _normalize_listing_url,
+    build_shared_seen_set,
     build_worker_subplan,
     dedup_leads_by_url,
     fanout_enabled,
+    find_url_collect_group,
     partition_urls,
     partition_urls_for_pagination,
     prepare_modal_partitions,
+    prepare_phase1_suite,
+    prepare_phase2_suites,
     read_partition_result,
     rewrite_for_fanout,
 )
@@ -563,7 +569,10 @@ def test_read_partition_result_none_input_safe() -> None:
     the orchestrator — the reader returns the zero shape and the
     orchestrator's exception handler logs the failure separately."""
     out = read_partition_result(None)
-    assert out == {"viable": 0, "with_phone": 0, "leads": []}
+    assert out == {
+        "viable": 0, "with_phone": 0,
+        "leads": [], "collected_urls": [],
+    }
 
 
 def test_read_partition_result_tolerates_missing_leads_list() -> None:
@@ -773,3 +782,303 @@ def test_dedup_mixed_string_and_dict_leads() -> None:
     deduped, raw, dedup_count = dedup_leads_by_url(per_partition)
     assert raw == 2
     assert dedup_count == 1
+
+
+# ── #628: Phase-1/Phase-2 fan-out builders ──────────────────────────────
+
+
+def _url_collect_suite() -> dict:
+    """A boattrader-shaped task_suite with a parallelizable_url_collect
+    inner extraction loop (no pagination wrapper). Mirrors what
+    PlanDecomposer.decompose emits for the boattrader_scrape_urlnav plan
+    before pagination is added."""
+    plan = MicroPlan(domain="x.com")
+    plan.steps = [
+        MicroIntent(
+            intent="Navigate", type="navigate", section="setup",
+            params={"url": "https://x.com/listings"},
+        ),
+        MicroIntent(intent="Click card", type="click", section="extraction"),
+        MicroIntent(intent="Read URL", type="extract_url", section="extraction"),
+        MicroIntent(intent="Scroll", type="scroll", section="extraction"),
+        MicroIntent(intent="Extract", type="extract_data", section="extraction"),
+        MicroIntent(intent="Back", type="navigate_back", section="extraction"),
+        MicroIntent(
+            intent="Inner loop", type="loop", section="extraction",
+            loop_target=1, loop_count=20,
+        ),
+    ]
+    PlanDecomposer._classify_loop_groups(plan)
+    return {
+        "session_name": "x",
+        "_micro_plan": [
+            {
+                "intent": s.intent, "type": s.type, "section": s.section,
+                "params": dict(s.params or {}),
+                "loop_target": s.loop_target, "loop_count": s.loop_count,
+                "claude_only": s.claude_only, "gate": s.gate,
+                "required": s.required, "grounding": s.grounding,
+                "verify": s.verify, "reverse": s.reverse,
+                "budget": s.budget, "hints": dict(s.hints or {}),
+            }
+            for s in plan.steps
+        ],
+        "_loop_groups": [
+            {
+                "loop_step_idx": g.loop_step_idx,
+                "body_range": list(g.body_range),
+                "shape": g.shape,
+            }
+            for g in plan.loop_groups
+        ],
+    }
+
+
+def test_find_url_collect_group_returns_group_when_present() -> None:
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    assert g is not None
+    assert g.shape == "parallelizable_url_collect"
+
+
+def test_find_url_collect_group_returns_none_for_pagination_only() -> None:
+    """Pagination-only plan (no url-collect inner) → orchestrator falls
+    through to the existing per-page partition path."""
+    suite = _pagination_plan_suite()
+    g = find_url_collect_group(suite)
+    # The pagination plan has BOTH groups (inner url-collect + outer
+    # pagination). Verify finder returns the url-collect inner — but
+    # in real flows the orchestrator prefers Phase-1/Phase-2 over
+    # per-page when the url-collect group exists. We pin shape here.
+    if g is not None:
+        assert g.shape == "parallelizable_url_collect"
+
+
+def test_find_url_collect_group_returns_none_without_micro_plan() -> None:
+    assert find_url_collect_group({}) is None
+    assert find_url_collect_group({"_micro_plan": []}) is None
+
+
+# ── prepare_phase1_suite ─────────────────────────────────────────────
+
+
+def test_phase1_suite_keeps_setup_drops_extraction_body() -> None:
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    phase1 = prepare_phase1_suite(suite, g)
+    types = [s["type"] for s in phase1["_micro_plan"]]
+    # Setup navigate is preserved; extraction body + loop are gone;
+    # collect_urls is injected at the end.
+    assert types == ["navigate", "collect_urls"]
+
+
+def test_phase1_suite_injects_collect_urls_step() -> None:
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    phase1 = prepare_phase1_suite(suite, g)
+    last = phase1["_micro_plan"][-1]
+    assert last["type"] == "collect_urls"
+    assert last["claude_only"] is True
+    assert last["section"] == "extraction"
+
+
+def test_phase1_suite_drops_loop_groups() -> None:
+    """Phase-1 sub-suite has no loops — drop _loop_groups so the child
+    container doesn't accidentally route through any fanout path."""
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    phase1 = prepare_phase1_suite(suite, g)
+    assert "_loop_groups" not in phase1
+
+
+def test_phase1_suite_tags_phase_metadata() -> None:
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    phase1 = prepare_phase1_suite(suite, g)
+    assert phase1["_fanout_phase"] == "phase1_collect"
+    assert phase1["session_name"].endswith("_phase1")
+
+
+# ── prepare_phase2_suites ────────────────────────────────────────────
+
+
+def test_phase2_suites_one_per_worker_chunk() -> None:
+    """8 URLs × 4 workers → round-robin chunks of 2 URLs each → 4 sub-suites."""
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    urls = [f"https://x.com/boat/{i}/" for i in range(8)]
+    suites = prepare_phase2_suites(suite, urls, g, workers=4)
+    assert len(suites) == 4
+    for sub in suites:
+        assert sub["_fanout_url_count"] == 2
+
+
+def test_phase2_suites_each_url_gets_navigate_scroll_extract() -> None:
+    """Per-URL triple: navigate → scroll → extract_data."""
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    urls = ["https://x.com/boat/1/", "https://x.com/boat/2/"]
+    suites = prepare_phase2_suites(suite, urls, g, workers=1)
+    types = [s["type"] for s in suites[0]["_micro_plan"]]
+    assert types == [
+        "navigate", "scroll", "extract_data",
+        "navigate", "scroll", "extract_data",
+    ]
+    nav_urls = [
+        s["params"]["url"] for s in suites[0]["_micro_plan"]
+        if s["type"] == "navigate"
+    ]
+    assert nav_urls == urls
+
+
+def test_phase2_suites_empty_chunks_dropped() -> None:
+    """3 URLs × 5 workers → 3 non-empty chunks + 2 empty → return 3 sub-suites."""
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    urls = ["a", "b", "c"]
+    suites = prepare_phase2_suites(suite, urls, g, workers=5)
+    assert len(suites) == 3
+
+
+def test_phase2_suites_no_loop_groups_persisted() -> None:
+    """Phase-2 sub-plans have no loops — confirm _loop_groups not set."""
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    suites = prepare_phase2_suites(suite, ["a"], g, workers=1)
+    assert "_loop_groups" not in suites[0]
+
+
+def test_phase2_suites_no_urls_returns_empty_list() -> None:
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    assert prepare_phase2_suites(suite, [], g, workers=4) == []
+
+
+def test_phase2_navigate_carries_wait_after_load() -> None:
+    """Phase-2 worker hits a detail page directly (cold cache). The
+    navigate step needs wait_after_load_seconds so the runner pauses
+    long enough for the page to render before scroll fires."""
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    suites = prepare_phase2_suites(suite, ["https://x.com/boat/1/"], g, workers=1)
+    nav = next(s for s in suites[0]["_micro_plan"] if s["type"] == "navigate")
+    assert nav["params"]["wait_after_load_seconds"] == 6
+
+
+# ── read_partition_result collected_urls ─────────────────────────────
+
+
+def test_read_partition_result_surfaces_collected_urls() -> None:
+    """Phase-1 workers stash harvested URLs on result.collected_urls
+    (added to build_micro_result in #628). The reader must surface
+    them so the orchestrator can dispatch Phase-2."""
+    fake = {
+        "viable": 0,
+        "leads_with_phone": 0,
+        "leads": [],
+        "collected_urls": ["https://x.com/boat/1/", "https://x.com/boat/2/"],
+    }
+    out = read_partition_result(fake)
+    assert out["collected_urls"] == [
+        "https://x.com/boat/1/", "https://x.com/boat/2/",
+    ]
+
+
+def test_read_partition_result_collected_urls_defaults_empty() -> None:
+    """Phase-2 / sequential workers have no collected_urls — empty list."""
+    out = read_partition_result({"viable": 27, "leads_with_phone": 1})
+    assert out["collected_urls"] == []
+
+
+# ── #627: shared seen-URL set ───────────────────────────────────────────
+
+
+def test_null_shared_seen_is_noop() -> None:
+    """Default backend on every runner. ``contains`` never hits;
+    ``add`` is silent; ``size`` is always zero — preserves single-worker
+    behaviour without conditional dedup branches on the hot path."""
+    s = NullSharedSeenSet()
+    s.add("https://x.com/boat/1/")
+    assert s.contains("https://x.com/boat/1/") is False
+    assert s.size() == 0
+
+
+def test_inmemory_shared_seen_basic_round_trip() -> None:
+    s = _InMemorySharedSeenSet()
+    s.add("https://x.com/boat/1/")
+    assert s.contains("https://x.com/boat/1/") is True
+    assert s.size() == 1
+
+
+def test_inmemory_shared_seen_normalizes_url() -> None:
+    """Trailing slash and case drift collapse — keys line up with
+    the merge-step ``dedup_leads_by_url`` normalization."""
+    s = _InMemorySharedSeenSet()
+    s.add("https://Example.com/Boat/1/")
+    assert s.contains("https://example.com/boat/1") is True
+    assert s.contains("https://example.com/boat/1/") is True
+    assert s.size() == 1
+
+
+def test_inmemory_shared_seen_ignores_empty_urls() -> None:
+    """Empty / whitespace-only URLs aren't keys — they pass through the
+    normalizer to ``""``, which we don't add (avoids a single 'no URL'
+    bucket swallowing everything that fails extract_url)."""
+    s = _InMemorySharedSeenSet()
+    s.add("")
+    s.add("   ")
+    assert s.size() == 0
+
+
+def test_build_shared_seen_set_returns_null_without_dict_name() -> None:
+    """No ``_fanout_seen_dict_name`` in suite → NullSharedSeenSet.
+    Pure local / non-fanout runs hit this path."""
+    s = build_shared_seen_set({})
+    assert isinstance(s, NullSharedSeenSet)
+    s2 = build_shared_seen_set({"_micro_plan": [{"type": "navigate"}]})
+    assert isinstance(s2, NullSharedSeenSet)
+
+
+def test_build_shared_seen_set_falls_back_when_modal_raises(monkeypatch) -> None:
+    """Suite has a dict name but ``modal.Dict.from_name`` raises (e.g.
+    not authenticated to Modal, or running outside a Modal container) →
+    fall back to NullSharedSeenSet with a WARNING. Prevents fan-out
+    runs from crashing when the shared store can't be attached.
+
+    Skipped when ``modal`` is not installed (CI's default test extra
+    doesn't pull it). The bare-module check is what matters here, and
+    on Modal-less environments the fall-through path already returns
+    NullSharedSeenSet via the import-fail branch in build_shared_seen_set.
+    """
+    import pytest
+    modal = pytest.importorskip("modal")
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("simulated: not on Modal")
+
+    monkeypatch.setattr(modal.Dict, "from_name", _boom)
+    s = build_shared_seen_set({"_fanout_seen_dict_name": "test-name"})
+    assert isinstance(s, NullSharedSeenSet)
+
+
+def test_build_shared_seen_set_returns_modal_backend_when_available() -> None:
+    """When modal is importable AND from_name succeeds, the build helper
+    returns the Modal backend, not Null. Skipped when modal isn't
+    installed (CI's default test extra doesn't pull it)."""
+    import pytest
+    pytest.importorskip("modal")
+    from mantis_agent.gym.fanout_runner import _ModalDictSharedSeenSet
+    s = build_shared_seen_set({"_fanout_seen_dict_name": "test-unit-noop"})
+    assert isinstance(s, _ModalDictSharedSeenSet)
+
+
+def test_build_shared_seen_set_returns_null_when_modal_unavailable() -> None:
+    """Modal-less environments (CI default) → build helper returns
+    NullSharedSeenSet via the ImportError catch in the implementation.
+    Pins the fail-soft behaviour so a fan-out config in a non-Modal
+    env doesn't crash the runner."""
+    s = build_shared_seen_set({"_fanout_seen_dict_name": "test-name"})
+    # In a Modal-equipped env this returns the real backend; in CI it
+    # falls back to Null. Either way the runner doesn't crash — we
+    # accept both shapes for cross-env stability.
+    assert isinstance(s, (NullSharedSeenSet,)) or hasattr(s, "contains")

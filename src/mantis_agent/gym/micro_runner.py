@@ -231,6 +231,13 @@ class MicroPlanRunner:
         # check ``len(runner._collected_urls)`` to decide whether to
         # fan out vs fall back to the sequential extraction loop.
         self._collected_urls: list[str] = []
+        # #627: cross-worker seen-URL set. Default is a no-op
+        # (NullSharedSeenSet); the Modal orchestrator overrides via the
+        # suite's ``_fanout_seen_dict_name`` field so spawned workers
+        # attach to the same Modal Dict. Read by ClaudeStepHandler.execute
+        # to short-circuit when a sibling worker already extracted the URL.
+        from .fanout_runner import NullSharedSeenSet
+        self._shared_seen_set: Any = NullSharedSeenSet()
         self._active_checkpoint_context = None
         self._pre_step_snapshot, self._final_status = None, "running"
         # #audit item 4: halt_reason last set by ``_persist`` — read by

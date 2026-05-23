@@ -260,6 +260,36 @@ class ClaudeStepHandler:
                     step_index=index, intent=step.intent,
                     success=False, data=f"DUPLICATE|{url}",
                 )
+            # #627: cross-worker dedup. The per-container scanner caught
+            # within-this-container repeats above; the shared seen-set
+            # catches the case where a sibling fan-out worker already
+            # extracted this URL. Short-circuit so we don't pay the
+            # extract_data Claude cost (~$0.20) on a confirmed duplicate.
+            # NullSharedSeenSet.contains() returns False → unchanged
+            # behaviour for single-worker / non-fanout runs.
+            #
+            # ``contains(url) is True`` rejects MagicMock fakes whose
+            # auto-generated .contains returns a truthy Mock — without
+            # that the test_listing_card_grounding fakes would trip
+            # this gate and silently turn every URL into a DUPLICATE.
+            shared = getattr(runner, "_shared_seen_set", None)
+            if url and shared is not None and shared.contains(url) is True:
+                logger.warning(
+                    "  [shared-seen] cross-worker dedup hit: %s "
+                    "(step=%d, shared set size=%d)",
+                    url[:80], index, shared.size(),
+                )
+                dynamic_verifier.record_item_completed(
+                    page=runner._current_page,
+                    item=runner._current_item_label(data),
+                    url=url,
+                    success=True,
+                    reason="cross_worker_dedup_skipped",
+                )
+                return StepResult(
+                    step_index=index, intent=step.intent,
+                    success=False, data=f"DUPLICATE|cross_worker|{url}",
+                )
             if url:
                 # Issue #603: do NOT mark_seen here. extract_url is a
                 # PRE-extraction probe; the URL hasn't been deep-extracted
@@ -384,6 +414,16 @@ class ClaudeStepHandler:
                 }
             if data and data.is_viable():
                 runner.scanner.mark_seen(extracted_url)
+                # #627: also write to the cross-worker shared seen-set
+                # so sibling fan-out workers can short-circuit on this
+                # URL. NullSharedSeenSet.add() is a no-op for non-fanout
+                # runs — preserves single-worker behaviour.
+                shared = getattr(runner, "_shared_seen_set", None)
+                if shared is not None and extracted_url:
+                    try:
+                        shared.add(extracted_url)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("[shared-seen] add raised: %s", exc)
                 summary = data.to_summary()
                 # Persist to cache so subsequent runs (or loop iterations)
                 # can short-circuit. No-op when cache_write is disabled.

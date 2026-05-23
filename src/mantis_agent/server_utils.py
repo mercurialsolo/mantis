@@ -818,6 +818,13 @@ def build_micro_result(
         "dynamic_verification": dynamic_verification,
         "dynamic_verification_summary": dynamic_verification_summary,
         "leads": leads,
+        # #628: Phase-1 fan-out workers stash harvested URLs on
+        # ``runner._collected_urls`` via the ``collect_urls`` step (#615).
+        # Surfacing them through the result envelope lets the Modal
+        # orchestrator read them after Phase-1 completes and use the
+        # list to partition Phase-2 workers. Empty list for runs that
+        # didn't include a ``collect_urls`` step (which is most runs).
+        "collected_urls": list(getattr(runner, "_collected_urls", []) or []),
         "artifacts": artifacts,
         "executor_backend_counts": executor_backend_counts,
         "step_details": [
@@ -1106,6 +1113,7 @@ def build_micro_suite(
     max_recoveries_per_run: int | None = None,
     max_recoveries_per_step: int | None = None,
     loop_groups: list[dict[str, Any]] | None = None,
+    pagination_url_template: str = "",
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
@@ -1186,6 +1194,14 @@ def build_micro_suite(
     # that case for plans persisted before this field existed.
     if loop_groups:
         suite["_loop_groups"] = list(loop_groups)
+    # #629: plan-level pagination URL template overrides the default
+    # ``{base}/page-{n}/`` in the fan-out orchestrator. Set when the
+    # decomposer infers a template from the source plan, or by an
+    # enhancer step that probes the site. Empty when neither — the
+    # orchestrator falls back to the paginate-step ``url_template``
+    # param then the default.
+    if pagination_url_template:
+        suite["_pagination_url_template"] = str(pagination_url_template)
     return suite
 
 
