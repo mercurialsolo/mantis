@@ -104,9 +104,9 @@
               <div class="range-handle range-handle-max"></div>
             </div>
             <div class="range-row">
-              <input class="filter-input range-input" type="number" min="0" step="1000" name="price_min" placeholder="No Min" value="{{ f.price_min or '' }}" />
+              <input class="filter-input range-input" type="number" min="{{ facets.price_range[0]|int }}" max="{{ facets.price_range[1]|int }}" step="1000" name="price_min" placeholder="No Min" value="{{ f.price_min or '' }}" />
               <span>to</span>
-              <input class="filter-input range-input" type="number" min="0" step="1000" name="price_max" placeholder="No Max" value="{{ f.price_max or '' }}" />
+              <input class="filter-input range-input" type="number" min="{{ facets.price_range[0]|int }}" max="{{ facets.price_range[1]|int }}" step="1000" name="price_max" placeholder="No Max" value="{{ f.price_max or '' }}" />
             </div>
             <label class="checkbox-row">
               <input type="checkbox" name="price_drop" value="1" {% if f.price_drop %}checked{% endif %} />
@@ -139,9 +139,151 @@
           </div>
         </details>
 
+        <details class="filter-group" data-testid="filter-beam">
+          <summary><span class="filter-group-label">Beam</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <div class="range-slider-wrap" aria-hidden="true">
+              <div class="range-track"></div>
+              <div class="range-fill"></div>
+              <div class="range-handle range-handle-min"></div>
+              <div class="range-handle range-handle-max"></div>
+            </div>
+            <div class="range-row">
+              <input class="filter-input range-input" type="number" min="0" max="40" name="beam_min" placeholder="No Min" value="{{ f.beam_min or '' }}" />
+              <span>to</span>
+              <input class="filter-input range-input" type="number" min="0" max="40" name="beam_max" placeholder="No Max" value="{{ f.beam_max or '' }}" />
+              <span class="range-unit">ft.</span>
+            </div>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-draft">
+          <summary><span class="filter-group-label">Max Draft</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <div class="range-slider-wrap" aria-hidden="true">
+              <div class="range-track"></div>
+              <div class="range-fill"></div>
+              <div class="range-handle range-handle-min"></div>
+              <div class="range-handle range-handle-max"></div>
+            </div>
+            <div class="range-row">
+              <input class="filter-input range-input" type="number" min="0" max="20" name="draft_min" placeholder="No Min" value="{{ f.draft_min or '' }}" />
+              <span>to</span>
+              <input class="filter-input range-input" type="number" min="0" max="20" name="draft_max" placeholder="No Max" value="{{ f.draft_max or '' }}" />
+              <span class="range-unit">ft.</span>
+            </div>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-fuel">
+          <summary><span class="filter-group-label">Fuel Type</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <select class="filter-select" name="fuel">
+              <option value="">All Fuel Types</option>
+              <option value="gas">Gas</option>
+              <option value="diesel">Diesel</option>
+              <option value="electric">Electric</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-hull">
+          <summary><span class="filter-group-label">Hull</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <select class="filter-select" name="hull">
+              <option value="">All Hull Types</option>
+              <option value="fiberglass">Fiberglass</option>
+              <option value="aluminum">Aluminum</option>
+              <option value="composite">Composite</option>
+              <option value="steel">Steel</option>
+              <option value="wood">Wood</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-engines">
+          <summary><span class="filter-group-label">Engines</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <label class="filter-sublabel">Number of Engines</label>
+            <div class="seg-control" role="radiogroup" data-engines-count>
+              {% for v in ['any','1','2','3','4+'] %}
+              <label class="seg {% if (f.engines_count or 'any')==v %}active{% endif %}">
+                <input type="radio" name="engines_count" value="{{ v }}" {% if (f.engines_count or 'any')==v %}checked{% endif %} /> {{ v|capitalize if v=='any' else v }}
+              </label>
+              {% endfor %}
+            </div>
+            <label class="filter-sublabel" style="margin-top: 14px">Engine Type</label>
+            <div class="radio-list">
+              {% for v, label in [('all','All'), ('direct','Direct Drive'), ('jet','Jet Drive'), ('none','None'), ('other','Other'), ('inboard','Single Inboard'), ('outboard','Outboard')] %}
+              <label class="radio-row">
+                <input type="radio" name="engine_type" value="{{ v }}" {% if (f.engine_type or 'all')==v %}checked{% endif %} />
+                <span>{{ label }}</span>
+              </label>
+              {% endfor %}
+            </div>
+          </div>
+        </details>
+
+        <details class="filter-group" data-testid="filter-for-sale-by">
+          <summary><span class="filter-group-label">For Sale By</span><span class="filter-chevron"></span></summary>
+          <div class="filter-group-body">
+            <div class="radio-list">
+              <label class="radio-row">
+                <input type="radio" name="for_sale_by" value="any" {% if (f.for_sale_by or 'any')=='any' %}checked{% endif %} />
+                <span>Any</span>
+              </label>
+              <label class="radio-row">
+                <input type="radio" name="for_sale_by" value="dealer" {% if f.for_sale_by=='dealer' %}checked{% endif %} />
+                <span>Dealer</span>
+              </label>
+              <label class="radio-row">
+                <input type="radio" name="for_sale_by" value="owner" {% if f.for_sale_by=='owner' %}checked{% endif %} />
+                <span>Private Seller</span>
+              </label>
+            </div>
+          </div>
+        </details>
+
         <button type="submit" class="btn btn-primary btn-block apply-filters" data-testid="apply-filters">Apply Filters</button>
         <a href="/boats/" class="filter-clear">Clear all</a>
       </form>
+
+      {# ─── Boat Loan Calculator widget (below the filter card) ─── #}
+      <div class="loan-calc-card" data-testid="loan-calc-card">
+        <h3 class="loan-calc-title">Boat Loan Calculator</h3>
+        <label class="loan-calc-field">
+          <span class="loan-calc-label">Loan Amount *</span>
+          <input type="number" class="loan-calc-input" name="loan_amount" placeholder="$" value="" />
+        </label>
+        <label class="loan-calc-field">
+          <span class="loan-calc-label">Loan Term *</span>
+          <select class="loan-calc-input">
+            <option>240 months</option>
+            <option>180 months</option>
+            <option>120 months</option>
+            <option>60 months</option>
+          </select>
+        </label>
+        <label class="loan-calc-field">
+          <span class="loan-calc-label">Interest Rate (APR) *</span>
+          <div class="loan-calc-input-row">
+            <input type="number" class="loan-calc-input" value="6.49" step="0.01" />
+            <span class="loan-calc-unit">%</span>
+          </div>
+        </label>
+        <button type="button" class="btn btn-secondary loan-calc-button">Calculate</button>
+        <div class="loan-calc-result">
+          <div class="loan-calc-result-label">Monthly Payment</div>
+          <div class="loan-calc-result-value">$0.00</div>
+        </div>
+        <p class="loan-calc-prompt">Ready for the next step?</p>
+        <a href="/boat-loans/pre-qualify/" class="btn btn-primary loan-calc-cta">↗ Get Pre-Qualified</a>
+        <p class="loan-calc-fineprint">
+          Adjust the loan term, down payment amount and interest rate to see results based on the numbers you provide — and how any changes to those numbers may affect your payment. *For more information on the APR rates, please visit our <a href="/boat-loans/">Boat Loans</a> page.
+        </p>
+      </div>
     </aside>
 
     <section class="srp-results">

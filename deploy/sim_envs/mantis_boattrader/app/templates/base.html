@@ -4,10 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Boat Trader - #1 marketplace to buy & sell boats in the US{% endblock %}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" />
-  <link rel="stylesheet" href="/static/app.css?v=71" />
+  {# Real BT declares 'Roboto, -apple-system, system-ui, ...' as font-family
+     but does NOT actually load Roboto — it falls back to the system font
+     (San Francisco on macOS, Segoe UI on Windows). Loading Roboto Medium
+     from Google Fonts makes our text render heavier than real BT, so we
+     match by NOT loading Roboto and letting the system fallback render. #}
+  <link rel="stylesheet" href="/static/app.css?v=81" />
   <meta name="description" content="{% block description %}Buy and sell new & used boats. Find boats, yachts, sailboats, fishing boats, pontoons, and more.{% endblock %}" />
 </head>
 <body class="bt-body">
@@ -129,6 +131,54 @@
         if (!t.contains(ev.target)) t.setAttribute('hidden', '');
       });
     }, true);
+  })();
+  // Sync range-slider handle positions + fill bar from the min/max
+  // number inputs in the same filter group. Runs on load and whenever
+  // an input changes so the visual handles always reflect the URL state.
+  (function(){
+    function syncOne(wrap) {
+      var group = wrap.closest('.filter-group-body');
+      if (!group) return;
+      var inputs = group.querySelectorAll('input[type="number"]');
+      if (inputs.length < 2) return;
+      var minIn = inputs[0], maxIn = inputs[1];
+      var lo = parseFloat(minIn.min);
+      var hi = parseFloat(minIn.max);
+      if (isNaN(lo) || isNaN(hi) || hi <= lo) return;
+      var curMin = parseFloat(minIn.value);
+      var curMax = parseFloat(maxIn.value);
+      if (isNaN(curMin)) curMin = lo;
+      if (isNaN(curMax)) curMax = hi;
+      curMin = Math.max(lo, Math.min(hi, curMin));
+      curMax = Math.max(lo, Math.min(hi, curMax));
+      var minPct = ((curMin - lo) / (hi - lo)) * 100;
+      var maxPct = ((curMax - lo) / (hi - lo)) * 100;
+      // Account for 22px handle width: shift max-handle so right edge
+      // aligns with maxPct, and the fill bar matches both.
+      var hMin = wrap.querySelector('.range-handle-min');
+      var hMax = wrap.querySelector('.range-handle-max');
+      var fill = wrap.querySelector('.range-fill');
+      if (hMin) hMin.style.left = 'calc(' + minPct + '% - 11px)';
+      if (hMax) hMax.style.left = 'calc(' + maxPct + '% - 11px)';
+      if (fill) {
+        fill.style.left = minPct + '%';
+        fill.style.right = (100 - maxPct) + '%';
+      }
+    }
+    function syncAll() {
+      document.querySelectorAll('.range-slider-wrap').forEach(syncOne);
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', syncAll);
+    } else {
+      syncAll();
+    }
+    document.addEventListener('input', function(ev){
+      if (ev.target.matches && ev.target.matches('.filter-group-body input[type="number"]')) {
+        var wrap = ev.target.closest('.filter-group-body').querySelector('.range-slider-wrap');
+        if (wrap) syncOne(wrap);
+      }
+    });
   })();
 </script>
 
