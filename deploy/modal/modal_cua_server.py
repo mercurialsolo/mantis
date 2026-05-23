@@ -2829,7 +2829,7 @@ def main(
                 except Exception as e:
                     print(f"    [fanout] partition {i + 1}: ERROR — {e}")
 
-            print(f"\n  ═══ FANOUT RESULTS ═══")
+            print("\n  ═══ FANOUT RESULTS ═══")
             print(f"  Partitions:  {len(partitions)}")
             print(f"  Total leads: {merged_total}")
             return
