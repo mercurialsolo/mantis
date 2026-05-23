@@ -3,10 +3,10 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=94** (2026-05-23) — Typography diff fixes from side-by-side probe: section headings 15/400 #333 → 16/500 #404040; `.zip-use-location` margin `8px 0 0` → `-16px 0 15px` (tightens against zip row, matches real BT); `.filter-options` outer border → `bg #f7f7f7; padding: 8px` (real BT's softer container); list-item label 14px → 15px.
+Last updated: **v=95** (2026-05-23) — Color shade pass: `.filter-select` + `.filter-input` color `#333` → `#404040` (real BT inputs/selects); `.zip-tab` + `.seg` color `var(--bt-text)` → `#0a0a0a` (real BT switcher labels are noticeably darker than panel body).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `-jpdhhyruvelh-h7yhep-czjfogk72vv`)
+(token rotates per sandbox restart; current: `rzsrm967ibbct7vgbgpzdzudgofezmmv`)
 
 ## Methodology
 
@@ -428,6 +428,24 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=95` Color shade pass (deferred 5th item from v=94 typography diff):
+       • `.filter-select` + `.filter-input` color: `var(--bt-text)`
+         (#333) → **`#404040`**. Verified against real BT's
+         `.tool-set select` and `input[placeholder*="Zip"]` —
+         both render at rgb(64,64,64).
+       • `.zip-tab` color: `var(--bt-text)` → **`#0a0a0a`**.
+         Real BT's `.switcher-option-label` renders at rgb(10,10,10) —
+         near-black, noticeably darker than the panel body. Also
+         updates `.zip-tab.active` to match.
+       • `.seg` + `.seg.active` color: same `#0a0a0a` treatment as
+         `.zip-tab` (Condition / All / New / Used use the same
+         switcher styling).
+       • Scoped change — did NOT change `--bt-text` globally to avoid
+         cascading shade shifts in header nav, breadcrumb, listing
+         cards, footer.
+       • 2 new fidelity tests: test_filter_inputs_are_404040,
+         test_switcher_options_are_near_black. Suite now **37 passing**.
+       • Cache-buster bumped to `?v=95`.
 `v=94` Typography diff fixes (side-by-side probe of filter panel):
        • `.filter-group-label`: 15/400 #333 → **16/500 #404040** with
          line-height 20px. Verified against all real BT section

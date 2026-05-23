@@ -375,6 +375,26 @@ def test_filter_options_label_is_15px(base_css):
     assert "font-size: 15px" in block
 
 
+# ── v=95 color shade pass ─────────────────────────────────────────────
+
+
+def test_filter_inputs_are_404040(base_css):
+    """v=95: `.filter-select` + `.filter-input` color → #404040 (was
+    #333). Real BT inputs/selects render at this slightly darker shade."""
+    block = _rule_block(base_css, ".filter-select, .filter-input {")
+    assert "color: #404040" in block
+
+
+def test_switcher_options_are_near_black(base_css):
+    """v=95: `.zip-tab` + `.seg` color → #0a0a0a (was var(--bt-text)).
+    Real BT renders switcher labels noticeably darker than the panel
+    body — verified rgb(10,10,10) on `.switcher-option-label`."""
+    zip_block = _rule_block(base_css, ".zip-tab {")
+    assert "color: #0a0a0a" in zip_block
+    seg_block = _rule_block(base_css, ".seg {")
+    assert "color: #0a0a0a" in seg_block
+
+
 # ── BDP fidelity anchors (v=91) ───────────────────────────────────────
 
 
