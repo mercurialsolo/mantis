@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=82** (2026-05-22) — filter-panel fidelity pass: Zip Code wrap, Use-My-Location underline, zip-row fixed widths, section-divider 2px, filter-card drop shadow, focus-state blue border, auto-submit on 5-digit zip.
+Last updated: **v=83** (2026-05-22) — Price Drop toggle switch + info icon (replaces checkbox), continued from v=82's filter-panel fidelity pass.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `fb8g7s_onpwfzlewqnojzripth8s9e3q`)
@@ -116,6 +116,11 @@ the current state. Status legend:
 | "Use My Location" | underlined, 14/400, blue, right-aligned | underlined, 14/400, blue, right-aligned (v=82) | ✅ |
 | Zip input focus | border-color → blue, no outline | border 1.5px blue + 0.5px shadow ring (v=82) | ✅ |
 | 5-digit zip auto-submit | typing 5 digits navigates to `?zip=NNNNN` | debounced 250ms form.submit() in base.html (v=82) | ✅ |
+| Price Drop control | `.switch.toggleButton` 50×26, white 22×22 thumb, slides on click; Material Icons `info` (24×24 #c2c2c2) next to label | `.switch` div with white thumb, `:has(input:checked)` toggles blue + slides right; inline SVG info icon 18×18 #c2c2c2 (v=83) | ✅ |
+| Price Drop label | "Price Drop" + info icon | "Price Drop" + info icon (v=83; was "Price Drop only" + checkbox) | ✅ |
+| Boat Type / Make filter UI | Search-as-you-type input + checkbox list (`ul.opts`) inside collapse | `<select>` dropdown — functionally equivalent for the agent but visually divergent | 🟡 |
+| Beam / Max Draft / Fuel Type / Hull | Same search-input + checkbox pattern as Boat Type | `<select>` dropdown | 🟡 |
+| Default collapsed sections | Boat Type/Make/Beam/Max Draft/Fuel/Hull start `closed` on real BT | sandbox starts Beam/Max Draft/Fuel/Hull `closed`; Boat Type/Make are `open` | 🟡 |
 | All/New/Used segmented | same shape as zip toggle | same | ✅ |
 | Length / Year / Price sliders | 22×22 blue thumb w/ 2px white border, 4px rail #e9e9e9, blue fill | same exact spec | ✅ |
 | **Slider handle URL sync** | rc-slider auto-positions handles from URL | JS in base.html reads input min/max/value, sets handle positions | ✅ |
@@ -333,3 +338,11 @@ the current state. Status legend:
        • 5-digit Zip input auto-submits the filters form (matches real BT's auto-navigation)
        • Adds `deploy/sim_envs/mantis_boattrader/scripts/perceptual_diff.py` harness
        • Adds `deploy/sim_envs/mantis_boattrader/FIDELITY_AGENT_PROMPT.md` — repeatable workflow
+`v=83` Price Drop toggle switch replaces checkbox:
+       • New `.price-drop-row` with label + inline-SVG info icon (18×18 #c2c2c2)
+       • New `.switch` (50×26 grey track, white 22×22 thumb) + `:has(input:checked)`
+         flips background to `--bt-blue` and slides thumb 24px right with `transition: left 0.2s`
+       • Label changed from "Price Drop only" → "Price Drop" (matches real BT)
+       • Documents remaining 🟡 gaps in dropdown sections (Boat Type / Make / Beam /
+         Max Draft / Fuel Type / Hull) — real BT uses search-as-you-type filter lists,
+         sandbox keeps `<select>` for now; future v= will swap when needed
