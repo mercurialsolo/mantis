@@ -757,6 +757,13 @@ class PlanDecomposer:
                 # and means we don't have to invalidate all existing
                 # cache files when shipping plan-normalization fixes.
                 self._fix_loop_targets(plan)
+                # Issue #598: same idempotency play for the new-tab
+                # hint — cached plans from before this fix don't carry
+                # ``hints.open_in_new_tab`` so the click handler would
+                # still dispatch plain-click first then fall back. Re-
+                # apply on every load so the speedup takes effect on
+                # existing cache entries without invalidation.
+                self._apply_open_in_new_tab_hint(plan)
 
                 logger.info(f"Loaded cached micro-plan: {cache_path} ({len(plan.steps)} steps)")
                 return plan
@@ -864,6 +871,15 @@ class PlanDecomposer:
         # per gate whose preceding navigate had a literal URL with
         # distinctive path segments.
         self._inject_gate_url_hints(plan)
+        # Fix 6 (#598): when the source plan tells the agent to open
+        # listings in a NEW TAB (right-click / Ctrl+click / "open link
+        # in new tab"), set ``hints.open_in_new_tab=True`` on every
+        # extraction-section click step so the click handler dispatches
+        # middle-click as PRIMARY (instead of plain-click then falling
+        # back). Avoids one round-trip of plain-click + verify on every
+        # iteration, and gates future per-tab parallelization on a
+        # plan-level intent signal.
+        self._apply_open_in_new_tab_hint(plan)
 
         # Cache the full parsed structure (object or legacy array) so the
         # cached path round-trips through both schemas.
@@ -1211,6 +1227,77 @@ class PlanDecomposer:
                     s.loop_target, click_idx,
                 )
                 s.loop_target = click_idx
+
+    # Issue #598: prose patterns that signal "open this in a new tab"
+    # intent. Matched case-insensitively against the source plan + the
+    # extraction-click step's intent. Kept narrow on purpose — generic
+    # "open" / "tab" words appear in lots of plans (e.g. "open the
+    # filters tab") that shouldn't trigger middle-click dispatch. The
+    # ``in new tab`` / ``in a new tab`` substrings are the load-bearing
+    # signals; the explicit modifier-click verbs catch plans that say
+    # "right-click each row" without spelling out "in a new tab".
+    _NEW_TAB_PROSE_PATTERNS: ClassVar[tuple[str, ...]] = (
+        "in new tab",       # "Open <X> in new tab", "Open the link in new tab"
+        "in a new tab",     # "Open <X> in a new tab"
+        "ctrl+click",
+        "ctrl-click",
+        "middle-click",
+        "middle click",
+        "right-click",      # plan asks for right-click → context-menu → "Open in new tab"
+        "right click",
+    )
+
+    @staticmethod
+    def _apply_open_in_new_tab_hint(plan: MicroPlan) -> None:
+        """Fix 6 (#598): set ``hints.open_in_new_tab=True`` on every
+        extraction-section ``click`` step when the source plan tells the
+        agent to open listings in a new tab.
+
+        Without the hint, the click handler dispatches a plain left-click
+        first, verifies URL navigation, and only middle-clicks as a
+        fallback. With the hint, middle-click is the primary dispatch —
+        saving one click + 2-attempt verify (~3-5 s / iteration) and
+        gating future per-tab parallelization on a plan-level intent
+        signal. See issue #598.
+
+        The detection scans:
+
+        - ``plan.source_plan`` (the human-written plan text, lower-cased)
+        - ``step.intent`` for each candidate ``click`` step
+
+        Either match sets the hint on that step. Conservative on purpose:
+        only ``section == "extraction"`` click steps qualify, so a setup-
+        section click (cookie banner / sign-in) isn't accidentally
+        flagged when the EXTRACTION prose mentions tabs.
+        """
+        source = (plan.source_plan or "").lower()
+        source_matches = any(
+            pattern in source
+            for pattern in PlanDecomposer._NEW_TAB_PROSE_PATTERNS
+        )
+
+        for s in plan.steps:
+            if s.type != "click" or s.section != "extraction":
+                continue
+            intent = (s.intent or "").lower()
+            step_matches = any(
+                pattern in intent
+                for pattern in PlanDecomposer._NEW_TAB_PROSE_PATTERNS
+            )
+            if not (source_matches or step_matches):
+                continue
+            # ``hints`` may be a default-factory dict; mutate in place
+            # but defend against an upstream None/non-dict.
+            hints = s.hints if isinstance(s.hints, dict) else {}
+            if hints.get("open_in_new_tab") is True:
+                continue  # idempotent — don't re-log on cache reloads
+            hints["open_in_new_tab"] = True
+            s.hints = hints
+            logger.info(
+                "  [fix] Set hints.open_in_new_tab=True on extraction "
+                "click step %d (intent=%r)",
+                s.index, (s.intent or "")[:60],
+            )
 
     # ── Plan-shape extraction (parsed from Claude's JSON output) ────────
 

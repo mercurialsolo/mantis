@@ -376,6 +376,24 @@ class ClaudeGuidedClickHandler:
         # ``navigate_back_recovered`` halt cycle.
         tabs_before_click = _safe_tab_count(env)
 
+        # Issue #598: when the plan signals "open in new tab" intent
+        # (plan_decomposer sets ``hints.open_in_new_tab=True`` on
+        # extraction click steps whose source plan prose says "open
+        # link in new tab" / "Ctrl+click" / "right-click"), dispatch
+        # middle-click as PRIMARY. On success, fall straight through
+        # the existing new-tab settle path (which sets
+        # _opened_detail_in_new_tab=True so navigate_back routes via
+        # Ctrl+W) and return early. On failure, fall through to the
+        # legacy plain-click chain (which still has its own middle-
+        # click fallback) so a missed click doesn't drop the listing.
+        primary_result = _try_open_in_new_tab_primary(
+            handler=self, runner=runner, env=env, ctx=ctx,
+            step=step, index=index, x=x, y=y, title=title,
+            site_config=site_config, dynamic_verifier=dynamic_verifier,
+        )
+        if primary_result is not None:
+            return primary_result
+
         primary_click_backend = "vision"
         from ..som_dispatch import try_som_click
         try:
@@ -832,6 +850,161 @@ _LOGIN_PATH_TOKENS: tuple[str, ...] = (
     "/users/sign_in",
     "/account/login",
 )
+
+
+def _try_open_in_new_tab_primary(
+    *,
+    handler: Any,
+    runner: Any,
+    env: Any,
+    ctx: Any,
+    step: Any,
+    index: int,
+    x: int,
+    y: int,
+    title: str,
+    site_config: Any,
+    dynamic_verifier: Any,
+):
+    """Issue #598: when ``step.hints.open_in_new_tab is True``, try
+    middle-click as the PRIMARY click dispatch (skip the plain-click +
+    2-attempt verify dance).
+
+    Mirrors the success contract of the existing middle-click FALLBACK
+    path inside ``execute()`` (currently lines ~571-606): dispatch
+    middle-click, settle, verify URL is a detail page (on either the
+    source or the new tab), set ``_opened_detail_in_new_tab=True`` so
+    ``navigate_back`` routes via Ctrl+W (existing
+    ``execute_close_detail_tab`` handler), and return a success
+    ``StepResult``.
+
+    Screenshot correctness (the #598 ask): after middle-click and
+    ``ctrl+Tab`` to switch to the new tab, ``env.screenshot()``
+    captures the focused window — which IS the new tab. The same
+    primitive the existing fallback uses; the only thing this helper
+    changes is the dispatch ORDER (primary instead of fallback).
+
+    Returns:
+      - ``StepResult`` (success or blank-newtab failure) when the
+        hint is set and middle-click succeeded or definitively failed
+        — caller returns this verbatim.
+      - ``None`` when the hint is unset OR middle-click didn't open a
+        new tab — caller falls through to the legacy plain-click chain
+        so a missed middle-click doesn't drop the listing.
+    """
+    from ..checkpoint import StepResult  # local import — avoid TYPE_CHECKING cycle
+
+    hints = getattr(step, "hints", None) or {}
+    if not hints.get("open_in_new_tab"):
+        return None
+
+    logger.warning(
+        "  [claude-click] PRIMARY middle-click (hints.open_in_new_tab=True) "
+        "at (%d, %d) title=%r",
+        x, y, (title or "")[:60],
+    )
+
+    try:
+        env.step(Action(action_type=ActionType.CLICK, params={
+            "x": x, "y": y, "button": "middle",
+        }))
+        runner.costs["gpu_steps"] += 1
+        runner.costs["gpu_seconds"] += 3
+        runner.costs["proxy_mb"] += 5.0
+        # Same cap the fallback uses — 2s for new-tab settle.
+        adaptive_settle.settle_after_action(env, max_seconds=2.0)
+    except Exception as exc:  # noqa: BLE001 — fall through on dispatch failure
+        logger.warning(
+            "  [claude-click] PRIMARY middle-click dispatch failed: %s "
+            "— falling through to plain-click chain",
+            exc,
+        )
+        return None
+
+    # Verify (2 attempts, ctrl+Tab between) — mirror the fallback contract.
+    for switch_attempt in range(2):
+        url = runner._read_current_url()
+        if not url:
+            after = env.screenshot()
+            url = runner._read_current_url(after)
+        if url and site_config.is_detail_page(url, base_url=runner._results_base_url):
+            logger.warning(
+                "  [claude-click] PRIMARY middle-click opened detail: %s",
+                url[:80],
+            )
+            runner._opened_detail_in_new_tab = True
+            runner._last_known_url = url
+            dynamic_verifier.record_item_opened(
+                page=runner._current_page,
+                item=getattr(runner, "_last_click_title", "") or title,
+                url=url,
+            )
+            runner._last_extracted = {
+                **runner._last_extracted,
+                "last_clicked_title": getattr(runner, "_last_click_title", ""),
+                "last_attempted_url": url,
+                "last_attempted_at": time.time(),
+                "last_attempted_step": index,
+            }
+            runner._set_scroll_state(
+                context="detail_top", url=url, page_downs=0, wheel_downs=0,
+            )
+            runner._listings_on_page += 1
+            if getattr(runner, "_last_click_title", ""):
+                runner._extracted_titles.append(runner._last_click_title)
+            ctx.state["_executor_backend"] = "middle_primary"
+            return StepResult(
+                step_index=index, intent=step.intent, success=True,
+                steps_used=1 + switch_attempt, duration=9.0,
+            )
+        if url and _looks_like_blank_newtab(url):
+            # Middle-click landed on an empty newtab page — the card
+            # region isn't a real link. Close the tab and let recovery
+            # move on; do NOT fall through to plain-click (plain-click
+            # on the same coords would just sit there with no nav).
+            logger.warning(
+                "  [claude-click] PRIMARY middle-click landed on blank "
+                "tab (%s) — aborting",
+                url_for_log(url),
+            )
+            try:
+                env.step(Action(
+                    action_type=ActionType.KEY_PRESS,
+                    params={"keys": "ctrl+w"},
+                ))
+                time.sleep(0.5)
+            except Exception:  # noqa: BLE001
+                pass
+            dynamic_verifier.record_item_completed(
+                page=runner._current_page,
+                item=getattr(runner, "_last_click_title", "") or title,
+                url=url,
+                success=False,
+                reason="newtab_blank",
+            )
+            if getattr(runner, "_last_click_title", ""):
+                runner._extracted_titles.append(runner._last_click_title)
+            return StepResult(
+                step_index=index, intent=step.intent, success=False,
+                data="newtab_blank",
+            )
+        if switch_attempt == 0:
+            # Try the new tab if focus is still on the source.
+            env.step(Action(
+                action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+Tab"},
+            ))
+            adaptive_settle.settle_after_action(env, max_seconds=2.0)
+
+    # Middle-click fired but neither tab landed on a detail page.
+    # Fall through to legacy plain-click chain (which has its own
+    # fallback) so we don't lose the listing — middle-click may have
+    # been off-target and a fresh plain-click on the refined grounding
+    # coords could still work.
+    logger.info(
+        "  [claude-click] PRIMARY middle-click didn't open detail "
+        "— falling through to plain-click chain"
+    )
+    return None
 
 
 def _safe_tab_count(env: Any) -> int:
