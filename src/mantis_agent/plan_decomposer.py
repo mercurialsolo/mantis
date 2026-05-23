@@ -1276,7 +1276,7 @@ class PlanDecomposer:
             for pattern in PlanDecomposer._NEW_TAB_PROSE_PATTERNS
         )
 
-        for s in plan.steps:
+        for i, s in enumerate(plan.steps):
             if s.type != "click" or s.section != "extraction":
                 continue
             intent = (s.intent or "").lower()
@@ -1296,7 +1296,7 @@ class PlanDecomposer:
             logger.info(
                 "  [fix] Set hints.open_in_new_tab=True on extraction "
                 "click step %d (intent=%r)",
-                s.index, (s.intent or "")[:60],
+                i, (s.intent or "")[:60],
             )
 
     # ── Plan-shape extraction (parsed from Claude's JSON output) ────────
