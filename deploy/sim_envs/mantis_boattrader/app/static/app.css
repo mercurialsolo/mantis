@@ -2006,17 +2006,24 @@ body.bdp-scrolled-deep .sticky-save {
 }
 .bdp-accordion .accordion-subhead:first-child { margin-top: 0; }
 .accordion-body { font-size: 15px; line-height: 1.45; }
+/* Real BT accordion: padding 18px 0 on the <details>, 0 on summary,
+   1px #ededed bottom border between sections (not a wrapper card per
+   accordion). Sandbox had 16px 22px padding on summary which inflated
+   the closed height 28→55. Tightened to match. */
 .bdp-accordion {
-  background: #fff;
-  border-radius: var(--bt-radius);
-  margin-bottom: 10px;
+  background: transparent;
+  border-radius: 0;
+  border-bottom: 1px solid #ededed;
+  padding: 18px 0;
+  margin: 0;
   overflow: hidden;
 }
+.bdp-accordion:last-of-type { border-bottom: 0; }
 .bdp-accordion summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 22px;
+  padding: 0;
   font-size: 16px;
   font-weight: 700;
   color: var(--bt-text);
@@ -2033,7 +2040,7 @@ body.bdp-scrolled-deep .sticky-save {
 }
 .bdp-accordion[open] .accordion-chevron { transform: rotate(-135deg); }
 .accordion-body {
-  padding: 0 22px 18px;
+  padding: 16px 0 0;
   font-size: 14px;
   color: var(--bt-text);
   line-height: 1.55;
@@ -2173,9 +2180,10 @@ body.bdp-scrolled-deep .sticky-save {
   font-size: 12px;
 }
 
-/* ── Listed By section ───────────────────────────────────── */
+/* ── Listed By section ─────────────────────────────────────
+   Real BT bg: rgb(245,249,255) = #f5f9ff (matches Boat Details). */
 .bdp-listed-by {
-  background: #eef4fb;
+  background: #f5f9ff;
   border-radius: var(--bt-radius-lg);
   padding: 24px 26px;
   margin: 24px 0;
@@ -2222,30 +2230,36 @@ body.bdp-scrolled-deep .sticky-save {
   font-weight: 600;
   margin-top: 8px;
 }
+/* Real BT "Trusted Boat Trader Partner" label sits at the BOTTOM of
+   the right column (no `| <years>` suffix). 14/400 text. */
 .enhanced-trusted {
   font-size: 14px;
   color: var(--bt-text);
-  margin: 0 0 14px;
+  margin: 14px 0 0;
 }
 .enhanced-stat-row {
-  border-top: 1px solid var(--bt-border);
-  padding: 12px 0;
+  border-bottom: 1px solid var(--bt-border);
+  padding: 10px 0;
 }
-.enhanced-stat-row:last-child { border-bottom: 1px solid var(--bt-border); }
+.enhanced-stat-row:first-child { border-top: 1px solid var(--bt-border); }
+/* Real BT stat number: 16/600 (was 22/700). Tighter, inline-looking. */
 .enhanced-stat-num {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 600;
   color: var(--bt-text);
   line-height: 1.2;
 }
 .enhanced-stat-label {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--bt-text);
+  font-weight: 400;
 }
 
-/* ── More From This Dealer rail ───────────────────────────── */
+/* ── More From This Dealer rail ─────────────────────────────
+   Real BT bg: matches the Listed By #f5f9ff tint (both panels live
+   in the same visual band). */
 .bdp-more-from-dealer {
-  background: #eef4fb;
+  background: #f5f9ff;
   border-radius: var(--bt-radius-lg);
   padding: 24px 28px 18px;
   margin: 24px 0;

@@ -481,7 +481,9 @@
       <a href="#" class="enhanced-dealer-link">Visit Seller Website</a>
     </div>
     <div class="enhanced-seller-card-right">
-      <p class="trusted-partner enhanced-trusted">Trusted Boat Trader Partner | <strong>{{ dealer.trusted_partner_label }}</strong></p>
+      {# Real BT Listed By right column: two stat rows (16/600 number +
+         label) stacked vertically, "Trusted Boat Trader Partner"
+         label-only at the BOTTOM (no `| <years>` suffix). #}
       <div class="enhanced-stat-row">
         <div class="enhanced-stat-num">{{ dealer.active_listings }}</div>
         <div class="enhanced-stat-label">Active listings</div>
@@ -490,6 +492,7 @@
         <div class="enhanced-stat-num">{{ "{:,}".format(dealer.sold_listings) }}</div>
         <div class="enhanced-stat-label">Sold listings</div>
       </div>
+      <p class="trusted-partner enhanced-trusted">Trusted Boat Trader Partner</p>
     </div>
   </div>
 </section>
