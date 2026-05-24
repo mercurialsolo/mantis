@@ -80,7 +80,6 @@ def test_skip_envelope_advances_without_recovery():
     has_show_more=False but the skip envelope was processed as a
     click failure.
     """
-    import os
     # The skip-bypass branch lives in _execute_inner. Drive the
     # branch detection logic directly to keep the test focused +
     # avoid the deep dependency chain RunExecutor._execute_inner
