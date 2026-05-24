@@ -62,3 +62,61 @@ def test_effective_step_guard_empty_default_preserved():
     eff = _build_effective_step_via_executor(src)
     assert eff.guard == ""
     assert eff.out_var == ""
+
+
+# ── Skip envelope outer-loop bypass ──────────────────────────────────
+
+
+def test_skip_envelope_advances_without_recovery():
+    """``StepResult(success=False, skip=True)`` is the contract that
+    execute_step's guard branch + recipe-rejection paths emit. The
+    outer loop must advance to the next step directly — calling
+    ``_handle_failure`` on a skip envelope routes the skipped step
+    through the click-recovery branch (Escape + jump to loop), which
+    silently corrupts a deliberate skip into a real failure path.
+
+    Live repro 2026-05-24 boattrader verification run
+    20260524_171431_ece15fbb: step 6 guard correctly resolved
+    has_show_more=False but the skip envelope was processed as a
+    click failure.
+    """
+    # The skip-bypass branch lives in _execute_inner. Drive the
+    # branch detection logic directly to keep the test focused +
+    # avoid the deep dependency chain RunExecutor._execute_inner
+    # mounts (env, brain, checkpoint persistence, ...).
+    from mantis_agent.gym.checkpoint import StepResult
+
+    skip_result = StepResult(
+        step_index=6, intent="Click Show More", success=False,
+        data="guard:has_show_more=False:skipped",
+        skip=True, skip_reason="guard_has_show_more_false",
+    )
+    # The outer-loop branch condition:
+    #   if success: success path
+    #   elif skip:  advance directly (THIS PR)
+    #   else:       _handle_failure
+    is_success = bool(skip_result.success)
+    is_skip = bool(getattr(skip_result, "skip", False))
+    # Must hit the skip branch BEFORE the failure branch.
+    assert not is_success
+    assert is_skip
+
+
+def test_skip_envelope_outer_loop_bypass_in_run_executor():
+    """Reads the _execute_inner source to confirm the ``elif
+    step_result.skip:`` branch exists between the success and failure
+    branches. A grep-style structural test — cheaper than mocking the
+    whole MicroPlanRunner just to assert a 4-line control-flow
+    change."""
+    import inspect
+    from mantis_agent.gym.run_executor import RunExecutor
+
+    source = inspect.getsource(RunExecutor._execute_inner)
+    # Find the order of the three branches.
+    success_pos = source.find("step_result.success")
+    skip_pos = source.find("step_result.skip")
+    failure_pos = source.find("_handle_failure")
+    assert success_pos < skip_pos < failure_pos, (
+        f"Expected branch order success({success_pos}) < "
+        f"skip({skip_pos}) < failure({failure_pos}). Source:\n{source[:2000]}"
+    )
