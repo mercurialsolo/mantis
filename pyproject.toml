@@ -137,6 +137,13 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-xdist>=3.8",  # parallel test execution: pytest -n auto (~2x speedup locally)
+    # pytest-split shards the test suite across N CI jobs by running
+    # ``pytest --splits N --group K`` once per shard. Each shard runs
+    # only its slice, so total wall-clock drops by ~Nx on CI matrices
+    # that fan out across runners. Locally devs still use ``-n auto``
+    # via pytest-xdist; pytest-split is only activated by passing
+    # ``--splits``. See .github/workflows/test.yml for the matrix wiring.
+    "pytest-split>=0.9",
     "ruff>=0.4",
     "httpx>=0.24",   # FastAPI TestClient
     "jsonschema>=4.0",  # tests/test_plan_schema.py validates plans against docs/reference/plan.schema.json

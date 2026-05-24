@@ -16,7 +16,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        # Python matrix is narrower on PR (just 3.12) to cut PR
+        # wall-clock in half. Main-branch push runs both 3.11 and 3.12
+        # as the regression catch — a Python-version-specific bug
+        # would still land on main but never silently. Override via
+        # ``workflow_dispatch`` if you need the full matrix for a PR.
+        python-version: ${{ github.event_name == 'pull_request' && fromJSON('["3.12"]') || fromJSON('["3.11", "3.12"]') }}
+        # 4-way shard via pytest-split. Each runner executes
+        # ``pytest --splits 4 --group K`` and gets ~1/4 of the suite.
+        # Combined with the Python matrix this is 4 jobs (PR) / 8 jobs
+        # (main push), all running in parallel — total CI wall-clock
+        # drops from ~31 min to ~8 min on PR.
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
@@ -39,8 +50,12 @@ jobs:
         # locally and in CI, no surprise minor-version drift.
         run: uv sync --python ${{ matrix.python-version }} --extra dev --extra server --extra orchestrator --extra metrics
 
-      - name: Run pytest
-        run: uv run pytest tests/ -q
+      - name: Run pytest (shard ${{ matrix.shard }}/4)
+        # pytest-split balances shards using ``.test_durations`` when
+        # present (committed into the repo as a CI artifact). First
+        # run without the manifest does a naive equal-count split and
+        # writes one on each shard; subsequent runs auto-balance.
+        run: uv run pytest tests/ -q --splits 4 --group ${{ matrix.shard }}
 
   ruff:
     runs-on: ubuntu-latest
