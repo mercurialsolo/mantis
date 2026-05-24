@@ -490,12 +490,21 @@ def extract_url_from_intent(intent: str) -> str:
 
 
 def derive_filter_tokens(url: str) -> tuple[str, ...]:
+    # #657 PR 3: dropped the ``{"boats"}`` literal exclusion that was
+    # a boattrader-specific hack — every boattrader URL has ``boats``
+    # as a path segment, so excluding it produced cleaner filter tokens
+    # for that one domain. Including it is functionally equivalent
+    # downstream (``url_has_required_filters`` checks tokens are a
+    # subset of the URL — ``boats`` is trivially in every boattrader
+    # URL) and removes the last domain-specific literal from this
+    # framework primitive. ``page-`` skip stays since pagination
+    # segments aren't filters by convention across all sites.
     match = re.search(r'https?://[^/]+/([^?#]+)', url)
     if not match:
         return ()
     tokens = []
     for token in match.group(1).strip("/").split("/"):
-        if not token or token in {"boats"} or token.startswith("page-"):
+        if not token or token.startswith("page-"):
             continue
         tokens.append(token.lower())
     return tuple(tokens)
