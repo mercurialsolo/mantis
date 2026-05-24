@@ -1155,14 +1155,14 @@ class PlanDecomposer:
             # the inner extraction loop never iterated past the first
             # card (1 lead vs the expected 25-40). Live repro
             # 2026-05-24 verification run 20260524_172252_88d4e49e.
-            loop_target=s.get(
-                "loop_target",
-                (s.get("params") or {}).get("loop_target", -1),
-            ),
-            loop_count=s.get(
-                "loop_count",
-                (s.get("params") or {}).get("loop_count", 0),
-            ),
+            #
+            # Uses the already-validated ``params`` dict (line ~1126
+            # coerces non-dict shapes to {}). Re-fetching via
+            # ``s.get("params")`` would crash on malformed plans where
+            # params is a string (pinned by
+            # ``test_build_intent_params_rejects_non_dict``).
+            loop_target=s.get("loop_target", params.get("loop_target", -1)),
+            loop_count=s.get("loop_count", params.get("loop_count", 0)),
             section=section,
             required=s.get("required", default_required),
             gate=gate,
