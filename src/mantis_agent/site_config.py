@@ -245,6 +245,24 @@ class SiteConfig:
         )
 
     @classmethod
+    def generic(cls) -> SiteConfig:
+        """The neutral default — no URL patterns, no pagination synthesis,
+        no gate-prompt prefix.
+
+        ``is_detail_page`` falls back to the path-extension heuristic
+        when a ``base_url`` is supplied (works for CRM-shape URLs like
+        ``/contacts/123``), else returns False. ``is_results_page``
+        returns False. ``paginated_url`` returns the base URL unchanged.
+
+        Use this as the default for callers that don't have a
+        :class:`~mantis_agent.plan_tuning.DomainProfile` lookup — the
+        framework primitives are designed to no-op cleanly on
+        unset patterns rather than apply boattrader-shaped defaults.
+        See #657 for context.
+        """
+        return cls()
+
+    @classmethod
     def default_boattrader(cls) -> SiteConfig:
         """The current hardcoded BoatTrader patterns for backward compatibility."""
         return cls(

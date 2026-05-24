@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..plan_decomposer import MicroPlan
+    from ..site_config import SiteConfig
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,55 @@ class DomainProfile:
     # tuple means no opinion.
     expect_url_contains: tuple[str, ...] = field(default_factory=tuple)
 
+    # ── URL classification + pagination knobs (#657) ──
+    # These mirror :class:`mantis_agent.site_config.SiteConfig` fields
+    # so a single DomainProfile entry can drive both the decomposer
+    # pass (scroll/nav knobs above) AND the runner's SiteConfig
+    # (URL patterns + gate prompt below). Empty defaults preserve the
+    # neutral case — a profile without URL fields produces a generic
+    # SiteConfig that's safe for any domain.
+    #
+    # Why on DomainProfile rather than two parallel registries: every
+    # domain that wants tuned scroll/wait usually ALSO wants the right
+    # URL classification (the same operator that observed "scroll
+    # overshoots short pages" already knows what a detail page URL
+    # looks like). Co-locating keeps the per-domain knowledge in one
+    # spot.
+    detail_page_pattern: str = ""        # e.g. r"/boat/[\w-]+"
+    results_page_pattern: str = ""       # e.g. r"/boats/"
+    pagination_format: str = ""          # e.g. "/page-{n}/", "?page={n}"
+    pagination_type: str = ""            # "path_suffix" | "query_param" | "next_button"
+    pagination_strip_pattern: str = ""   # regex stripping the page param
+    filtered_results_url: str = ""       # canonical filter URL for filter-recovery
+    gate_verify_prompt: str = ""         # prefix for verify_gate prompts
+
+    def to_site_config(self) -> "SiteConfig":
+        """Render the profile as a :class:`SiteConfig`.
+
+        Empty URL fields stay empty — the resulting SiteConfig is the
+        "generic" shape (``is_detail_page`` falls back to the path-
+        extension heuristic, ``is_results_page`` returns False, no
+        pagination synthesis). Domains with concrete URL knobs get
+        the full classification + pagination behavior.
+
+        The plan-tuning knobs (scroll_backend, scroll_count,
+        nav_wait_seconds, expect_url_contains, pagination_url_template)
+        are NOT mirrored onto SiteConfig — they're consumed by the
+        decomposer pass and stamped on individual plan steps, not on
+        the runner's per-run SiteConfig.
+        """
+        from ..site_config import SiteConfig
+        return SiteConfig(
+            domain=self.domain,
+            detail_page_pattern=self.detail_page_pattern,
+            results_page_pattern=self.results_page_pattern,
+            pagination_format=self.pagination_format,
+            pagination_type=self.pagination_type or "path_suffix",
+            pagination_strip_pattern=self.pagination_strip_pattern,
+            filtered_results_url=self.filtered_results_url,
+            gate_verify_prompt=self.gate_verify_prompt,
+        )
+
 
 # ── Registry ─────────────────────────────────────────────────────────
 #
@@ -117,6 +167,20 @@ DOMAIN_PROFILES: dict[str, DomainProfile] = {
             "8s nav wait covers CF-proxy first paint."
         ),
         expect_url_contains=("/boat/",),
+        # URL classification + pagination — mirrors the legacy
+        # ``SiteConfig.default_boattrader()`` so the runner gets the
+        # same per-domain SiteConfig that's hardcoded today. After
+        # #657 the runner reads SiteConfig from the suite (built via
+        # ``to_site_config()``), this is the source of truth.
+        detail_page_pattern=r"/boat/[\w-]+",
+        results_page_pattern=r"/boats/",
+        pagination_format="/page-{n}/",
+        pagination_type="path_suffix",
+        pagination_strip_pattern=r"/page-\d+/?$",
+        filtered_results_url="https://www.boattrader.com/boats/by-owner/",
+        gate_verify_prompt=(
+            "Page is a filtered results page with these active filters: "
+        ),
     ),
     # lu.ma — SPA cold-mount: Vite/React app hasn't mounted in 4s on
     # a fresh profile. ``feedback_spa_cold_mount_wait.md`` documents
