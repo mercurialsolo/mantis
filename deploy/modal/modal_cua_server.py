@@ -3019,7 +3019,10 @@ def main(
                 )
                 return
 
-            print("    [phase1] no URLs harvested — falling through to single worker")
+            print(
+                "    [phase1] no URLs harvested — falling through to "
+                "pagination-partition path (#617)"
+            )
 
         # ── #617: per-page partitioning for parallelizable_pagination ─
         partitions = prepare_modal_partitions(task_suite, workers)
