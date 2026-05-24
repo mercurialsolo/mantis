@@ -12,7 +12,7 @@ Foundational PR for the de-boattrader-ification work. Pins:
     domains: empty patterns, falls back to the path-extension
     heuristic when a base_url is available.
   - Profiles without URL fields produce a generic-shaped SiteConfig
-    (lu.ma, staffai today — they only set nav_wait, not URL patterns).
+    (lu.ma, mantis-crm today — only set nav_wait, not URL patterns).
 """
 
 from __future__ import annotations
@@ -95,9 +95,9 @@ def test_boattrader_profile_renders_to_default_boattrader_site_config():
 
 def test_profile_without_url_fields_renders_to_generic_shape():
     """A DomainProfile with only the plan-tuning knobs set (lu.ma,
-    staffai) produces a SiteConfig whose URL patterns are all empty
-    — equivalent to ``SiteConfig.generic()`` apart from the ``domain``
-    label."""
+    mantis-crm) produces a SiteConfig whose URL patterns are all
+    empty — equivalent to ``SiteConfig.generic()`` apart from the
+    ``domain`` label."""
     p = DOMAIN_PROFILES["lu.ma"]
     rendered = p.to_site_config()
     assert rendered.detail_page_pattern == ""

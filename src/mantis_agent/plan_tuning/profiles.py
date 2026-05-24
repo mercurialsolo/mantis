@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..plan_decomposer import MicroPlan
+    from ..site_config import SiteConfig
 
 
 @dataclass(frozen=True)
