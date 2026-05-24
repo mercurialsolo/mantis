@@ -1038,6 +1038,17 @@ def _run_holo3_executor(
             # otherwise sees a stripped dict and writes nothing).
             "leads": leads,
             "artifacts": result.get("artifacts", []),
+            # #628 / #631 follow-up: forward the orchestrator-side
+            # contract fields. read_partition_result on the orchestrator
+            # reads these to drive Phase-2 (collected_urls), aggregate
+            # phone counts (leads_with_phone), and report shared-seen
+            # savings (shared_seen_hits). Without this re-export, the
+            # envelope at line 1016 strips them — Phase-1 silently
+            # collected URLs and silently dropped them on return,
+            # making Phase-1/Phase-2 fail every time.
+            "collected_urls": result.get("collected_urls", []),
+            "leads_with_phone": result.get("leads_with_phone", 0),
+            "shared_seen_hits": result.get("shared_seen_hits", 0),
         }
         # #347: surface paused state to the Modal API container. The poll
         # path detects ``_paused`` on the FunctionCall result and writes
