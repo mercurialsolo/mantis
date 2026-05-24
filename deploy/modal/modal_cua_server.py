@@ -2771,12 +2771,25 @@ def main(
 
         elif micro.endswith(".json"):
             print(f"  Mode:    Micro-Intent → {cua_config['name']}")
-            # Load pre-built micro-plan JSON directly (no decomposition)
+            # Load pre-built micro-plan JSON directly (no decomposition).
+            # Accept either a raw steps list OR a dict with a ``steps`` key
+            # — the latter is what plan files (e.g. ``plans/boattrader_*``)
+            # carry alongside ``shapes`` metadata.
             with open(micro) as f:
-                raw_steps = json.load(f)
+                raw = json.load(f)
+            raw_steps = raw["steps"] if isinstance(raw, dict) and "steps" in raw else raw
             micro_plan = MicroPlan(domain="direct_json")
             for s in raw_steps:
                 micro_plan.steps.append(PlanDecomposer._build_intent(s))
+            # Hand-authored / cached step lists frequently omit
+            # ``loop_target`` (issue #605) — the orchestrator's fan-out
+            # classifier then sees self-pointing loops and falls back to
+            # ``sequential``, defeating the parallelizable_url_collect /
+            # parallelizable_pagination path entirely. Run the same
+            # normalization + classification that ``decompose()`` runs so
+            # ``--micro <file.json> --workers N`` actually fans out.
+            PlanDecomposer._fix_loop_targets(micro_plan)
+            PlanDecomposer._classify_loop_groups(micro_plan)
         else:
             print(f"  Mode:    Micro-Intent → {cua_config['name']}")
             # Decompose plain text plan into micro-intents (Claude Sonnet, cached)

@@ -1007,6 +1007,20 @@ def test_resolve_phase1_max_pages_uses_pagination_loop_count() -> None:
     assert max_pages == min(4, DEFAULT_PHASE1_MAX_PAGES)
 
 
+def test_resolve_phase1_max_pages_unset_loop_count_defaults_to_cap() -> None:
+    """When the pagination loop has no loop_count (None / 0) but the
+    group exists, default to DEFAULT_PHASE1_MAX_PAGES — the existence of
+    a parallelizable_pagination group is enough signal that Phase-1
+    should harvest beyond page 1. Mirrors the per-page partitioning
+    path's ``or 5`` default."""
+    suite = _pagination_plan_suite()
+    for step in suite["_micro_plan"]:
+        if step.get("type") == "loop" and step.get("section") == "pagination":
+            step["loop_count"] = 0  # mimic _fix_loop_targets leaving it unset
+    max_pages, _ = resolve_phase1_max_pages(suite)
+    assert max_pages == DEFAULT_PHASE1_MAX_PAGES
+
+
 def test_resolve_phase1_max_pages_clamps_to_default_cap() -> None:
     """A plan with loop_count=50 should be clamped to DEFAULT_PHASE1_MAX_PAGES
     so Phase-1 cost stays bounded."""

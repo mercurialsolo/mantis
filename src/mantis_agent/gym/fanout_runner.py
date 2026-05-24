@@ -778,8 +778,14 @@ def resolve_phase1_max_pages(suite_dict: dict) -> tuple[int, str]:
         except (TypeError, ValueError):
             max_pages = 1
     elif pagination_group is not None:
+        # Hand-authored plans frequently omit ``loop_count`` on the
+        # pagination loop (the per-page partition path defaults this to
+        # ``5``). Treat absent loop_count as "walk up to
+        # DEFAULT_PHASE1_MAX_PAGES" — the existence of a pagination group
+        # is enough signal that Phase-1 should harvest beyond page 1.
         loop_count = int(
-            plan.steps[pagination_group.loop_step_idx].loop_count or 1
+            plan.steps[pagination_group.loop_step_idx].loop_count
+            or DEFAULT_PHASE1_MAX_PAGES
         )
         max_pages = max(1, min(loop_count, DEFAULT_PHASE1_MAX_PAGES))
     else:
