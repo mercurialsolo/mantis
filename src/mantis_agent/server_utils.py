@@ -1220,7 +1220,7 @@ def build_micro_suite(
     # HTTP path's executor can pick it up. Without this, every HTTP
     # submission silently inherits ``SiteConfig.default_boattrader()``
     # via the runner's fallback at ``micro_runner.py:233`` — boattrader
-    # URL regex applied to lu.ma / staffai / any non-boattrader plan.
+    # URL regex applied to lu.ma / mantis-crm / any non-boattrader plan.
     # Empty DomainProfile match means we skip writing the field; the
     # runner's fallback then takes over (still boattrader-shaped today;
     # #657 PR 3 flips that default to ``SiteConfig.generic()``).

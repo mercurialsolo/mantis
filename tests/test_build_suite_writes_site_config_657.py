@@ -3,7 +3,7 @@ DomainProfile registry; the HTTP path's runner reads it.
 
 Before this PR, every HTTP submission silently inherited
 ``SiteConfig.default_boattrader()`` via ``MicroPlanRunner.__init__``'s
-fallback. lu.ma / staffai / any non-boattrader plan got boattrader
+fallback. lu.ma / mantis-crm / any non-boattrader plan got boattrader
 URL regex applied to its URLs — ``is_detail_page`` / ``is_results_page``
 returned False everywhere, silently degrading recovery + URL gates.
 
