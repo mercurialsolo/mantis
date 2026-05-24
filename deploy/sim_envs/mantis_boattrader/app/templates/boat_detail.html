@@ -214,7 +214,7 @@
           </div>
         </div>
         <p class="dealership-address">{{ dealer.address }}, {{ dealer.city }}, {{ dealer.state }}, {{ dealer.zip }}</p>
-        <p class="trusted-partner">Trusted Boat Trader Partner | <strong>{{ dealer.trusted_partner_label }}</strong></p>
+        <p class="trusted-partner">Trusted Boat Trader Partner</p>
         <div class="dealership-stats">
           <div class="dealership-stat-box">
             <span class="dealership-stat-num">{{ dealer.active_listings }}</span>
@@ -260,7 +260,7 @@
     <div class="stat-icon" aria-hidden="true">
       <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><circle cx="20" cy="22" r="8" fill="none" stroke="#3a6a93" stroke-width="1.5"/><line x1="20" y1="22" x2="20" y2="16" stroke="#3a6a93" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="22" x2="25" y2="22" stroke="#3a6a93" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="13" x2="20" y2="11" stroke="#3a6a93" stroke-width="1.5"/></svg>
     </div>
-    <div class="stat-text"><span class="stat-label">Engine(s) Hours <span class="info-tip stat-info" title="Reported by the seller">ⓘ</span></span><span class="stat-value">{{ boat.hours if boat.hours else '-' }}</span></div>
+    <div class="stat-text"><span class="stat-label">Engine(s) Hours</span><span class="stat-value">{{ boat.hours if boat.hours else '-' }}</span></div>
   </div>
   <div class="stat-card">
     <div class="stat-icon" aria-hidden="true">

@@ -1905,15 +1905,17 @@ body.bdp-scrolled-deep .sticky-save {
   font-size: 14px;
   font-weight: 700;
   color: #303030;
-  letter-spacing: 0.2px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
-/* Inline info ⓘ next to "Engine(s) Hours" — slightly smaller than
-   the default 16×16 to fit the 14/700 label line cleanly. */
+/* Inline info ⓘ next to "Engine(s) Hours" — smaller (12×12) so the
+   "Engine(s) Hours ⓘ" label still fits on one line inside the 166px
+   stat card without wrapping. */
 .stat-label .stat-info {
-  width: 14px; height: 14px; font-size: 10px;
+  width: 12px; height: 12px; font-size: 9px;
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 2px;
 }
 .stat-value {
   font-size: 14px;
