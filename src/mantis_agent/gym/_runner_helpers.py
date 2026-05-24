@@ -777,7 +777,14 @@ def execute_step(
     # post-step loop advances past without retry recovery. The
     # ``data`` line carries the guard name + observed value so trace
     # consumers (Augur, ops logs) can see why the step was skipped.
-    guard_name = (getattr(step, "guard", "") or "").strip()
+    #
+    # Triple-fallback lookup via :func:`resolve_guard_name` —
+    # top-level field, then params, then hints. Robust against Modal
+    # source-mount caching that occasionally serves stale dataclass
+    # definitions to workers (the params/hints dicts have round-
+    # tripped reliably for ages).
+    from .step_handlers.detect_visible import resolve_guard_name
+    guard_name = resolve_guard_name(step)
     if guard_name:
         state_vars = getattr(runner, "_state_vars", {}) or {}
         guard_value = bool(state_vars.get(guard_name, False))

@@ -76,7 +76,21 @@ class DetectVisibleHandler:
         env = ctx.env
         extractor = ctx.extractor
         index = int(ctx.state.get("index", 0))
-        out_var = (step.out_var or "").strip()
+        # Read out_var from the top-level MicroIntent field, falling
+        # back to ``params["out_var"]`` then ``hints["out_var"]``.
+        # The fallbacks exist because params + hints are dict-typed
+        # fields that have round-tripped reliably through the
+        # orchestrator → JSON → worker → MicroIntent(**s) chain for a
+        # long time; new top-level dataclass fields (added 2026-05-24)
+        # depend on Modal picking up the new MicroIntent class on the
+        # worker — which Modal's source-mount cache occasionally
+        # serves stale. The dict-field path is the load-bearing
+        # contract; the top-level field is the ergonomic alias.
+        out_var = (
+            (step.out_var or "").strip()
+            or str((step.params or {}).get("out_var") or "").strip()
+            or str((step.hints or {}).get("out_var") or "").strip()
+        )
 
         if not out_var:
             logger.warning(
@@ -152,3 +166,18 @@ class DetectVisibleHandler:
             state_vars = {}
             runner._state_vars = state_vars
         state_vars[name] = value
+
+
+def resolve_guard_name(step: "MicroIntent") -> str:
+    """Read the guard variable name with the same triple fallback the
+    detect_visible handler uses for ``out_var``.
+
+    Top-level MicroIntent.guard field wins; falls back to
+    ``params['guard']`` then ``hints['guard']``. Empty string means
+    "no guard" — the runner runs the step unconditionally.
+    """
+    return (
+        (getattr(step, "guard", "") or "").strip()
+        or str((getattr(step, "params", None) or {}).get("guard") or "").strip()
+        or str((getattr(step, "hints", None) or {}).get("guard") or "").strip()
+    )
