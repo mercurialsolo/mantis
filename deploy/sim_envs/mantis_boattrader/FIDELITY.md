@@ -789,6 +789,37 @@ Calculator" (18/700 #303030), then a result row.
          text for both dealer + private (was "Email Seller" for private).
        • `.dealer-card-heading` 18/500 → 20/700 to match real BT.
        • K-format views >999 (e.g. 1.5k) in the engagement strip.
+`v=88` BDP fidelity iter2 — title suffix + accordion restore + clamp + stat sizing:
+       • Real-BT DEALER BDP probe (2026-05-24,
+         boattrader.com/boat/2008-pursuit-os-335-offshore-10161885/)
+         revealed three iter1 misses driven by the original
+         private-seller-only probe.
+       • Title length suffix restored as a SIBLING `<span class="bdp-length">`
+         inside a new `.bdp-title-row` flex header — real BT ships
+         `<header><h1>Title</h1><span>| 33'</span></header>` to keep
+         H1.textContent clean while the visible title reads
+         "Title | XX'". Iter1 dropped the suffix entirely; restored.
+       • Boat Details accordions: real BT renders ALL FIVE
+         (Description / Measurements / Propulsion / More Details /
+         Location). Iter1.2 removed the last two based on the
+         private-seller probe; both restored at H3 level.
+       • Description body clamp: real BT clamps to ~168px with
+         inline "Show More" button (13/400 BT-blue). Sandbox now wraps
+         the accordion body in `.bdp-description-clamped` and adds a
+         `.bdp-show-more` button. base.html gets a click handler that
+         toggles `.is-expanded` and swaps "Show More" ↔ "Show Less".
+       • Stat cards 205×44 → 166×39: grid switched from `repeat(4,1fr)`
+         to `repeat(4,166px)` w/ 16px/12px gaps; stat-icon container
+         44→32px; card gap 14→10px.
+       • "Visit Seller Website ↗" → "Visit Seller Website" (real BT
+         has no arrow on the dealership-card link).
+       • Verified live on 5 variants via Chrome MCP probes:
+         dealer (Princess F55), private (Chaparral 267 SSX),
+         sponsored (Robalo R230 — yellow SPONSORED LISTING pill),
+         POA (Boston Whaler 210 Dauntless — "Request a Price", no
+         monthly link), and price-drop (Crestliner VT 18 —
+         "$27,800 ↓ $1,500"). All structural anchors present, no
+         regressions.
 `v=87` BDP fidelity iter1.2 — stats + accordions + services:
        • Stats label "Engine Hours" → "Engine(s) Hours" with inline
          gray ⓘ tooltip trigger (matches real BT exactly). New
