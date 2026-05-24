@@ -1145,8 +1145,24 @@ class PlanDecomposer:
                 "claude_only",
                 step_type in ("extract_url", "extract_data", "detect_visible"),
             ),
-            loop_target=s.get("loop_target", -1),
-            loop_count=s.get("loop_count", 0),
+            # Some plan-authoring styles (and Claude's older response
+            # shapes) put loop_target / loop_count inside ``params``
+            # rather than at the top level. Read top-level first;
+            # fall back to ``params`` so both forms work. Without this
+            # fallback, the canonical boattrader_scrape_urlnav plan
+            # silently degraded to loop_target=-1 / loop_count=0 →
+            # ``_handle_loop_step`` self-spun on its own index and
+            # the inner extraction loop never iterated past the first
+            # card (1 lead vs the expected 25-40). Live repro
+            # 2026-05-24 verification run 20260524_172252_88d4e49e.
+            loop_target=s.get(
+                "loop_target",
+                (s.get("params") or {}).get("loop_target", -1),
+            ),
+            loop_count=s.get(
+                "loop_count",
+                (s.get("params") or {}).get("loop_count", 0),
+            ),
             section=section,
             required=s.get("required", default_required),
             gate=gate,
