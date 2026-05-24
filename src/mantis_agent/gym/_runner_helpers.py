@@ -785,6 +785,30 @@ def execute_step(
     # tripped reliably for ages).
     from .step_handlers.detect_visible import resolve_guard_name
     guard_name = resolve_guard_name(step)
+    # WARNING-level diagnostic (per
+    # ``feedback_warning_level_for_modal_observability.md``): a step
+    # author opted into guarded behaviour — surface the decision so
+    # "why didn't the guard skip the step" is triagable from Modal
+    # logs without redeploying. Silent on the unconditional common
+    # path (no guard hint anywhere).
+    _guarded_request = (
+        bool(guard_name)
+        or bool(getattr(step, "guard", "") or "")
+        or "guard" in (getattr(step, "params", None) or {})
+        or "guard" in (getattr(step, "hints", None) or {})
+    )
+    if _guarded_request:
+        _sv_now = getattr(runner, "_state_vars", None)
+        _logger = logging.getLogger("mantis_agent.gym._runner_helpers")
+        _logger.warning(
+            "  [guard-check] step=%d type=%s resolved=%r "
+            "top=%r params.guard=%r hints.guard=%r state_vars=%s",
+            index, getattr(step, "type", "?"), guard_name,
+            getattr(step, "guard", ""),
+            (getattr(step, "params", None) or {}).get("guard", ""),
+            (getattr(step, "hints", None) or {}).get("guard", ""),
+            dict(_sv_now) if isinstance(_sv_now, dict) else _sv_now,
+        )
     if guard_name:
         state_vars = getattr(runner, "_state_vars", {}) or {}
         guard_value = bool(state_vars.get(guard_name, False))
