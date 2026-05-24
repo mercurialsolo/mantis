@@ -785,6 +785,25 @@ class RunExecutor:
             section=step.section, required=step.required, gate=step.gate,
             params=dict(step.params or {}),
             hints=dict(getattr(step, "hints", {}) or {}),
+            # #643 stage 2 fields — vision-only conditional steps. The
+            # executor's outer loop reads ``guard`` (in
+            # ``_runner_helpers.execute_step``) to decide whether to
+            # short-circuit a step against a prior ``detect_visible``
+            # binding. The detect_visible handler reads ``out_var`` to
+            # decide where to bind its boolean result. Dropping these
+            # from the effective_step forced ``resolve_guard_name`` /
+            # ``DetectVisibleHandler.execute`` onto their
+            # ``params`` / ``hints`` fallback paths — which the
+            # boattrader urlnav plan happens to populate, so cache
+            # paths "worked", but any plan that set guard/out_var only
+            # at the top level (the canonical authoring form) would
+            # silently regress: the guarded step ran unconditionally
+            # and burned brain-budget. Live repro 2026-05-24 boattrader
+            # verification run 20260524_155643_b90f0d66: step 6 click
+            # ran despite step 5 detect_visible binding
+            # ``has_show_more=False``.
+            guard=getattr(step, "guard", "") or "",
+            out_var=getattr(step, "out_var", "") or "",
         )
 
     def _handle_loop_step(
