@@ -2155,8 +2155,9 @@ body.bdp-scrolled-deep .sticky-save {
   grid-template-columns: 1fr 1fr;
   gap: 32px;
 }
+/* Real BT loan calc heading: 20/700 #333 (was 18). */
 .loan-form-heading, .loan-preview-heading {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--bt-text);
   text-align: center;
@@ -2167,6 +2168,14 @@ body.bdp-scrolled-deep .sticky-save {
   color: var(--bt-text-dim);
   font-size: 13px;
   margin: 0 0 18px;
+}
+/* Real BT loan calc form inputs/selects: 4px border-radius (was 8px
+   from the SRP filter base) and 16px font (was 14px). Scoped to the
+   loan calc so SRP filter styling is unaffected. */
+.bdp-loan-card .filter-input,
+.bdp-loan-card .filter-select {
+  border-radius: 4px;
+  font-size: 16px;
 }
 .loan-field {
   display: block;
