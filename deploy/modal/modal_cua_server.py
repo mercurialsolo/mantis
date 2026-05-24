@@ -2566,7 +2566,13 @@ def _print_shared_seen_metrics(
         try:
             import modal as _modal
             _shared = _modal.Dict.from_name(dict_name)
-            final_size = len(_shared)
+            # modal.Dict doesn't implement __len__; use .len() method
+            # (returns int) and fall back to counting keys() on older
+            # SDKs that may not expose it.
+            if hasattr(_shared, "len"):
+                final_size = int(_shared.len())
+            else:
+                final_size = sum(1 for _ in _shared.keys())
         except Exception as exc:
             print(
                 f"  [shared-seen] could not query final dict size "

@@ -138,8 +138,13 @@ class _ModalDictSharedSeenSet:
             logger.warning("[shared-seen] add() raised: %s", exc)
 
     def size(self) -> int:
+        # modal.Dict doesn't implement __len__; use the SDK's .len()
+        # method (returns int) and fall back to counting keys() if even
+        # that's missing on older SDKs.
         try:
-            return len(self._dict)
+            if hasattr(self._dict, "len"):
+                return int(self._dict.len())
+            return sum(1 for _ in self._dict.keys())
         except Exception as exc:  # noqa: BLE001
             logger.debug("[shared-seen] size() raised: %s", exc)
             return 0

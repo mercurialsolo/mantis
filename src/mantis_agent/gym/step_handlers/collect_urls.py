@@ -96,10 +96,13 @@ class CollectUrlsHandler:
                 data="no_extractor",
             )
 
-        # Settle briefly so lazy-rendered cards are present in the
-        # screenshot. Same min/max as ClaudeStepHandler's pre-extract
-        # pause for behavioral parity with the click loop.
-        adaptive_content_settle(env, min_seconds=0.2, max_seconds=1.0)
+        # Settle for the cold-load case. BoatTrader on a proxied
+        # cold-cache fetch can take 3-5s before listings render; the
+        # 1s pre-extract pause is the right floor for warm pages but
+        # leaves Phase-1 fan-out scanning a half-rendered page (cards
+        # not yet hydrated). Settle up to 4s here — collect_urls runs
+        # ONCE per Phase-1 dispatch, so the cost is bounded.
+        adaptive_content_settle(env, min_seconds=1.0, max_seconds=4.0)
 
         screenshot = env.screenshot()
         scan = extractor.find_all_listings(screenshot)
@@ -113,18 +116,31 @@ class CollectUrlsHandler:
                 signal,
             )
             runner._collected_urls = []
+            # Skip envelope (success=False, skip=True) so the runner's
+            # retry policy advances past this step instead of burning
+            # ~9 retries (each costs another Claude scan call) on the
+            # same blocked / empty page state.
             return StepResult(
                 step_index=index, intent=step.intent, success=False,
                 data=f"scan_signal:{signal}",
+                skip=True, skip_reason=f"collect_urls_signal_{signal}",
             )
 
         runner.costs["claude_extract"] += 1
         card_count = len(scan)
+        # Always-on WARNING so operators (and the orchestrator's local
+        # CLI grep) see the scan outcome even when Modal trims worker
+        # log tails. Format: ``[collect_urls] scan returned N cards``.
+        logger.warning(
+            "  [collect_urls] scan returned %d card(s)", card_count,
+        )
         urls: list[str] = []
         seen: set[str] = set()
+        unresolved = 0
         for x, y, _title in scan:
             href = self._resolve_href(env, int(x), int(y))
             if not href:
+                unresolved += 1
                 continue
             # Dedup: lazy-loaded results pages occasionally render the
             # same card twice with slightly different y; the URL is the
@@ -138,18 +154,32 @@ class CollectUrlsHandler:
         runner._last_known_url = runner._last_known_url or ""
         resolved = len(urls)
         coverage = resolved / max(card_count, 1)
-        # WARNING when coverage is degraded so Modal logs surface the
-        # fallback signal; INFO for the healthy case.
+        # Always-on WARNING so the resolved-vs-found ratio is visible.
+        # When unresolved == card_count the CDP href lookup is failing
+        # universally (elementFromPoint miss, wrong chromeH calc, page
+        # not yet hydrated) — operator needs this signal to diagnose.
         if coverage < 0.8:
             logger.warning(
                 "  [collect_urls] coverage degraded: %d/%d cards resolved hrefs "
-                "(%.0f%%) — fan-out runner should consider sequential fallback",
-                resolved, card_count, coverage * 100,
+                "(%.0f%%, %d unresolved) — fan-out runner should consider "
+                "sequential fallback",
+                resolved, card_count, coverage * 100, unresolved,
             )
         else:
-            logger.info(
+            logger.warning(
                 "  [collect_urls] resolved %d/%d card hrefs (%.0f%% coverage)",
                 resolved, card_count, coverage * 100,
+            )
+
+        # Fail-fast skip envelope when EVERY card failed CDP resolution.
+        # Triggers the same runner-side advance as the scan-signal path
+        # — no point retrying because the cdp_evaluate JS will return
+        # the same null on every retry against the same screenshot.
+        if card_count > 0 and resolved == 0:
+            return StepResult(
+                step_index=index, intent=step.intent, success=False,
+                data=f"urls:0/{card_count}:all_unresolved",
+                skip=True, skip_reason="collect_urls_all_unresolved",
             )
 
         return StepResult(
