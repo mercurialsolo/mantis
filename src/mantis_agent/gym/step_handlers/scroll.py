@@ -90,8 +90,28 @@ class MechanicalScrollHandler:
 
     step_type = "scroll"
 
+    # After this many consecutive ``scroll_no_movement`` returns on the
+    # same step_index, the handler stops emitting the deterministic
+    # failure_class and instead returns ``success=True`` with a
+    # ``scroll_no_movement_skipped`` data line. Cap is per (handler
+    # instance, step_index): a fresh step_index resets the counter.
+    #
+    # Why: the recovery layer (``step_recovery``) doesn't cap retries
+    # for ``scroll_no_movement`` (it isn't in
+    # ``REWRITE_TRIGGERING_CLASSES``) — without this cap the runner
+    # re-dispatches the same scroll indefinitely. Observed on v8
+    # boattrader run: worker w2 stuck 46 min / 114 retries on a page
+    # shorter than ``params.count`` viewports. After the cap, the
+    # handler reports success the Nth time so the runner advances to
+    # the next step naturally.
+    NO_MOVEMENT_RETRY_CAP: int = 3
+
     def __init__(self, runner: "MicroPlanRunner") -> None:
         self.parent = runner
+        # Per-step counter for consecutive ``scroll_no_movement``
+        # returns. Cleared on success (any verified scroll motion on
+        # the same index resets) and on cap-exceeded skip.
+        self._no_movement_counts: dict[int, int] = {}
 
     def applies_to(self, step: "MicroIntent") -> bool:
         """Mechanical scroll takes over when EITHER ``params.count`` is
@@ -251,11 +271,34 @@ class MechanicalScrollHandler:
         if pre_y >= 0 and post_y >= 0:
             delta = post_y - pre_y if direction == "down" else pre_y - post_y
             if delta < 50:
+                # Per-step counter: cap consecutive no-movement returns
+                # so the runner can't loop forever (the recovery layer
+                # doesn't gate this failure class). See class-level
+                # ``NO_MOVEMENT_RETRY_CAP`` comment.
+                attempts = self._no_movement_counts.get(index, 0) + 1
+                self._no_movement_counts[index] = attempts
+                if attempts >= self.NO_MOVEMENT_RETRY_CAP:
+                    logger.warning(
+                        "  [scroll] no-movement cap reached on step %d "
+                        "(attempt %d/%d, pre=%.0f post=%.0f); reporting "
+                        "success so recovery advances — page is likely "
+                        "already at scroll limit",
+                        index, attempts, self.NO_MOVEMENT_RETRY_CAP,
+                        pre_y, post_y,
+                    )
+                    self._no_movement_counts.pop(index, None)
+                    return StepResult(
+                        step_index=index, intent=step.intent, success=True,
+                        data=(
+                            f"scroll_no_movement_skipped:"
+                            f"attempts={attempts}_pre={pre_y:.0f}_post={post_y:.0f}"
+                        ),
+                    )
                 logger.warning(
                     "  [scroll] mechanical scroll fired but scrollY didn't "
-                    "move (pre=%.0f post=%.0f delta=%.0f); failing "
-                    "deterministically so recovery sees a real signal",
-                    pre_y, post_y, delta,
+                    "move (pre=%.0f post=%.0f delta=%.0f, attempt %d/%d); "
+                    "failing deterministically so recovery sees a real signal",
+                    pre_y, post_y, delta, attempts, self.NO_MOVEMENT_RETRY_CAP,
                 )
                 return StepResult(
                     step_index=index, intent=step.intent, success=False,
@@ -268,6 +311,10 @@ class MechanicalScrollHandler:
                 pre_y, post_y, delta,
             )
 
+        # Any verified motion (or no CDP to verify) clears the
+        # no-movement counter for this step — next time the step runs
+        # it gets a fresh budget.
+        self._no_movement_counts.pop(index, None)
         return StepResult(
             step_index=index, intent=step.intent, success=True,
             data=f"scroll:{direction}x{count}",

@@ -296,6 +296,102 @@ def test_cdp_backend_falls_back_to_xdotool_when_no_cdp_evaluate():
     assert env.step.call_count == 2
 
 
+# ── #647: no-movement retry cap (CDP backend hangs indefinitely guard) ──
+
+
+def test_no_movement_cap_skips_step_after_n_consecutive_returns():
+    """After ``NO_MOVEMENT_RETRY_CAP`` consecutive ``scroll_no_movement``
+    returns on the same step_index, the handler stops emitting the
+    failure class and instead reports success with a
+    ``scroll_no_movement_skipped`` data line. This prevents the recovery
+    layer (which doesn't gate ``scroll_no_movement``) from looping the
+    runner forever on a page shorter than ``params.count`` viewports."""
+    h = MechanicalScrollHandler(MagicMock())
+    cap = h.NO_MOVEMENT_RETRY_CAP
+
+    # Attempts 1 .. cap-1 must fail with ``scroll_no_movement``.
+    for attempt in range(1, cap):
+        env = _env_with_scroll(pre=500.0, post=500.0)
+        res = h.execute(
+            MicroIntent(intent="x", type="scroll", params={"count": 1}),
+            _ctx(env, index=7),
+        )
+        assert res.success is False, f"attempt {attempt} should still fail"
+        assert res.failure_class == "scroll_no_movement"
+
+    # Attempt == cap: handler reports success so recovery advances.
+    env = _env_with_scroll(pre=500.0, post=500.0)
+    res = h.execute(
+        MicroIntent(intent="x", type="scroll", params={"count": 1}),
+        _ctx(env, index=7),
+    )
+    assert res.success is True
+    # Skip path doesn't tag a failure class — runner advances.
+    assert not res.failure_class
+    assert "scroll_no_movement_skipped" in res.data
+    assert f"attempts={cap}" in res.data
+
+    # After the cap fires the counter resets, so a fresh sequence of
+    # no-movement returns on the same step_index starts a new budget.
+    env = _env_with_scroll(pre=500.0, post=500.0)
+    res = h.execute(
+        MicroIntent(intent="x", type="scroll", params={"count": 1}),
+        _ctx(env, index=7),
+    )
+    assert res.success is False
+    assert res.failure_class == "scroll_no_movement"
+
+
+def test_no_movement_counter_isolates_per_step_index():
+    """Two different step_indices accumulate independent
+    no-movement counters — w workers / step indices don't share budget."""
+    h = MechanicalScrollHandler(MagicMock())
+    # step 3: 1 no-movement
+    env = _env_with_scroll(pre=500.0, post=500.0)
+    h.execute(
+        MicroIntent(intent="x", type="scroll", params={"count": 1}),
+        _ctx(env, index=3),
+    )
+    # step 5: 1 no-movement — should still fail (not cap-skip), because
+    # the step_index=3 counter is irrelevant to step_index=5.
+    env = _env_with_scroll(pre=500.0, post=500.0)
+    res = h.execute(
+        MicroIntent(intent="x", type="scroll", params={"count": 1}),
+        _ctx(env, index=5),
+    )
+    assert res.success is False
+    assert res.failure_class == "scroll_no_movement"
+
+
+def test_no_movement_counter_reset_on_verified_motion():
+    """A successful scroll on the same step_index clears the
+    no-movement counter — page that scrolls once then jams shouldn't
+    cap-skip prematurely on a later jam."""
+    h = MechanicalScrollHandler(MagicMock())
+    # Two no-movement attempts to build up the counter.
+    for _ in range(2):
+        env = _env_with_scroll(pre=500.0, post=500.0)
+        h.execute(
+            MicroIntent(intent="x", type="scroll", params={"count": 1}),
+            _ctx(env, index=4),
+        )
+    # Verified motion clears the counter.
+    env = _env_with_scroll(pre=100.0, post=900.0)
+    res = h.execute(
+        MicroIntent(intent="x", type="scroll", params={"count": 1}),
+        _ctx(env, index=4),
+    )
+    assert res.success is True
+    # Next no-movement should fail (not skip) — counter was reset.
+    env = _env_with_scroll(pre=900.0, post=900.0)
+    res = h.execute(
+        MicroIntent(intent="x", type="scroll", params={"count": 1}),
+        _ctx(env, index=4),
+    )
+    assert res.success is False
+    assert res.failure_class == "scroll_no_movement"
+
+
 def test_cdp_backend_dispatch_error_returned_with_failure_class():
     """When CDP dispatch raises (Chrome devtools disconnected etc.),
     the handler returns ``scroll_dispatch_error`` rather than
