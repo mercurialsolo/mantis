@@ -156,6 +156,20 @@ class MicroIntent:
     # Anything that used to be hardcoded in the extractor should now flow
     # through this field. See issue #86 for the redesign.
     hints: dict[str, Any] = field(default_factory=dict)
+    # Vision-only conditional step support (#643 stage 2). The plan
+    # composes a ``detect_visible`` step that asks Holo3/Claude
+    # "is X visible?" against the current screenshot and binds the
+    # boolean result to ``runner._state_vars[out_var]``. Subsequent
+    # steps then carry a ``guard`` field naming that variable — if
+    # the variable is False (or absent), the runner skips the step
+    # for free (no vision call, no env action).
+    #
+    # ``guard`` is empty for unconditional steps (the default).
+    # ``out_var`` is set on ``detect_visible`` steps; ignored elsewhere.
+    # Pure-vision: detection is one Claude/Holo3 call against the
+    # screenshot, never a DOM probe. CUA-purity preserved.
+    guard: str = ""
+    out_var: str = ""
 
 
 @dataclass
@@ -1127,7 +1141,10 @@ class PlanDecomposer:
                 "grounding",
                 step_type in ("click", "filter", "paginate") + PlanDecomposer.FORM_STEP_TYPES,
             ),
-            claude_only=s.get("claude_only", step_type in ("extract_url", "extract_data")),
+            claude_only=s.get(
+                "claude_only",
+                step_type in ("extract_url", "extract_data", "detect_visible"),
+            ),
             loop_target=s.get("loop_target", -1),
             loop_count=s.get("loop_count", 0),
             section=section,
@@ -1135,6 +1152,8 @@ class PlanDecomposer:
             gate=gate,
             params=params,
             hints=hints,
+            guard=str(s.get("guard", "") or ""),
+            out_var=str(s.get("out_var", "") or ""),
         )
 
     @staticmethod

@@ -30,6 +30,7 @@ from ..step_context import HandlerRegistry
 from .claude_step import ClaudeStepHandler
 from .click import ClaudeGuidedClickHandler
 from .collect_urls import CollectUrlsHandler
+from .detect_visible import DetectVisibleHandler
 from .filter import ClaudeGuidedFilterHandler
 from .form import ClaudeGuidedFormHandler
 from .holo3 import Holo3StepHandler
@@ -48,6 +49,7 @@ __all__ = [
     "ClaudeGuidedFormHandler",
     "ClaudeStepHandler",
     "CollectUrlsHandler",
+    "DetectVisibleHandler",
     "Holo3StepHandler",
     "MechanicalNavigateBackHandler",
     "MechanicalScrollHandler",
@@ -100,6 +102,11 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
     # Stashes urls on runner._collected_urls; safe to run standalone too
     # (sequential plan can use it for a URL-list dump).
     reg.register(CollectUrlsHandler(runner))
+    # #643 stage 2: vision-only ``detect_visible`` for conditional
+    # steps. Composes with the ``guard`` field on subsequent
+    # MicroIntents — one Claude verify-shaped call against the
+    # current screenshot, boolean bound to runner._state_vars.
+    reg.register(DetectVisibleHandler(runner))
     reg.register_for_types(
         ClaudeGuidedFormHandler(runner),
         ("fill_field", "submit", "select_option", "right_click"),

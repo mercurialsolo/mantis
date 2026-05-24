@@ -231,6 +231,12 @@ class MicroPlanRunner:
         # check ``len(runner._collected_urls)`` to decide whether to
         # fan out vs fall back to the sequential extraction loop.
         self._collected_urls: list[str] = []
+        # #643 stage 2: plan-state variable bag for vision-only
+        # conditional steps. ``DetectVisibleHandler.execute`` binds
+        # boolean answers here (keyed by ``step.out_var``); the
+        # ``execute_step`` dispatcher reads it before each step to
+        # honour ``step.guard``. Empty for plans without conditionals.
+        self._state_vars: dict[str, Any] = {}
         # #627: cross-worker seen-URL set. Default is a no-op
         # (NullSharedSeenSet); the Modal orchestrator overrides via the
         # suite's ``_fanout_seen_dict_name`` field so spawned workers

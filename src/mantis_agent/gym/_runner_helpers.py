@@ -766,6 +766,28 @@ def execute_step(
 ) -> StepResult:
     registry = runner._handler_registry
 
+    # #643 stage 2: vision-only conditional steps. When the plan author
+    # set ``step.guard`` naming a state variable that an earlier
+    # ``detect_visible`` step bound to False (or never bound at all),
+    # skip THIS step entirely — no vision call, no env action. The
+    # guard check is free; the alternative is paying brain-budget on a
+    # step the operator marked conditional on a prior detection.
+    #
+    # Skip envelope returns (success=False, skip=True) so the runner's
+    # post-step loop advances past without retry recovery. The
+    # ``data`` line carries the guard name + observed value so trace
+    # consumers (Augur, ops logs) can see why the step was skipped.
+    guard_name = (getattr(step, "guard", "") or "").strip()
+    if guard_name:
+        state_vars = getattr(runner, "_state_vars", {}) or {}
+        guard_value = bool(state_vars.get(guard_name, False))
+        if not guard_value:
+            return StepResult(
+                step_index=index, intent=step.intent, success=False,
+                data=f"guard:{guard_name}=False:skipped",
+                skip=True, skip_reason=f"guard_{guard_name}_false",
+            )
+
     # Agentic handler-escalation — issue #224 follow-up. When prior
     # failures on this step indicate the default handler is the
     # wrong tool (canonical case: text-matching submit handler keeps
