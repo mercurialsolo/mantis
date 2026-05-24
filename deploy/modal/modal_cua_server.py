@@ -892,6 +892,23 @@ def _run_holo3_executor(
             if workflow_id else _uuid_for_augur.uuid4().hex[:12]
         )
 
+        # #657 PR 2: read the per-domain ``SiteConfig`` from the suite
+        # (written by ``build_micro_suite`` after resolving
+        # ``MicroPlan.domain`` → DomainProfile). Passing it explicitly
+        # here means the HTTP path stops silently inheriting the
+        # runner's ``default_boattrader()`` fallback for any plan that
+        # doesn't have a profile entry. ``None`` → runner picks its
+        # default (today still boattrader; flipped to generic in
+        # #657 PR 3).
+        site_config_for_runner = None
+        _sc_dict = task_suite.get("_site_config")
+        if _sc_dict:
+            try:
+                from mantis_agent.site_config import SiteConfig as _SiteConfig
+                site_config_for_runner = _SiteConfig.from_dict(_sc_dict)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  WARNING: _site_config deserialization failed: {exc}")
+
         micro_runner = MicroPlanRunner(
             brain=brain, env=env,
             grounding=grounding, extractor=extractor,
@@ -905,6 +922,11 @@ def _run_holo3_executor(
             on_checkpoint=vol.commit,
             max_cost=task_suite.get("_max_cost", 10.0),
             max_time_minutes=task_suite.get("_max_time_minutes", 180),
+            # #657 PR 2: per-domain SiteConfig resolved from suite.
+            # None means "use runner default" (preserves legacy
+            # behaviour for callers that pre-build a suite without
+            # going through ``build_micro_suite``).
+            site_config=site_config_for_runner,
             # #560: ``None`` (key absent) → runner falls back to
             # ``Holo3StepHandler.DEFAULT_BRAIN_BUDGET_CAPS``.
             brain_budgets=task_suite.get("_brain_budgets"),
