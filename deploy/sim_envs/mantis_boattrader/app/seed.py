@@ -435,7 +435,9 @@ def _gen_dealers(rng: random.Random) -> list[Dealer]:
         suffix = suffix_pool[idx % len(suffix_pool)]
         name = f"{prefix}{suffix}".strip(", ").strip()
         phone_seed = 4000000 + idx * 18371
-        phone = f"({rng.randint(200, 989)}) {rng.randint(200, 989)}-{phone_seed % 10000:04d}"
+        # Real BT renders dealer phones as raw `+1XXXXXXXXXX` (E.164,
+        # no parens/dashes). Match that format.
+        phone = f"+1{rng.randint(200, 989)}{rng.randint(200, 989):03d}{phone_seed % 10000:04d}"
         years = rng.choice([3, 6, 8, 12, 15, 18, 22])
         dealers.append(
             Dealer(

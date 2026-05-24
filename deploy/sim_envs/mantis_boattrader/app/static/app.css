@@ -2577,11 +2577,11 @@ body.bdp-scrolled-deep .sticky-save {
   margin-bottom: 8px;
 }
 
-/* Private-seller card */
-.bdp-private-seller-card {
-  border-top: 1px solid var(--bt-border);
-  padding-top: 14px;
-}
+/* Private-seller card spec is now handled by the shared
+   `.bdp-dealer-card, .bdp-private-seller-card` rule above (nested card
+   with 1px border, 8px radius, 16px padding). Kept this block as a
+   marker so future edits don't accidentally re-add a border-top. */
+/* (see .bdp-dealer-card, .bdp-private-seller-card rule near line 2686) */
 .private-seller-tag {
   display: inline-block;
   background: var(--bt-bg-alt-2);
@@ -2683,7 +2683,19 @@ body.bdp-scrolled-deep .sticky-save {
   border-radius: 3px;
 }
 
-.bdp-dealer-card { border-top: 1px solid var(--bt-border); padding-top: 14px; }
+/* Real BT BDP dealer card is a NESTED card inside .bdp-summary — its
+   own 1px #ededed border, 8px radius, white bg, ~16px padding. Was
+   rendered as a bare section with a top divider line. The nested look
+   makes the contact form visually distinct from the title/price area
+   above it. Same treatment for the private-seller variant. */
+.bdp-dealer-card,
+.bdp-private-seller-card {
+  background: #fff;
+  border: 1px solid #ededed;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 14px;
+}
 /* Real BT 'Contact Private Seller' / 'Contact <Salesperson>' heading: 20/700 #333.
    Was 18/500 — bumped to match real boattrader exactly. */
 .dealer-card-heading { font-size: 20px; font-weight: 700; color: var(--bt-text); margin: 0 0 12px; }
