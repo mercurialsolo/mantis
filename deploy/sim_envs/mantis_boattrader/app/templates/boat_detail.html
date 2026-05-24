@@ -177,22 +177,19 @@
       </div>
     {% else %}
       <div class="bdp-dealer-card" id="contact" data-testid="dealer-card">
-        {% set _sp_idx = (boat.id|length + boat.year) % 6 %}
-        <h2 class="dealer-card-heading">Contact {{ ['Michael Mandery','Jennifer Cole','Marcus Webb','Elena Patel','Tom Hartwell','Priya Shah'][_sp_idx] }}</h2>
-        <div class="dealer-card-meta">
-          <div class="dealer-headshot" aria-label="Salesperson headshot">
-            <svg viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" width="60" height="60">
-              <defs><linearGradient id="hs{{ _sp_idx }}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#9bbcdb"/><stop offset="1" stop-color="#3a6a93"/></linearGradient></defs>
-              <rect width="60" height="60" rx="30" fill="url(#hs{{ _sp_idx }})"/>
-              <circle cx="30" cy="24" r="11" fill="#f2e3c8"/>
-              <path d="M8 60 Q 30 36 52 60 Z" fill="#f2e3c8"/>
-            </svg>
-          </div>
-          <address class="dealer-address">
-            {{ dealer.name }}<br/>
-            <a href="tel:{{ dealer.phone }}" class="dealer-phone"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> {{ dealer.phone }}</a>
-          </address>
-        </div>
+        {# Real BT dealer card pattern (Westchester probe): heading is the
+           DEALERSHIP NAME (not a salesperson name), then a pin-icon-led
+           street address line, then the phone in blue. No salesperson
+           headshot. The salesperson name is shown elsewhere (e.g. inside
+           the Listed By card lower on the page) when present. #}
+        <h2 class="dealer-card-heading">Contact {{ dealer.name }}</h2>
+        <p class="dealer-address-row">
+          <svg class="ico-pin" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          <span>{{ dealer.address }}, {{ dealer.city }}, {{ dealer.state }}, {{ dealer.zip }}</span>
+        </p>
+        <p class="dealer-phone-row">
+          <a href="tel:{{ dealer.phone }}" class="dealer-phone">{{ dealer.phone }}</a>
+        </p>
         <form class="dealer-lead-form" method="post" action="/boat/{{ boat.slug }}/contact" data-testid="dealer-lead-form">
           <input type="text" name="name" placeholder="First &amp; Last Name" required class="lead-input" />
           <div class="lead-row">

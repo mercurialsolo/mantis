@@ -2709,6 +2709,23 @@ body.bdp-scrolled-deep .sticky-save {
 }
 .dealer-address { font-style: normal; font-size: 14px; color: var(--bt-text); line-height: 1.4; }
 .dealer-phone { color: var(--bt-blue); font-size: 14px; font-weight: 400; display: inline-block; margin-top: 2px; }
+/* Real BT dealer-card address row: 14/400 #333, pin SVG (14×14) before
+   the street address, ~6px gap between icon and text. Phone sits on
+   its own line below, blue link, no icon. */
+.dealer-address-row {
+  display: flex; align-items: flex-start; gap: 6px;
+  margin: 0 0 6px;
+  font-size: 14px; line-height: 1.4; color: var(--bt-text);
+}
+.dealer-address-row .ico-pin {
+  flex-shrink: 0; margin-top: 2px;
+  color: var(--bt-text-dim);
+}
+.dealer-phone-row { margin: 0 0 12px; font-size: 14px; }
+.dealer-phone-row .dealer-phone {
+  color: var(--bt-blue); font-weight: 400; text-decoration: none;
+}
+.dealer-phone-row .dealer-phone:hover { text-decoration: underline; }
 .trusted-partner { font-size: 13px; color: var(--bt-text-dim); margin: 0 0 12px; }
 .trusted-partner strong { color: var(--bt-navy); }
 .dealer-lead-form { display: flex; flex-direction: column; gap: 8px; }
