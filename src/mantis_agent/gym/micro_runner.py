@@ -230,7 +230,19 @@ class MicroPlanRunner:
         self.dynamic_verifier = (
             dynamic_verifier or DynamicPlanVerifier(plan_name=session_name)
         )
-        self.site_config = site_config or SiteConfig.default_boattrader()
+        # #657 PR 3: default flipped from ``default_boattrader()`` to
+        # ``generic()``. Callers without a per-domain SiteConfig
+        # (now resolved upstream via DomainProfile in ``build_micro_suite``
+        # — see #657 PR 2) get the neutral shape: empty URL patterns,
+        # ``is_detail_page`` falls back to a path-extension heuristic
+        # against the base URL when supplied, ``is_results_page``
+        # returns False. This stops silently applying boattrader URL
+        # regex to every plan that didn't pass a site_config.
+        # Boattrader plans are unaffected — they flow through
+        # build_micro_suite → DomainProfile["boattrader.com"] →
+        # explicit SiteConfig with the same regex/pagination knobs the
+        # legacy ``default_boattrader()`` hardcoded.
+        self.site_config = site_config or SiteConfig.generic()
         self.extraction_cache = extraction_cache
         self.scanner = ListingsScanner()
         if extraction_cache is not None and extraction_cache.read_enabled:
