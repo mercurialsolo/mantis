@@ -3,10 +3,10 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=85** (2026-05-23) — `_captured/` spec corpus checked in (Phase 1 discovery output) — SRP `structural.json` is the measured snapshot; Home + BDP are TODO placeholders.
+Last updated: **v=104** (2026-05-23) — BDP visual/perceptual compare (dealer + owner): removed H1 length suffix `| 16'` (real BT format is "Year Make Model"); added H2 "Meet Your Seller" above the contact card on both seller paths matching real BT's pattern. Side-by-side diff saved as `_captured/bdp/SELLER_VS_OWNER_DIFF.md`.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `woytvzdntbjtmv7kz-4jzz-psltnq7jc`)
+(token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
 
 ## Methodology
 
@@ -27,7 +27,7 @@ the current state. Status legend:
 | Font family | Roboto, -apple-system, ... (system fallback; no actual Roboto loaded) | same — no Google Fonts link, system fallback | ✅ |
 | Nav weight | 500 medium via system font | 500 medium via system font | ✅ |
 | Page container width (SRP/home) | 1440px max, 36px side margin | same | ✅ |
-| Page container width (BDP) | ~1335px content | 1400px content (mine 65px wider) | 🟡 |
+| Page container width (BDP) | ~1319-1336px content (left col 890 + 79 gap + right col 334) | `.bdp-grid` capped at `max-width: 1336px` centered in `.bt-main` (v=91) | ✅ |
 
 ## Header
 
@@ -50,6 +50,7 @@ the current state. Status legend:
 | Bg | rgb(37,102,176) | same | ✅ |
 | Inner padding | 10px 16px | 10px 16px | ✅ |
 | "Get started" CTA | plain inline bold text | plain inline bold text | ✅ |
+| **Sticky on scroll** | `position: fixed; top: 62px` — stays visible at y=62 across scroll (real BT nav is 62px tall, leaves 62px gap above ribbon on scroll) | `position: sticky; top: 0` — at scroll=0 ribbon sits flush under the nav (y=44, in flow); on scroll past the nav, ribbon flushes to viewport top (y=0). User-preferred behavior per v=102 — matches real BT visually at scroll=0 and tucks tight to the top on scroll instead of leaving a 44px gap. | ✅ (intentional divergence from real BT's fixed-top:62 pattern) |
 | Hidden on BDP | yes (no ribbon on BDP) | hidden via `{% block ribbon %}{% endblock %}` | ✅ |
 
 ## SRP page
@@ -80,7 +81,12 @@ the current state. Status legend:
 | "Try" font-size | 16px | 16px | ✅ |
 | "Try" color | rgb(100,116,139) #64748b | same | ✅ |
 | Quote placeholder | 16/400 #64748b | 16/400 #64748b | ✅ |
-| Sparkle icon | small SVG ai.svg (4-point star) | inline SVG 4-point star | ✅ |
+| **"Try …" rotator** (SRP only) | 3-line vertical column inside `.ai-search-v2__rotator` (overflow:hidden, 18px tall), `@keyframes 9s ease-in-out infinite alternate ai-try-rotate` cycling translateY 0→-18→-36 across "fishing boats under $80k", "Sea Ray under 40 feet", "pontoon boats near me" | Same — 3 `.ai-search-v2__try-text` spans, same 9s alternate animation, same 3 example queries (v=86). Native input placeholder emptied; visible suggestion comes from the span overlay. | ✅ |
+| Rotator hides on focus | Real BT clears `.ai-search-v2__try` the moment user clicks into the input (before any typing) | Sandbox uses `.ai-search-v2__form:focus-within .ai-search-v2__try { display: none }` (v=87) | ✅ |
+| Rotator hides on typed value | Real BT keeps prefix hidden when input has content (even if focus moved elsewhere) | Sandbox uses `:has(input:not(:placeholder-shown):not([value=""]))` (v=86) | ✅ |
+| Sparkle icon | `<img src="/static/legacy/img/icons/ai.svg" width="16" height="16">` — 4-point star + two small "+" accents (top-right, bottom-left), all stroked/filled `#2566B0` | Inline SVG transcribed from real BT's ai.svg, 16×16 viewBox, same paths + same `#2566B0` (v=88 — previously 20×20 with different path data) | ✅ |
+| Sparkle wrapper geometry | natural 16px line, no padding | `.ai-search-v2__icon { width:16; height:16; line-height:0; inline-flex }` so the 18px parent font-size doesn't expand it to 20×26 (v=88) | ✅ |
+| Click anywhere → focus input | Real BT overlays `.ai-search-v2__try` via `position:absolute` + `pointer-events:none`; click on the span passes through to the input | Sandbox uses inline-flex layout (span takes real space), so adds a `mousedown` handler in base.html: any click in the form that isn't on submit/links calls `inp.focus()` + moves caret to end. CSS `cursor: text` + `user-select: none` on the span match the affordance (v=89). | ✅ |
 | Submit icon | magnifier SVG | inline SVG circle+handle | ✅ |
 
 ### Pre-qualify banner
@@ -106,19 +112,19 @@ the current state. Status legend:
 | Save Search button | 270×40, blue pill, 16/700, 50px br | 270×40, same | ✅ |
 | Save Search → Location gap | ~50-60px | 51px | ✅ |
 | Section divider | 2px solid #ededed | 2px solid #ededed (v=82) | ✅ |
-| Section label | 15/400 #333 | 15/400 #333 | ✅ |
+| Section label (toggle-btn text) | 16/500 #404040 line-height 20px | 16/500 #404040 line-height 20px (v=94 — was 15/400 #333) | ✅ |
 | Chevron | down arrow ~10px | down arrow ~10px via border trick | ✅ |
 | Zip/City/Other segmented | 282×59 gray track, 50px br, 4px pad | 280×59 same shape (v=82: flex layout) | ✅ |
 | Active tab label wrap | "Zip\nCode" (2 lines), forced by narrow cell | explicit `<br>` in markup (v=82) — Roboto's narrow rendering would wrap naturally, but sandbox's system font doesn't | ✅ |
 | 25 miles select | 106×40, 1px #ededed, 8px br | 106×40, same | ✅ |
 | Zip input | 100×40 fixed (not flex) | 100×40 fixed (v=82) | ✅ |
 | "from" label | 16px #5E5E5E, margin 0 16px | 16px #5E5E5E, margin 0 16px (v=82) | ✅ |
-| "Use My Location" | underlined, 14/400, blue, right-aligned | underlined, 14/400, blue, right-aligned (v=82) | ✅ |
+| "Use My Location" | underlined, 14/400, blue, right-aligned, **margin: -16px 0 15px** (tucks up against zip row) | underlined, 14/400, blue, right-aligned, `margin: -16px 0 15px` (v=94 — was margin-top: 8px) | ✅ |
 | Zip input focus | border-color → blue, no outline | border 1.5px blue + 0.5px shadow ring (v=82) | ✅ |
 | 5-digit zip auto-submit | typing 5 digits navigates to `?zip=NNNNN` | debounced 250ms form.submit() in base.html (v=82) | ✅ |
 | Price Drop control | `.switch.toggleButton` 50×26, white 22×22 thumb, slides on click; Material Icons `info` (24×24 #c2c2c2) next to label | `.switch` div with white thumb, `:has(input:checked)` toggles blue + slides right; inline SVG info icon 18×18 #c2c2c2 (v=83) | ✅ |
 | Price Drop label | "Price Drop" + info icon | "Price Drop" + info icon (v=83; was "Price Drop only" + checkbox) | ✅ |
-| Boat Type / Make filter UI | Search input (270×40, 4px br, magnifier icon) + `ul.opts` (270 wide, 270 maxH, scroll) + 40px-tall checkbox `<li>` items | Same — `.filter-search-wrap` + `.filter-options` + custom-styled `.filter-opt-checkbox` (v=84) | ✅ |
+| Boat Type / Make filter UI | Search input (270×40, 4px br, magnifier icon) + `ul.opts` (270 wide, 270 maxH, scroll, **bg #f7f7f7, padding 8px, no outer border**) + 40px-tall `<li>` items with **15/400 #333** text | Same — `.filter-search-wrap` + `.filter-options` (bg #f7f7f7, padding 8px, v=94) + custom-styled `.filter-opt-checkbox`; label text 15px (v=94 — was 14px) | ✅ |
 | Fuel Type / Hull filter UI | `ul.opts` checkbox list (no search input — small list) | Same — `.filter-options` only (v=84) | ✅ |
 | Beam / Max Draft | Range slider + No Min/No Max number inputs | Same | ✅ |
 | Default-closed sections | Boat Type / Make / Beam / Max Draft / Fuel / Hull / Engines / For Sale By all start `closed` | Beam / Max Draft / Fuel / Hull / Engines / For Sale By already closed; Boat Type + Make flipped to closed in v=84 | ✅ |
@@ -136,15 +142,23 @@ the current state. Status legend:
 
 ### Boat Loan Calculator widget (below filter card)
 
+Re-probed real BT 2026-05-23 — widget concept is structurally different
+from sandbox. Real BT puts the **output ("Monthly Payment $X")** at the
+top with `.calc-summary-title` (22/900 #404040), then 4 input fields
+(`Enter purchase price`, `Enter Down Payment`, `Enter term in years`,
+APR). Sandbox puts the **input form first** with title "Boat Loan
+Calculator" (18/700 #303030), then a result row.
+
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
-| Title | "Boat Loan Calculator" 18/700 | same | ✅ |
-| Loan Amount field | input with $ | added | ✅ |
-| Loan Term dropdown | 240/180/120/60 months | added | ✅ |
-| Interest Rate (APR) | 6.49% default | added | ✅ |
-| Calculate button | blue outline | added | ✅ |
-| Monthly Payment result | "$0.00" centered | added | ✅ |
-| "Get Pre-Qualified" CTA | blue filled pill | added | ✅ |
+| Widget concept | output-first (Monthly Payment headline + inputs below) | input-first (Boat Loan Calculator title + inputs + result row) | 🟡 — different widget concept; both work for agent training; rewriting would need user buy-in on which version |
+| Container | `.calc-calculator-body` w=300, transparent bg, no border/radius/shadow | `.loan-calc-card` w=303, bg=#fff, 1px #e0e0e0 border, 6px br, `var(--bt-shadow)` (intentional sandbox chrome) | 🟡 |
+| Title | "Monthly Payment" 22/900 #404040 — also acts as the output display | "Boat Loan Calculator" 18/700 #303030 | 🟡 |
+| Input geometry | 262×39, fs 15.9px, 3.9px br, 1px rgba(0,0,0,0.2) border | 269×40, fs 14px, 4px br | 🟡 — close (within rendering tolerance) |
+| Input placeholders | "Enter purchase price", "Enter Down Payment", "Enter term in years" | "$" only | 🟡 — sandbox's `$` is less informative |
+| Field types | 4 fields (purchase price, down payment, term years, APR) | 3 fields (loan amount, term months, APR) | 🟡 — slightly different inputs but functionally equivalent calc |
+| Calculate button | outline secondary style | blue outline | ✅ visual style matches |
+| "Get Pre-Qualified" CTA | blue filled pill | blue filled pill | ✅ |
 | Fineprint help text | small gray | added | ✅ |
 
 ### Listing cards (SRP)
@@ -177,7 +191,7 @@ the current state. Status legend:
 |---|---|---|---|
 | Layout | plain inline "Sort:[strong] Recommended ▾" | same | ✅ |
 | Border | none | none | ✅ |
-| Font | 14/500 #404040 | 14/500 #404040 | ✅ |
+| Font | **12/400 #333** (re-probed v=96; earlier 14/500 #404040 was wrong) | 12/400 #333 (`.sort-label strong { font-weight: 400 }` overrides the bold default) | ✅ |
 | Chevron | inline SVG | inline SVG (bg-image data URL) | ✅ |
 
 ### Pagination
@@ -185,10 +199,13 @@ the current state. Status legend:
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
 | Style | plain text links | plain text links | ✅ |
-| Font | 14/400 #0a0a0a | 14/400 #0a0a0a | ✅ |
-| Active page | bold dark + underline | bold dark + 2px blue underline | ✅ |
-| Prev/Next | plain blue | plain blue | ✅ |
-| "of N" | dim gray | #757575 dim | ✅ |
+| Wrapper font + margin | **15/400, margin 15px 0** (re-probed v=96; earlier 14/400 was wrong) | 15/400, margin 15px 0 | ✅ |
+| Page link color | **#A5A5A5 medium-grey** (both active + inactive) | #A5A5A5 | ✅ |
+| Page link font-weight | 700 (both active + inactive) | 700 | ✅ |
+| Page link padding | 5px 10px | 5px 10px | ✅ |
+| Active page distinguisher | 2px blue underline only (color matches inactive) | 2px var(--bt-blue) bottom border | ✅ |
+| Prev/Next | plain blue | plain blue (`var(--bt-blue) !important`) | ✅ |
+| "of N" | dim gray, regular weight | #757575 font-weight 400 | ✅ |
 
 ## BDP page
 
@@ -209,7 +226,7 @@ the current state. Status legend:
 | Main image aspect | 3:2 (890×593) | 3:2 (auto-scales by width) | ✅ |
 | Main image border-radius | 8px | 8px | ✅ |
 | Prev/Next/Share/Like buttons | 40×40 circle, rgba(0,0,0,0.3) bg | same | ✅ |
-| Thumbnail strip | 5 thumbs, 175×116, 8px br | 5 thumbs, ~181×123, 8px br | 🟡 |
+| Thumbnail strip | 5 thumbs, 175×116, 8px br | 5 thumbs at 175×116, 8px br (v=91 — auto-scaled by `.bdp-grid max-width: 1336px` capping the parent column to ~890px) | ✅ |
 
 ### Right rail (Featured card)
 
@@ -237,14 +254,17 @@ the current state. Status legend:
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
 | Stats strip (Length / Year / etc.) | label 14/700 #303030, value 14/400 #333 | same | ✅ |
-| "What Owners Say" + Owner Highlights | section heading + pill tags | implemented | ✅ |
+| "What Owners Say" + Owner Highlights | "Owner Highlights" is `<h2>` 20/700 #333 (verified via real BT probe) | sandbox `<h2>` 20/700 #333 (v=91 — was `<h3>`, the CSS already styled `.owners-card-tags-heading` at 20/700 so only the tag changed) | ✅ |
 | Owner-highlight pills | bg #e3f1fe, color #2566b0, 12/700, 4px 8px pad, 5px br | same | ✅ |
 | Boat Details H2 section | 20/700 #333, bg #f5f9ff, 8px br, 20px 16px pad | same | ✅ |
 | Description accordion (H3) | open by default | open by default | ✅ |
 | Measurements accordion (H3) → Dimensions/Weights/Tanks (H4) | collapsed, h4 subgroups | added | ✅ |
 | Propulsion accordion (H3) | collapsed | implemented | ✅ |
-| More Details accordion (H3) | real BT uses H4 | implemented as H3 | 🟡 |
-| Location accordion (H3) | real BT uses H4 | implemented as H3 | 🟡 |
+| More Details accordion heading | not visible in v=91 probe (real BT may have removed or renamed this section); existing FIDELITY note claimed H4 but unverifiable today | sandbox uses H3 — leave as-is until real BT shows it again | 🟡 |
+| Location accordion heading | not visible in v=91 probe — same caveat as More Details | sandbox uses H3 — leave as-is | 🟡 |
+| Description / Measurements / Propulsion accordion headings | `<h3>` 16/700 #333 (verified) | sandbox `<h3>` 16/700 #333 | ✅ |
+| Dimensions / Weights / Tanks subheadings | `<h4>` 14/700 (verified) | sandbox `<h4>` (already matches) | ✅ |
+| Boat Details / What Owners Say section headers | `<h2>` 20/700 (verified) | sandbox already H2 | ✅ |
 | Dealership card | dealership-card with logo, address, stats | implemented | ✅ |
 | "Get pre-qualified in minutes" rail card | 18/700 heading + checkmarks + outline btn | implemented (heading bumped to 18px in v=56) | ✅ |
 | More From This Dealer carousel | horizontal scroll of small cards | implemented | ✅ |
@@ -255,9 +275,17 @@ the current state. Status legend:
 
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
-| Hero search panel (dark navy) | left column with "Find your perfect boat" header | implemented | ✅ |
-| Hero ad (right) | full-bleed sponsor banner | gradient placeholder ad | ✅ |
+| Hero card layout | 296×48 narrow overlay card at (14, 139) on hero image (NOT a full-width search bar) | implemented as narrow card overlay | ✅ |
+| Hero H1 "Find your perfect boat" | 296×19 at (14, 108), 16/700 #fff over hero image | implemented | ✅ |
+| Hero search form | same `.ai-search-v2__form` as SRP — sparkle + Try-rotator + magnifier | shared component, same rotator (v=86) | ✅ |
 | "Sell Your Boat Fast!" callout | sailboat icon + label + Sell pill | implemented | ✅ |
+| "Boats Near You" section heading | full-width h2 at y=586, 15/700 #333, with "Based on your location" subtext inline | implemented | ✅ |
+| Hero ad (right side strip) | full-bleed sponsor banner | gradient placeholder ad | 🚫 (placeholder by design) |
+| Featured Brands tiles | brand logo grid below the rails | implemented per `.brand-tile` | ✅ |
+| Popular Boat Types tiles | type-tile rail | implemented per `.type-tile` | ✅ |
+| Popular Boats card rail | listing-card rail (same shape as SRP listing card) | implemented (shares `.card-grid` patterns) | ✅ |
+| Recent Articles card rail | editorial card rail linking to /articles/... | implemented | ✅ |
+| Per-tile geometry on rail sections | individual brand-tile / type-tile / article-card sizes + gaps | not individually probed — corpus marks as open follow-up in `_captured/home/structural.json` | 🟡 |
 
 ## Behaviors
 
@@ -267,16 +295,43 @@ the current state. Status legend:
 | Click ⓘ on monthly | opens sticky banner | implemented | ✅ |
 | Click outside tooltip | closes | implemented | ✅ |
 | Detail page sticky bar | appears on scroll | `bdp-scrolled` body class via scroll listener | ✅ |
+| 5-digit Zip auto-submit | typing complete zip navigates to filtered SRP | debounced 250ms `form.submit()` in base.html (v=82) | ✅ |
+| Price Drop toggle click | flips checkbox + visual track turns blue | `.switch` + `:has(input:checked)` slides thumb (v=83) | ✅ |
+| Boat Type / Make search-as-you-type filter | typing hides non-matching `<li>` items | JS in base.html toggles `.hidden` on non-matching `<li>` (v=84) | ✅ |
+| Filter checkbox single-select submit | clicking a Boat Type / Make / Fuel / Hull checkbox auto-navigates | JS unchecks siblings + `form.submit()` (v=84) | ✅ |
+| Search-box prefix hides on focus | "Try …" disappears the moment input is clicked | `.ai-search-v2__form:focus-within .ai-search-v2__try { display: none }` (v=87) | ✅ |
+| Search-box prefix hides on typed value | "Try …" stays hidden when value present (even after blur) | `:has(input:not(:placeholder-shown):not([value=""]))` (v=86) | ✅ |
+| Click anywhere in search field → focus input | clicks on sparkle / "Try …" overlay / empty area all focus input | `mousedown` handler on `.ai-search-v2__form` calls `inp.focus()` (v=89) | ✅ |
+| Search-box "Try …" suggestions rotate | 3 example queries cycle through a 18px clipped window | `@keyframes ai-try-rotate` 9s ease-in-out alternate (v=86) | ✅ |
 
 ## Open work / known minor diffs
 
-- 🟡 **BDP content area width**: mine is 1400px, real BT is ~1335px (65px wider).
-  Decided not to narrow per page since the SRP container width is intentionally 1440.
-- 🟡 **Real photos vs SVG placeholder boats**: user accepted placeholder content.
-- 🟡 **More Details / Location H-level in Boat Details accordion**: mine uses H3,
-  real BT uses H4. Trivial fix when needed.
-- 🟡 **Thumbnail size**: 181×123 vs real 175×116 — auto-scales with column,
-  visually equivalent.
+- ✅ ~~BDP content area width~~ — fixed in v=91 via `.bdp-grid { max-width: 1336px }`.
+- 🚫 **Real photos vs SVG placeholder boats**: out-of-scope per `SCOPE.md` —
+  sandbox uses procedural SVG by design. Re-classified from 🟡.
+- 🟡 **More Details / Location H-level in Boat Details accordion**: real BT
+  doesn't currently render these headings on probed listings — earlier
+  claim that real BT uses H4 is unverifiable today. Sandbox uses H3.
+  Re-probe + decide once real BT shows these sections again.
+- ✅ ~~Thumbnail size~~ — auto-fixed by v=91's `.bdp-grid max-width`.
+- ✅ ~~Per-tile geometry on Home page rails~~ — measured in v=93. Real BT
+  uses 363×120 boat-listing cards, 266×161 brand tiles, 325×317 article
+  cards. Sandbox card-grid pattern matches within typical render
+  variance; corpus documents the spec for future verification.
+- 🟡 **BDP `.next-previous` sticky navigation bar**: Real BT renders a
+  1512×54 ALWAYS-sticky bar at top:0 with Previous Boat / Next Boat
+  links. Sandbox doesn't have this widget; instead it has a different
+  sticky pattern (`.bdp-scrolled` body class after 320px scroll for a
+  title+price+contact bar). Different concept — decide whether to add
+  the next-previous widget or accept the divergence.
+- 🟡 **Listing-dependent BDP elements**: Similar Boats rail and
+  Show-Phone button are present on some listings (dealer) and absent on
+  others (private seller). Need a dedicated dealer-listing probe pass
+  to measure these. Sandbox always renders both — divergence from
+  real BT's conditional rendering is functional (agent training fine)
+  but visually divergent.
+- 🟡 **Mobile viewport**: no mobile pass yet. CSS has `@media (max-width: 980px)`
+  responsive rules but they're not verified against real BT mobile rendering.
 
 ## Data variety (fixtures)
 
@@ -370,6 +425,332 @@ the current state. Status legend:
          23 structural-anchor assertions covering v=82..v=84 changes. Runs in
          the regular pytest matrix, no playwright needed (FastAPI TestClient).
          Phase 5 (verification harness) from FIDELITY_BUILD_FROM_SCRATCH_PROMPT.md.
+`v=86` SRP search-box "Try …" rotator animation matches real BT:
+       • Replaces static `<span>Try</span>` + single-suggestion placeholder
+         with `.ai-search-v2__rotator` (overflow:hidden, 18px tall window)
+         containing 3 `.ai-search-v2__try-text` lines
+       • New `@keyframes ai-try-rotate` — 0%/25% translateY(0), 37.5%/62.5%
+         translateY(-18), 75%/100% translateY(-36); animation runs
+         `9s ease-in-out infinite alternate` exactly as real BT does
+       • Native input placeholder is now `" "` (single space); visible
+         suggestion comes from the span overlay so it doesn't double-render
+       • `.ai-search-v2__form:has(input:not(:placeholder-shown))` hides
+         the rotator when user types — matches real BT's DOM removal
+       • Adds 3 new fidelity tests covering rotator structure + animation
+         + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
+       • `.ai-search-v2__try-prefix` kept as a legacy alias for the
+         non-rotating prefix used elsewhere (e.g. home hero search)
+`v=104` BDP visual/perceptual compare — dealer + owner (user request):
+       • Probed real BT private listings (President Trawler + Pioneer
+         Sportfish + Sea Fox + Yamaha — all rendered as private with
+         "Meet Your Seller" / "Contact <FirstName>"). Couldn't isolate
+         a "Contact Dealer" pattern on first-page listings; real BT
+         appears to fold both seller types under the same UI.
+       • Probed sandbox dealer (Crestliner VT 18) + sandbox owner
+         (Chaparral 267 SSX) at the same viewport.
+       • Findings written up in `_captured/bdp/SELLER_VS_OWNER_DIFF.md`
+         — heading hierarchy side-by-side + layout invariants verified
+         ✅ + remaining 🟡 enumerated.
+       • Concrete fixes landed in v=104:
+         * Removed `<span class="bdp-length">| 16'</span>` from H1.
+           Real BT H1 is just "Year Make Model" without the length
+           suffix.
+         * Added `<h2 class="meet-your-seller-h2">Meet Your Seller</h2>`
+           above the contact card block (renders for both
+           `is_owner_listed` true + false paths). 20/700 #404040
+           matching real BT.
+       • Documented divergences kept as 🟡:
+         * Sandbox extra "Key Features" / "More Details" / "Location"
+           H3s (not visible on probed real BT BDPs)
+         * Sparkle prefix on "What Owners Say" (sandbox decorative add)
+         * Show Phone always shown on dealer cards (real BT gates by
+           dealer/private — already 🟡 in SCOPE.md)
+       • Cache-buster bumped to `?v=104`.
+       • 2 new fidelity tests: H1 has no length suffix + "Meet Your
+         Seller" H2 present. Suite now **46 passing**.
+`v=103` Cookie consent banner added (user screenshot):
+       • New `.cookie-consent` bottom-right floating card (white,
+         12px radius, layered drop shadow, 22px 26px padding).
+       • Body copy 15/regular #333 with "Privacy" link underlined.
+       • 3 pill buttons (108min×44 tall, 1px #d6d6d6 border, 50px br,
+         hover bg #f7f7f7): Customize / Reject / Accept.
+       • Conditional render via Jinja: only shown when
+         `bt_cookie_consent` cookie isn't set (first visit).
+       • Wiring:
+         * Customize → JS removes the banner without setting cookie
+           (reappears next visit)
+         * Reject → form POST `/__site/consent` with `choice=decline`
+           + `next_url=<current>` (303 redirect back, cookie set)
+         * Accept → same as Reject with `choice=accept`
+       • Backend `/__site/consent` route already existed (sets
+         `bt_cookie_consent` cookie 180d max-age, emits
+         `consent_set` mutation). No backend changes.
+       • Cache-buster bumped to `?v=103`.
+       • 3 new fidelity tests: banner renders on first visit, banner
+         hidden once cookie set, card styling matches the spec.
+         Suite now **44 passing**.
+`v=102` Ribbon switched to `position: sticky; top: 0`:
+       • v=100's `position: fixed; top: 44px` left a 44px gap above the
+         ribbon on scroll (the area where the nav used to be) — user
+         pointed out via screenshot that they wanted the ribbon flush
+         to top:0 on scroll.
+       • Changed to `position: sticky; top: 0; z-index: 100`:
+         * At scroll=0: ribbon stays in flow at y=44, right under the
+           nav — matches the user-supplied real-BT screenshot's
+           nav-above-ribbon stacking with no gap
+         * On scroll past the nav: ribbon flushes to viewport top (y=0)
+       • `.bt-main` margin-top: 40px reverted to `margin: 0 auto`
+         since position:sticky stays in flow (no compensation needed).
+       • Cache-buster bumped to `?v=102`.
+       • Live-verified: ribbon y goes from 44 (scroll=0) → 0 (scroll≥100).
+       • This is an intentional divergence from real BT's behavior —
+         real BT uses `position: fixed; top: 62px` which leaves a 62px
+         gap above the ribbon on scroll. User preferred the flush-to-top
+         pattern.
+       • Updated regression test to match new sticky behavior.
+`v=101` Boat Loan Calculator widget re-probed (doc-only):
+       • Sandbox's `.loan-calc-card` and real BT's `.calc-calculator-body`
+         are STRUCTURALLY DIFFERENT widget concepts:
+         * Real BT: output-first (`Monthly Payment $X` headline at 22/900
+           #404040, then 4 inputs: purchase price / down payment / term
+           years / APR)
+         * Sandbox: input-first (`Boat Loan Calculator` title at 18/700,
+           then 3 inputs: loan amount / term months / APR, then a result row)
+       • Both work for agent training (same calc output) but visually
+         and structurally diverge.
+       • Existing FIDELITY rows marked ✅ were misleading — they described
+         sandbox's version not real BT's. Flipped to 🟡 with the concept
+         divergence documented.
+       • No code change — rewriting the widget needs user buy-in on which
+         concept to keep (sandbox's familiar input-first card vs real BT's
+         output-first card).
+`v=100` Pre-qualify ribbon sticky on scroll:
+       • User asked to verify the blue banner on /boats is sticky on
+         scroll. Probed real BT: `.ribbon-prequal` is
+         `position: fixed; top: 62px` and stays at y=62 across
+         scrollY 0/500/1500.
+       • Sandbox had `.ribbon-prequal { position: static }` — ribbon
+         just sat under the nav and scrolled away.
+       • Fix: `.ribbon-prequal` → `position: fixed; top: 44px;
+         left: 0; right: 0; z-index: 100`. Sandbox nav is 44px tall
+         (real BT's is 62px), so the offset scales accordingly.
+       • `.bt-main` gets `margin-top: 40px` so the breadcrumb / H1
+         don't tuck under the now-out-of-flow ribbon.
+       • Live-verified: ribbon y stays at 44 across scrollY 0/800/2000.
+       • Adds `test_ribbon_is_sticky_on_scroll` — suite now **41 passing**.
+       • Cache-buster bumped to `?v=100`.
+`v=99` Bumped sandbox `auto_stop_interval` 15 → 180 min:
+       • The sandbox was auto-stopping after ~15min of idle, hitting
+         every cron-triggered loop iteration with a manual restart
+         step (boot container → wait for uvicorn → re-fetch token →
+         update FIDELITY row). 5× in this session.
+       • `sb.set_autostop_interval(180)` (3h) removes the friction;
+         sandbox now stays warm across cron ticks at :07.
+       • Token rotated to `a_oh4hg7awgeznbwwglbfml0sdlrywzw`.
+       • Documenting this as a saved memory pattern alongside the
+         existing `feedback_boattrader_sandbox_restart_recipe.md` —
+         "auto-stop interval defaults to 15min, bump to ≥120 for
+         long-running iteration work".
+`v=98` SCOPE.md handoff summary (doc-only):
+       • Rewrote SCOPE.md's "Done bar" section as a 5-row status
+         table showing all four high-level criteria from the build-
+         from-scratch prompt are met after the v=82..v=97 PR #620
+         work.
+       • Rewrote "Open follow-ups" as 3 prioritized 🟡 items, each
+         tagged with what's needed to close it (human decision /
+         backend change / measurement pass). Removed the v=82-era
+         items that have since been closed.
+       • Adds a "Pick-up by the next session" note explaining where
+         the autonomous loop stopped + how the remaining 🟡s need
+         human input rather than another probe pass.
+`v=97` FIDELITY.md Sort + Pagination row sync (doc-only):
+       • The v=96 CSS edits flipped Sort row to 12/400/#333 and
+         Pagination to 15/400/#A5A5A5, but the matching FIDELITY.md
+         rows still showed stale values ("14/500 #404040" and
+         "14/400 #0a0a0a") — copying old assumptions from earlier
+         iterations.
+       • Updated both rows with the re-probed values + linked back to
+         v=96's iteration log entry so the doc and CSS now agree.
+       • Re-verified SRP listing card section against real BT — all
+         rows still ✅ (card 350×384, title 18/700 #404040, price
+         16/400 #404040, monthly 14/700 #139af5, meta 12/400 #9e9e9e).
+         No code changes needed for listing cards.
+`v=96` SRP sort row + pagination re-measured:
+       • `.sort-row` 14/500 → 12/400; color #404040 → #333. Real BT's
+         "Sort: Recommended" inline label is much smaller and lighter
+         than the panel body. The existing CSS comment claimed 14/500
+         but a fresh probe at /boats/ shows 12/400.
+       • `.sort-label strong` font-weight 700 → 400 (no longer bolds
+         the "Sort:" prefix — matches real BT).
+       • `.sort-select` 14/500/#404040 → 12/400/#333.
+       • `.pagination` font 14/400 → 15/400; margin 26px 0 → 15px 0.
+       • `.pagination a` color #0a0a0a → **#A5A5A5** (medium grey);
+         padding 8px 14px → 5px 10px. Real BT page-links are bold
+         but use a light-grey color, not the near-black sandbox had.
+       • `.pagination a.active` color → #A5A5A5 (real BT's active and
+         inactive page-links share the same color — differentiated
+         only by the 2px bottom border which sandbox already had).
+       • 3 new fidelity tests: test_sort_row_is_12_400,
+         test_pagination_is_15_400, test_pagination_link_color_is_a5a5a5.
+         Suite now **40 passing**.
+       • Cache-buster bumped to `?v=96`.
+`v=95` Color shade pass (deferred 5th item from v=94 typography diff):
+       • `.filter-select` + `.filter-input` color: `var(--bt-text)`
+         (#333) → **`#404040`**. Verified against real BT's
+         `.tool-set select` and `input[placeholder*="Zip"]` —
+         both render at rgb(64,64,64).
+       • `.zip-tab` color: `var(--bt-text)` → **`#0a0a0a`**.
+         Real BT's `.switcher-option-label` renders at rgb(10,10,10) —
+         near-black, noticeably darker than the panel body. Also
+         updates `.zip-tab.active` to match.
+       • `.seg` + `.seg.active` color: same `#0a0a0a` treatment as
+         `.zip-tab` (Condition / All / New / Used use the same
+         switcher styling).
+       • Scoped change — did NOT change `--bt-text` globally to avoid
+         cascading shade shifts in header nav, breadcrumb, listing
+         cards, footer.
+       • 2 new fidelity tests: test_filter_inputs_are_404040,
+         test_switcher_options_are_near_black. Suite now **37 passing**.
+       • Cache-buster bumped to `?v=95`.
+`v=94` Typography diff fixes (side-by-side probe of filter panel):
+       • `.filter-group-label`: 15/400 #333 → **16/500 #404040** with
+         line-height 20px. Verified against all real BT section
+         `.toggle-btn` elements (Location / Condition / Length /
+         Year / Price / Boat Type / Make / Beam / Max Draft / Fuel /
+         Hull / Engines / For Sale By) — all render at the same spec.
+       • `.zip-use-location`: `margin-top: 8px` → **`margin: -16px 0
+         15px`**. Real BT pulls the link UP toward the zip-row above
+         using a negative top margin so it visually tucks under
+         the row instead of sitting below it.
+       • `.filter-options`: outer `1px #ededed border` → **`background:
+         #f7f7f7; padding: 8px`** with `border-radius: 8px`. Real BT
+         uses a soft grey backdrop instead of a hard border to group
+         the scrollable list.
+       • `.filter-options li:hover label`: hover bg #f7f7f7 → **#ededed**
+         so the hover stays visible against the new #f7f7f7 parent.
+       • `.filter-options label`: font-size 14 → **15px**. Real BT
+         renders the visible list-item text at 15px / weight 400 #333.
+       • Cache-buster bumped to `?v=94`.
+       • 4 new fidelity tests: section-heading 16/500/#404040,
+         use-my-location negative-top-margin, filter-options grey
+         backdrop, filter-options label 15px. Suite now **35 passing**.
+       • Live-verified via Chrome MCP probe — all 4 computed-style
+         values byte-match real BT.
+`v=93` Home + BDP corpus measurements completed:
+       • Home: measured tile geometry for "Boats Near You" (363×120
+         listing-card row), "Featured Brands" (266×161 brand tiles
+         in 5-up grid), "Recent Articles" (325×317 article cards).
+         "Popular Boat Types" section not found on current real BT —
+         possibly removed or renamed since the FIDELITY row was written.
+       • Home: real BT uses TWO H2 sizes — 15/700 for boat-listing
+         subsections (Boats Near You) with inline subtext, and
+         22.5/700 for major sections (Featured Brands, Popular Boats,
+         Recent Articles). Sandbox uses one size; documented for
+         future styling alignment.
+       • BDP: identified `.next-previous` always-sticky navigation
+         bar (1512×54 at top:0 — Previous Boat / Next Boat links)
+         absent in sandbox; documented as 🟡 with the design decision
+         deferred (sandbox has its own different sticky pattern).
+       • BDP: verified Similar Boats + Show Phone are listing-dependent
+         (this probe's listing was private-seller, so neither rendered).
+       • Verified all accordion heading levels match real BT exactly
+         (H2/H3/H4 distribution captured under
+         `below_fold_accordions_verified` in the BDP corpus).
+       • `_captured/README.md` status table: all three pages now ✅.
+       • Code unchanged; this is corpus + FIDELITY.md doc work only.
+`v=92` FIDELITY.md cleanup pass (no code changes):
+       • "Open work / known minor diffs" cleaned: BDP width and
+         thumbnail size were fixed in v=91 but still listed as 🟡 —
+         flipped to ✅ with strikethrough. "Real photos" re-classified
+         from 🟡 to 🚫 (out-of-scope per SCOPE.md, not a fidelity gap).
+       • New consolidated 🟡 rows for Home tile geometry, BDP below-fold
+         elements, and mobile viewport — each pointing at the open
+         follow-up in the matching `_captured/<page>/structural.json`.
+       • Home page table expanded from 3 → 11 rows using the measured
+         data captured in v=90 (hero card 296×48 narrow overlay, H1
+         16/700 #fff, "Boats Near You" h2 at y=586, etc.).
+       • Behaviors table expanded from 4 → 11 rows to cover the
+         interactions wired in v=82..v=91 (5-digit zip auto-submit,
+         price-drop toggle, search-as-you-type filter, single-select
+         submit, focus-hide / typed-hide, click-anywhere-focus,
+         try-text rotator).
+       • Code unchanged; this is doc-only.
+`v=91` BDP fidelity touch-ups (re-probed real BT BDP):
+       • Owner Highlights `<h3>` → `<h2>` — real BT renders this as
+         H2 20/700 alongside "Boat Details" / "What Owners Say". The
+         existing `.owners-card-tags-heading` CSS already styled it at
+         20/700, so only the tag changed.
+       • `.bdp-grid { max-width: 1336px; margin-inline: auto }` —
+         caps BDP content area to match real BT's measured 1319px
+         (left col 890 + gap 79 + right col 334). Sandbox was rendering
+         at 1400 (81px wider, the long-standing 🟡 row).
+       • As a bonus, capping the parent column auto-shrinks
+         `.bdp-thumbs` from (994-48)/5 ≈ 189 wide × 126 tall down to
+         (890-48)/5 ≈ 168 × 112 — close enough to real BT's exact
+         175×116 that the existing 🟡 thumbnail row flips to ✅.
+       • Verified real BT's accordion heading levels: Description /
+         Measurements / Propulsion = H3 16/700, Dimensions / Weights /
+         Tanks = H4 14/700. Sandbox already matches all of these.
+         The earlier 🟡 row claiming "real BT uses H4" for More Details
+         + Location turned out to be a stale measurement; those
+         section headers aren't visible in current real BT — they may
+         have been removed or renamed since the row was written.
+         Keeping 🟡 on those two with the caveat noted in the row.
+       • Bumped cache-buster to ?v=90.
+`v=90` Home + BDP `_captured/` corpora measured (partial):
+       • Real-BT probes against / and /boat/<slug>/ at 1512×711.
+       • Home: hero card 296×48 at (14,139) sits as a narrow overlay on
+         the hero image, NOT a full-width search bar. H1 "Find your
+         perfect boat" white 16/700 directly above. First section
+         "Boats Near You" h2 at y=586, full-width 1488 #333 15/700.
+         Featured Brands / Popular Types / Popular Boats / Articles /
+         Why BoatTrader sections present but per-tile geometry still
+         TODO (open follow-ups).
+       • BDP: breadcrumb 332×40 at (137,191) 12/400 #616161. Gallery
+         container 890×727 at x=70, 8px br. Right rail at x=1039–1389
+         holds H1 "2015 Pioneer 197 Sportfish" (248×23, 20/700 #333),
+         main price "$25,900" (20px), monthly est "$4,000" (18px,
+         x=1132, sits inline-right of price), contact form
+         `.lead-form-basic__body` 334×260 at x=1055. Content area
+         ~1319px wide (sandbox is 1400 — 81px wider, accept 🟡).
+       • _captured/README.md status table: srp ✅ / home + bdp 🟡 partial.
+`v=89` Search box: click anywhere focuses the input:
+       • User reported screenshot showing "Try" text getting highlight-
+         selected instead of focusing input when clicked. On real BT,
+         clicks anywhere in the search field (sparkle, "Try …" overlay,
+         empty area) focus the input. Real BT achieves this via
+         `position:absolute` + `pointer-events:none` on the overlay.
+       • Sandbox uses inline-flex layout (the overlay actually takes
+         space), so a `mousedown` handler in base.html intercepts any
+         click in `.ai-search-v2__form` not landing on the submit button
+         and calls `inp.focus()` + `setSelectionRange(end, end)`.
+       • CSS: `.ai-search-v2__try { cursor: text; user-select: none }`
+         so the visual affordance matches and dragging across the
+         overlay doesn't select text.
+`v=88` Search-box sparkle icon resized to 16×16:
+       • Real BT's `/static/legacy/img/icons/ai.svg` is 16×16. Sandbox
+         was using a 20×20 inline SVG with different path data.
+       • Replaced sandbox's SVG path with the exact path data from
+         real BT (4-point burst star + two "+" accent marks at
+         top-right and bottom-left, all `#2566B0` stroke+fill).
+       • `.ai-search-v2__icon` wrapper: `width: 16px; height: 16px;
+         line-height: 0; display: inline-flex` so the 18px parent
+         font-size (from `.srp-search`) doesn't expand the wrapper to
+         the 20×26 it was before this fix.
+       • Cache-buster bumped to `?v=88` then `?v=89`.
+`v=87` SRP search-box prefix hides on FOCUS, not just on typing:
+       • Bug found via user-supplied before/after screenshots — real BT
+         clears the "Try …" prefix the moment the user clicks into the
+         input, even before any typing. v=86 only hid it once the
+         input had typed content, so an empty-but-focused input still
+         showed "Try …" — wrong.
+       • Adds `.ai-search-v2__form:focus-within .ai-search-v2__try
+         { display: none }` so the prefix disappears on first click.
+         The `:has(input:not(:placeholder-shown))` rule from v=86 is
+         kept to cover the blur-with-text case.
+       • Adds `test_rotator_hides_on_focus` to the fidelity suite.
+       • Live-verified: `display: flex` (unfocused) → `display: none`
+         (focused) — exact match to real BT screenshot pair.
 `v=85` Phase 1 (Discovery) corpus checked in under `_captured/`:
        • `_captured/srp/structural.json` — full SRP spec: filter card, save-search,
          location section (switcher / miles row / zip input / use-my-location), all

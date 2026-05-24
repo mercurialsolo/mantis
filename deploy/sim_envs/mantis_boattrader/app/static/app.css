@@ -115,13 +115,21 @@ header.main {
 .navbar-toggle { display: none; }
 
 /* ── Ribbon (pre-qualify) — real BT bg rgb(37,102,176), 14/400 white,
-   40px tall. */
+   40px tall. v=102: `position: sticky; top: 0` so the ribbon stays
+   in flow at scroll=0 (right under the nav) and sticks flush to the
+   viewport top once the nav scrolls past — user wanted top:0 on
+   scroll, not the 44px-gap-from-top pattern that v=100 used.
+   Because position:sticky stays in flow, `.bt-main` does NOT need a
+   margin-top compensation. */
 .ribbon-prequal {
   background: rgb(37, 102, 176);
   color: #fff;
   text-align: center;
   font-size: 14px;
   font-weight: 400;
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 .ribbon-inner {
   margin: 0;
@@ -157,6 +165,9 @@ header.main {
    with 20px internal padding (giving x=56 for the inner content). */
 .bt-main {
   max-width: var(--container);
+  /* v=102: ribbon is `position: sticky` (stays in flow), so no
+     compensating top margin needed. v=100's `margin: 40px auto 0`
+     reverted. */
   margin: 0 auto;
   padding: 0 20px;
   min-height: 480px;
@@ -188,9 +199,77 @@ header.main {
   padding: 6px 6px 6px 12px;
   margin-bottom: 10px;
 }
-.ai-search-v2__icon { color: var(--bt-blue); font-size: 16px; margin-right: 6px; }
-/* Real BT splits the placeholder so "Try" is bold (700) and the quoted
-   suggestion is regular (400). Both are 16px Roboto, #64748b slate grey. */
+/* The AI sparkle is a 16×16 SVG copied from real BT's
+   /static/legacy/img/icons/ai.svg (a 4-point star + two small "+"
+   accents at top-right and bottom-left, all #2566B0). The wrapper
+   uses inline-flex with line-height:0 so the icon stays at exact
+   16×16 and centers cleanly with the input baseline — without this
+   the parent .srp-search's 18px font-size pushed the wrapper to
+   ~26px tall. */
+.ai-search-v2__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  margin-right: 8px;
+  color: var(--bt-blue);
+  line-height: 0;
+}
+.ai-search-v2__icon svg { display: block; width: 16px; height: 16px; }
+/* Real BT renders "Try" + a vertically-rotating quoted suggestion in a
+   clipped 18px-tall window — the inner column has 3 suggestion lines
+   and animates with `9s ease-in-out infinite alternate ai-try-rotate`
+   so the window cycles through them. The native input placeholder is
+   empty; the visible text comes from this <span> overlay. */
+.ai-search-v2__try {
+  display: inline-flex; align-items: center;
+  font-size: 16px; font-weight: 700; color: #64748b;
+  line-height: 1; margin-right: 6px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  /* Mirror real BT: clicks on the "Try …" overlay should focus the
+     input, not select the text. The form-level click handler in
+     base.html does the focus; this just makes the affordance match. */
+  cursor: text;
+  user-select: none;
+}
+.ai-search-v2__rotator {
+  display: inline-block;
+  height: 18px;
+  overflow: hidden;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.ai-search-v2__rotator-inner {
+  display: block;
+  animation: ai-try-rotate 9s ease-in-out infinite alternate;
+  will-change: transform;
+}
+.ai-search-v2__try-text {
+  display: block;
+  height: 18px;
+  line-height: 18px;
+  font-weight: 400;
+  color: #64748b;
+}
+@keyframes ai-try-rotate {
+  0%, 25%   { transform: translateY(0); }
+  37.5%, 62.5% { transform: translateY(-18px); }
+  75%, 100% { transform: translateY(-36px); }
+}
+/* Hide the rotating "Try …" prefix when the user clicks into the
+   input (focus-within) OR when they've typed something. Real BT clears
+   the suggestion the instant you focus the field — empty cursor sits
+   between the sparkle and the magnifier. */
+.ai-search-v2__form:focus-within .ai-search-v2__try,
+.ai-search-v2__form:has(input:not(:placeholder-shown):not([value=""])) .ai-search-v2__try,
+.ai-search-v2__form.has-value .ai-search-v2__try {
+  display: none;
+}
+/* Legacy class kept as alias for the simple non-rotating prefix used
+   elsewhere (home hero); same styling. */
 .ai-search-v2__try-prefix {
   font-size: 16px; font-weight: 700; color: #64748b;
   margin-right: 6px; line-height: 1;
@@ -229,7 +308,10 @@ header.main {
   padding: 8px 12px;
   font: inherit;
   font-size: 14px;
-  color: var(--bt-text);
+  /* v=95 typography pass: real BT inputs/selects render at #404040
+     (slightly darker than --bt-text #333). Verified via probe of
+     .tool-set select + input[placeholder*="Zip"]. */
+  color: #404040;
   height: 40px;
   box-sizing: border-box;
 }
@@ -699,9 +781,15 @@ header.main {
 }
 .filter-group summary::-webkit-details-marker { display: none; }
 .filter-group-label {
-  font-weight: 400;
-  color: var(--bt-text);
-  font-size: 15px;
+  /* Real BT renders all section headings (Location / Condition /
+     Length / …) as 16/500 medium #404040 — verified across all
+     `.toggle-btn` elements in the .tool-set at 1512px viewport
+     (v=94 typography diff). Sandbox was 15/400 #333, visibly lighter
+     and 1px smaller. */
+  font-weight: 500;
+  color: #404040;
+  font-size: 16px;
+  line-height: 20px;
 }
 .filter-chevron {
   width: 10px;
@@ -734,7 +822,10 @@ header.main {
   flex: 1; background: transparent; border: 0;
   font: inherit; font-size: 14px; padding: 8px 12px;
   cursor: pointer;
-  color: var(--bt-text);
+  /* v=95: switcher option labels on real BT are #0a0a0a (rgb(10,10,10))
+     — near-black, noticeably darker than the rest of the panel body.
+     Verified via probe of `.switcher-option-label`. */
+  color: #0a0a0a;
   border-radius: 50px;
   text-align: center;
   line-height: 1.2;
@@ -748,7 +839,7 @@ header.main {
 }
 .zip-tab.active {
   background: #fff;
-  color: var(--bt-text);
+  color: #0a0a0a;
   font-weight: 400;
   box-shadow: 0 1px 3px rgba(10, 30, 60, 0.12), 0 1px 2px rgba(10, 30, 60, 0.08);
 }
@@ -787,7 +878,11 @@ header.main {
   text-align: right;
   font-size: 14px;
   font-weight: 400;
-  margin-top: 8px;
+  /* Real BT uses `margin: -16px 0 15px` so the link tucks UP against
+     the zip-row above (saves vertical space — the zip-row has ~30px
+     of bottom whitespace from its 19px top padding + the row content).
+     v=94 typography diff. */
+  margin: -16px 0 15px;
   color: var(--bt-blue);
   text-decoration: underline;
   text-decoration-color: var(--bt-blue);
@@ -819,17 +914,21 @@ header.main {
 }
 .filter-options {
   list-style: none;
-  margin: 0 0 12px;
-  padding: 0;
+  /* Real BT uses `background: #f7f7f7; padding: 8px; margin: 0 0 15px`
+     instead of a 1px outer border (v=94 typography diff). The light
+     grey backdrop groups the rows visually without a line. Inner row
+     separators come from a 1px #ededed border-bottom on each li. */
+  margin: 0 0 15px;
+  padding: 8px;
   max-height: 270px;
   overflow-y: auto;
-  border: 1px solid #ededed;
-  border-radius: 4px;
+  background: #f7f7f7;
+  border-radius: 8px;
 }
 .filter-options li {
   margin: 0;
   padding: 0;
-  border-bottom: 1px solid #f4f4f4;
+  border-bottom: 1px solid #ededed;
 }
 .filter-options li:last-child { border-bottom: 0; }
 .filter-options li.hidden { display: none; }
@@ -839,11 +938,14 @@ header.main {
   gap: 10px;
   padding: 10px 12px;
   cursor: pointer;
-  font-size: 14px;
+  /* Real BT renders the visible row text at 15/400 #333 (v=94). */
+  font-size: 15px;
   color: var(--bt-text);
   line-height: 1.2;
 }
-.filter-options li:hover label { background: #f7f7f7; }
+/* Parent is now #f7f7f7 (v=94), so hover uses a slightly cooler tint
+   to stay visible against the backdrop. */
+.filter-options li:hover label { background: #ededed; }
 .filter-options input[type="checkbox"] {
   position: absolute;
   width: 0;
@@ -912,13 +1014,15 @@ header.main {
   font-size: 14px; text-align: center; cursor: pointer;
   background: transparent;
   border-radius: 999px;
-  color: var(--bt-text);
+  /* v=95: same #0a0a0a near-black as .zip-tab (real BT switcher
+     options share the styling). */
+  color: #0a0a0a;
   line-height: 1.2;
 }
 .seg input { display: none; }
 .seg.active {
   background: #fff;
-  color: var(--bt-text);
+  color: #0a0a0a;
   font-weight: 400;
   box-shadow: 0 1px 3px rgba(10, 30, 60, 0.12), 0 1px 2px rgba(10, 30, 60, 0.08);
 }
@@ -1039,6 +1143,75 @@ header.main {
 }
 .apply-filters { margin: 18px 0 10px; }
 .filter-clear { display: block; text-align: center; font-size: 14px; margin: 0 0 8px; }
+
+/* "Meet Your Seller" h2 above the BDP contact card (v=104) —
+   matches real BT's 20/700 #404040 heading that appears before
+   the seller info on both private + dealer listings. */
+.meet-your-seller-h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #404040;
+  margin: 24px 0 12px;
+}
+
+/* ── Cookie consent banner (v=103) ─────────────────────────────────
+   Shown on first visit only (server-rendered conditional in base.html
+   when bt_cookie_consent cookie isn't set). Bottom-right floating
+   card with 3 pill buttons. Customize dismisses via JS; Reject/Accept
+   POST to /__site/consent which sets the cookie + redirects back. */
+.cookie-consent {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 200;
+  max-width: 560px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(10, 30, 60, 0.18), 0 2px 6px rgba(10, 30, 60, 0.08);
+  padding: 22px 26px;
+}
+.cookie-consent-text {
+  margin: 0 0 16px;
+  font-size: 15px;
+  line-height: 1.45;
+  color: #333;
+}
+.cookie-consent-link {
+  color: #333;
+  text-decoration: underline;
+}
+.cookie-consent-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.cookie-consent-form {
+  margin: 0;
+  padding: 0;
+  display: inline;
+}
+.cookie-consent-btn {
+  flex: 0 0 auto;
+  min-width: 108px;
+  padding: 10px 22px;
+  font-size: 14px;
+  font-weight: 400;
+  color: #333;
+  background: #fff;
+  border: 1px solid #d6d6d6;
+  border-radius: 50px;
+  cursor: pointer;
+  text-align: center;
+}
+.cookie-consent-btn:hover {
+  border-color: #404040;
+  background: #f7f7f7;
+}
+.cookie-consent-btn:focus-visible {
+  outline: 2px solid var(--bt-blue);
+  outline-offset: 1px;
+}
 
 /* Sub-label inside Engines / etc — small bold heading above sub-controls. */
 .filter-sublabel {
@@ -1214,17 +1387,19 @@ header.main {
 }
 .srp-results-count { color: #404040; font-size: 14px; font-weight: 400; }
 .srp-results-count strong { font-weight: 400; }
-/* Real BT sort row: inline 14px / 500 medium 'Sort:' + 14/500 value,
-   both #404040, with a separate ⌄ chevron. No border, no pad, no bg. */
+/* Real BT sort row: inline 12px/400 'Sort:' + 12/400 value, both
+   #333, with a separate ⌄ chevron. No border, no pad, no bg.
+   v=96 typography fix — earlier 14/500 #404040 was wrong (probably
+   measured a different page state). Re-probed at /boats/. */
 .sort-row {
   display: inline-flex; align-items: center; gap: 6px;
-  color: #404040; font-size: 14px; font-weight: 500;
+  color: #333; font-size: 12px; font-weight: 400;
   cursor: pointer;
 }
-.sort-label strong { font-weight: 700; color: #404040; }
+.sort-label strong { font-weight: 400; color: #333; }
 .sort-select {
   border: 0; background: transparent; padding: 0 22px 0 0;
-  font-size: 14px; font-weight: 500; color: #404040;
+  font-size: 12px; font-weight: 400; color: #333;
   font-family: inherit;
   appearance: none; -webkit-appearance: none; -moz-appearance: none;
   cursor: pointer;
@@ -1244,27 +1419,31 @@ header.main {
   text-align: center;
 }
 .srp-empty strong { display: block; font-size: 18px; margin-bottom: 6px; color: var(--bt-navy); }
-/* Real BT pagination: plain text links, no border boxes. 14/400 dark
-   #0a0a0a; active page is bold-darker; "of N" total dimmer. */
+/* Real BT pagination: plain text links, no border boxes. 15/700
+   medium-grey #A5A5A5 — both active and inactive render at the same
+   color (real BT differentiates by font-weight only — page-link is
+   700, surrounding "of N" total is 400). 15px 0 vertical margin.
+   v=96 typography fix — earlier 14/400 #0a0a0a was wrong. */
 .pagination {
   display: flex; align-items: center; justify-content: center;
-  gap: 4px; margin: 26px 0;
-  font-size: 14px; font-weight: 400;
+  gap: 4px; margin: 15px 0;
+  font-size: 15px; font-weight: 400;
 }
 .pagination a {
-  padding: 8px 14px; border: 0;
-  border-radius: 0; color: #0a0a0a;
+  padding: 5px 10px; border: 0;
+  border-radius: 0; color: #A5A5A5;
   text-decoration: none;
   background: transparent;
+  font-weight: 700;
 }
 .pagination a:hover { color: var(--bt-blue); }
 .pagination a.active {
-  color: #0a0a0a; font-weight: 700;
+  color: #A5A5A5; font-weight: 700;
   background: transparent;
   border-bottom: 2px solid var(--bt-blue);
 }
 .page-prev, .page-next { color: var(--bt-blue) !important; font-weight: 400; }
-.page-total { color: #757575; margin: 0 4px; }
+.page-total { color: #757575; margin: 0 4px; font-weight: 400; }
 
 /* ── Boat Detail Page (BDP) ───────────────────────────────────── */
 
@@ -1351,6 +1530,12 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
 .bdp-grid {
   display: grid; grid-template-columns: 1fr 366px; gap: 80px;
   align-items: start;
+  /* Real BT's BDP renders at ~1319px content area (left col 890 + 79
+     gap + right col 334). Cap at 1336 to match — also auto-shrinks
+     the .bdp-thumbs row from 5×~189 down to 5×175, fixing the
+     thumbnail-strip 🟡 row. */
+  max-width: 1336px;
+  margin-left: auto; margin-right: auto;
 }
 
 /* Stacked variant: all sections live in column 1 stacked vertically.

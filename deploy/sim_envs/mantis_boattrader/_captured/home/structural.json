@@ -1,49 +1,90 @@
 {
   "_meta": {
-    "captured_at": null,
+    "captured_at": "2026-05-23T18:30Z",
     "url": "https://www.boattrader.com/",
-    "status": "TODO — placeholder, not yet probed",
-    "note": "This file lists what needs to be captured. Run a Chrome MCP probe pass against the real BT home page to fill in concrete measurements. SRP corpus is the template (../srp/structural.json)."
+    "viewport": {"width": 1512, "height": 711, "devicePixelRatio": 2},
+    "captured_via": "Chrome MCP getBoundingClientRect + getComputedStyle probes",
+    "note": "Home page is a narrow hero card (~296px) overlaid on a hero image, with full-width section rails below. Two heading sizes coexist: 15/700 for boat-listing subsections (Boats Near You) and 22.5/700 for major sections (Featured Brands, Popular Boats, Recent Articles)."
   },
 
-  "_todo_sections": [
-    {
-      "name": "hero_search_panel",
-      "note": "Main blue hero card with AI-search input ('Try …'), location field, condition+type quick filters. SRP search bar uses the same .ai-search-v2 pattern — see FIDELITY.md 'Search bar (Try + quote)' section for the matched spec we already have."
+  "hero_card": {
+    "_real_class": ".ai-search-v2__form (parent is a positioned hero overlay container)",
+    "rect": {"width": 296, "height": 48, "x": 14, "y": 139},
+    "note": "Hero search form sits at top-left of hero image at ~14px inset, narrow 296px width. NOT a full-page-width search bar — it's an overlay card."
+  },
+
+  "hero_h1": {
+    "_real_text": "Find your perfect boat",
+    "rect": {"width": 296, "height": 19, "x": 14, "y": 108},
+    "style": {
+      "fontSize": "16px",
+      "fontWeight": "700",
+      "color": "rgb(255, 255, 255)"
     },
-    {
-      "name": "ad_carousel_hero",
-      "note": "Rotating hero ad strip. Sandbox uses 6 procedural SVG creatives. Out-of-scope per SCOPE.md — visual stub only."
+    "note": "Bold white text directly above the search form, same 14px x inset. Hero card contains H1 + form stacked vertically over the hero image."
+  },
+
+  "section_headings": {
+    "_note": "Real BT uses two H2 sizes on home: 15/700 for boat-listing subsections, 22.5/700 for major content sections.",
+    "boats_near_you": {
+      "_real_text": "Boats Near You Based on your location",
+      "rect": {"width": 1488, "height": 20, "x": 12, "y": 586},
+      "style": {"fontSize": "15px", "fontWeight": "700", "color": "rgb(51, 51, 51)"},
+      "subtext_inline": "Based on your location (rendered inline after the heading)"
     },
-    {
-      "name": "boats_near_you_section",
-      "note": "Card rail of ~6 nearby boats based on geolocation. Sandbox uses fixed seed-deterministic list."
+    "featured_brands": {
+      "_real_text": "Featured Brands",
+      "rect": {"x": 30, "width": 1452},
+      "style": {"fontSize": "22.5px", "fontWeight": "700"}
     },
-    {
-      "name": "featured_brands",
-      "note": "Grid of brand logos (Boston Whaler, Sea Ray, Bayliner, etc.) linking to /boats/?make=X."
+    "popular_boats": {
+      "_real_text": "Popular Boats",
+      "rect": {"x": 75, "width": 1347},
+      "style": {"fontSize": "22.5px", "fontWeight": "700"}
     },
-    {
-      "name": "popular_boat_types",
-      "note": "Tile grid: Center Console, Bowrider, Yacht, Pontoon, etc."
+    "recent_articles": {
+      "_real_text": "Recent Articles",
+      "rect": {"x": 60, "width": 1392},
+      "style": {"fontSize": "22.5px", "fontWeight": "700"}
     },
-    {
-      "name": "popular_boats",
-      "note": "Listing card rail (4-5 cards) — same shape as SRP listing card."
-    },
-    {
-      "name": "mid_ad_strip",
-      "note": "728x90 banner ad. Sandbox stub."
-    },
-    {
-      "name": "footer_ad_strip",
-      "note": "728x90 banner ad above footer."
-    },
-    {
-      "name": "recent_articles",
-      "note": "Editorial card rail linking to /articles/..."
+    "popular_boat_types": {
+      "_status": "not found in 2026-05-23 probe — section may have been removed or renamed since the FIDELITY.md row was written"
     }
+  },
+
+  "tile_geometry": {
+    "boats_near_you_card": {
+      "_real_class": "anchor in .recommended-boats",
+      "rect_per_tile": {"width": 363, "height": 120},
+      "layout": "Horizontal 4-up card row (1488/4 ≈ 372 per tile, slight 9px gap)",
+      "_known_match_in_fidelity_md": "Same listing-card shape as SRP (matched ✅)"
+    },
+    "featured_brand_tile": {
+      "_real_class": ".style-module_link__Q9Bge",
+      "rect_per_tile": {"width": 266, "height": 161},
+      "layout": "5-up grid (1452/5 ≈ 290 per slot, 24px gap → 266 tile width)"
+    },
+    "recent_article_card": {
+      "_real_class": "anchor wrapping article element",
+      "rect_per_tile": {"width": 325, "height": 317},
+      "layout": "4-up grid (1392/4 ≈ 348, with gaps → ~325 per tile)"
+    },
+    "popular_boats_tile": {
+      "_status": "Heading present at x=75 w=1347 but tiles not in 2026-05-23 probe scope (lazy-loaded below fold)"
+    }
+  },
+
+  "_known_matches_in_fidelity_md": [
+    "Hero search bar (.ai-search-v2) shares structure with SRP search — Try + rotator + sparkle + magnifier (v=86, v=87)",
+    "Brand tiles + type tiles use .brand-tile / .type-tile (v=49)",
+    "Footer + columns match real BT layout"
   ],
 
-  "_capture_methodology": "Open https://www.boattrader.com/ in Chrome MCP, then run the same structural probe pattern as srp/structural.json. Reuse FIDELITY.md rows where the element shape matches what the SRP/BDP already captured (e.g. .ai-search-v2 panel, listing card)."
+  "_capture_methodology": "Open https://www.boattrader.com/ at 1512px viewport, scroll through each section to make it visible, then run the structural probe per section. Tile measurements taken from the first 3 children of each section's container. Lazy-loaded sections (Similar Boats, etc.) may require additional scroll triggers.",
+
+  "_open_followups": [
+    "Probe Popular Boats card-rail tile dimensions (heading found but tiles not visible without lazy load)",
+    "Verify whether 'Popular Boat Types' section still exists on real BT (not found in 2026-05-23 probe)",
+    "Probe Why BoatTrader / Sell My Boat sections (if present)"
+  ]
 }

@@ -233,6 +233,96 @@ def test_boat_type_and_make_default_closed(srp_html):
     assert "data-testid=\"filter-make\" open" not in make_block
 
 
+# ── SRP search box rotator (v=86) ─────────────────────────────────────
+
+
+def test_srp_search_uses_rotator_not_static_prefix(srp_html):
+    """v=86: replaced the static `<span>Try</span>` + single-suggestion
+    placeholder with `.ai-search-v2__rotator` cycling through 3 example
+    queries — matches real BT's vertical translate animation."""
+    assert 'class="ai-search-v2__rotator"' in srp_html
+    assert 'class="ai-search-v2__rotator-inner"' in srp_html
+    # Three suggestion lines
+    assert srp_html.count('class="ai-search-v2__try-text"') == 3
+    # All three example queries present
+    for needle in ("fishing boats under $80k", "Sea Ray under 40 feet", "pontoon boats near me"):
+        assert needle in srp_html
+
+
+def test_srp_search_input_placeholder_is_blank(srp_html):
+    """v=86: the visible 'Try …' text comes from the span overlay, so
+    the native input placeholder must be empty (real BT uses a single
+    space). A non-empty placeholder would double-render with the span."""
+    import re
+    m = re.search(r'<input class="ai-search-v2__input" type="search" name="q" placeholder="([^"]*)"', srp_html)
+    assert m, "ai-search-v2 input not found"
+    placeholder = m.group(1).strip()
+    assert placeholder == "", (
+        f"input placeholder should be blank (rotator handles the visible text); got {placeholder!r}"
+    )
+
+
+def test_rotator_animation_in_css(base_css):
+    """v=86: `@keyframes ai-try-rotate` with 9s ease-in-out alternate
+    animation on `.ai-search-v2__rotator-inner` — matches real BT."""
+    assert "@keyframes ai-try-rotate" in base_css
+    block = _rule_block(base_css, ".ai-search-v2__rotator-inner {")
+    assert "animation: ai-try-rotate 9s ease-in-out infinite alternate" in block
+    rotator_block = _rule_block(base_css, ".ai-search-v2__rotator {")
+    assert "overflow: hidden" in rotator_block
+    assert "height: 18px" in rotator_block
+
+
+def test_sparkle_icon_is_16x16(srp_html, base_css):
+    """v=88: sparkle icon resized from sandbox's old 20×20 inline SVG to
+    match real BT's 16×16 ai.svg. Wrapper uses line-height:0 +
+    inline-flex so the 18px parent font-size doesn't add vertical
+    padding (was rendering at 20×26 instead of 16×16)."""
+    # SVG width/height attrs must be 16
+    assert 'width="16" height="16" viewBox="0 0 16 16"' in srp_html, (
+        "sparkle SVG must be 16x16 (real BT uses ai.svg at this size); "
+        "if you see width=\"20\", v=87's 20x20 inline SVG regressed back in"
+    )
+    # Wrapper rule pins to 16x16 with line-height:0
+    block = _rule_block(base_css, ".ai-search-v2__icon {")
+    assert "width: 16px" in block
+    assert "height: 16px" in block
+    assert "line-height: 0" in block
+
+
+def test_search_form_focuses_input_on_any_click(client, base_css):
+    """v=89: clicks anywhere in the .ai-search-v2__form (sparkle, "Try …"
+    overlay, empty area) must focus the input. Without this fix, clicks
+    on the .ai-search-v2__try span just selected its text. The fix is a
+    `mousedown` handler in base.html that calls `inp.focus()` for any
+    non-submit-button target, plus `cursor: text` on the span so the
+    affordance is visible."""
+    r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    # JS handler must exist
+    assert ".ai-search-v2__form" in html
+    assert "form.addEventListener('mousedown'" in html
+    assert "inp.focus()" in html
+    # The span gets `cursor: text` so users don't see the I-beam → text
+    # cursor mismatch (CSS).
+    try_block = _rule_block(base_css, ".ai-search-v2__try {")
+    assert "cursor: text" in try_block
+    assert "user-select: none" in try_block
+
+
+def test_rotator_hides_on_focus(base_css):
+    """v=87: real BT clears the 'Try …' prefix the moment you click
+    into the input (before any typing). Sandbox uses `:focus-within`
+    on the form to set `display: none` on `.ai-search-v2__try`."""
+    # Find the rule that hides the prefix; must include :focus-within
+    idx = base_css.find(":focus-within .ai-search-v2__try")
+    assert idx >= 0, "missing :focus-within rule for the Try prefix"
+    # Also must hide on typed value (covers the blur-with-text case)
+    idx2 = base_css.find(":has(input:not(:placeholder-shown):not([value=\"\"])) .ai-search-v2__try")
+    assert idx2 >= 0, "missing :has(typed-value) rule for the Try prefix"
+
+
 # ── Cache-buster pin ──────────────────────────────────────────────────
 
 
@@ -246,6 +336,213 @@ def test_app_css_cache_buster_is_current(srp_html):
     assert version >= 84, (
         f"app.css cache-buster is at v={version}; bump it when shipping CSS edits"
     )
+
+
+# ── v=94 typography diff fixes ────────────────────────────────────────
+
+
+def test_section_heading_is_16_500_404040(base_css):
+    """v=94: all section headings (Location / Condition / Length / …)
+    on real BT use 16/500/#404040. Sandbox was 15/400 #333."""
+    block = _rule_block(base_css, ".filter-group-label {")
+    assert "font-weight: 500" in block
+    assert "font-size: 16px" in block
+    assert "color: #404040" in block
+
+
+def test_use_my_location_uses_negative_top_margin(base_css):
+    """v=94: real BT uses `margin: -16px 0 15px` on `.search-user-location`
+    to tuck the link up against the zip-row above. Sandbox was
+    `margin-top: 8px` (pushed below the row instead)."""
+    block = _rule_block(base_css, ".zip-use-location {")
+    assert "margin: -16px 0 15px" in block
+
+
+def test_filter_options_has_grey_backdrop(base_css):
+    """v=94: real BT's ul.opts uses `background: #f7f7f7; padding: 8px`
+    instead of a 1px outer border. Sandbox was bordered with no fill."""
+    block = _rule_block(base_css, ".filter-options {")
+    assert "background: #f7f7f7" in block
+    assert "padding: 8px" in block
+    # Outer border should be removed (rules don't mention `border:` line)
+    # but keep the radius
+    assert "border-radius: 8px" in block
+
+
+def test_filter_options_label_is_15px(base_css):
+    """v=94: list-item label text 14px → 15px to match real BT."""
+    block = _rule_block(base_css, ".filter-options label {")
+    assert "font-size: 15px" in block
+
+
+# ── v=95 color shade pass ─────────────────────────────────────────────
+
+
+def test_filter_inputs_are_404040(base_css):
+    """v=95: `.filter-select` + `.filter-input` color → #404040 (was
+    #333). Real BT inputs/selects render at this slightly darker shade."""
+    block = _rule_block(base_css, ".filter-select, .filter-input {")
+    assert "color: #404040" in block
+
+
+def test_switcher_options_are_near_black(base_css):
+    """v=95: `.zip-tab` + `.seg` color → #0a0a0a (was var(--bt-text)).
+    Real BT renders switcher labels noticeably darker than the panel
+    body — verified rgb(10,10,10) on `.switcher-option-label`."""
+    zip_block = _rule_block(base_css, ".zip-tab {")
+    assert "color: #0a0a0a" in zip_block
+    seg_block = _rule_block(base_css, ".seg {")
+    assert "color: #0a0a0a" in seg_block
+
+
+# ── v=96 sort row + pagination typography ─────────────────────────────
+
+
+def test_sort_row_is_12_400(base_css):
+    """v=96: real BT renders Sort: at 12/400/#333 — sandbox had 14/500/#404040
+    (oversized + bolded by the <strong> tag). Override sets the right weight."""
+    block = _rule_block(base_css, ".sort-row {")
+    assert "font-size: 12px" in block
+    assert "font-weight: 400" in block
+    strong = _rule_block(base_css, ".sort-label strong {")
+    assert "font-weight: 400" in strong
+
+
+def test_pagination_is_15_400(base_css):
+    """v=96: real BT pagination wrapper is 15/400 with margin 15px 0
+    (was 14/400 m=26px in sandbox)."""
+    block = _rule_block(base_css, ".pagination {")
+    assert "font-size: 15px" in block
+    assert "margin: 15px 0" in block
+
+
+def test_cookie_consent_banner_renders_on_first_visit(client):
+    """v=103: cookie consent banner appears bottom-right when the
+    `bt_cookie_consent` cookie isn't set. Has Customize / Reject /
+    Accept buttons. Reject + Accept POST to /__site/consent with the
+    matching `choice`; Customize dismisses in JS only."""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'id="cookie-consent"' in r.text
+    assert 'aria-label="Cookie consent"' in r.text
+    # All three buttons present
+    assert '>Customize<' in r.text
+    assert '>Reject<' in r.text
+    assert '>Accept<' in r.text
+    # Customize is a button with data-cookie-action; Reject/Accept are
+    # forms posting to /__site/consent.
+    assert 'data-cookie-action="customize"' in r.text
+    assert r.text.count('action="/__site/consent"') >= 2
+    assert 'name="choice" value="decline"' in r.text
+    assert 'name="choice" value="accept"' in r.text
+
+
+def test_cookie_consent_hidden_once_accepted(client):
+    """After Accept (sets bt_cookie_consent cookie), the banner should
+    disappear on subsequent loads."""
+    # First load: banner present
+    r1 = client.get("/")
+    assert 'id="cookie-consent"' in r1.text
+    # POST accept
+    r2 = client.post("/__site/consent", data={"choice": "accept", "next_url": "/"}, follow_redirects=False)
+    assert r2.status_code == 303
+    # Now the test client has the cookie; re-fetch home — banner gone
+    r3 = client.get("/")
+    assert 'id="cookie-consent"' not in r3.text
+
+
+def test_cookie_consent_card_styling(base_css):
+    """v=103 CSS: banner is `position: fixed; right: 24px; bottom: 24px`
+    bottom-right floating card with rounded corners + drop shadow.
+    3 pill buttons in a row with min-width 108px."""
+    block = _rule_block(base_css, ".cookie-consent {")
+    assert "position: fixed" in block
+    assert "right: 24px" in block
+    assert "bottom: 24px" in block
+    assert "border-radius: 12px" in block
+    btn_block = _rule_block(base_css, ".cookie-consent-btn {")
+    assert "border-radius: 50px" in btn_block
+    assert "min-width: 108px" in btn_block
+
+
+def test_ribbon_is_sticky_on_scroll(base_css):
+    """v=102: blue pre-qualify ribbon uses `position: sticky; top: 0`
+    so it stays in flow at scroll=0 (right under the nav) and sticks
+    flush to the viewport top once the nav scrolls past. User
+    wanted top:0 on scroll, not v=100's 44px-gap pattern.
+    Position:sticky stays in flow so .bt-main needs no compensation
+    margin."""
+    block = _rule_block(base_css, ".ribbon-prequal {")
+    assert "position: sticky" in block
+    assert "top: 0" in block
+    # .bt-main should NOT have margin-top compensation (ribbon in flow).
+    # Check the literal property line — `margin: 0 auto;` — not the
+    # historical mention in the comment.
+    main_block = _rule_block(base_css, ".bt-main {")
+    assert "  margin: 0 auto;" in main_block
+
+
+def test_pagination_link_color_is_a5a5a5(base_css):
+    """v=96: real BT page-link color is rgb(165,165,165) = #A5A5A5 for
+    both active and inactive — they differ only by font-weight (700)
+    and a 2px bottom border on active."""
+    block = _rule_block(base_css, ".pagination a {")
+    assert "color: #A5A5A5" in block
+    active_block = _rule_block(base_css, ".pagination a.active {")
+    assert "color: #A5A5A5" in active_block
+
+
+# ── BDP fidelity anchors (v=91) ───────────────────────────────────────
+
+
+@pytest.fixture
+def bdp_html(client) -> str:
+    # Pick any boat detail page — TestClient hits the same handler.
+    r = client.get("/")
+    # Find a BDP slug from a listing card on the home page.
+    import re
+    m = re.search(r'href="(/boat/[^"]+)"', r.text)
+    assert m, "no BDP link found on home"
+    slug_url = m.group(1)
+    r2 = client.get(slug_url)
+    assert r2.status_code == 200, r2.text[:300]
+    return r2.text
+
+
+def test_bdp_h1_has_no_length_suffix(bdp_html):
+    """v=104: real BT BDP H1 is just "Year Make Model" — no length
+    suffix like sandbox's old "| 16'". Removed in v=104."""
+    # H1 should not contain the bdp-length span anymore
+    assert 'class="bdp-length"' not in bdp_html
+    # H1 should not contain a vertical bar followed by a length unit
+    import re
+    h1_match = re.search(r'<h1[^>]*>([^<]+)</h1>', bdp_html)
+    assert h1_match, "no h1 found"
+    h1_text = h1_match.group(1)
+    assert "| " not in h1_text, f"H1 still has length suffix: {h1_text!r}"
+
+
+def test_bdp_has_meet_your_seller_heading(bdp_html):
+    """v=104: H2 "Meet Your Seller" sits above the contact card on both
+    private and dealer listings — matches real BT's pattern."""
+    assert '<h2 class="meet-your-seller-h2">Meet Your Seller</h2>' in bdp_html
+
+
+def test_owner_highlights_is_h2(bdp_html):
+    """v=91: real BT renders 'Owner Highlights' as H2 20/700 alongside
+    'Boat Details' and 'What Owners Say'. Sandbox had it as H3 — flipped."""
+    # The heading uses the class `owners-card-tags-heading` regardless of tag,
+    # so check both that the class is on an H2 and not on an H3.
+    assert '<h2 class="owners-card-tags-heading">Owner Highlights</h2>' in bdp_html
+    assert '<h3 class="owners-card-tags-heading">' not in bdp_html
+
+
+def test_bdp_grid_capped_at_real_bt_width(base_css):
+    """v=91: real BT renders BDP content at ~1319px (left col 890 + gap
+    79 + right col 334). Cap .bdp-grid at max-width: 1336px so sandbox
+    matches and the thumbnail strip auto-scales to 175×116."""
+    block = _rule_block(base_css, ".bdp-grid {")
+    assert "max-width: 1336px" in block
 
 
 # ── SCOPE.md + prompt docs ────────────────────────────────────────────

@@ -15,8 +15,8 @@ real site changes, then re-diff against the sandbox.
 | Path | Status | Source |
 |---|---|---|
 | `srp/structural.json`   | ✅ measured 2026-05-23 | Chrome MCP probes from real boattrader.com (1512×711 viewport) |
-| `home/structural.json`  | ⏳ TODO placeholder    | listing of sections to capture; sources from FIDELITY.md |
-| `bdp/structural.json`   | ⏳ TODO placeholder    | listing of sections to capture; sources from FIDELITY.md |
+| `home/structural.json`  | ✅ measured 2026-05-23 | hero card + 4 section headings + 3 tile-geometry types (Boats Near You card 363×120, Featured Brands tile 266×161, Articles card 325×317) |
+| `bdp/structural.json`   | ✅ measured 2026-05-23 | breadcrumb, gallery, right-rail title/price/contact-form, all accordion heading levels, sticky bar geometry, Similar Boats + Show Phone documented as listing-dependent |
 
 ## Format
 
