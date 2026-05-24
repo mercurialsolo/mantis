@@ -115,13 +115,22 @@ header.main {
 .navbar-toggle { display: none; }
 
 /* ── Ribbon (pre-qualify) — real BT bg rgb(37,102,176), 14/400 white,
-   40px tall. */
+   40px tall. v=100: position:fixed top:44px so the ribbon stays
+   visible at the top while the rest of the page scrolls (matches
+   real BT's `position: fixed; top: 62px` behavior — sandbox nav is
+   44px tall vs real BT's 62px). `.bt-main` gets `margin-top: 40px`
+   to compensate for the ribbon being removed from normal flow. */
 .ribbon-prequal {
   background: rgb(37, 102, 176);
   color: #fff;
   text-align: center;
   font-size: 14px;
   font-weight: 400;
+  position: fixed;
+  top: 44px;
+  left: 0;
+  right: 0;
+  z-index: 100;
 }
 .ribbon-inner {
   margin: 0;
@@ -157,7 +166,10 @@ header.main {
    with 20px internal padding (giving x=56 for the inner content). */
 .bt-main {
   max-width: var(--container);
-  margin: 0 auto;
+  /* v=100: 40px top margin compensates for `.ribbon-prequal` being
+     position:fixed (removed from flow). Without this the breadcrumb
+     would tuck under the ribbon at the top of the page. */
+  margin: 40px auto 0;
   padding: 0 20px;
   min-height: 480px;
 }

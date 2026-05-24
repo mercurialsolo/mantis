@@ -416,6 +416,21 @@ def test_pagination_is_15_400(base_css):
     assert "margin: 15px 0" in block
 
 
+def test_ribbon_is_sticky_on_scroll(base_css):
+    """v=100: real BT's blue pre-qualify ribbon is `position: fixed;
+    top: 62px` so it stays visible at the top while the rest of the
+    page scrolls. Sandbox was rendering it `position: static` (just
+    a regular flow element under the nav). Now `position: fixed;
+    top: 44px` (sandbox nav is 44px tall vs real BT's 62px)."""
+    block = _rule_block(base_css, ".ribbon-prequal {")
+    assert "position: fixed" in block
+    assert "top: 44px" in block
+    # .bt-main needs matching top margin to compensate for the ribbon
+    # being out of flow.
+    main_block = _rule_block(base_css, ".bt-main {")
+    assert "margin: 40px auto 0" in main_block
+
+
 def test_pagination_link_color_is_a5a5a5(base_css):
     """v=96: real BT page-link color is rgb(165,165,165) = #A5A5A5 for
     both active and inactive — they differ only by font-weight (700)

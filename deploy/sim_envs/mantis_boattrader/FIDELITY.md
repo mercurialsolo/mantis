@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=99** (2026-05-23) — Operational: bumped sandbox `auto_stop_interval` from 15 min → 180 min via `sb.set_autostop_interval(180)`. Removes the recurring "boot the container" friction that hit every cron iteration. Token rotated to `a_oh4hg7awgeznbwwglbfml0sdlrywzw`.
+Last updated: **v=100** (2026-05-23) — Pre-qualify ribbon now sticky on scroll: `.ribbon-prequal` `position: static` → `position: fixed; top: 44px` (matches real BT's `position: fixed; top: 62px`, scaled to sandbox's 44px nav vs real BT's 62px nav). `.bt-main` gets `margin-top: 40px` to compensate for the ribbon being removed from flow.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
@@ -50,6 +50,7 @@ the current state. Status legend:
 | Bg | rgb(37,102,176) | same | ✅ |
 | Inner padding | 10px 16px | 10px 16px | ✅ |
 | "Get started" CTA | plain inline bold text | plain inline bold text | ✅ |
+| **Sticky on scroll** | `position: fixed; top: 62px` — stays visible at y=62 across scroll (real BT nav is 62px tall) | `position: fixed; top: 44px` — stays at y=44 across scroll (sandbox nav is 44px tall). `.bt-main` compensates with `margin-top: 40px` since the ribbon is removed from flow. Verified live: ribbon y stays at 44 across scrollY 0/800/2000 (v=100). | ✅ |
 | Hidden on BDP | yes (no ribbon on BDP) | hidden via `{% block ribbon %}{% endblock %}` | ✅ |
 
 ## SRP page
@@ -431,6 +432,21 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=100` Pre-qualify ribbon sticky on scroll:
+       • User asked to verify the blue banner on /boats is sticky on
+         scroll. Probed real BT: `.ribbon-prequal` is
+         `position: fixed; top: 62px` and stays at y=62 across
+         scrollY 0/500/1500.
+       • Sandbox had `.ribbon-prequal { position: static }` — ribbon
+         just sat under the nav and scrolled away.
+       • Fix: `.ribbon-prequal` → `position: fixed; top: 44px;
+         left: 0; right: 0; z-index: 100`. Sandbox nav is 44px tall
+         (real BT's is 62px), so the offset scales accordingly.
+       • `.bt-main` gets `margin-top: 40px` so the breadcrumb / H1
+         don't tuck under the now-out-of-flow ribbon.
+       • Live-verified: ribbon y stays at 44 across scrollY 0/800/2000.
+       • Adds `test_ribbon_is_sticky_on_scroll` — suite now **41 passing**.
+       • Cache-buster bumped to `?v=100`.
 `v=99` Bumped sandbox `auto_stop_interval` 15 → 180 min:
        • The sandbox was auto-stopping after ~15min of idle, hitting
          every cron-triggered loop iteration with a manual restart
