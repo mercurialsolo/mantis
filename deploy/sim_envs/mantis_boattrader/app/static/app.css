@@ -160,16 +160,16 @@ header.main {
   font-size: 18px; cursor: pointer; line-height: 1;
 }
 
-/* ── Main + container — matches real boattrader: max-width 1440px,
-   margin auto so at 1512px viewport the main element starts at x=36
-   with 20px internal padding (giving x=56 for the inner content). */
+/* ── Main + container — real boattrader probe (Pursuit BDP, 2026-05-24)
+   shows `<main class="page-container">` at width=1600 (FULL viewport)
+   with padding 0. Sections inside (.bdp-grid, .bdp-nav-row) apply
+   their own 1336px max-width centered. Previous `.bt-main { max-width:
+   1440 }` was indenting the full-bleed sections (ad-strip) ~80px
+   from each viewport edge — fixed by removing the cap. */
 .bt-main {
-  max-width: var(--container);
-  /* v=102: ribbon is `position: sticky` (stays in flow), so no
-     compensating top margin needed. v=100's `margin: 40px auto 0`
-     reverted. */
-  margin: 0 auto;
-  padding: 0 20px;
+  max-width: none;
+  margin: 0;
+  padding: 0;
   min-height: 480px;
 }
 
@@ -1567,15 +1567,30 @@ body.bdp-scrolled-deep .sticky-save {
   gap: 24px;
 }
 .bdp-nav-actions { display: flex; gap: 16px; margin-left: auto; }
-/* Real BT BDP top links: 12/400 #139af5.
-   Probed at boattrader.com 2026-05-24 — both Previous and Next get
-   chevrons via CSS pseudo-elements (NOT inline text). Iter1 wrongly
-   stripped both. Restored to match exact `next-previous-button-tray`
-   layout (Pursuit BDP probe: `prev::before content "<"`,
-   `next::after content ">"`). */
-.bdp-back, .bdp-next, .bdp-prev { font-size: 12px; font-weight: 400; color: #139af5; text-decoration: none; }
-.bdp-prev::before { content: "< "; }
-.bdp-next::after { content: " >"; }
+/* Real BT BDP breadcrumb color: rgb(97,97,97) = #616161 (slightly
+   darker than SRP's #757575). The base `.breadcrumb` rule is used by
+   both SRP and BDP, so we scope the BDP override under `.bdp-nav-row`. */
+.bdp-nav-row .breadcrumb,
+.bdp-nav-row .breadcrumb a { color: #616161; }
+.bdp-nav-row .breadcrumb a:hover { color: var(--bt-blue); }
+/* Real BT BDP top links 12/400 #139af5. Pursuit BDP probe (2026-05-24):
+   `.next-previous-button` is a 104×34 padded button-shaped link with
+   border-radius 4px, padding 11px 15px (prev) / 11px 35px 11px 15px
+   (next has extra right pad to anchor the chevron). Both render
+   chevrons via CSS pseudo-elements:
+     prev::before content "<", next::after content ">"
+   `< Search` stays a plain text link with no padding. */
+.bdp-back { font-size: 12px; font-weight: 400; color: #139af5; text-decoration: none; }
+.bdp-prev, .bdp-next {
+  font-size: 12px; font-weight: 400; color: #139af5; text-decoration: none;
+  padding: 11px 15px;
+  border-radius: 4px;
+  display: inline-flex; align-items: center;
+  white-space: nowrap;
+}
+.bdp-next { padding: 11px 35px 11px 15px; }
+.bdp-prev::before { content: "< "; margin-right: 4px; }
+.bdp-next::after { content: " >"; margin-left: 4px; }
 .bdp-back:hover, .bdp-next:hover, .bdp-prev:hover { color: var(--bt-blue); text-decoration: underline; }
 /* Real BT BDP uses ~890 gallery + ~80 gap + 366 rail at 1512 viewport.
    That's ratio gallery:rail ≈ 2.43:1, with ~80px gap. */
