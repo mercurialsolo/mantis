@@ -864,6 +864,12 @@ def _run_holo3_executor(
         workflow_id = task_suite.get("_workflow_id", state_key)
         checkpoint_path = task_suite.get("_checkpoint_path") or f"/data/checkpoints/micro_{session_name}_{run_id}.json"
         plan_signature = task_suite.get("_plan_signature", "")
+        # #638 axis 2 follow-up: stable human-readable plan identifier
+        # (e.g. ``boattrader_scrape_urlnav``). Set by the orchestrator
+        # at suite-build time from the source file stem. The Augur
+        # adapter reads ``runner.plan_name`` and emits it as a tag so
+        # the Runs list can group different runs of the same plan.
+        plan_name = task_suite.get("_plan_name", "")
 
         print(f"\n  === MICRO-INTENT MODE ({len(micro_plan.steps)} steps) ===")
         print(micro_plan.summary())
@@ -933,6 +939,12 @@ def _run_holo3_executor(
         # ``log_progress`` falls back to the legacy format unchanged.
         branch_id = str(task_suite.get("_fanout_branch_id", "") or "")
         micro_runner._worker_tag = branch_id.rsplit(":", 1)[-1] if ":" in branch_id else ""
+        # #638 axis 2 follow-up: expose the plan_name as a runner
+        # attribute so ``RunExecutor`` can emit it as an Augur tag.
+        # Empty string is fine — Augur stores it as a tag regardless,
+        # and ad-hoc runs with no plan-file source legitimately have no
+        # canonical name.
+        micro_runner.plan_name = plan_name
 
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
         # API container's ``action=reasoning_trace`` reads this file
@@ -1670,6 +1682,11 @@ def _build_suite_from_payload(payload: dict) -> str:
         max_recoveries_per_run=payload.get("max_recoveries_per_run"),
         max_recoveries_per_step=payload.get("max_recoveries_per_step"),
     )
+    # #638 axis 2 follow-up: stamp a human-readable plan_name on the
+    # suite so the Augur Runs list can group runs of the same plan.
+    # ``payload['plan_name']`` wins when the caller sets it; otherwise
+    # fall back to the source file stem (e.g. ``boattrader_scrape_urlnav``).
+    suite["_plan_name"] = str(payload.get("plan_name") or path.stem or "")
     return json.dumps(suite)
 
 
@@ -2818,7 +2835,13 @@ def main(
             with open(micro) as f:
                 raw = json.load(f)
             raw_steps = raw["steps"] if isinstance(raw, dict) and "steps" in raw else raw
-            micro_plan = MicroPlan(domain="direct_json")
+            # #638 axis 2 follow-up: domain mirrors the file stem so
+            # Augur tags expose the same human-readable identifier as
+            # the suite-level _plan_name (set on the suite below). The
+            # legacy hardcode ``"direct_json"`` made every JSON-micro
+            # run look identical in the Runs list regardless of plan.
+            from pathlib import Path as _Path
+            micro_plan = MicroPlan(domain=_Path(micro).stem)
             for s in raw_steps:
                 micro_plan.steps.append(PlanDecomposer._build_intent(s))
             # Hand-authored / cached step lists frequently omit
@@ -2890,6 +2913,14 @@ def main(
                 micro_plan, "pagination_url_template", "",
             ) or "",
         )
+        # #638 axis 2 follow-up: stable human-readable plan identifier
+        # for Augur grouping. ``micro_plan.domain`` is already set from
+        # the source file stem (JSON-micro / freetext path) or
+        # ``decomposer.decompose(micro)`` returns it. Stamping on the
+        # suite makes it explicit for the executor + survives the
+        # fan-out partition rewrite (each partition inherits via
+        # ``dict(suite_dict)`` in prepare_phase1/2_suite).
+        task_suite["_plan_name"] = str(micro_plan.domain or "")
 
         print(f"  Profile:  {task_suite['_profile_id']}")
         print(f"  Workflow: {task_suite['_workflow_id']}")
