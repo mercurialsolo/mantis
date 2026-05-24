@@ -48,6 +48,10 @@ def test_registry_covers_every_step_type_phase2_lifted():
         # #615: collect_urls primitive — single-pass listing URL harvest
         # for the fan-out runner (#616, #617).
         "collect_urls",
+        # #643 stage 2: vision-only yes/no element existence check —
+        # binds boolean to runner._state_vars for ``step.guard`` to
+        # consume on subsequent conditional steps.
+        "detect_visible",
     }
     assert set(reg.types()) == expected
 

@@ -991,6 +991,11 @@ def micro_plan_steps_to_dicts(steps: list[Any]) -> list[dict[str, Any]]:
             "gate": s.gate,
             "params": dict(getattr(s, "params", {}) or {}),
             "hints": dict(getattr(s, "hints", {}) or {}),
+            # #643 stage 2: vision-only conditional step support.
+            # Empty strings on legacy plans so the receiving
+            # MicroIntent gets the field defaults.
+            "guard": str(getattr(s, "guard", "") or ""),
+            "out_var": str(getattr(s, "out_var", "") or ""),
         }
         for s in steps
     ]
