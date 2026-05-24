@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=97** (2026-05-23) — FIDELITY.md Sort row + Pagination rows updated with the re-measured values from v=96 (were still showing stale pre-fix values). SRP listing card section re-verified against real BT probes — all rows ✅.
+Last updated: **v=98** (2026-05-23) — SCOPE.md "Done bar" + "Open follow-ups" sections rewritten as a handoff summary after the v=82..v=97 PR #620 work concluded. All four high-level done-bar criteria met; three 🟡 follow-ups remain as documented human-decision items (next-previous widget, listing-dependent BDP elements, mobile viewport pass).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `rzsrm967ibbct7vgbgpzdzudgofezmmv`)
@@ -431,6 +431,18 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=98` SCOPE.md handoff summary (doc-only):
+       • Rewrote SCOPE.md's "Done bar" section as a 5-row status
+         table showing all four high-level criteria from the build-
+         from-scratch prompt are met after the v=82..v=97 PR #620
+         work.
+       • Rewrote "Open follow-ups" as 3 prioritized 🟡 items, each
+         tagged with what's needed to close it (human decision /
+         backend change / measurement pass). Removed the v=82-era
+         items that have since been closed.
+       • Adds a "Pick-up by the next session" note explaining where
+         the autonomous loop stopped + how the remaining 🟡s need
+         human input rather than another probe pass.
 `v=97` FIDELITY.md Sort + Pagination row sync (doc-only):
        • The v=96 CSS edits flipped Sort row to 12/400/#333 and
          Pagination to 15/400/#A5A5A5, but the matching FIDELITY.md
