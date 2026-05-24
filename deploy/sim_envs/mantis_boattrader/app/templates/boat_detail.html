@@ -366,7 +366,9 @@
         <div><dt>Number of Engines</dt><dd>{{ boat.engine_count }}</dd></div>
         <div><dt>Engine Power</dt><dd>{{ boat.engine_hp }} hp{% if boat.engine_count > 1 %} (each){% endif %}</dd></div>
         <div><dt>Fuel Type</dt><dd>{{ boat.fuel_type }}</dd></div>
+        {% if 'Sail' not in boat.boat_type %}
         <div><dt>Engine Hours</dt><dd>{{ boat.hours if boat.hours else '—' }}</dd></div>
+        {% endif %}
       </dl>
     </div>
   </details>
