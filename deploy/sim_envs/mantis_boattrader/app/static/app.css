@@ -1723,11 +1723,19 @@ body.bdp-scrolled-deep .sticky-save {
   gap: 4px;
   position: relative;
 }
+/* Real BT engagement-row divider: 1px wide × 12px tall vertical line
+   via bg color rgb(222,226,227). Sandbox used `content: "|"` which
+   renders as the actual pipe character — visibly thicker than real
+   BT's hairline separator. Replaced with a pseudo-element that paints
+   a real 1×12 rectangle. */
 .bdp-engagement-row .engagement-item:not(:last-child)::after {
-  content: "|";
-  color: var(--bt-border);
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 12px;
+  background: rgb(222, 226, 227);
   margin-left: 12px;
-  font-weight: 300;
+  vertical-align: middle;
 }
 .bdp-engagement-row .ico {
   font-size: 13px;
@@ -2041,12 +2049,18 @@ body.bdp-scrolled-deep .sticky-save {
   transition: transform 200ms ease;
 }
 .bdp-accordion[open] .accordion-chevron { transform: rotate(-135deg); }
+/* Real BT accordion body: 15px / 1.3 line-height (19.5px), padding
+   8px 0 0 8px. Was 14/1.55 — too tight on font + too loose on lh. */
 .accordion-body {
-  padding: 16px 0 0;
-  font-size: 14px;
+  padding: 8px 0 0 8px;
+  font-size: 15px;
   color: var(--bt-text);
-  line-height: 1.55;
+  line-height: 1.3;
 }
+/* Real BT description body <p>: 15px margin top and bottom. */
+.bdp-description p { margin: 15px 0; line-height: 1.3; }
+.bdp-description p:first-child { margin-top: 0; }
+.bdp-description p:last-child { margin-bottom: 0; }
 /* Real BT BDP Description body: the seller blurb (first paragraph) is
    rendered bold like a sub-heading, followed by a small uppercase
    "DESCRIPTION" label, then the body paragraphs. Together they take ~3
