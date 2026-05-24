@@ -202,28 +202,10 @@
         </form>
       </div>
 
-      {# Separate dealership card with logo + address + active/sold stats. #}
-      <div class="bdp-dealership-card" data-testid="dealership-card">
-        <div class="dealership-logo-wrap">
-          <div class="dealership-logo">
-            <span class="logo-mark">{{ dealer.logo_initial }}</span>
-            <span class="logo-name">{{ dealer.name|upper }}</span>
-          </div>
-        </div>
-        <p class="dealership-address">{{ dealer.address }}, {{ dealer.city }}, {{ dealer.state }}, {{ dealer.zip }}</p>
-        <p class="trusted-partner">Trusted Boat Trader Partner</p>
-        <div class="dealership-stats">
-          <div class="dealership-stat-box">
-            <span class="dealership-stat-num">{{ dealer.active_listings }}</span>
-            <span class="dealership-stat-label">Active listings</span>
-          </div>
-          <div class="dealership-stat-box">
-            <span class="dealership-stat-num">{{ "{:,}".format(dealer.sold_listings) }}</span>
-            <span class="dealership-stat-label">Sold listings</span>
-          </div>
-        </div>
-        <a href="https://www.{{ dealer.name|lower|replace(' ','-')|replace(',','')|replace('--','-') }}.com" class="visit-seller-link dealership-link" target="_blank" rel="nofollow">Visit Seller Website</a>
-      </div>
+      {# Real BT side-panel does NOT show the dealership logo + active/
+         sold stat boxes — those live only in the full-width "Listed By"
+         block below the loan calculator. Iter14 removed the duplicate
+         right-rail .bdp-dealership-card to match. #}
     {% endif %}
 
     {# ─── Get pre-qualified card (always last in the right rail) ─── #}
