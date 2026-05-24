@@ -972,16 +972,59 @@ def prepare_phase2_suites(
     # navigates directly to a listing URL, no results-page touch.
     steps_raw = suite_dict.get("_micro_plan") or []
 
-    # Find the extract_data body step to clone — that's the per-listing
-    # extraction operator the Phase-1/Phase-2 split is built around.
-    # Fall back to a minimal hand-built extract_data if absent.
     body_dicts = steps_raw[group.body_range[0]: group.body_range[1]]
-    extract_template = next(
-        (_step_dict_clone(s) for s in body_dicts if s.get("type") == "extract_data"),
+
+    # Per-URL extraction sequence: everything in the loop body from the
+    # first ``scroll`` step onwards, minus ``navigate_back`` (loop-iter
+    # mechanics — Phase-2 already isolates each URL into its own
+    # navigate). Captures any in-page interactions the plan author
+    # placed BETWEEN scroll and extract_data (e.g. ``click(Show More)``
+    # to expand a truncated description so phone numbers buried in the
+    # freeform text become extractable).
+    #
+    # Steps BEFORE the first scroll (typically ``click(listing_card)``
+    # + ``extract_url``) are loop-navigation: they're how the original
+    # plan transitions from results-page → detail-page. Phase-2 skips
+    # them because each worker navigates directly to a known URL.
+    #
+    # Fallback: when the body has no ``scroll`` (degenerate plans) we
+    # synthesize the legacy ``(scroll, extract_data)`` pair so existing
+    # tests + production plans built before this rewrite continue to
+    # work unchanged.
+    first_scroll_idx = next(
+        (i for i, s in enumerate(body_dicts) if s.get("type") == "scroll"),
         None,
     )
-    if extract_template is None:
-        extract_template = {
+    if first_scroll_idx is not None:
+        per_url_templates = [
+            _step_dict_clone(s)
+            for s in body_dicts[first_scroll_idx:]
+            if s.get("type") != "navigate_back"
+        ]
+    else:
+        per_url_templates = [
+            {
+                "intent": "Scroll the listing page to surface description + more details",
+                "type": "scroll",
+                "section": "extraction",
+                "budget": 10,
+                "required": False,
+                "params": {},
+                "hints": {},
+                "claude_only": False,
+                "gate": False,
+                "loop_target": -1,
+                "loop_count": 0,
+                "grounding": False,
+                "verify": "",
+                "reverse": "",
+            },
+        ]
+        extract_from_body = next(
+            (_step_dict_clone(s) for s in body_dicts if s.get("type") == "extract_data"),
+            None,
+        )
+        per_url_templates.append(extract_from_body or {
             "intent": "Extract structured fields from the listing detail page",
             "type": "extract_data",
             "section": "extraction",
@@ -996,23 +1039,7 @@ def prepare_phase2_suites(
             "grounding": False,
             "verify": "",
             "reverse": "",
-        }
-    scroll_template = {
-        "intent": "Scroll the listing page to surface description + more details",
-        "type": "scroll",
-        "section": "extraction",
-        "budget": 10,
-        "required": False,
-        "params": {},
-        "hints": {},
-        "claude_only": False,
-        "gate": False,
-        "loop_target": -1,
-        "loop_count": 0,
-        "grounding": False,
-        "verify": "",
-        "reverse": "",
-    }
+        })
 
     def _navigate_step(url: str) -> dict:
         return {
@@ -1037,8 +1064,8 @@ def prepare_phase2_suites(
         plan_steps: list[dict] = []
         for url in chunk:
             plan_steps.append(_navigate_step(url))
-            plan_steps.append(dict(scroll_template))
-            plan_steps.append(dict(extract_template))
+            for tmpl in per_url_templates:
+                plan_steps.append(_step_dict_clone(tmpl))
         sub_suite = dict(suite_dict)
         sub_suite["_micro_plan"] = plan_steps
         # Drop loop_groups — the rewritten plan has no loops.
