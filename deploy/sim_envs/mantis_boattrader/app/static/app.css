@@ -400,17 +400,19 @@ header.main {
 .dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.5); }
 .dot.active { background: #fff; }
 
-/* ── Ad strips ─ Real BT BDP top sponsor: bg #f7f7f7, padding 16px 0,
-   ad image inside is fixed 728×90 leaderboard. ─────────────────── */
+/* ── Ad strips — Real BT BDP top sponsor: 970×120 banner inside a
+   tight #f7f7f7 strip (~122px total height, ~1px breathing room above
+   and below the banner). Was 728×90 with 16+24px padding/margin which
+   bloated the strip to ~170px total. ─────────────────────────────── */
 .ad-strip {
   background: #f7f7f7;
-  padding: 16px 0;
+  padding: 1px 0;
   display: flex; justify-content: center;
-  margin: 24px 0;
+  margin: 0;
 }
 .ad-banner {
-  position: relative; max-width: 728px; width: 100%; height: 90px;
-  border-radius: var(--bt-radius); overflow: hidden;
+  position: relative; max-width: 970px; width: 100%; height: 120px;
+  border-radius: 0; overflow: hidden;
 }
 .ad-banner img { width: 100%; display: block; }
 .ad-card {
@@ -1541,19 +1543,21 @@ body.bdp-scrolled-deep .sticky-save {
   cursor: pointer; white-space: nowrap;
 }
 
-/* Match .bdp-grid's 1336px max-width so `< Search` and Previous/Next
-   align with the gallery + right-rail content beneath, not the wider
-   1440px `.bt-main` container. Without this, the row spreads to the
-   full main width and the breadcrumb appears further left/right than
-   the content below it. */
+/* Real BT BDP nav row layout (per Beneteau probe, 2026-05-24):
+     `< Search` (left) [gap] breadcrumb (left, after Search) [flex grow]
+     Previous Boat | Next Boat (right edge)
+   NOT space-between — breadcrumb hugs `< Search` rather than centering.
+   Achieved with `display: flex; gap: 24px` (default flex-start) and
+   `margin-left: auto` on `.bdp-nav-actions` to push Previous/Next
+   to the right edge. */
 .bdp-nav-row {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center;
   max-width: 1336px;
   margin: 8px auto 14px;
   font-size: 12px; color: var(--bt-blue);
   gap: 24px;
 }
-.bdp-nav-actions { display: flex; gap: 16px; }
+.bdp-nav-actions { display: flex; gap: 16px; margin-left: auto; }
 /* Real BT BDP top links 'Back to Search' / 'Next Boat' / 'Previous Boat':
    12/400 #139af5 (plain words, no chevrons). */
 .bdp-back, .bdp-next, .bdp-prev { font-size: 12px; font-weight: 400; color: #139af5; text-decoration: none; }
