@@ -327,23 +327,16 @@
     </summary>
     <div class="accordion-body bdp-description-body" data-clampable="1">
       <div class="bdp-description-clamped">
+        {# Real BT BDP Description body: bold seller blurb at top, a small
+           UPPERCASE "DESCRIPTION" label between blurb and body, then the
+           description paragraphs. No "Key Features" sub-section, no
+           owner-only disclaimer paragraph — both were sandbox additions
+           that don't exist in real BT and inflate the clamp region. #}
         <p class="bdp-seller-blurb">{{ boat.owner_seller_description }}</p>
+        <p class="bdp-description-label">DESCRIPTION</p>
         <div class="bdp-description">
           {% for para in boat.description %}<p>{{ para }}</p>{% endfor %}
         </div>
-        {% if boat.description_features %}
-          <h3 class="bdp-feature-h3">Key Features</h3>
-          <ul class="bdp-feature-list">
-            {% for f in boat.description_features %}<li>{{ f }}</li>{% endfor %}
-          </ul>
-        {% endif %}
-        {% if boat.is_owner_listed %}
-          <p class="bdp-disclaimer-text">
-            This listing was placed by a private seller. Boat Trader has not verified
-            the accuracy of any claims made in the description. Always inspect a boat
-            in person and obtain a marine survey before any purchase decision.
-          </p>
-        {% endif %}
       </div>
       <button type="button" class="bdp-show-more" data-show-more>Show More</button>
     </div>
@@ -435,15 +428,18 @@
   </a>
 </section>
 
-{# ─── Loan Calculator ──────────────────────────────────────── #}
+{# ─── Loan Calculator — matches real BT BDP probe (2026-05-24):
+   • Form: 4 fields only — Year / Purchase Price / Down Payment / Loan Term (Months)
+     (was 5: Loan Type + Year + Purchase Price + Down Payment + Credit Score (FICO))
+   • Preview pane: huge monthly ($X.XX, 50px), TOTAL LOAN AMOUNT line,
+     horizontal rule, See Important Disclosure link only.
+     The Get Pre-Qualified button + bullet list belong to a separate
+     right-rail "Get pre-qualified in minutes" card, NOT this preview. #}
 <section class="bdp-loan-card" id="loan-calculator" data-testid="loan-calculator">
   <div class="loan-card-grid">
     <div class="loan-form">
       <h3 class="loan-form-heading">Boat Loan Payment Calculator</h3>
       <p class="loan-form-sub">Estimate your monthly payment based on the boat you want to buy and your specific loan need.</p>
-      <label class="loan-field"><span>Loan Type</span>
-        <select class="filter-select"><option>{{ boat.condition|capitalize }} Boat Loan</option><option>New Boat Loan</option></select>
-      </label>
       <label class="loan-field"><span>Year</span>
         <select class="filter-select"><option>{{ boat.year }}</option></select>
       </label>
@@ -451,26 +447,17 @@
         <input type="text" class="filter-input" value="{{ boat.display_price }}" />
       </label>
       <label class="loan-field"><span>Down Payment</span>
-        <input type="text" class="filter-input" value="${{ ((boat.price or 0) * 0.10)|int }}" />
+        <input type="text" class="filter-input" value="${{ ((boat.price or 0) * 0.15)|int }}" />
       </label>
-      <label class="loan-field"><span>Credit Score (FICO)</span>
-        <select class="filter-select"><option>800-850</option><option>740-799</option><option>670-739</option></select>
+      <label class="loan-field"><span>Loan Term (Months)</span>
+        <select class="filter-select"><option>240</option><option>180</option><option>120</option><option>60</option></select>
       </label>
     </div>
     <div class="loan-preview">
-      <h3 class="loan-preview-heading">Here is what your monthly payment might look like:</h3>
-      <p class="loan-apr"><strong>{{ '%.2f'|format(7.49 if boat.condition == 'new' else 8.24) }}%</strong> APR</p>
+      <h3 class="loan-preview-heading">Here is what your monthly payment<br/>might look like:</h3>
       <p class="loan-payment">{{ boat.display_monthly|replace('/mo*','')|replace('/mo','') if boat.display_monthly else '$—' }}</p>
-      <p class="loan-total">TOTAL LOAN AMOUNT <strong>${{ ((boat.price or 0) * 0.90)|int }}</strong></p>
-      <p class="loan-term"><strong>180</strong> MONTHS</p>
-      <a href="/boat-loans/" class="btn-secondary loan-prequal-btn">Get Pre-Qualified</a>
+      <p class="loan-total">TOTAL LOAN AMOUNT <strong>${{ ((boat.price or 0) * 0.85)|int }}</strong></p>
       <hr class="loan-divider" />
-      <h4 class="loan-bullets-heading">Get pre-qualified in minutes</h4>
-      <ul class="prequal-bullets">
-        <li><span class="prequal-check">✓</span> We'll compare over 15 lenders to get you the best rate &amp; terms</li>
-        <li><span class="prequal-check">✓</span> Customized financing to meet your needs</li>
-        <li><span class="prequal-check">✓</span> Over 25 years of marine lending experience</li>
-      </ul>
       <a href="#" class="loan-disclosure-link">See Important Disclosure<sup>3</sup></a>
     </div>
   </div>

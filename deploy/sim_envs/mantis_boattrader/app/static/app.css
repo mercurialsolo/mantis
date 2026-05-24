@@ -2038,8 +2038,23 @@ body.bdp-scrolled-deep .sticky-save {
   color: var(--bt-text);
   line-height: 1.55;
 }
+/* Real BT BDP Description body: the seller blurb (first paragraph) is
+   rendered bold like a sub-heading, followed by a small uppercase
+   "DESCRIPTION" label, then the body paragraphs. Together they take ~3
+   visible lines above the clamp boundary. */
 .bdp-seller-blurb {
-  margin: 0 0 14px;
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--bt-text);
+  line-height: 1.4;
+}
+.bdp-description-label {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--bt-text);
+  letter-spacing: 1px;
 }
 .bdp-map-placeholder {
   margin-top: 12px;
@@ -2100,18 +2115,22 @@ body.bdp-scrolled-deep .sticky-save {
   margin: 18px 0 0;
 }
 .loan-apr strong { font-size: 18px; font-weight: 700; }
+/* Real BT loan-preview monthly payment: 50px / 700 / centered, with
+   tight letter-spacing. Was 48px (close, bumped to match probe). */
 .loan-payment {
-  font-size: 48px;
+  font-size: 50px;
   font-weight: 700;
   color: var(--bt-text);
-  margin: 4px 0 8px;
+  margin: 16px 0 12px;
   letter-spacing: -1px;
+  text-align: center;
 }
 .loan-total {
   font-size: 13px;
   color: var(--bt-text);
   letter-spacing: 0.8px;
   margin: 8px 0;
+  text-align: center;
 }
 .loan-term {
   font-size: 13px;
