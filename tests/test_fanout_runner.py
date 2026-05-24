@@ -24,6 +24,7 @@ from typing import Any
 from mantis_agent.gym.checkpoint import StepResult
 from mantis_agent.gym.fanout_runner import (
     DEFAULT_PAGINATION_URL_TEMPLATE,
+    DEFAULT_PHASE1_MAX_PAGES,
     LocalFanoutRunner,
     NullSharedSeenSet,
     _InMemorySharedSeenSet,
@@ -39,6 +40,7 @@ from mantis_agent.gym.fanout_runner import (
     prepare_phase1_suite,
     prepare_phase2_suites,
     read_partition_result,
+    resolve_phase1_max_pages,
     rewrite_for_fanout,
 )
 from mantis_agent.plan_decomposer import (
@@ -897,6 +899,156 @@ def test_phase1_suite_tags_phase_metadata() -> None:
     phase1 = prepare_phase1_suite(suite, g)
     assert phase1["_fanout_phase"] == "phase1_collect"
     assert phase1["session_name"].endswith("_phase1")
+
+
+# ── #638 axis 2: multi-page Phase-1 ──────────────────────────────────
+
+
+def test_phase1_suite_max_pages_one_is_single_collect() -> None:
+    """max_pages=1 → no navigate inserted after the setup chain; one
+    collect_urls only. Backward compatible with the original #628 shape."""
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    phase1 = prepare_phase1_suite(suite, g, max_pages=1)
+    types = [s["type"] for s in phase1["_micro_plan"]]
+    assert types == ["navigate", "collect_urls"]
+
+
+def test_phase1_suite_max_pages_three_chains_nav_collect() -> None:
+    """max_pages=3 → setup navigate + collect_urls + navigate(page-2) +
+    collect_urls + navigate(page-3) + collect_urls."""
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    phase1 = prepare_phase1_suite(suite, g, max_pages=3)
+    types = [s["type"] for s in phase1["_micro_plan"]]
+    assert types == [
+        "navigate", "collect_urls",
+        "navigate", "collect_urls",
+        "navigate", "collect_urls",
+    ]
+
+
+def test_phase1_suite_max_pages_three_synthesizes_page_urls() -> None:
+    """Pages 2..N synthesised via the default pagination url_template,
+    matching what the per-page fan-out path uses."""
+    suite = _url_collect_suite()
+    # Setup navigate base URL is https://x.com/listings.
+    g = find_url_collect_group(suite)
+    phase1 = prepare_phase1_suite(suite, g, max_pages=3)
+    nav_urls = [
+        s["params"]["url"] for s in phase1["_micro_plan"]
+        if s["type"] == "navigate"
+    ]
+    # First navigate is the original setup URL; pages 2 and 3 follow
+    # the default ``{base}/page-{n}/`` template.
+    assert nav_urls[0] == "https://x.com/listings"
+    assert nav_urls[1].endswith("/page-2/")
+    assert nav_urls[2].endswith("/page-3/")
+
+
+def test_phase1_suite_max_pages_template_override() -> None:
+    """Custom url_template propagates from caller into the synthesised
+    page-N navigate steps."""
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    phase1 = prepare_phase1_suite(
+        suite, g, max_pages=2, pagination_url_template="{base}?p={n}",
+    )
+    nav_urls = [
+        s["params"]["url"] for s in phase1["_micro_plan"]
+        if s["type"] == "navigate"
+    ]
+    assert nav_urls[1].endswith("?p=2")
+
+
+def test_phase1_suite_records_max_pages_metadata() -> None:
+    suite = _url_collect_suite()
+    g = find_url_collect_group(suite)
+    phase1 = prepare_phase1_suite(suite, g, max_pages=3)
+    assert phase1["_fanout_phase1_pages"] == 3
+
+
+def test_phase1_suite_max_pages_silently_falls_back_without_base_url() -> None:
+    """If the setup chain has no navigate (degenerate plan), Phase-1 falls
+    back to single-page mode rather than crashing — the operator gets
+    fewer URLs but the worker still runs."""
+    suite = _url_collect_suite()
+    # Strip the setup navigate by truncating the micro_plan from
+    # body_start. Rebuild loop_groups against the stripped sequence.
+    g = find_url_collect_group(suite)
+    body_start, _ = g.body_range
+    # Replace the setup navigate with a dummy non-navigate step so the
+    # body range stays valid but base_url resolution returns "".
+    suite["_micro_plan"][0]["type"] = "wait"
+    suite["_micro_plan"][0]["params"] = {}
+    phase1 = prepare_phase1_suite(suite, g, max_pages=3)
+    types = [s["type"] for s in phase1["_micro_plan"]]
+    # Only one collect_urls fires — no page-2/page-3 chain because no
+    # base URL was resolvable.
+    assert types.count("collect_urls") == 1
+    assert "navigate" not in types  # only the wait step remains
+
+
+# ── #638 axis 2: resolve_phase1_max_pages ────────────────────────────
+
+
+def test_resolve_phase1_max_pages_default_when_no_pagination_group() -> None:
+    """Plan without a parallelizable_pagination group → max_pages=1."""
+    suite = _url_collect_suite()
+    max_pages, template = resolve_phase1_max_pages(suite)
+    assert max_pages == 1
+    assert template == DEFAULT_PAGINATION_URL_TEMPLATE
+
+
+def test_resolve_phase1_max_pages_uses_pagination_loop_count() -> None:
+    """Pagination loop_count=4 → max_pages=min(4, DEFAULT_PHASE1_MAX_PAGES)."""
+    suite = _pagination_plan_suite()
+    max_pages, _ = resolve_phase1_max_pages(suite)
+    assert max_pages == min(4, DEFAULT_PHASE1_MAX_PAGES)
+
+
+def test_resolve_phase1_max_pages_unset_loop_count_defaults_to_cap() -> None:
+    """When the pagination loop has no loop_count (None / 0) but the
+    group exists, default to DEFAULT_PHASE1_MAX_PAGES — the existence of
+    a parallelizable_pagination group is enough signal that Phase-1
+    should harvest beyond page 1. Mirrors the per-page partitioning
+    path's ``or 5`` default."""
+    suite = _pagination_plan_suite()
+    for step in suite["_micro_plan"]:
+        if step.get("type") == "loop" and step.get("section") == "pagination":
+            step["loop_count"] = 0  # mimic _fix_loop_targets leaving it unset
+    max_pages, _ = resolve_phase1_max_pages(suite)
+    assert max_pages == DEFAULT_PHASE1_MAX_PAGES
+
+
+def test_resolve_phase1_max_pages_clamps_to_default_cap() -> None:
+    """A plan with loop_count=50 should be clamped to DEFAULT_PHASE1_MAX_PAGES
+    so Phase-1 cost stays bounded."""
+    suite = _pagination_plan_suite()
+    # Bump the outer loop count past the cap.
+    for step in suite["_micro_plan"]:
+        if step.get("type") == "loop" and step.get("section") == "pagination":
+            step["loop_count"] = 50
+    max_pages, _ = resolve_phase1_max_pages(suite)
+    assert max_pages == DEFAULT_PHASE1_MAX_PAGES
+
+
+def test_resolve_phase1_max_pages_honours_explicit_override() -> None:
+    """An explicit ``_fanout_phase1_max_pages`` on the suite overrides
+    the pagination loop_count + the default cap."""
+    suite = _pagination_plan_suite()
+    suite["_fanout_phase1_max_pages"] = 7
+    max_pages, _ = resolve_phase1_max_pages(suite)
+    assert max_pages == 7
+
+
+def test_resolve_phase1_max_pages_picks_up_plan_template_override() -> None:
+    """Plan-level ``_pagination_url_template`` (set by #629) wins over
+    the default."""
+    suite = _pagination_plan_suite()
+    suite["_pagination_url_template"] = "{base}?page={n}"
+    _, template = resolve_phase1_max_pages(suite)
+    assert template == "{base}?page={n}"
 
 
 # ── prepare_phase2_suites ────────────────────────────────────────────

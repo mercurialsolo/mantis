@@ -226,7 +226,13 @@ executor_image = (
         # 0.1.2+ fires an immediate session-opened heartbeat so the
         # workspace's connection badge updates the moment the SDK is
         # wired up, before the first step lands.
-        "augur-sdk>=0.1.9",
+        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``, which
+        # the fan-out runner needs to label Phase-1/Phase-2 worker
+        # sessions under a shared parent_run_id. Stale 0.1.x pins
+        # silently drop events from every fan-out worker — the adapter
+        # catches the TypeError and the worker session never opens.
+        "augur-sdk>=0.2.1,<0.3",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -858,6 +864,12 @@ def _run_holo3_executor(
         workflow_id = task_suite.get("_workflow_id", state_key)
         checkpoint_path = task_suite.get("_checkpoint_path") or f"/data/checkpoints/micro_{session_name}_{run_id}.json"
         plan_signature = task_suite.get("_plan_signature", "")
+        # #638 axis 2 follow-up: stable human-readable plan identifier
+        # (e.g. ``boattrader_scrape_urlnav``). Set by the orchestrator
+        # at suite-build time from the source file stem. The Augur
+        # adapter reads ``runner.plan_name`` and emits it as a tag so
+        # the Runs list can group different runs of the same plan.
+        plan_name = task_suite.get("_plan_name", "")
 
         print(f"\n  === MICRO-INTENT MODE ({len(micro_plan.steps)} steps) ===")
         print(micro_plan.summary())
@@ -917,6 +929,22 @@ def _run_holo3_executor(
             )
         except Exception as exc:  # noqa: BLE001
             print(f"  WARNING: fanout branch_context init failed: {exc}")
+
+        # #638 axis 2 follow-up: derive a short worker tag from the
+        # fan-out branch_id so per-step log lines can be greppable per-
+        # worker in the interleaved orchestrator stdout. The branch_id
+        # shape is ``{parent_run_id}:{phase_tag}`` (e.g.
+        # ``fanout-XXX:phase2_w3``) — take only the suffix after ``:``.
+        # Empty when no branch_id is set (single-container runs) so
+        # ``log_progress`` falls back to the legacy format unchanged.
+        branch_id = str(task_suite.get("_fanout_branch_id", "") or "")
+        micro_runner._worker_tag = branch_id.rsplit(":", 1)[-1] if ":" in branch_id else ""
+        # #638 axis 2 follow-up: expose the plan_name as a runner
+        # attribute so ``RunExecutor`` can emit it as an Augur tag.
+        # Empty string is fine — Augur stores it as a tag regardless,
+        # and ad-hoc runs with no plan-file source legitimately have no
+        # canonical name.
+        micro_runner.plan_name = plan_name
 
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
         # API container's ``action=reasoning_trace`` reads this file
@@ -1359,7 +1387,13 @@ def _run_gemma4_cua_executor(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
         # #509: parity with run_holo3 — Gemma4 also runs the augur wedge.
-        "augur-sdk>=0.1.9",
+        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``, which
+        # the fan-out runner needs to label Phase-1/Phase-2 worker
+        # sessions under a shared parent_run_id. Stale 0.1.x pins
+        # silently drop events from every fan-out worker — the adapter
+        # catches the TypeError and the worker session never opens.
+        "augur-sdk>=0.2.1,<0.3",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -1406,7 +1440,13 @@ claude_executor_image = (
         # #509: parity with run_holo3 / run_gemma4_cua — Claude executor
         # also runs the augur wedge so bundles + streaming work for the
         # Anthropic-API tier.
-        "augur-sdk>=0.1.9",
+        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``, which
+        # the fan-out runner needs to label Phase-1/Phase-2 worker
+        # sessions under a shared parent_run_id. Stale 0.1.x pins
+        # silently drop events from every fan-out worker — the adapter
+        # catches the TypeError and the worker session never opens.
+        "augur-sdk>=0.2.1,<0.3",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -1539,7 +1579,13 @@ api_image = (
         # is lazy-imported but if augur_sdk is missing it falls back
         # silently — keeping the dep here makes the import succeed and
         # lets future API-side bundle reads work without a redeploy.
-        "augur-sdk>=0.1.9",
+        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``, which
+        # the fan-out runner needs to label Phase-1/Phase-2 worker
+        # sessions under a shared parent_run_id. Stale 0.1.x pins
+        # silently drop events from every fan-out worker — the adapter
+        # catches the TypeError and the worker session never opens.
+        "augur-sdk>=0.2.1,<0.3",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -1636,6 +1682,11 @@ def _build_suite_from_payload(payload: dict) -> str:
         max_recoveries_per_run=payload.get("max_recoveries_per_run"),
         max_recoveries_per_step=payload.get("max_recoveries_per_step"),
     )
+    # #638 axis 2 follow-up: stamp a human-readable plan_name on the
+    # suite so the Augur Runs list can group runs of the same plan.
+    # ``payload['plan_name']`` wins when the caller sets it; otherwise
+    # fall back to the source file stem (e.g. ``boattrader_scrape_urlnav``).
+    suite["_plan_name"] = str(payload.get("plan_name") or path.stem or "")
     return json.dumps(suite)
 
 
@@ -2393,7 +2444,13 @@ def api():
         # so augur-sdk has to be added here separately. Without this the
         # AugurAdapter init logs sdk_available=False and is a no-op even
         # though the package is in executor_image for the other tiers.
-        "augur-sdk>=0.1.9",
+        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``, which
+        # the fan-out runner needs to label Phase-1/Phase-2 worker
+        # sessions under a shared parent_run_id. Stale 0.1.x pins
+        # silently drop events from every fan-out worker — the adapter
+        # catches the TypeError and the worker session never opens.
+        "augur-sdk>=0.2.1,<0.3",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE).add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -2771,12 +2828,31 @@ def main(
 
         elif micro.endswith(".json"):
             print(f"  Mode:    Micro-Intent → {cua_config['name']}")
-            # Load pre-built micro-plan JSON directly (no decomposition)
+            # Load pre-built micro-plan JSON directly (no decomposition).
+            # Accept either a raw steps list OR a dict with a ``steps`` key
+            # — the latter is what plan files (e.g. ``plans/boattrader_*``)
+            # carry alongside ``shapes`` metadata.
             with open(micro) as f:
-                raw_steps = json.load(f)
-            micro_plan = MicroPlan(domain="direct_json")
+                raw = json.load(f)
+            raw_steps = raw["steps"] if isinstance(raw, dict) and "steps" in raw else raw
+            # #638 axis 2 follow-up: domain mirrors the file stem so
+            # Augur tags expose the same human-readable identifier as
+            # the suite-level _plan_name (set on the suite below). The
+            # legacy hardcode ``"direct_json"`` made every JSON-micro
+            # run look identical in the Runs list regardless of plan.
+            from pathlib import Path as _Path
+            micro_plan = MicroPlan(domain=_Path(micro).stem)
             for s in raw_steps:
                 micro_plan.steps.append(PlanDecomposer._build_intent(s))
+            # Hand-authored / cached step lists frequently omit
+            # ``loop_target`` (issue #605) — the orchestrator's fan-out
+            # classifier then sees self-pointing loops and falls back to
+            # ``sequential``, defeating the parallelizable_url_collect /
+            # parallelizable_pagination path entirely. Run the same
+            # normalization + classification that ``decompose()`` runs so
+            # ``--micro <file.json> --workers N`` actually fans out.
+            PlanDecomposer._fix_loop_targets(micro_plan)
+            PlanDecomposer._classify_loop_groups(micro_plan)
         else:
             print(f"  Mode:    Micro-Intent → {cua_config['name']}")
             # Decompose plain text plan into micro-intents (Claude Sonnet, cached)
@@ -2837,6 +2913,14 @@ def main(
                 micro_plan, "pagination_url_template", "",
             ) or "",
         )
+        # #638 axis 2 follow-up: stable human-readable plan identifier
+        # for Augur grouping. ``micro_plan.domain`` is already set from
+        # the source file stem (JSON-micro / freetext path) or
+        # ``decomposer.decompose(micro)`` returns it. Stamping on the
+        # suite makes it explicit for the executor + survives the
+        # fan-out partition rewrite (each partition inherits via
+        # ``dict(suite_dict)`` in prepare_phase1/2_suite).
+        task_suite["_plan_name"] = str(micro_plan.domain or "")
 
         print(f"  Profile:  {task_suite['_profile_id']}")
         print(f"  Workflow: {task_suite['_workflow_id']}")
@@ -2890,6 +2974,7 @@ def main(
         from mantis_agent.gym.fanout_runner import (
             find_url_collect_group, prepare_modal_partitions,
             prepare_phase1_suite, prepare_phase2_suites,
+            resolve_phase1_max_pages,
         )
 
         # #627: create a per-run shared seen-URL set keyed by a unique
@@ -2938,8 +3023,23 @@ def main(
         url_collect_group = find_url_collect_group(task_suite)
         if url_collect_group is not None:
             executor_fn = EXECUTOR_MAP.get(model, run_holo3)
-            print("\n  ═══ PHASE-1 (#628): URL collection on 1 container ═══")
-            phase1_suite = prepare_phase1_suite(task_suite, url_collect_group)
+            # #638 axis 2: walk N pagination pages in Phase-1 so the
+            # serial URL-harvest container can dominate the per-page
+            # fanout on coverage. Cap derived from the plan's
+            # parallelizable_pagination loop_count (clamped) or from an
+            # explicit ``_fanout_phase1_max_pages`` suite override.
+            phase1_max_pages, phase1_template = resolve_phase1_max_pages(
+                task_suite,
+            )
+            print(
+                f"\n  ═══ PHASE-1 (#628): URL collection on 1 container "
+                f"(max_pages={phase1_max_pages}, template={phase1_template!r}) ═══"
+            )
+            phase1_suite = prepare_phase1_suite(
+                task_suite, url_collect_group,
+                max_pages=phase1_max_pages,
+                pagination_url_template=phase1_template,
+            )
             # #631: per-partition branch_id for Augur grouping.
             phase1_suite["_fanout_branch_id"] = (
                 f"{fanout_parent_run_id}:phase1"

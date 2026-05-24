@@ -257,6 +257,14 @@ class RunExecutor:
             session_name=str(getattr(runner, "session_name", "") or ""),
             extra_tags={
                 "plan_signature": runner.plan_signature or "",
+                # #638 axis 2 follow-up: human-readable plan identifier
+                # (e.g. ``boattrader_scrape_urlnav``) for Augur grouping.
+                # ``plan_signature`` already groups exact-match plans by
+                # hash; ``plan_name`` lets operators filter the Runs list
+                # by plan-family rather than memorising 12-char hashes.
+                # Stable across runs of the same source plan; empty
+                # string for ad-hoc runs that didn't set one.
+                "plan_name": str(getattr(runner, "plan_name", "") or ""),
                 "model": model_name,
                 # #542: surface the plan's total step count as a tag so
                 # the Augur runs-list can render "X / N steps" instead

@@ -362,6 +362,12 @@ def log_progress(
         proxy_cost=proxy_cost,
         total_cost=total_cost,
         elapsed_seconds=elapsed,
+        # #638 axis 2 follow-up: prefix per-step lines with the
+        # fan-out worker tag (e.g. ``phase2_w3``) so the interleaved
+        # orchestrator stdout from N concurrent containers is greppable
+        # per-worker. Empty string in single-container runs preserves
+        # the legacy format byte-for-byte.
+        worker_tag=getattr(runner, "_worker_tag", "") or "",
     ))
     runner.cost_meter.emit_inflight_gauges(
         gpu_cost, claude_cost, proxy_cost, total_cost

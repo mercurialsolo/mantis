@@ -723,6 +723,76 @@ def find_url_collect_group(suite_dict: dict) -> LoopGroup | None:
     return None
 
 
+def resolve_phase1_max_pages(suite_dict: dict) -> tuple[int, str]:
+    """Decide how many pages Phase-1 should walk + the URL template.
+
+    Resolution order for ``max_pages``:
+
+      1. Explicit ``_fanout_phase1_max_pages`` override on the suite
+         (operator/test escape hatch).
+      2. ``loop_count`` of the plan's ``parallelizable_pagination``
+         group, clamped to :data:`DEFAULT_PHASE1_MAX_PAGES` (so a
+         50-page pagination plan doesn't burn $5 in Phase-1).
+      3. Default of 1 (single page — backward compatible with the
+         original #628 Phase-1 shape).
+
+    Resolution order for ``url_template``:
+
+      1. Plan-level ``_pagination_url_template`` (set by #629).
+      2. ``params['url_template']`` on the ``paginate`` step inside
+         the pagination group (back-compat).
+      3. :data:`DEFAULT_PAGINATION_URL_TEMPLATE`.
+
+    Returns ``(max_pages, url_template)``. Callers pass both into
+    :func:`prepare_phase1_suite` as keyword args.
+    """
+    if not suite_dict.get("_micro_plan"):
+        return 1, ""
+    plan = _build_plan_from_suite(suite_dict)
+    explicit = suite_dict.get("_fanout_phase1_max_pages")
+    pagination_group = next(
+        (g for g in plan.loop_groups if g.shape == "parallelizable_pagination"),
+        None,
+    )
+
+    template = DEFAULT_PAGINATION_URL_TEMPLATE
+    plan_tpl = (
+        getattr(plan, "pagination_url_template", "") or ""
+    ).strip()
+    if plan_tpl:
+        template = plan_tpl
+    elif pagination_group is not None:
+        body_start, body_end = pagination_group.body_range
+        paginate_step = next(
+            (s for s in plan.steps[body_start:body_end] if s.type == "paginate"),
+            None,
+        )
+        if paginate_step is not None:
+            custom = (paginate_step.params or {}).get("url_template")
+            if custom:
+                template = str(custom)
+
+    if explicit is not None:
+        try:
+            max_pages = max(1, int(explicit))
+        except (TypeError, ValueError):
+            max_pages = 1
+    elif pagination_group is not None:
+        # Hand-authored plans frequently omit ``loop_count`` on the
+        # pagination loop (the per-page partition path defaults this to
+        # ``5``). Treat absent loop_count as "walk up to
+        # DEFAULT_PHASE1_MAX_PAGES" — the existence of a pagination group
+        # is enough signal that Phase-1 should harvest beyond page 1.
+        loop_count = int(
+            plan.steps[pagination_group.loop_step_idx].loop_count
+            or DEFAULT_PHASE1_MAX_PAGES
+        )
+        max_pages = max(1, min(loop_count, DEFAULT_PHASE1_MAX_PAGES))
+    else:
+        max_pages = 1
+    return max_pages, template
+
+
 def _step_dict_clone(step_dict: dict) -> dict:
     """Shallow-clone a step dict, deep-copying ``params`` + ``hints`` so
     sub-suite mutations don't leak into the source plan."""
@@ -732,30 +802,51 @@ def _step_dict_clone(step_dict: dict) -> dict:
     return cloned
 
 
+#: Default cap on Phase-1 multi-page harvest. Each page costs one
+#: ``collect_urls`` invocation (~$0.05-0.10 with multi-viewport scan)
+#: plus one navigate (~$0.01) — capping at 3 keeps Phase-1 cost
+#: bounded at ~$0.30 in the worst case. Plans that need broader
+#: coverage can lift via ``_fanout_phase1_max_pages`` in the suite,
+#: or via ``paginate.params['url_template']`` + the orchestrator's
+#: pagination loop_count.
+DEFAULT_PHASE1_MAX_PAGES = 3
+
+
 def prepare_phase1_suite(
     suite_dict: dict, group: LoopGroup,
+    *,
+    max_pages: int = 1,
+    pagination_url_template: str = "",
 ) -> dict:
     """Build a one-container Phase-1 sub-suite that harvests listing URLs.
 
-    The Phase-1 worker runs the plan's setup chain (everything BEFORE
-    the extraction loop body) and then a synthesized ``collect_urls``
-    step (#615). The worker returns its harvested URL list to the
-    orchestrator via the result envelope's ``collected_urls`` field
-    (added by :func:`build_micro_result`).
+    Phase-1 runs the plan's setup chain (everything BEFORE the
+    extraction loop body), then walks ``max_pages`` paginated pages
+    accumulating URLs via the ``collect_urls`` handler. The worker
+    returns its harvested URL list to the orchestrator via the result
+    envelope's ``collected_urls`` field (added by
+    :func:`build_micro_result`).
 
-    Phase-1 is a serial bottleneck — one Modal container, no fan-out —
-    so its cost is bounded by the cost of one navigate + a single
-    Claude scan call (~$0.02-0.05). For a 5-page plan this typically
-    runs in ~30-60 seconds vs the ~3-5 min the pagination-fanout's
-    setup chain takes per partition.
+    On ``max_pages=1`` (default) the sub-suite is:
+        setup_steps + collect_urls
+    On ``max_pages=N > 1`` the sub-suite is (#638 axis 2):
+        setup_steps + collect_urls
+                    + navigate(page-2) + collect_urls
+                    + navigate(page-3) + collect_urls
+                    + ...
+    The collect_urls handler appends-with-dedup to
+    ``runner._collected_urls``, so URLs from all pages accumulate
+    into a single list that crosses to the orchestrator on return.
 
-    Steps in the returned sub-suite's ``_micro_plan``:
+    Phase-1 is a serial bottleneck — one Modal container, no fan-out
+    inside. Each page costs ~$0.05-0.10 (multi-viewport scan) + ~$0.01
+    (navigate); ``max_pages=3`` caps the worst-case Phase-1 cost at
+    ~$0.30.
 
-      - All steps BEFORE the loop body (setup navigate, filters,
-        verification gates).
-      - One injected ``collect_urls`` step (claude_only=True,
-        section=extraction) that runs ``CollectUrlsHandler``.
-      - No loop body, no pagination — that's Phase 2's job.
+    ``pagination_url_template`` defaults to the same
+    :data:`DEFAULT_PAGINATION_URL_TEMPLATE` the per-page fan-out uses
+    so the URL synthesis is consistent across both paths. Set to a
+    custom template (e.g. ``"{base}?page={n}"``) to override.
     """
     body_start, _body_end = group.body_range
     loop_idx = group.loop_step_idx
@@ -763,30 +854,76 @@ def prepare_phase1_suite(
     setup_steps = [
         _step_dict_clone(s) for s in steps_raw[:body_start]
     ]
-    collect_step = {
-        "intent": "Collect every listing URL visible on this results page",
-        "type": "collect_urls",
-        "section": "extraction",
-        "claude_only": True,
-        "budget": 0,
-        # required=False (not True) so the runner's step-recovery
-        # policy doesn't trigger agentic_recovery + add_hint retries
-        # on collect_urls failure. The orchestrator already handles
-        # empty collect_urls by falling through to the pagination
-        # path — burning ~$0.20 on 3 doomed Claude scan retries +
-        # critic-row-link recovery attempts is wasted budget.
-        "required": False,
-        "params": {},
-        "hints": {},
-        "gate": False,
-        "loop_target": -1,
-        "loop_count": 0,
-        "grounding": False,
-        "verify": "",
-        "reverse": "",
-    }
+
+    def _collect_step() -> dict:
+        return {
+            "intent": "Collect every listing URL visible on this results page",
+            "type": "collect_urls",
+            "section": "extraction",
+            "claude_only": True,
+            "budget": 0,
+            # required=False (not True) so the runner's step-recovery
+            # policy doesn't trigger agentic_recovery + add_hint retries
+            # on collect_urls failure. The orchestrator already handles
+            # empty collect_urls by falling through to the pagination
+            # path — burning ~$0.20 on 3 doomed Claude scan retries +
+            # critic-row-link recovery attempts is wasted budget.
+            "required": False,
+            "params": {},
+            "hints": {},
+            "gate": False,
+            "loop_target": -1,
+            "loop_count": 0,
+            "grounding": False,
+            "verify": "",
+            "reverse": "",
+        }
+
+    def _navigate_step(url: str) -> dict:
+        return {
+            "intent": f"Navigate to {url}",
+            "type": "navigate",
+            "section": "extraction",
+            "budget": 3,
+            "required": False,
+            "params": {"url": url, "wait_after_load_seconds": 6},
+            "hints": {},
+            "claude_only": False,
+            "gate": False,
+            "loop_target": -1,
+            "loop_count": 0,
+            "grounding": False,
+            "verify": "",
+            "reverse": "",
+        }
+
+    plan_steps: list[dict] = list(setup_steps) + [_collect_step()]
+
+    if max_pages > 1:
+        # Resolve the base URL from the setup navigate so we can
+        # synthesize per-page URLs from the same template the per-page
+        # fanout uses (#629). If no base URL is found, fall back to
+        # single-page mode silently — the operator gets fewer URLs but
+        # no crash.
+        base_url = ""
+        for s in setup_steps:
+            if s.get("type") == "navigate":
+                base_url = (s.get("params") or {}).get("url", "") or ""
+                if base_url:
+                    break
+        template = pagination_url_template or DEFAULT_PAGINATION_URL_TEMPLATE
+        if base_url and "{base}" in template and "{n}" in template:
+            per_page_urls = partition_urls_for_pagination(
+                base_url, max_pages, template=template,
+            )
+            # per_page_urls[0] is the base URL the setup already
+            # navigated to; skip it and append pages 2..max_pages.
+            for url in per_page_urls[1:]:
+                plan_steps.append(_navigate_step(url))
+                plan_steps.append(_collect_step())
+
     sub_suite = dict(suite_dict)
-    sub_suite["_micro_plan"] = setup_steps + [collect_step]
+    sub_suite["_micro_plan"] = plan_steps
     sub_suite["session_name"] = (
         f"{suite_dict.get('session_name', 'fanout')}_phase1"
     )
@@ -799,6 +936,9 @@ def prepare_phase1_suite(
     # Loop_idx is unused but documenting the source body span helps
     # operators when reading the suite payload in dispatch logs.
     sub_suite["_fanout_source_loop_step"] = loop_idx
+    # Record max_pages so the operator can see (in the dispatch log)
+    # how many pages Phase-1 was asked to walk.
+    sub_suite["_fanout_phase1_pages"] = max_pages
     return sub_suite
 
 

@@ -56,6 +56,56 @@ def test_step_progress_line_failed_step():
     assert "[ 7] FAIL" in line
 
 
+# ── #638 axis 2 follow-up: worker_tag prefix ────────────────────────
+
+
+def test_step_progress_line_no_worker_tag_preserves_legacy_format():
+    """``worker_tag=""`` (default) → no prefix; output identical to
+    pre-fanout single-container format. Pinning here so any future
+    tweak to the tag injection can't silently regress single-runner
+    behaviour."""
+    line = RunReporter.step_progress_line(
+        step_index=4,
+        success=True,
+        results=[],
+        gpu_cost=0.1, claude_cost=0.0, proxy_cost=0.0,
+        total_cost=0.1, elapsed_seconds=60.0,
+    )
+    # ``  [`` followed immediately by the step index — no extra prefix
+    # bracket between leading whitespace and the step-index bracket.
+    assert line.startswith("  [ 4] OK ")
+
+
+def test_step_progress_line_worker_tag_prefixes_step_index():
+    """With ``worker_tag="phase2_w3"`` the line is greppable per-worker
+    out of the orchestrator's interleaved stdout."""
+    line = RunReporter.step_progress_line(
+        step_index=4,
+        success=True,
+        results=[],
+        gpu_cost=0.1, claude_cost=0.0, proxy_cost=0.0,
+        total_cost=0.1, elapsed_seconds=60.0,
+        worker_tag="phase2_w3",
+    )
+    assert "[phase2_w3][ 4] OK" in line
+
+
+def test_step_progress_line_empty_worker_tag_no_prefix():
+    """Explicit empty string is treated as no-prefix — guards against
+    accidentally emitting ``[][ 4] OK`` if the suite carries
+    ``_fanout_branch_id=""`` (single-container parent path)."""
+    line = RunReporter.step_progress_line(
+        step_index=4,
+        success=True,
+        results=[],
+        gpu_cost=0.1, claude_cost=0.0, proxy_cost=0.0,
+        total_cost=0.1, elapsed_seconds=60.0,
+        worker_tag="",
+    )
+    assert "[][" not in line
+    assert "  [ 4] OK" in line
+
+
 def test_step_progress_line_with_viable_lead():
     """Lead summary in result.data → counted by ListingDedup, divisor reflected."""
     results = [_viable(3, "VIABLE | year:2020 | make:Acme | url:http://x")]
