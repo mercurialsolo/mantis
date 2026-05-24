@@ -130,13 +130,12 @@ DOMAIN_PROFILES: dict[str, DomainProfile] = {
             "interactive element renders on a fresh Chrome profile."
         ),
     ),
-    # staff-crm-long (synthetic test app served by sim_envs) — same
-    # SPA cold-mount story as lu.ma, plus tab-walk grounding is
-    # finicky enough that operators have repeatedly added an 8s wait
-    # to the first navigate. See ``project_staff_crm_long_*`` memory
-    # files for the multi-day debug history.
-    "staffai.com": DomainProfile(
-        domain="staffai.com",
+    # mantis-crm (synthetic sim_envs CRM — same domain used by
+    # ``SiteConfig.default_mantis_crm()``). SPA cold-mount story like
+    # lu.ma, plus tab-walk grounding is finicky enough that operators
+    # repeatedly added an 8s wait to the first navigate.
+    "mantis-crm": DomainProfile(
+        domain="mantis-crm",
         nav_wait_seconds=8,
         note=(
             "Multi-day stress test surfaced session layout drift + "
