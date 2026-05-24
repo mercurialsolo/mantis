@@ -1106,6 +1106,75 @@ def test_phase2_suites_no_urls_returns_empty_list() -> None:
     assert prepare_phase2_suites(suite, [], g, workers=4) == []
 
 
+def test_phase2_suites_propagate_in_page_click_between_scroll_and_extract() -> None:
+    """Per-URL extraction sequence preserves any in-page click steps
+    the plan author placed BETWEEN ``scroll`` and ``extract_data``
+    (e.g. ``click(Show More)`` to expand a truncated description so
+    phone numbers buried in freeform text become extractable).
+
+    Steps BEFORE the first scroll (listing_card click + extract_url)
+    are loop-iteration mechanics — Phase-2 already isolates each URL
+    via a direct navigate, so those steps must be dropped. Same for
+    ``navigate_back`` which is the loop-tail return.
+    """
+    plan = MicroPlan(domain="x.com")
+    plan.steps = [
+        MicroIntent(
+            intent="Navigate", type="navigate", section="setup",
+            params={"url": "https://x.com/listings"},
+        ),
+        MicroIntent(intent="Click card", type="click", section="extraction"),
+        MicroIntent(intent="Read URL", type="extract_url", section="extraction"),
+        MicroIntent(intent="Scroll", type="scroll", section="extraction"),
+        MicroIntent(
+            intent="Click Show More", type="click", section="extraction",
+        ),
+        MicroIntent(intent="Extract", type="extract_data", section="extraction"),
+        MicroIntent(intent="Back", type="navigate_back", section="extraction"),
+        MicroIntent(
+            intent="Inner loop", type="loop", section="extraction",
+            loop_target=1, loop_count=20,
+        ),
+    ]
+    PlanDecomposer._classify_loop_groups(plan)
+    suite = {
+        "session_name": "x",
+        "_micro_plan": [
+            {
+                "intent": s.intent, "type": s.type, "section": s.section,
+                "params": dict(s.params or {}),
+                "loop_target": s.loop_target, "loop_count": s.loop_count,
+                "claude_only": s.claude_only, "gate": s.gate,
+                "required": s.required, "grounding": s.grounding,
+                "verify": s.verify, "reverse": s.reverse,
+                "budget": s.budget, "hints": dict(s.hints or {}),
+            }
+            for s in plan.steps
+        ],
+        "_loop_groups": [
+            {
+                "loop_step_idx": g.loop_step_idx,
+                "body_range": list(g.body_range),
+                "shape": g.shape,
+            }
+            for g in plan.loop_groups
+        ],
+    }
+    g = find_url_collect_group(suite)
+    suites = prepare_phase2_suites(suite, ["https://x.com/boat/1/"], g, workers=1)
+    types = [s["type"] for s in suites[0]["_micro_plan"]]
+    # Pre-scroll body (click(listing card), extract_url) is dropped.
+    # navigate_back is dropped. Show More click sits between scroll
+    # and extract_data and gets propagated.
+    assert types == ["navigate", "scroll", "click", "extract_data"]
+    # Verify the click step's intent is the Show More one, not the
+    # listing-card click that was dropped.
+    click_intent = next(
+        s["intent"] for s in suites[0]["_micro_plan"] if s["type"] == "click"
+    )
+    assert "Show More" in click_intent
+
+
 def test_phase2_navigate_carries_wait_after_load() -> None:
     """Phase-2 worker hits a detail page directly (cold cache). The
     navigate step needs wait_after_load_seconds so the runner pauses
