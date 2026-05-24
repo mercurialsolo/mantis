@@ -23,8 +23,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 
 def test_micro_plan_runner_accepts_augur_run_id_kwarg():
     """Constructor takes ``augur_run_id``; stores it on the instance."""
