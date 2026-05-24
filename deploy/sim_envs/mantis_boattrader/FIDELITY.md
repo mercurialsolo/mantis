@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=100** (2026-05-23) — Pre-qualify ribbon now sticky on scroll: `.ribbon-prequal` `position: static` → `position: fixed; top: 44px` (matches real BT's `position: fixed; top: 62px`, scaled to sandbox's 44px nav vs real BT's 62px nav). `.bt-main` gets `margin-top: 40px` to compensate for the ribbon being removed from flow.
+Last updated: **v=101** (2026-05-23) — Re-probed Boat Loan Calculator widget; confirmed sandbox uses an input-first concept while real BT uses an output-first concept (Monthly Payment headline + inputs below). FIDELITY rows flipped from ✅ to 🟡 with the concept divergence documented; no code change — rewriting needs user buy-in on which version to keep.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
@@ -142,15 +142,23 @@ the current state. Status legend:
 
 ### Boat Loan Calculator widget (below filter card)
 
+Re-probed real BT 2026-05-23 — widget concept is structurally different
+from sandbox. Real BT puts the **output ("Monthly Payment $X")** at the
+top with `.calc-summary-title` (22/900 #404040), then 4 input fields
+(`Enter purchase price`, `Enter Down Payment`, `Enter term in years`,
+APR). Sandbox puts the **input form first** with title "Boat Loan
+Calculator" (18/700 #303030), then a result row.
+
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
-| Title | "Boat Loan Calculator" 18/700 | same | ✅ |
-| Loan Amount field | input with $ | added | ✅ |
-| Loan Term dropdown | 240/180/120/60 months | added | ✅ |
-| Interest Rate (APR) | 6.49% default | added | ✅ |
-| Calculate button | blue outline | added | ✅ |
-| Monthly Payment result | "$0.00" centered | added | ✅ |
-| "Get Pre-Qualified" CTA | blue filled pill | added | ✅ |
+| Widget concept | output-first (Monthly Payment headline + inputs below) | input-first (Boat Loan Calculator title + inputs + result row) | 🟡 — different widget concept; both work for agent training; rewriting would need user buy-in on which version |
+| Container | `.calc-calculator-body` w=300, transparent bg, no border/radius/shadow | `.loan-calc-card` w=303, bg=#fff, 1px #e0e0e0 border, 6px br, `var(--bt-shadow)` (intentional sandbox chrome) | 🟡 |
+| Title | "Monthly Payment" 22/900 #404040 — also acts as the output display | "Boat Loan Calculator" 18/700 #303030 | 🟡 |
+| Input geometry | 262×39, fs 15.9px, 3.9px br, 1px rgba(0,0,0,0.2) border | 269×40, fs 14px, 4px br | 🟡 — close (within rendering tolerance) |
+| Input placeholders | "Enter purchase price", "Enter Down Payment", "Enter term in years" | "$" only | 🟡 — sandbox's `$` is less informative |
+| Field types | 4 fields (purchase price, down payment, term years, APR) | 3 fields (loan amount, term months, APR) | 🟡 — slightly different inputs but functionally equivalent calc |
+| Calculate button | outline secondary style | blue outline | ✅ visual style matches |
+| "Get Pre-Qualified" CTA | blue filled pill | blue filled pill | ✅ |
 | Fineprint help text | small gray | added | ✅ |
 
 ### Listing cards (SRP)
@@ -432,6 +440,22 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=101` Boat Loan Calculator widget re-probed (doc-only):
+       • Sandbox's `.loan-calc-card` and real BT's `.calc-calculator-body`
+         are STRUCTURALLY DIFFERENT widget concepts:
+         * Real BT: output-first (`Monthly Payment $X` headline at 22/900
+           #404040, then 4 inputs: purchase price / down payment / term
+           years / APR)
+         * Sandbox: input-first (`Boat Loan Calculator` title at 18/700,
+           then 3 inputs: loan amount / term months / APR, then a result row)
+       • Both work for agent training (same calc output) but visually
+         and structurally diverge.
+       • Existing FIDELITY rows marked ✅ were misleading — they described
+         sandbox's version not real BT's. Flipped to 🟡 with the concept
+         divergence documented.
+       • No code change — rewriting the widget needs user buy-in on which
+         concept to keep (sandbox's familiar input-first card vs real BT's
+         output-first card).
 `v=100` Pre-qualify ribbon sticky on scroll:
        • User asked to verify the blue banner on /boats is sticky on
          scroll. Probed real BT: `.ribbon-prequal` is
