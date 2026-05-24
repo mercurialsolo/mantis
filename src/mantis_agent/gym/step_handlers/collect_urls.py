@@ -41,10 +41,24 @@ logger = logging.getLogger(__name__)
 
 # JS payload: takes (sx, sy) in screen-space, translates to viewport
 # coords using the same chromeH offset cdp_click_at_point applies,
-# walks up the DOM from elementFromPoint to find the nearest ``<a>``
-# ancestor, returns its absolute href. Returns None when no anchor is
-# found above the point — caller treats that as a card without a
-# resolvable URL and silently drops it from the partition.
+# walks the element tree at that point to find a navigable URL. Returns
+# the resolved URL string or null when no candidate is found.
+#
+# Resolution priority (matches what production listing cards use across
+# common marketplace sites):
+#   1. ``<a href>`` ancestor — BoatTrader's listing card wraps in an
+#      anchor. ``el.closest('a[href]')`` finds it cross-browser.
+#   2. ``[href]`` ancestor — anchor-less elements that nevertheless
+#      carry an href attribute (rare but seen on some SPAs).
+#   3. ``<a href>`` descendant of the topmost ancestor at the point —
+#      catches cards where the click target is a wrapping ``<div>``
+#      with the navigable ``<a>`` rendered INSIDE (BoatTrader's
+#      sponsored-listing variant does this).
+#   4. ``data-href`` / ``data-url`` on any ancestor — common React
+#      pattern for click-handled divs that synthesise navigation in JS.
+#
+# Returns null only when none of the above yield a value, indicating
+# the card is genuinely non-navigable (e.g. an in-page modal trigger).
 _HREF_LOOKUP_JS = """
 (() => {
   const oh = window.outerHeight;
@@ -54,13 +68,32 @@ _HREF_LOOKUP_JS = """
   const sy = {sy};
   const vx = sx;
   const vy = sy - chromeH;
-  let el = document.elementFromPoint(vx, vy);
+  const el = document.elementFromPoint(vx, vy);
   if (!el) return null;
-  while (el && el.tagName !== 'A') {
-    el = el.parentElement;
+  // 1. anchor ancestor (most common)
+  const anchor = el.closest('a[href]');
+  if (anchor && anchor.href) return anchor.href;
+  // 2. any [href] ancestor
+  const hrefAncestor = el.closest('[href]');
+  if (hrefAncestor && hrefAncestor.href) return hrefAncestor.href;
+  // 3. find an anchor inside the topmost "card-like" ancestor at the
+  //    point — walk up to the nearest element with role="link",
+  //    data-test*="listing", or a class hint, then look for an <a>
+  //    descendant. Cap at 5 levels to bound search.
+  let card = el;
+  for (let i = 0; i < 5 && card; i++) {
+    const aDesc = card.querySelector && card.querySelector('a[href]');
+    if (aDesc && aDesc.href) return aDesc.href;
+    card = card.parentElement;
   }
-  if (!el) return null;
-  return el.href || null;
+  // 4. data-href / data-url ancestor (React click-handled cards)
+  const dataAncestor = el.closest('[data-href], [data-url]');
+  if (dataAncestor) {
+    const v = dataAncestor.getAttribute('data-href')
+              || dataAncestor.getAttribute('data-url');
+    if (v) return v;
+  }
+  return null;
 })()
 """
 

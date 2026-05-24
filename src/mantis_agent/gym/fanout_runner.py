@@ -769,7 +769,13 @@ def prepare_phase1_suite(
         "section": "extraction",
         "claude_only": True,
         "budget": 0,
-        "required": True,
+        # required=False (not True) so the runner's step-recovery
+        # policy doesn't trigger agentic_recovery + add_hint retries
+        # on collect_urls failure. The orchestrator already handles
+        # empty collect_urls by falling through to the pagination
+        # path — burning ~$0.20 on 3 doomed Claude scan retries +
+        # critic-row-link recovery attempts is wasted budget.
+        "required": False,
         "params": {},
         "hints": {},
         "gate": False,
