@@ -764,3 +764,44 @@ Calculator" (18/700 #303030), then a result row.
        • `_captured/README.md` — format spec, methodology, what's intentionally
          not in the corpus (raw DOM, screenshots, HAR).
        • Closes "Done bar" item: `_captured/` corpus checked in.
+`v=86` BDP fidelity iter1 — nav row + sticky bar + private-seller card:
+       • Real-vs-sandbox BDP diff written to BDP_FIDELITY_PLAN.md;
+         _captured/bdp/structural.json filled with measured spec from
+         boattrader.com/boat/2010-contender-32-st-10169273/.
+       • Nav row + sticky bar: drop `‹`/`›` glyphs from back/next links
+         (plain words); wire `prev_boat` (template just wasn't using it);
+         add Previous Boat link in both static + sticky positions.
+       • Sticky bar gets TWO content states: shallow (breadcrumb) for
+         scrollY>320, deep (Title | $Price | City, ST ZIP | ♡ Save) for
+         scrollY>700 — matches real BT's `next-previous show-info` class
+         swap. base.html scroll listener toggles `bdp-scrolled-deep` on
+         body alongside `bdp-scrolled`.
+       • Breadcrumb color #757575 → #616161 to match real BT.
+       • Private-seller right rail: drop `Private Seller` pill; heading
+         is generic `Contact Private Seller` (no owner name); drop
+         disclaimer paragraph; drop owner-name from message prefill;
+         move Show Phone Number to AFTER the form and gate on
+         `boat.owner_phone`; drop badges above title; drop length suffix
+         from H1.
+       • Submit button: new `.bdp-contact-submit` class (filled blue
+         pill `rgb(37,102,176)` 40px tall full-width) replacing legacy
+         `.contact-seller-btn` outline override; same `Contact Seller`
+         text for both dealer + private (was "Email Seller" for private).
+       • `.dealer-card-heading` 18/500 → 20/700 to match real BT.
+       • K-format views >999 (e.g. 1.5k) in the engagement strip.
+`v=87` BDP fidelity iter1.2 — stats + accordions + services:
+       • Stats label "Engine Hours" → "Engine(s) Hours" with inline
+         gray ⓘ tooltip trigger (matches real BT exactly). New
+         `.stat-label .stat-info` 14×14 keeps ⓘ inline.
+       • Drop inline `<text>YEAR</text>` from Year icon SVG.
+       • Drop `More Details` + `Location` accordions — real BT only
+         renders Description / Measurements / Propulsion at this level.
+       • Drop `bdp-listed-by` block for `is_owner_listed` — real BT
+         private-seller BDP omits this section entirely.
+       • Other Services tiles 2 → 6 (Marine Surveyors, Boat
+         Documentation, Boat Loans, Boat Insurance, Boat Warranty, Boat
+         Transport); grid 2-col → 3-col at desktop.
+       • Verified live on dealer (Princess F55) + private (Chaparral
+         267 SSX) BDPs via Chrome MCP probes: sticky deep-state fires
+         at y>700; rail width = 366; all 3 accordions only; 6 service
+         tiles; FILLED `Contact Seller` button on both variants.
