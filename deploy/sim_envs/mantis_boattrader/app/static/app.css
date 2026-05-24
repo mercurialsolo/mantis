@@ -1537,9 +1537,15 @@ body.bdp-scrolled-deep .sticky-save {
   cursor: pointer; white-space: nowrap;
 }
 
+/* Match .bdp-grid's 1336px max-width so `< Search` and Previous/Next
+   align with the gallery + right-rail content beneath, not the wider
+   1440px `.bt-main` container. Without this, the row spreads to the
+   full main width and the breadcrumb appears further left/right than
+   the content below it. */
 .bdp-nav-row {
   display: flex; align-items: center; justify-content: space-between;
-  margin: 8px 0 14px;
+  max-width: 1336px;
+  margin: 8px auto 14px;
   font-size: 12px; color: var(--bt-blue);
   gap: 24px;
 }
