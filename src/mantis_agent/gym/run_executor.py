@@ -363,6 +363,21 @@ class RunExecutor:
             if step_result.success:
                 self._handle_success(plan, state, step, step_result)
                 continued = True
+            elif step_result.skip:
+                # #643 stage 2 + #246 — skip envelopes (guard False,
+                # recipe rejection, navigation_failed promotion, etc.)
+                # encode "this step didn't produce an action but
+                # that's by design, not a failure". The runner's
+                # recovery policy reads success=False and routes
+                # through ``_handle_click_failure`` etc., burning
+                # an env.step (Escape) and jumping to the next loop
+                # step — which silently corrupts a guarded skip into
+                # a real failure path. Advance to the next step
+                # directly; ``_handle_failure`` semantics apply only
+                # to actual missed actions.
+                state.step_index += 1
+                self._persist(plan, state)
+                continued = True
             else:
                 # #541 + fu: auto-pause on CAPTCHA must run BEFORE
                 # ``_handle_failure`` — the recovery policy decides
