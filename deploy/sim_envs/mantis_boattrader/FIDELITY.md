@@ -836,3 +836,40 @@ Calculator" (18/700 #303030), then a result row.
          267 SSX) BDPs via Chrome MCP probes: sticky deep-state fires
          at y>700; rail width = 366; all 3 accordions only; 6 service
          tiles; FILLED `Contact Seller` button on both variants.
+`v=89..v=117` BDP fidelity iter3..iter14:
+       • Description body restructure + Loan Calc form simplification
+         (4-field set; preview pane heading + monthly + total + disclosure)
+       • seed.py apostrophe encoding cleanup (Don?t → Don't, etc.)
+       • Listed By card matched real BT (#f5f9ff bg, stat-num 16/600,
+         "Trusted Boat Trader Partner" plain label without `| years`)
+       • Accordion summary padding 16/22 → 0 (details padding 18px 0
+         + 1px #ededed bottom border between sections)
+       • Stat label wrap fix (dropped inline ⓘ on Engine(s) Hours so
+         the label fits 166px card on one line)
+       • Engagement divider switched from `|` char to 1×12 rectangle
+         (bg rgb(222,226,227)); gap 12 → 10
+       • Description body 15/19.5 line-height (was 14/1.55); seller
+         blurb + DESCRIPTION label both at 15/700
+       • Boat Details H2 margin 16px → 0
+       • Nav row layout: NOT space-between — flex-start + margin-left:
+         auto on .bdp-nav-actions; max-width 1336 cap to align with
+         gallery underneath
+       • Sticky bar inner max-width 1336 (was 1440) for same alignment
+       • Ad-strip viewport breakout (margin: 24px calc(50% - 50vw);
+         width 100vw) so #f7f7f7 band spans full 1600px
+       • Ad-banner 728×90 → 970×120; strip padding 16 → 1px each side
+       • Previous Boat / Next Boat: padded 11px 15px button-shape with
+         4px radius; chevrons via ::before/::after pseudo-elements
+       • .bt-main max-width: none (was 1440) to let ad-strip break out;
+         compensating .srp / .home-section caps restored to keep SRP
+         and home centered
+       • Breadcrumb color BDP-scoped #757575 → #616161
+       • Dealer card pattern switched to dealership-name heading +
+         pin-led address + raw +1XXXXXXXXXX phone (Westchester pattern,
+         no headshot)
+       • Phone format E.164 in seed.py (was formatted with parens)
+       • Loan calc inputs scoped: 4px radius + 16px font; heading 20/700
+       • More Boats from this Dealer link color #2566b0 → #0051AD
+       • Right rail dedup: dropped legacy .bdp-dealership-card (was
+         duplicating dealer info already in the new nested .bdp-dealer-card;
+         dealership logo + stats stay only in full-width Listed By)
