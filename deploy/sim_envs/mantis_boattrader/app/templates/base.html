@@ -9,7 +9,7 @@
      (San Francisco on macOS, Segoe UI on Windows). Loading Roboto Medium
      from Google Fonts makes our text render heavier than real BT, so we
      match by NOT loading Roboto and letting the system fallback render. #}
-  <link rel="stylesheet" href="/static/app.css?v=102" />
+  <link rel="stylesheet" href="/static/app.css?v=103" />
   <meta name="description" content="{% block description %}Buy and sell new & used boats. Find boats, yachts, sailboats, fishing boats, pontoons, and more.{% endblock %}" />
 </head>
 <body class="bt-body">
@@ -84,6 +84,32 @@
 <main class="bt-main">
   {% block content %}{% endblock %}
 </main>
+
+{# Cookie consent banner — shown on first visit (no bt_cookie_consent
+   cookie yet). Customize dismisses via JS without setting a cookie
+   so it reappears next visit; Reject/Accept POST to /__site/consent. #}
+{% if not request.cookies.get('bt_cookie_consent') %}
+<div class="cookie-consent" id="cookie-consent" role="dialog" aria-label="Cookie consent">
+  <p class="cookie-consent-text">
+    We use cookies for improved site functionality, analytics, advertising,
+    and marketing as explained in our <a href="/privacy/" class="cookie-consent-link">Privacy</a>
+    and Cookie notices. You can customize your preferences at any time.
+  </p>
+  <div class="cookie-consent-actions">
+    <button type="button" class="cookie-consent-btn" data-cookie-action="customize">Customize</button>
+    <form action="/__site/consent" method="post" class="cookie-consent-form">
+      <input type="hidden" name="choice" value="decline" />
+      <input type="hidden" name="next_url" value="{{ request.url.path }}" />
+      <button type="submit" class="cookie-consent-btn">Reject</button>
+    </form>
+    <form action="/__site/consent" method="post" class="cookie-consent-form">
+      <input type="hidden" name="choice" value="accept" />
+      <input type="hidden" name="next_url" value="{{ request.url.path }}" />
+      <button type="submit" class="cookie-consent-btn">Accept</button>
+    </form>
+  </div>
+</div>
+{% endif %}
 <script>
   // Toggle .bdp-scrolled on <body> once the gallery is scrolled past so
   // the sticky title/price/contact bar can appear (matches real boattrader).
@@ -195,6 +221,16 @@
         t = setTimeout(function(){ form.submit(); }, 250);
       }
     });
+  })();
+  // Cookie consent: "Customize" dismisses the banner in JS only — no
+  // POST, no cookie. Reject/Accept use the form submit to /__site/consent.
+  (function(){
+    var banner = document.getElementById('cookie-consent');
+    if (!banner) return;
+    var customize = banner.querySelector('[data-cookie-action="customize"]');
+    if (customize) {
+      customize.addEventListener('click', function(){ banner.remove(); });
+    }
   })();
   // Click anywhere in the AI-search field (sparkle icon, "Try …"
   // overlay, empty area) focuses the input — matches real boattrader.

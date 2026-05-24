@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=102** (2026-05-23) — Ribbon `position: fixed; top: 44px` → `position: sticky; top: 0`. At scroll=0 the ribbon sits flush under the nav (matches the user-supplied real-BT screenshot); on scroll past the nav the ribbon flushes to the very top of the viewport (user wanted top:0 on scroll, not v=100's 44px-gap pattern).
+Last updated: **v=103** (2026-05-23) — Cookie consent banner added per user screenshot. Bottom-right floating card (white, 12px radius, soft shadow) with Customize / Reject / Accept pill buttons. Shows on first visit only (server-rendered conditional on `bt_cookie_consent` cookie). Accept/Reject POST to `/__site/consent`; Customize dismisses via JS without setting the cookie.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
@@ -440,6 +440,27 @@ Calculator" (18/700 #303030), then a result row.
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=103` Cookie consent banner added (user screenshot):
+       • New `.cookie-consent` bottom-right floating card (white,
+         12px radius, layered drop shadow, 22px 26px padding).
+       • Body copy 15/regular #333 with "Privacy" link underlined.
+       • 3 pill buttons (108min×44 tall, 1px #d6d6d6 border, 50px br,
+         hover bg #f7f7f7): Customize / Reject / Accept.
+       • Conditional render via Jinja: only shown when
+         `bt_cookie_consent` cookie isn't set (first visit).
+       • Wiring:
+         * Customize → JS removes the banner without setting cookie
+           (reappears next visit)
+         * Reject → form POST `/__site/consent` with `choice=decline`
+           + `next_url=<current>` (303 redirect back, cookie set)
+         * Accept → same as Reject with `choice=accept`
+       • Backend `/__site/consent` route already existed (sets
+         `bt_cookie_consent` cookie 180d max-age, emits
+         `consent_set` mutation). No backend changes.
+       • Cache-buster bumped to `?v=103`.
+       • 3 new fidelity tests: banner renders on first visit, banner
+         hidden once cookie set, card styling matches the spec.
+         Suite now **44 passing**.
 `v=102` Ribbon switched to `position: sticky; top: 0`:
        • v=100's `position: fixed; top: 44px` left a 44px gap above the
          ribbon on scroll (the area where the nav used to be) — user

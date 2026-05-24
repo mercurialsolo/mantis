@@ -416,6 +416,55 @@ def test_pagination_is_15_400(base_css):
     assert "margin: 15px 0" in block
 
 
+def test_cookie_consent_banner_renders_on_first_visit(client):
+    """v=103: cookie consent banner appears bottom-right when the
+    `bt_cookie_consent` cookie isn't set. Has Customize / Reject /
+    Accept buttons. Reject + Accept POST to /__site/consent with the
+    matching `choice`; Customize dismisses in JS only."""
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'id="cookie-consent"' in r.text
+    assert 'aria-label="Cookie consent"' in r.text
+    # All three buttons present
+    assert '>Customize<' in r.text
+    assert '>Reject<' in r.text
+    assert '>Accept<' in r.text
+    # Customize is a button with data-cookie-action; Reject/Accept are
+    # forms posting to /__site/consent.
+    assert 'data-cookie-action="customize"' in r.text
+    assert r.text.count('action="/__site/consent"') >= 2
+    assert 'name="choice" value="decline"' in r.text
+    assert 'name="choice" value="accept"' in r.text
+
+
+def test_cookie_consent_hidden_once_accepted(client):
+    """After Accept (sets bt_cookie_consent cookie), the banner should
+    disappear on subsequent loads."""
+    # First load: banner present
+    r1 = client.get("/")
+    assert 'id="cookie-consent"' in r1.text
+    # POST accept
+    r2 = client.post("/__site/consent", data={"choice": "accept", "next_url": "/"}, follow_redirects=False)
+    assert r2.status_code == 303
+    # Now the test client has the cookie; re-fetch home — banner gone
+    r3 = client.get("/")
+    assert 'id="cookie-consent"' not in r3.text
+
+
+def test_cookie_consent_card_styling(base_css):
+    """v=103 CSS: banner is `position: fixed; right: 24px; bottom: 24px`
+    bottom-right floating card with rounded corners + drop shadow.
+    3 pill buttons in a row with min-width 108px."""
+    block = _rule_block(base_css, ".cookie-consent {")
+    assert "position: fixed" in block
+    assert "right: 24px" in block
+    assert "bottom: 24px" in block
+    assert "border-radius: 12px" in block
+    btn_block = _rule_block(base_css, ".cookie-consent-btn {")
+    assert "border-radius: 50px" in btn_block
+    assert "min-width: 108px" in btn_block
+
+
 def test_ribbon_is_sticky_on_scroll(base_css):
     """v=102: blue pre-qualify ribbon uses `position: sticky; top: 0`
     so it stays in flow at scroll=0 (right under the nav) and sticks

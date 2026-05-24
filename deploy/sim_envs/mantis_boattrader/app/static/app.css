@@ -1144,6 +1144,65 @@ header.main {
 .apply-filters { margin: 18px 0 10px; }
 .filter-clear { display: block; text-align: center; font-size: 14px; margin: 0 0 8px; }
 
+/* ── Cookie consent banner (v=103) ─────────────────────────────────
+   Shown on first visit only (server-rendered conditional in base.html
+   when bt_cookie_consent cookie isn't set). Bottom-right floating
+   card with 3 pill buttons. Customize dismisses via JS; Reject/Accept
+   POST to /__site/consent which sets the cookie + redirects back. */
+.cookie-consent {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 200;
+  max-width: 560px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(10, 30, 60, 0.18), 0 2px 6px rgba(10, 30, 60, 0.08);
+  padding: 22px 26px;
+}
+.cookie-consent-text {
+  margin: 0 0 16px;
+  font-size: 15px;
+  line-height: 1.45;
+  color: #333;
+}
+.cookie-consent-link {
+  color: #333;
+  text-decoration: underline;
+}
+.cookie-consent-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.cookie-consent-form {
+  margin: 0;
+  padding: 0;
+  display: inline;
+}
+.cookie-consent-btn {
+  flex: 0 0 auto;
+  min-width: 108px;
+  padding: 10px 22px;
+  font-size: 14px;
+  font-weight: 400;
+  color: #333;
+  background: #fff;
+  border: 1px solid #d6d6d6;
+  border-radius: 50px;
+  cursor: pointer;
+  text-align: center;
+}
+.cookie-consent-btn:hover {
+  border-color: #404040;
+  background: #f7f7f7;
+}
+.cookie-consent-btn:focus-visible {
+  outline: 2px solid var(--bt-blue);
+  outline-offset: 1px;
+}
+
 /* Sub-label inside Engines / etc — small bold heading above sub-controls. */
 .filter-sublabel {
   display: block;
