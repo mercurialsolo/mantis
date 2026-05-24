@@ -3,10 +3,10 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=98** (2026-05-23) — SCOPE.md "Done bar" + "Open follow-ups" sections rewritten as a handoff summary after the v=82..v=97 PR #620 work concluded. All four high-level done-bar criteria met; three 🟡 follow-ups remain as documented human-decision items (next-previous widget, listing-dependent BDP elements, mobile viewport pass).
+Last updated: **v=99** (2026-05-23) — Operational: bumped sandbox `auto_stop_interval` from 15 min → 180 min via `sb.set_autostop_interval(180)`. Removes the recurring "boot the container" friction that hit every cron iteration. Token rotated to `a_oh4hg7awgeznbwwglbfml0sdlrywzw`.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `rzsrm967ibbct7vgbgpzdzudgofezmmv`)
+(token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
 
 ## Methodology
 
@@ -431,6 +431,18 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=99` Bumped sandbox `auto_stop_interval` 15 → 180 min:
+       • The sandbox was auto-stopping after ~15min of idle, hitting
+         every cron-triggered loop iteration with a manual restart
+         step (boot container → wait for uvicorn → re-fetch token →
+         update FIDELITY row). 5× in this session.
+       • `sb.set_autostop_interval(180)` (3h) removes the friction;
+         sandbox now stays warm across cron ticks at :07.
+       • Token rotated to `a_oh4hg7awgeznbwwglbfml0sdlrywzw`.
+       • Documenting this as a saved memory pattern alongside the
+         existing `feedback_boattrader_sandbox_restart_recipe.md` —
+         "auto-stop interval defaults to 15min, bump to ≥120 for
+         long-running iteration work".
 `v=98` SCOPE.md handoff summary (doc-only):
        • Rewrote SCOPE.md's "Done bar" section as a 5-row status
          table showing all four high-level criteria from the build-
