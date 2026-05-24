@@ -2890,6 +2890,7 @@ def main(
         from mantis_agent.gym.fanout_runner import (
             find_url_collect_group, prepare_modal_partitions,
             prepare_phase1_suite, prepare_phase2_suites,
+            resolve_phase1_max_pages,
         )
 
         # #627: create a per-run shared seen-URL set keyed by a unique
@@ -2938,8 +2939,23 @@ def main(
         url_collect_group = find_url_collect_group(task_suite)
         if url_collect_group is not None:
             executor_fn = EXECUTOR_MAP.get(model, run_holo3)
-            print("\n  ═══ PHASE-1 (#628): URL collection on 1 container ═══")
-            phase1_suite = prepare_phase1_suite(task_suite, url_collect_group)
+            # #638 axis 2: walk N pagination pages in Phase-1 so the
+            # serial URL-harvest container can dominate the per-page
+            # fanout on coverage. Cap derived from the plan's
+            # parallelizable_pagination loop_count (clamped) or from an
+            # explicit ``_fanout_phase1_max_pages`` suite override.
+            phase1_max_pages, phase1_template = resolve_phase1_max_pages(
+                task_suite,
+            )
+            print(
+                f"\n  ═══ PHASE-1 (#628): URL collection on 1 container "
+                f"(max_pages={phase1_max_pages}, template={phase1_template!r}) ═══"
+            )
+            phase1_suite = prepare_phase1_suite(
+                task_suite, url_collect_group,
+                max_pages=phase1_max_pages,
+                pagination_url_template=phase1_template,
+            )
             # #631: per-partition branch_id for Augur grouping.
             phase1_suite["_fanout_branch_id"] = (
                 f"{fanout_parent_run_id}:phase1"

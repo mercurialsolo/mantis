@@ -353,6 +353,85 @@ def test_multi_viewport_stage0_blocked_aborts(monkeypatch) -> None:
     assert runner.costs["claude_extract"] == 1
 
 
+# ── #638 axis 2: multi-page accumulation ──────────────────────────────
+
+
+def test_second_invocation_appends_to_existing_collected_urls(monkeypatch) -> None:
+    """When the runner already has URLs from a prior collect_urls call
+    (Phase-1 multi-page: navigate(page-1) → collect → navigate(page-2) →
+    collect), the second invocation appends to the existing list rather
+    than replacing it."""
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.collect_urls.adaptive_content_settle",
+        lambda *_, **__: None,
+    )
+    runner = _FakeRunner()
+    # Simulate page-1 already harvested.
+    runner._collected_urls = [
+        "https://example.com/boat/1/",
+        "https://example.com/boat/2/",
+    ]
+
+    extractor = MagicMock()
+    # Page-2 scan returns 2 new cards.
+    extractor.find_all_listings.return_value = [
+        (100, 200, "Boat 3"),
+        (100, 400, "Boat 4"),
+    ]
+    env = MagicMock()
+    env.screenshot.return_value = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        "https://example.com/boat/3/",
+        "https://example.com/boat/4/",
+    ]
+
+    result = CollectUrlsHandler(runner).execute(_step(), _ctx(env, extractor))
+
+    assert result.success is True
+    # Order preserved: page-1 URLs first, page-2 URLs appended.
+    assert runner._collected_urls == [
+        "https://example.com/boat/1/",
+        "https://example.com/boat/2/",
+        "https://example.com/boat/3/",
+        "https://example.com/boat/4/",
+    ]
+    # data string reports the CUMULATIVE count (4) over THIS-CALL cards (2).
+    assert result.data == "urls:4/2"
+
+
+def test_second_invocation_dedups_against_prior_urls(monkeypatch) -> None:
+    """Featured / sponsored listings frequently appear on every paginated
+    page. The cross-call dedup catches them via the seeded ``seen`` set."""
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.collect_urls.adaptive_content_settle",
+        lambda *_, **__: None,
+    )
+    runner = _FakeRunner()
+    runner._collected_urls = [
+        "https://example.com/boat/1/",  # featured — will re-appear on page-2
+        "https://example.com/boat/2/",
+    ]
+    extractor = MagicMock()
+    extractor.find_all_listings.return_value = [
+        (100, 200, "Featured"),
+        (100, 400, "New"),
+    ]
+    env = MagicMock()
+    env.screenshot.return_value = MagicMock()
+    env.cdp_evaluate.side_effect = [
+        "https://example.com/boat/1/",  # duplicate from page-1
+        "https://example.com/boat/9/",  # genuinely new
+    ]
+
+    CollectUrlsHandler(runner).execute(_step(), _ctx(env, extractor))
+
+    assert runner._collected_urls == [
+        "https://example.com/boat/1/",
+        "https://example.com/boat/2/",
+        "https://example.com/boat/9/",
+    ]
+
+
 def test_max_viewport_stages_hint_overrides_default(monkeypatch) -> None:
     """``step.hints['max_viewport_stages']`` is the operator knob —
     pin it to 2 and verify the loop respects it even when more cards

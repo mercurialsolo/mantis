@@ -168,8 +168,17 @@ class CollectUrlsHandler:
             )
         )
 
-        urls: list[str] = []
-        seen: set[str] = set()
+        # #638 axis 2: accumulate across calls so multi-page Phase-1
+        # plans (navigate(page-1) → collect_urls → navigate(page-2) →
+        # collect_urls → ...) carry forward URLs from prior pages.
+        # ``urls`` and ``seen`` are seeded from ``runner._collected_urls``
+        # so this invocation's dedup catches both within-this-page
+        # duplicates (viewport overlap) AND cross-page duplicates
+        # (featured listings rendered on multiple pages). On a single-
+        # page invocation the seed is empty and behaviour is unchanged.
+        urls: list[str] = list(getattr(runner, "_collected_urls", []) or [])
+        seen: set[str] = set(urls)
+        new_urls_this_call = 0  # tracked for the per-call log line
         total_cards = 0
         total_unresolved = 0
         first_signal: str | None = None
@@ -236,6 +245,7 @@ class CollectUrlsHandler:
                 seen.add(href)
                 urls.append(href)
                 new_this_stage += 1
+                new_urls_this_call += 1
             total_unresolved += unresolved_this_stage
 
             logger.warning(
@@ -285,17 +295,25 @@ class CollectUrlsHandler:
             )
 
         coverage = resolved / max(total_cards, 1)
+        # The CUMULATIVE total (resolved) is what the orchestrator reads;
+        # the NEW count (new_urls_this_call) shows what this specific
+        # invocation contributed. Same value on single-page Phase-1, but
+        # diverges on multi-page (#638 axis 2) where each subsequent
+        # navigate+collect_urls pair adds to the running total.
         if coverage < 0.8:
             logger.warning(
-                "  [collect_urls] FINAL: %d unique URLs from %d cards "
-                "across viewport stages (%.0f%% coverage, %d unresolved)",
-                resolved, total_cards, coverage * 100, total_unresolved,
+                "  [collect_urls] FINAL: %d new URLs this call, "
+                "%d cumulative from %d cards across viewport stages "
+                "(%.0f%% coverage, %d unresolved)",
+                new_urls_this_call, resolved, total_cards,
+                coverage * 100, total_unresolved,
             )
         else:
             logger.warning(
-                "  [collect_urls] FINAL: %d unique URLs from %d cards "
-                "across viewport stages (%.0f%% coverage)",
-                resolved, total_cards, coverage * 100,
+                "  [collect_urls] FINAL: %d new URLs this call, "
+                "%d cumulative from %d cards across viewport stages "
+                "(%.0f%% coverage)",
+                new_urls_this_call, resolved, total_cards, coverage * 100,
             )
 
         return StepResult(
