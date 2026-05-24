@@ -3114,7 +3114,7 @@ def main(
                     f"(max_pages={phase1_max_pages}, "
                     f"template={phase1_template!r}) ═══"
                 )
-                phase1_handles: list[tuple[int, Any]] = []
+                phase1_handles: list = []
                 for i, sub in enumerate(phase1_sub_suites):
                     sub["_fanout_branch_id"] = (
                         f"{fanout_parent_run_id}:phase1_w{i + 1}"
