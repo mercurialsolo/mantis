@@ -2945,7 +2945,25 @@ def main(
                 dedup_leads_by_url, read_partition_result,
             )
             try:
-                phase1_summary = read_partition_result(phase1_handle.get())
+                _phase1_raw = phase1_handle.get()
+                # Diagnostic: surface the raw result keys + lengths so a
+                # collected_urls vs viable mismatch is debuggable from
+                # the orchestrator log (worker container logs are tail-
+                # trimmed by Modal on stopped ephemeral apps).
+                if isinstance(_phase1_raw, dict):
+                    _urls_in_result = _phase1_raw.get("collected_urls", "MISSING")
+                    _urls_type = type(_urls_in_result).__name__
+                    _urls_len = (
+                        len(_urls_in_result)
+                        if isinstance(_urls_in_result, list) else "n/a"
+                    )
+                    print(
+                        f"    [phase1] raw result: "
+                        f"viable={_phase1_raw.get('viable', 'MISSING')} "
+                        f"collected_urls_type={_urls_type} "
+                        f"collected_urls_len={_urls_len}"
+                    )
+                phase1_summary = read_partition_result(_phase1_raw)
                 collected_urls = phase1_summary["collected_urls"]
             except Exception as exc:
                 print(f"    [phase1] ERROR: {exc} — aborting fan-out")
