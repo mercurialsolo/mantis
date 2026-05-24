@@ -891,6 +891,11 @@ class PlanDecomposer:
                 self._fix_loop_targets(plan)
                 # #614: classify loop bodies for the fan-out runner.
                 self._classify_loop_groups(plan)
+                # #648: stamp per-domain decomposer defaults (scroll
+                # backend, scroll count, first-navigate wait, pagination
+                # URL template). Idempotent — only sets a field when the
+                # source plan / cache didn't already pin it.
+                self._apply_domain_tuning(plan)
 
                 logger.info(f"Loaded cached micro-plan: {cache_path} ({len(plan.steps)} steps)")
                 return plan
@@ -1013,6 +1018,12 @@ class PlanDecomposer:
         # per gate whose preceding navigate had a literal URL with
         # distinctive path segments.
         self._inject_gate_url_hints(plan)
+        # #648: stamp per-domain decomposer defaults (scroll backend,
+        # scroll count, first-navigate wait, pagination URL template).
+        # Idempotent — only sets a field when the source plan didn't
+        # already pin it. Runs AFTER the structural fixes so the
+        # profile sees the final-shape plan.
+        self._apply_domain_tuning(plan)
 
         # Cache the full parsed structure (object or legacy array) so the
         # cached path round-trips through both schemas. #629: also persist
@@ -1271,6 +1282,35 @@ class PlanDecomposer:
             if any(ch.isdigit() for ch in s) or "-" in s
         ]
         return distinctive
+
+    @staticmethod
+    def _apply_domain_tuning(plan: "MicroPlan") -> None:
+        """#648: stamp per-domain decomposer defaults on ``plan`` in place.
+
+        Looks up a :class:`~mantis_agent.plan_tuning.DomainProfile` for
+        ``plan.domain`` (suffix-matched against the registry) and, if a
+        profile exists, applies its knobs via
+        :func:`~mantis_agent.plan_tuning.apply_domain_profile`. Idempotent
+        — every decision checks "did the source plan already set this?"
+        before stamping, so plan-author values win and the pass can run
+        on cached plans without drift.
+
+        Silently no-ops for unknown domains (the registry is sparse on
+        purpose). Surfacing a hit at INFO so operators can confirm the
+        profile fired in the decompose log.
+        """
+        from .plan_tuning import apply_domain_profile, resolve_domain_profile
+
+        profile = resolve_domain_profile(plan.domain or "")
+        if profile is None:
+            return
+        apply_domain_profile(plan, profile)
+        logger.info(
+            "  [decomposer] applied DomainProfile for %s "
+            "(scroll_backend=%r scroll_count=%d nav_wait_seconds=%d)",
+            profile.domain, profile.scroll_backend or "",
+            profile.scroll_count, profile.nav_wait_seconds,
+        )
 
     @staticmethod
     def _inject_gate_url_hints(plan: MicroPlan) -> None:
