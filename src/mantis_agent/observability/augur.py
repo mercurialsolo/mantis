@@ -304,6 +304,15 @@ class AugurAdapter:
     ) -> None:
         self._session: Any = None
         self._emitted_event_count: int = 0
+        # #659: per-step-index emission counter — used by
+        # :meth:`_build_step_trace` to mint a unique ``step_id`` for
+        # each emission even when the same plan ``step_index`` fires
+        # multiple times (inner-loop iterations). Without this, all
+        # iterations of step 2 in a 30-card extraction loop write to
+        # ``step-0003`` on the Augur server and last-write-wins,
+        # collapsing the trace down to one row per plan position. Keyed
+        # by the 1-based ``augur_index`` (matches ``step_id`` prefix).
+        self._step_emission_counts: dict[int, int] = {}
         # Verbose diagnostic — gated by ``MANTIS_AUGUR_VERBOSE``. WARN
         # is the only level that survives Modal's INFO/DEBUG suppression,
         # so when verifying a deploy operators flip the flag and get one
@@ -1156,8 +1165,17 @@ class AugurAdapter:
         # uses the 1-based index too so it lines up with the URL path.
         raw_index = int(getattr(sr, "step_index", 0))
         augur_index = raw_index + 1
+        # #659: per-emission ``step_id`` so loop-iterated dispatches
+        # don't collapse on the Augur server. ``step_index`` stays the
+        # plan position (Augur UI groups by it); ``step_id`` carries
+        # the iteration suffix (``-000`` for the first emission of a
+        # given index, ``-001`` for the second, …). Cumulative emission
+        # count per index is exposed via the suffix for downstream
+        # consumers that want "how many iterations did step N run".
+        emission = self._step_emission_counts.get(augur_index, 0)
+        self._step_emission_counts[augur_index] = emission + 1
         trace: dict[str, Any] = {
-            "step_id": f"step-{augur_index:04d}",
+            "step_id": f"step-{augur_index:04d}-{emission:03d}",
             "step_index": augur_index,
             "intent": str(getattr(sr, "intent", "") or "")[:500] or "(no intent)",
             "step_type": action_type or step_type or "unknown",

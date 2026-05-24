@@ -511,7 +511,10 @@ def test_step_index_and_attempt_are_clamped_to_augur_minimums(monkeypatch, tmp_p
     sr.recovery_decision = SimpleNamespace(type="retry", reason="x", attempt=0)
     trace = a._build_step_trace(sr, "2026-05-19T10:00:00Z", "2026-05-19T10:00:01Z", None, None)
     assert trace["step_index"] == 1, "Mantis 0 → Augur 1"
-    assert trace["step_id"] == "step-0001"
+    # #659: step_id carries the per-emission suffix so loop-iterated
+    # dispatches don't collapse on the Augur server. First emission
+    # for step_index=0 → ``step-0001-000``.
+    assert trace["step_id"] == "step-0001-000"
     assert trace["recovery_decision"]["attempt"] == 1, "0 clamped to schema minimum"
 
     # Observation paths should also be 1-based (line up with step_id)
