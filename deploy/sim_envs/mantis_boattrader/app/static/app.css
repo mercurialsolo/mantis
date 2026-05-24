@@ -402,13 +402,22 @@ header.main {
 
 /* ── Ad strips — Real BT BDP top sponsor: 970×120 banner inside a
    tight #f7f7f7 strip (~122px total height, ~1px breathing room above
-   and below the banner). Was 728×90 with 16+24px padding/margin which
-   bloated the strip to ~170px total. ─────────────────────────────── */
+   and below the banner). Real BT renders ~30px white gap above and
+   below the strip — body bg is white, the strip has its own #f7f7f7
+   tinted band with vertical margin to separate from the header above
+   and the nav row below. ─────────────────────────────────────────── */
+/* The ad-strip's #f7f7f7 band must span the FULL viewport edge-to-edge
+   per real BT (probed at 1600px viewport: ad-leaderboard-top width =
+   1600). Since .bt-main caps its inner content at 1440px max-width
+   centered, we use the classic "full-bleed" trick: negative left+
+   right margins of `calc(50% - 50vw)` push the strip out to viewport
+   edges regardless of the parent's max-width. */
 .ad-strip {
   background: #f7f7f7;
   padding: 1px 0;
   display: flex; justify-content: center;
-  margin: 0;
+  margin: 24px calc(50% - 50vw);
+  width: 100vw;
 }
 .ad-banner {
   position: relative; max-width: 970px; width: 100%; height: 120px;
@@ -1558,9 +1567,15 @@ body.bdp-scrolled-deep .sticky-save {
   gap: 24px;
 }
 .bdp-nav-actions { display: flex; gap: 16px; margin-left: auto; }
-/* Real BT BDP top links 'Back to Search' / 'Next Boat' / 'Previous Boat':
-   12/400 #139af5 (plain words, no chevrons). */
+/* Real BT BDP top links: 12/400 #139af5.
+   Probed at boattrader.com 2026-05-24 — both Previous and Next get
+   chevrons via CSS pseudo-elements (NOT inline text). Iter1 wrongly
+   stripped both. Restored to match exact `next-previous-button-tray`
+   layout (Pursuit BDP probe: `prev::before content "<"`,
+   `next::after content ">"`). */
 .bdp-back, .bdp-next, .bdp-prev { font-size: 12px; font-weight: 400; color: #139af5; text-decoration: none; }
+.bdp-prev::before { content: "< "; }
+.bdp-next::after { content: " >"; }
 .bdp-back:hover, .bdp-next:hover, .bdp-prev:hover { color: var(--bt-blue); text-decoration: underline; }
 /* Real BT BDP uses ~890 gallery + ~80 gap + 366 rail at 1512 viewport.
    That's ratio gallery:rail ≈ 2.43:1, with ~80px gap. */
