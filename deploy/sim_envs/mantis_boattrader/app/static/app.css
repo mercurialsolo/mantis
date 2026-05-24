@@ -1666,8 +1666,12 @@ body.bdp-scrolled-deep .sticky-save {
 }
 .bdp-badges { margin-bottom: 10px; }
 /* Right-rail typography matched to real boattrader desktop (1512px probe):
-   title 20/700, location 16/400, price 20/700, own-link 16/400. */
-.bdp-title { font-size: 20px; line-height: 1.25; margin: 8px 0 6px; color: var(--bt-text); font-weight: 700; }
+   title 20/700, location 16/400, price 20/700, own-link 16/400.
+   The title-row keeps H1 + length-suffix span side-by-side (real BT
+   ships a header > h1 + span pattern so H1.textContent stays clean
+   while the visible title reads "<title> | <length>'"). */
+.bdp-title-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
+.bdp-title { font-size: 20px; line-height: 1.25; margin: 0; color: var(--bt-text); font-weight: 700; }
 .bdp-length { color: var(--bt-text); font-weight: 700; font-size: 20px; }
 .bdp-location { color: var(--bt-text); font-size: 16px; margin: 0 0 10px; font-weight: 400; }
 .bdp-price { margin: 0 0 4px; font-size: 16px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -1865,27 +1869,34 @@ body.bdp-scrolled-deep .sticky-save {
   margin-top: 6px;
 }
 
-/* ── Top stats strip — 4 columns × 2 rows (8 cells total) ───── */
+/* ── Top stats strip — 4 columns × 2 rows (8 cells total) ─────
+   Real BT cards measure ~166×39 each. Switched from `1fr` columns
+   (which produced 205-wide cards in a 870-wide container) to fixed
+   166px tracks with a tighter gap. */
 .bdp-stats-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  grid-auto-rows: auto;
-  column-gap: 18px;
-  row-gap: 14px;
+  grid-template-columns: repeat(4, 166px);
+  grid-auto-rows: 39px;
+  column-gap: 16px;
+  row-gap: 12px;
   margin: 22px 0 14px;
-  padding: 22px 8px;
+  padding: 16px 0;
   border-bottom: 1px solid var(--bt-border);
 }
 .stat-card {
   display: flex;
-  gap: 14px;
+  gap: 10px;
   align-items: center;
 }
+/* Real BT stat cards: 166×39 (vs sandbox prior 205×44). Tighter icon
+   and tighter card track; 32px icon was already correct, just shrink
+   the surrounding flex container. */
 .stat-icon {
   flex-shrink: 0;
-  width: 44px; height: 44px;
+  width: 32px; height: 32px;
   display: flex; align-items: center; justify-content: center;
 }
+.stat-icon svg { width: 32px; height: 32px; }
 .stat-text {
   display: flex; flex-direction: column;
   min-width: 0;
@@ -2509,7 +2520,27 @@ body.bdp-scrolled-deep .sticky-save {
   color: var(--bt-text-dim);
 }
 
-/* Description section */
+/* Description section — real BT clamps the Description body to ~168px
+   (≈4 lines + heading) and shows an inline "Show More" button right-
+   aligned at the bottom. Click expands to full content. */
+.bdp-description-body { position: relative; }
+.bdp-description-clamped {
+  max-height: 168px;
+  overflow: hidden;
+  transition: max-height 200ms ease;
+}
+.bdp-description-body.is-expanded .bdp-description-clamped { max-height: none; overflow: visible; }
+.bdp-show-more {
+  background: transparent; border: 0; padding: 4px 0;
+  color: #139af5;
+  font: inherit; font-size: 13px; font-weight: 400;
+  cursor: pointer;
+  display: block;
+  margin-left: auto;
+}
+.bdp-show-more:hover { text-decoration: underline; }
+/* Label swap is handled by JS in base.html (sets textContent directly). */
+
 .bdp-description-section .bdp-description p { margin: 0 0 12px; }
 .bdp-feature-h3 {
   font-size: 14px;

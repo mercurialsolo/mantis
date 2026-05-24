@@ -110,8 +110,14 @@
       <div class="sponsored-strip">SPONSORED LISTING</div>
     {% endif %}
     {# Real BT does NOT render badges above the title in the right-rail card —
-       badges live in the engagement strip or the gallery overlay. #}
-    <h1 class="bdp-title">{{ boat.title }}</h1>
+       badges live in the engagement strip or the gallery overlay.
+       Title structure: H1 + sibling SPAN holding the length suffix —
+       SEO trick that keeps H1.textContent clean while the visible title
+       reads "Title | XX'". Matches probe of dealer BDP 2026-05-24. #}
+    <header class="bdp-title-row">
+      <h1 class="bdp-title">{{ boat.title }}</h1>
+      <span class="bdp-length">| {{ boat.length_ft|int }}'</span>
+    </header>
     <p class="bdp-location">{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</p>
     <div class="bdp-price-block" data-testid="price-block">
       <p class="bdp-price">
@@ -219,7 +225,7 @@
             <span class="dealership-stat-label">Sold listings</span>
           </div>
         </div>
-        <a href="https://www.{{ dealer.name|lower|replace(' ','-')|replace(',','')|replace('--','-') }}.com" class="visit-seller-link dealership-link" target="_blank" rel="nofollow">Visit Seller Website ↗</a>
+        <a href="https://www.{{ dealer.name|lower|replace(' ','-')|replace(',','')|replace('--','-') }}.com" class="visit-seller-link dealership-link" target="_blank" rel="nofollow">Visit Seller Website</a>
       </div>
     {% endif %}
 
@@ -319,24 +325,27 @@
       <h3 class="accordion-title">Description</h3>
       <span class="accordion-chevron"></span>
     </summary>
-    <div class="accordion-body">
-      <p class="bdp-seller-blurb">{{ boat.owner_seller_description }}</p>
-      <div class="bdp-description">
-        {% for para in boat.description %}<p>{{ para }}</p>{% endfor %}
+    <div class="accordion-body bdp-description-body" data-clampable="1">
+      <div class="bdp-description-clamped">
+        <p class="bdp-seller-blurb">{{ boat.owner_seller_description }}</p>
+        <div class="bdp-description">
+          {% for para in boat.description %}<p>{{ para }}</p>{% endfor %}
+        </div>
+        {% if boat.description_features %}
+          <h3 class="bdp-feature-h3">Key Features</h3>
+          <ul class="bdp-feature-list">
+            {% for f in boat.description_features %}<li>{{ f }}</li>{% endfor %}
+          </ul>
+        {% endif %}
+        {% if boat.is_owner_listed %}
+          <p class="bdp-disclaimer-text">
+            This listing was placed by a private seller. Boat Trader has not verified
+            the accuracy of any claims made in the description. Always inspect a boat
+            in person and obtain a marine survey before any purchase decision.
+          </p>
+        {% endif %}
       </div>
-      {% if boat.description_features %}
-        <h3 class="bdp-feature-h3">Key Features</h3>
-        <ul class="bdp-feature-list">
-          {% for f in boat.description_features %}<li>{{ f }}</li>{% endfor %}
-        </ul>
-      {% endif %}
-      {% if boat.is_owner_listed %}
-        <p class="bdp-disclaimer-text">
-          This listing was placed by a private seller. Boat Trader has not verified
-          the accuracy of any claims made in the description. Always inspect a boat
-          in person and obtain a marine survey before any purchase decision.
-        </p>
-      {% endif %}
+      <button type="button" class="bdp-show-more" data-show-more>Show More</button>
     </div>
   </details>
 
@@ -381,11 +390,40 @@
     </div>
   </details>
 
-  {# Real BT BDP only renders Description / Measurements / Propulsion
-     at this accordion level. The Condition / Hull / Listing ID fields
-     are already surfaced in the stats strip + Propulsion accordion; the
-     Location section duplicates the right-rail city/state line — both
-     dropped here to mirror real BT exactly. #}
+  {# Real BT BDP has FIVE accordions at this level: Description (open),
+     Measurements, Propulsion, More Details, Location. Iter1.2 removed
+     the last two based on a private-seller probe that didn't render
+     them — the dealer-BDP probe (2026-05-24) confirms both are present.
+     Restored to match. #}
+  <details class="bdp-accordion">
+    <summary>
+      <h3 class="accordion-title">More Details</h3>
+      <span class="accordion-chevron"></span>
+    </summary>
+    <div class="accordion-body">
+      <dl class="spec-grid">
+        <div><dt>Condition</dt><dd>{{ boat.condition|capitalize }}</dd></div>
+        <div><dt>Class</dt><dd>{{ boat.boat_type }}</dd></div>
+        <div><dt>Hull Material</dt><dd>{{ boat.hull_material }}</dd></div>
+        <div><dt>Hull Color</dt><dd>{{ boat.hull_color }}</dd></div>
+        <div><dt>Passenger Capacity</dt><dd>{{ boat.capacity_people }}</dd></div>
+        <div><dt>Listing ID</dt><dd>{{ boat.id }}</dd></div>
+      </dl>
+    </div>
+  </details>
+
+  <details class="bdp-accordion">
+    <summary>
+      <h3 class="accordion-title">Location</h3>
+      <span class="accordion-chevron"></span>
+    </summary>
+    <div class="accordion-body">
+      <p>{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</p>
+      <div class="bdp-map-placeholder" data-testid="map-placeholder">
+        <span>Map of {{ boat.city }}, {{ boat.state }}</span>
+      </div>
+    </div>
+  </details>
 </section>
 
 {# ─── Sponsor banner #2 — INSIDE left column ──── #}
