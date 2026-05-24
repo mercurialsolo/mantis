@@ -812,11 +812,143 @@ def _step_dict_clone(step_dict: dict) -> dict:
 DEFAULT_PHASE1_MAX_PAGES = 3
 
 
+def partition_pages(max_pages: int, n_workers: int) -> list[list[int]]:
+    """Round-robin slice the page set ``[1..max_pages]`` across N workers.
+
+    Returns a list of length ``min(n_workers, max_pages)`` so empty
+    chunks are never emitted (an empty chunk would mean spawning an
+    idle Phase-1 worker). Round-robin (vs contiguous) keeps each
+    worker's chunk diverse in seller-card-density distribution — many
+    real domains render featured listings up front and the long tail
+    at the bottom, so contiguous slicing would concentrate slow scans
+    on the last worker.
+
+    Worker w_i (0-indexed) walks pages ``[i+1, i+1+n_workers, i+1+2*n_workers, ...]``
+    truncated at ``max_pages``. ``n_workers <= 1`` falls back to a
+    single chunk of all pages (the current serial behaviour).
+    """
+    n = max(1, int(max_pages))
+    w = max(1, int(n_workers))
+    if w >= n:
+        w = n  # don't over-shard
+    chunks: list[list[int]] = [[] for _ in range(w)]
+    for page in range(1, n + 1):
+        # 1-indexed page → 0-indexed slot via (page-1) % w.
+        chunks[(page - 1) % w].append(page)
+    return chunks
+
+
+def _phase1_collect_step() -> dict:
+    """Stamp the canonical ``collect_urls`` step shape used by Phase-1
+    workers. Shared between ``prepare_phase1_suite`` (single-worker) and
+    ``prepare_phase1_partitions`` (multi-worker)."""
+    return {
+        "intent": "Collect every listing URL visible on this results page",
+        "type": "collect_urls",
+        "section": "extraction",
+        "claude_only": True,
+        "budget": 0,
+        # required=False (not True) so the runner's step-recovery
+        # policy doesn't trigger agentic_recovery + add_hint retries
+        # on collect_urls failure. The orchestrator already handles
+        # empty collect_urls by falling through to the pagination
+        # path — burning ~$0.20 on 3 doomed Claude scan retries +
+        # critic-row-link recovery attempts is wasted budget.
+        "required": False,
+        "params": {},
+        "hints": {},
+        "gate": False,
+        "loop_target": -1,
+        "loop_count": 0,
+        "grounding": False,
+        "verify": "",
+        "reverse": "",
+    }
+
+
+def _phase1_navigate_step(url: str) -> dict:
+    """Stamp the canonical ``navigate`` step shape used between page
+    transitions inside a Phase-1 worker."""
+    return {
+        "intent": f"Navigate to {url}",
+        "type": "navigate",
+        "section": "extraction",
+        "budget": 3,
+        "required": False,
+        "params": {"url": url, "wait_after_load_seconds": 6},
+        "hints": {},
+        "claude_only": False,
+        "gate": False,
+        "loop_target": -1,
+        "loop_count": 0,
+        "grounding": False,
+        "verify": "",
+        "reverse": "",
+    }
+
+
+def _setup_steps_base_url(setup_steps: list[dict]) -> str:
+    """Find the first ``navigate`` step's URL in ``setup_steps`` — the
+    base URL that all subsequent per-page navigations key off."""
+    for s in setup_steps:
+        if s.get("type") == "navigate":
+            url = (s.get("params") or {}).get("url", "") or ""
+            if url:
+                return url
+    return ""
+
+
+def _phase1_plan_for_pages(
+    setup_steps: list[dict],
+    pages: list[int],
+    pagination_url_template: str,
+) -> list[dict]:
+    """Build the Phase-1 plan-steps list for a worker assigned ``pages``.
+
+    Each worker shares the setup chain (cookie banners, login, base
+    navigate). Then:
+      * If page 1 is in the worker's set: collect_urls runs on the
+        base URL the setup just navigated to.
+      * For every page p > 1 in the worker's set:
+        navigate(page-p URL) + collect_urls.
+      * If page 1 is NOT in the worker's set: the worker still runs
+        setup (navigating to the base URL), then jumps straight to its
+        first assigned page>1. The base URL's listings are not
+        harvested by this worker — a different worker handles them.
+
+    Returns the flat list of step dicts the worker will execute.
+    Falls back silently to a single-collect (page 1 only) when the
+    template is malformed or the base URL is missing — better fewer
+    URLs than a crash.
+    """
+    steps: list[dict] = list(setup_steps)
+    sorted_pages = sorted(set(int(p) for p in pages))
+    if 1 in sorted_pages:
+        steps.append(_phase1_collect_step())
+    if any(p > 1 for p in sorted_pages):
+        base_url = _setup_steps_base_url(setup_steps)
+        template = pagination_url_template or DEFAULT_PAGINATION_URL_TEMPLATE
+        if (
+            base_url
+            and "{base}" in template
+            and "{n}" in template
+        ):
+            base = base_url.rstrip("/")
+            for p in sorted_pages:
+                if p == 1:
+                    continue
+                page_url = template.format(base=base, n=p)
+                steps.append(_phase1_navigate_step(page_url))
+                steps.append(_phase1_collect_step())
+    return steps
+
+
 def prepare_phase1_suite(
     suite_dict: dict, group: LoopGroup,
     *,
     max_pages: int = 1,
     pagination_url_template: str = "",
+    pages: list[int] | None = None,
 ) -> dict:
     """Build a one-container Phase-1 sub-suite that harvests listing URLs.
 
@@ -855,72 +987,14 @@ def prepare_phase1_suite(
         _step_dict_clone(s) for s in steps_raw[:body_start]
     ]
 
-    def _collect_step() -> dict:
-        return {
-            "intent": "Collect every listing URL visible on this results page",
-            "type": "collect_urls",
-            "section": "extraction",
-            "claude_only": True,
-            "budget": 0,
-            # required=False (not True) so the runner's step-recovery
-            # policy doesn't trigger agentic_recovery + add_hint retries
-            # on collect_urls failure. The orchestrator already handles
-            # empty collect_urls by falling through to the pagination
-            # path — burning ~$0.20 on 3 doomed Claude scan retries +
-            # critic-row-link recovery attempts is wasted budget.
-            "required": False,
-            "params": {},
-            "hints": {},
-            "gate": False,
-            "loop_target": -1,
-            "loop_count": 0,
-            "grounding": False,
-            "verify": "",
-            "reverse": "",
-        }
-
-    def _navigate_step(url: str) -> dict:
-        return {
-            "intent": f"Navigate to {url}",
-            "type": "navigate",
-            "section": "extraction",
-            "budget": 3,
-            "required": False,
-            "params": {"url": url, "wait_after_load_seconds": 6},
-            "hints": {},
-            "claude_only": False,
-            "gate": False,
-            "loop_target": -1,
-            "loop_count": 0,
-            "grounding": False,
-            "verify": "",
-            "reverse": "",
-        }
-
-    plan_steps: list[dict] = list(setup_steps) + [_collect_step()]
-
-    if max_pages > 1:
-        # Resolve the base URL from the setup navigate so we can
-        # synthesize per-page URLs from the same template the per-page
-        # fanout uses (#629). If no base URL is found, fall back to
-        # single-page mode silently — the operator gets fewer URLs but
-        # no crash.
-        base_url = ""
-        for s in setup_steps:
-            if s.get("type") == "navigate":
-                base_url = (s.get("params") or {}).get("url", "") or ""
-                if base_url:
-                    break
-        template = pagination_url_template or DEFAULT_PAGINATION_URL_TEMPLATE
-        if base_url and "{base}" in template and "{n}" in template:
-            per_page_urls = partition_urls_for_pagination(
-                base_url, max_pages, template=template,
-            )
-            # per_page_urls[0] is the base URL the setup already
-            # navigated to; skip it and append pages 2..max_pages.
-            for url in per_page_urls[1:]:
-                plan_steps.append(_navigate_step(url))
-                plan_steps.append(_collect_step())
+    # #644: explicit ``pages`` overrides ``max_pages``. The legacy
+    # path (no ``pages`` arg) walks pages 1..max_pages sequentially,
+    # which matches the pre-#644 behaviour byte-for-byte.
+    if pages is None:
+        pages = list(range(1, max(1, int(max_pages)) + 1))
+    plan_steps = _phase1_plan_for_pages(
+        setup_steps, pages, pagination_url_template,
+    )
 
     sub_suite = dict(suite_dict)
     sub_suite["_micro_plan"] = plan_steps
@@ -936,10 +1010,87 @@ def prepare_phase1_suite(
     # Loop_idx is unused but documenting the source body span helps
     # operators when reading the suite payload in dispatch logs.
     sub_suite["_fanout_source_loop_step"] = loop_idx
-    # Record max_pages so the operator can see (in the dispatch log)
-    # how many pages Phase-1 was asked to walk.
-    sub_suite["_fanout_phase1_pages"] = max_pages
+    # Record the worker's assigned page set (and total page count) so
+    # the operator can see (in the dispatch log) what each worker was
+    # asked to walk. Legacy callers passing only ``max_pages`` see the
+    # same shape they always did (``_fanout_phase1_pages == max_pages``)
+    # because ``pages = [1..max_pages]`` in that case.
+    sub_suite["_fanout_phase1_pages"] = len(pages)
+    sub_suite["_fanout_phase1_page_set"] = list(pages)
     return sub_suite
+
+
+def prepare_phase1_partitions(
+    suite_dict: dict, group: LoopGroup,
+    *,
+    n_workers: int,
+    max_pages: int,
+    pagination_url_template: str = "",
+) -> list[dict]:
+    """#644 — build M Phase-1 sub-suites each scanning a page slice.
+
+    The orchestrator spawns one Modal worker per returned sub-suite in
+    parallel, then merges + dedups the per-worker ``collected_urls``
+    on its side (orchestrator-side merge — option 2 in the issue;
+    see also #627's ``shared_seen_set`` for a future early-skip
+    optimization).
+
+    Round-robin page assignment (via :func:`partition_pages`) keeps
+    each worker's chunk diverse in seller-density distribution.
+    Workers whose chunk is empty are dropped — passing
+    ``n_workers > max_pages`` returns ``max_pages`` sub-suites instead
+    of ``n_workers``.
+
+    When ``n_workers <= 1`` this returns a single sub-suite equivalent
+    to :func:`prepare_phase1_suite` — the orchestrator's serial path
+    is preserved when fan-out is disabled.
+
+    Each sub-suite has the standard Phase-1 envelope plus a
+    per-worker ``_fanout_phase1_worker_index`` (0-indexed) that the
+    operator can read in dispatch logs.
+    """
+    chunks = partition_pages(max_pages, n_workers)
+    sub_suites: list[dict] = []
+    for i, page_chunk in enumerate(chunks):
+        if not page_chunk:
+            continue
+        sub = prepare_phase1_suite(
+            suite_dict, group,
+            pagination_url_template=pagination_url_template,
+            pages=page_chunk,
+        )
+        # Per-worker session name + index — tells the operator which
+        # worker owns which page slice in the dispatch log + Augur Runs.
+        sub["session_name"] = (
+            f"{suite_dict.get('session_name', 'fanout')}_phase1_w{i + 1}"
+        )
+        sub["_fanout_phase1_worker_index"] = i
+        sub["_fanout_phase1_worker_count"] = len(chunks)
+        sub_suites.append(sub)
+    return sub_suites
+
+
+def dedup_urls_across_workers(per_worker_urls: list[list[str]]) -> list[str]:
+    """Concatenate + dedup the per-worker harvest preserving first-seen
+    order across workers in their list-order.
+
+    Worker w_1's URLs come first (in the order they were harvested),
+    then w_2's URLs not already seen, and so on. This keeps the
+    deterministic order useful for cache-keyed Phase-2 partitioning
+    while not stamping any "winner-takes-all" structure on the chunks
+    themselves.
+    """
+    seen: set[str] = set()
+    merged: list[str] = []
+    for chunk in per_worker_urls:
+        for url in chunk:
+            if not url:
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            merged.append(url)
+    return merged
 
 
 def prepare_phase2_suites(

@@ -2973,8 +2973,9 @@ def main(
     if workers > 1 and task_suite.get("_micro_plan"):
         from mantis_agent.gym.fanout_runner import (
             find_url_collect_group, prepare_modal_partitions,
-            prepare_phase1_suite, prepare_phase2_suites,
-            resolve_phase1_max_pages,
+            prepare_phase1_suite, prepare_phase1_partitions,
+            prepare_phase2_suites, resolve_phase1_max_pages,
+            dedup_urls_across_workers,
         )
 
         # #627: create a per-run shared seen-URL set keyed by a unique
@@ -3031,55 +3032,133 @@ def main(
             phase1_max_pages, phase1_template = resolve_phase1_max_pages(
                 task_suite,
             )
-            print(
-                f"\n  ═══ PHASE-1 (#628): URL collection on 1 container "
-                f"(max_pages={phase1_max_pages}, template={phase1_template!r}) ═══"
-            )
-            phase1_suite = prepare_phase1_suite(
-                task_suite, url_collect_group,
-                max_pages=phase1_max_pages,
-                pagination_url_template=phase1_template,
-            )
-            # #631: per-partition branch_id for Augur grouping.
-            phase1_suite["_fanout_branch_id"] = (
-                f"{fanout_parent_run_id}:phase1"
-            )
-            spawn_kwargs = {
-                "task_file_contents": json.dumps(phase1_suite),
-                "max_steps": max_steps,
-            }
-            if model == "claude":
-                spawn_kwargs["claude_model"] = claude_model
-            phase1_handle = executor_fn.spawn(**spawn_kwargs)
-            print("    [phase1] worker spawned")
+            # #644 (axis 3): split Phase-1 across M parallel workers
+            # when the suite opts in via ``_fanout_phase1_workers``.
+            # Default 1 preserves the serial #638 behaviour. Cap at
+            # phase1_max_pages — round-robin partitioning would emit
+            # empty chunks otherwise.
+            phase1_workers_req = task_suite.get("_fanout_phase1_workers")
+            try:
+                phase1_workers = max(1, int(phase1_workers_req or 1))
+            except (TypeError, ValueError):
+                phase1_workers = 1
+            phase1_workers = min(phase1_workers, phase1_max_pages)
             from mantis_agent.gym.fanout_runner import (
                 dedup_leads_by_url, read_partition_result,
             )
-            try:
-                _phase1_raw = phase1_handle.get()
-                # Diagnostic: surface the raw result keys + lengths so a
-                # collected_urls vs viable mismatch is debuggable from
-                # the orchestrator log (worker container logs are tail-
-                # trimmed by Modal on stopped ephemeral apps).
-                if isinstance(_phase1_raw, dict):
-                    _urls_in_result = _phase1_raw.get("collected_urls", "MISSING")
-                    _urls_type = type(_urls_in_result).__name__
-                    _urls_len = (
-                        len(_urls_in_result)
-                        if isinstance(_urls_in_result, list) else "n/a"
+
+            if phase1_workers <= 1:
+                # Serial path — exactly the #638 axis-2 behaviour.
+                print(
+                    f"\n  ═══ PHASE-1 (#628): URL collection on 1 container "
+                    f"(max_pages={phase1_max_pages}, "
+                    f"template={phase1_template!r}) ═══"
+                )
+                phase1_suite = prepare_phase1_suite(
+                    task_suite, url_collect_group,
+                    max_pages=phase1_max_pages,
+                    pagination_url_template=phase1_template,
+                )
+                # #631: per-partition branch_id for Augur grouping.
+                phase1_suite["_fanout_branch_id"] = (
+                    f"{fanout_parent_run_id}:phase1"
+                )
+                spawn_kwargs = {
+                    "task_file_contents": json.dumps(phase1_suite),
+                    "max_steps": max_steps,
+                }
+                if model == "claude":
+                    spawn_kwargs["claude_model"] = claude_model
+                phase1_handle = executor_fn.spawn(**spawn_kwargs)
+                print("    [phase1] worker spawned")
+                try:
+                    _phase1_raw = phase1_handle.get()
+                    if isinstance(_phase1_raw, dict):
+                        _urls_in_result = _phase1_raw.get(
+                            "collected_urls", "MISSING"
+                        )
+                        _urls_type = type(_urls_in_result).__name__
+                        _urls_len = (
+                            len(_urls_in_result)
+                            if isinstance(_urls_in_result, list) else "n/a"
+                        )
+                        print(
+                            f"    [phase1] raw result: "
+                            f"viable={_phase1_raw.get('viable', 'MISSING')} "
+                            f"collected_urls_type={_urls_type} "
+                            f"collected_urls_len={_urls_len}"
+                        )
+                    phase1_summary = read_partition_result(_phase1_raw)
+                    collected_urls = phase1_summary["collected_urls"]
+                except Exception as exc:
+                    print(f"    [phase1] ERROR: {exc} — aborting fan-out")
+                    collected_urls = []
+                print(
+                    f"    [phase1] harvested {len(collected_urls)} "
+                    f"unique URL(s)"
+                )
+            else:
+                # #644: M parallel Phase-1 workers each scanning a
+                # page-slice. Each worker's collected_urls are merged
+                # + deduped orchestrator-side; cross-worker dedup
+                # via ``shared_seen_set`` is a future-work optimisation.
+                phase1_sub_suites = prepare_phase1_partitions(
+                    task_suite, url_collect_group,
+                    n_workers=phase1_workers,
+                    max_pages=phase1_max_pages,
+                    pagination_url_template=phase1_template,
+                )
+                print(
+                    f"\n  ═══ PHASE-1 (#644 axis 3): URL collection "
+                    f"on {len(phase1_sub_suites)} containers "
+                    f"(max_pages={phase1_max_pages}, "
+                    f"template={phase1_template!r}) ═══"
+                )
+                phase1_handles: list[tuple[int, Any]] = []
+                for i, sub in enumerate(phase1_sub_suites):
+                    sub["_fanout_branch_id"] = (
+                        f"{fanout_parent_run_id}:phase1_w{i + 1}"
                     )
+                    spawn_kwargs = {
+                        "task_file_contents": json.dumps(sub),
+                        "max_steps": max_steps,
+                    }
+                    if model == "claude":
+                        spawn_kwargs["claude_model"] = claude_model
+                    handle = executor_fn.spawn(**spawn_kwargs)
+                    phase1_handles.append((i, handle))
                     print(
-                        f"    [phase1] raw result: "
-                        f"viable={_phase1_raw.get('viable', 'MISSING')} "
-                        f"collected_urls_type={_urls_type} "
-                        f"collected_urls_len={_urls_len}"
+                        f"    [phase1] worker {i + 1}/"
+                        f"{len(phase1_sub_suites)} spawned "
+                        f"(pages={sub['_fanout_phase1_page_set']})"
                     )
-                phase1_summary = read_partition_result(_phase1_raw)
-                collected_urls = phase1_summary["collected_urls"]
-            except Exception as exc:
-                print(f"    [phase1] ERROR: {exc} — aborting fan-out")
-                collected_urls = []
-            print(f"    [phase1] harvested {len(collected_urls)} unique URL(s)")
+                per_worker_urls: list[list[str]] = []
+                for i, handle in phase1_handles:
+                    try:
+                        summary = read_partition_result(handle.get())
+                        urls = summary["collected_urls"]
+                        per_worker_urls.append(urls)
+                        print(
+                            f"    [phase1] worker {i + 1}: "
+                            f"collected_urls={len(urls)}"
+                        )
+                    except Exception as exc:
+                        print(
+                            f"    [phase1] worker {i + 1} ERROR: {exc}"
+                        )
+                        per_worker_urls.append([])
+                collected_urls = dedup_urls_across_workers(per_worker_urls)
+                raw_total = sum(len(c) for c in per_worker_urls)
+                if raw_total > len(collected_urls):
+                    print(
+                        f"    [phase1] cross-worker dedup: "
+                        f"{raw_total} → {len(collected_urls)} unique URL(s)"
+                    )
+                else:
+                    print(
+                        f"    [phase1] harvested {len(collected_urls)} "
+                        f"unique URL(s) (no cross-worker duplicates)"
+                    )
 
             if collected_urls:
                 phase2_suites = prepare_phase2_suites(
