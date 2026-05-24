@@ -1144,6 +1144,16 @@ header.main {
 .apply-filters { margin: 18px 0 10px; }
 .filter-clear { display: block; text-align: center; font-size: 14px; margin: 0 0 8px; }
 
+/* "Meet Your Seller" h2 above the BDP contact card (v=104) —
+   matches real BT's 20/700 #404040 heading that appears before
+   the seller info on both private + dealer listings. */
+.meet-your-seller-h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #404040;
+  margin: 24px 0 12px;
+}
+
 /* ── Cookie consent banner (v=103) ─────────────────────────────────
    Shown on first visit only (server-rendered conditional in base.html
    when bt_cookie_consent cookie isn't set). Bottom-right floating

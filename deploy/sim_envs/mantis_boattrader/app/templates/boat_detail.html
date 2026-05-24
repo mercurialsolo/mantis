@@ -93,7 +93,7 @@
       {% for badge in boat.badges %}<span class="listing-tag listing-tag-{{ badge|lower|replace(' ','-') }}">{{ badge }}</span>{% endfor %}
       </div>
     {% endif %}
-    <h1 class="bdp-title">{{ boat.title }} <span class="bdp-length">| {{ boat.length_ft|int }}'</span></h1>
+    <h1 class="bdp-title">{{ boat.title }}</h1>
     <p class="bdp-location">{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</p>
     <div class="bdp-price-block" data-testid="price-block">
       <p class="bdp-price">
@@ -120,7 +120,10 @@
       </li>
     </ul>
 
-    {# ─── Contact card (owner vs dealer/sponsored) ────────────── #}
+    {# ─── Contact card (owner vs dealer/sponsored) ──────────────
+       v=104: "Meet Your Seller" H2 above the contact card matches
+       real BT's pattern (same heading for both seller types). #}
+    <h2 class="meet-your-seller-h2">Meet Your Seller</h2>
     {% if boat.is_owner_listed %}
       <div class="bdp-private-seller-card" id="contact" data-testid="private-seller-card">
         <div class="private-seller-tag">Private Seller</div>

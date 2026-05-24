@@ -509,6 +509,25 @@ def bdp_html(client) -> str:
     return r2.text
 
 
+def test_bdp_h1_has_no_length_suffix(bdp_html):
+    """v=104: real BT BDP H1 is just "Year Make Model" — no length
+    suffix like sandbox's old "| 16'". Removed in v=104."""
+    # H1 should not contain the bdp-length span anymore
+    assert 'class="bdp-length"' not in bdp_html
+    # H1 should not contain a vertical bar followed by a length unit
+    import re
+    h1_match = re.search(r'<h1[^>]*>([^<]+)</h1>', bdp_html)
+    assert h1_match, "no h1 found"
+    h1_text = h1_match.group(1)
+    assert "| " not in h1_text, f"H1 still has length suffix: {h1_text!r}"
+
+
+def test_bdp_has_meet_your_seller_heading(bdp_html):
+    """v=104: H2 "Meet Your Seller" sits above the contact card on both
+    private and dealer listings — matches real BT's pattern."""
+    assert '<h2 class="meet-your-seller-h2">Meet Your Seller</h2>' in bdp_html
+
+
 def test_owner_highlights_is_h2(bdp_html):
     """v=91: real BT renders 'Owner Highlights' as H2 20/700 alongside
     'Boat Details' and 'What Owners Say'. Sandbox had it as H3 — flipped."""

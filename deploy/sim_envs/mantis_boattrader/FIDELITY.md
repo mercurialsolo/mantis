@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=103** (2026-05-23) — Cookie consent banner added per user screenshot. Bottom-right floating card (white, 12px radius, soft shadow) with Customize / Reject / Accept pill buttons. Shows on first visit only (server-rendered conditional on `bt_cookie_consent` cookie). Accept/Reject POST to `/__site/consent`; Customize dismisses via JS without setting the cookie.
+Last updated: **v=104** (2026-05-23) — BDP visual/perceptual compare (dealer + owner): removed H1 length suffix `| 16'` (real BT format is "Year Make Model"); added H2 "Meet Your Seller" above the contact card on both seller paths matching real BT's pattern. Side-by-side diff saved as `_captured/bdp/SELLER_VS_OWNER_DIFF.md`.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
@@ -440,6 +440,34 @@ Calculator" (18/700 #303030), then a result row.
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=104` BDP visual/perceptual compare — dealer + owner (user request):
+       • Probed real BT private listings (President Trawler + Pioneer
+         Sportfish + Sea Fox + Yamaha — all rendered as private with
+         "Meet Your Seller" / "Contact <FirstName>"). Couldn't isolate
+         a "Contact Dealer" pattern on first-page listings; real BT
+         appears to fold both seller types under the same UI.
+       • Probed sandbox dealer (Crestliner VT 18) + sandbox owner
+         (Chaparral 267 SSX) at the same viewport.
+       • Findings written up in `_captured/bdp/SELLER_VS_OWNER_DIFF.md`
+         — heading hierarchy side-by-side + layout invariants verified
+         ✅ + remaining 🟡 enumerated.
+       • Concrete fixes landed in v=104:
+         * Removed `<span class="bdp-length">| 16'</span>` from H1.
+           Real BT H1 is just "Year Make Model" without the length
+           suffix.
+         * Added `<h2 class="meet-your-seller-h2">Meet Your Seller</h2>`
+           above the contact card block (renders for both
+           `is_owner_listed` true + false paths). 20/700 #404040
+           matching real BT.
+       • Documented divergences kept as 🟡:
+         * Sandbox extra "Key Features" / "More Details" / "Location"
+           H3s (not visible on probed real BT BDPs)
+         * Sparkle prefix on "What Owners Say" (sandbox decorative add)
+         * Show Phone always shown on dealer cards (real BT gates by
+           dealer/private — already 🟡 in SCOPE.md)
+       • Cache-buster bumped to `?v=104`.
+       • 2 new fidelity tests: H1 has no length suffix + "Meet Your
+         Seller" H2 present. Suite now **46 passing**.
 `v=103` Cookie consent banner added (user screenshot):
        • New `.cookie-consent` bottom-right floating card (white,
          12px radius, layered drop shadow, 22px 26px padding).
