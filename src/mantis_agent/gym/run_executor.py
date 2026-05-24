@@ -252,7 +252,19 @@ class RunExecutor:
         brain = getattr(runner, "brain", None)
         model_name = str(getattr(brain, "model_name", "") or "") if brain is not None else ""
         runner._augur = AugurAdapter(
-            run_id=str(getattr(runner, "run_key", "") or runner.plan_signature or "run"),
+            # #649: prefer the per-session ``augur_run_id`` minted by
+            # the executor (workflow_id-prefixed for searchability,
+            # uuid-suffixed for uniqueness). Legacy callers that didn't
+            # mint one fall back to ``run_key`` (== workflow_id), then
+            # to ``plan_signature``. ``workflow_id`` is preserved as
+            # the ``workflow_id`` tag below so the Runs list can still
+            # group all sessions of one logical workflow.
+            run_id=str(
+                getattr(runner, "augur_run_id", "")
+                or getattr(runner, "run_key", "")
+                or runner.plan_signature
+                or "run"
+            ),
             tenant_id=str(getattr(runner, "tenant_id", "") or ""),
             session_name=str(getattr(runner, "session_name", "") or ""),
             extra_tags={
@@ -265,6 +277,10 @@ class RunExecutor:
                 # Stable across runs of the same source plan; empty
                 # string for ad-hoc runs that didn't set one.
                 "plan_name": str(getattr(runner, "plan_name", "") or ""),
+                # #649: the stable logical-workflow id (= ``run_key``).
+                # With ``run_id`` now unique per session, the Runs list
+                # still groups across re-runs by filtering on this tag.
+                "workflow_id": str(getattr(runner, "run_key", "") or ""),
                 "model": model_name,
                 # #542: surface the plan's total step count as a tag so
                 # the Augur runs-list can render "X / N steps" instead

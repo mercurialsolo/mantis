@@ -87,6 +87,7 @@ class MicroPlanRunner:
         max_retries: int = 2,
         checkpoint_path: str = "/data/checkpoints/micro_run.json",
         run_key: str = "", session_name: str = "", plan_signature: str = "",
+        augur_run_id: str = "",
         resume_state: bool = False, on_checkpoint: Any = None,
         dynamic_verifier: DynamicPlanVerifier | None = None,
         max_cost: float = 10.0, max_time_minutes: int = 180,
@@ -213,6 +214,18 @@ class MicroPlanRunner:
         self.on_step, self.max_retries = on_step, max_retries
         self.checkpoint_path, self.run_key = checkpoint_path, run_key
         self.session_name, self.plan_signature = session_name, plan_signature
+        # #649: ``run_key`` (== workflow_id) is intentionally STABLE
+        # across re-runs of the same logical workflow — the HTTP host
+        # polls it, the Chrome profile lock is keyed on it, and
+        # checkpoints resume by it. Augur's DebugSession.run_id, by
+        # contrast, must be UNIQUE per session so the Runs list doesn't
+        # pile overlapping rows under the same id and so trajectory
+        # comparisons across runs stay well-defined. The Modal executor
+        # (and any other caller) mints a per-session id and passes it
+        # here; ``run_executor`` prefers ``augur_run_id`` when opening
+        # ``AugurAdapter``, falling back to ``run_key`` then
+        # ``plan_signature`` for legacy callers that didn't mint one.
+        self.augur_run_id = augur_run_id
         self.resume_state, self.on_checkpoint = resume_state, on_checkpoint
         self.dynamic_verifier = (
             dynamic_verifier or DynamicPlanVerifier(plan_name=session_name)

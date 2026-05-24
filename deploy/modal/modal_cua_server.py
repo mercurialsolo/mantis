@@ -879,6 +879,19 @@ def _run_holo3_executor(
             print(f"  Resume:     {'on' if resume_state else 'off'}")
             print(f"  Checkpoint: {checkpoint_path}")
 
+        # #649: mint a per-session Augur run_id that's distinct from
+        # the (stable) ``workflow_id``. Two callers may invoke the same
+        # workflow_id (intentional, for resume / profile-lock reuse);
+        # each invocation gets its own Augur session id so the Runs
+        # list doesn't pile overlapping rows under the same identifier.
+        # The workflow_id is preserved as a prefix for searchability
+        # and as a separate Augur tag for cross-run grouping.
+        import uuid as _uuid_for_augur
+        augur_run_id = (
+            f"{workflow_id}-{_uuid_for_augur.uuid4().hex[:8]}"
+            if workflow_id else _uuid_for_augur.uuid4().hex[:12]
+        )
+
         micro_runner = MicroPlanRunner(
             brain=brain, env=env,
             grounding=grounding, extractor=extractor,
@@ -887,6 +900,7 @@ def _run_holo3_executor(
             run_key=workflow_id or session_name,
             session_name=session_name,
             plan_signature=plan_signature,
+            augur_run_id=augur_run_id,
             resume_state=resume_state,
             on_checkpoint=vol.commit,
             max_cost=task_suite.get("_max_cost", 10.0),
