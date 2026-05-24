@@ -2416,13 +2416,17 @@ body.bdp-scrolled-deep .sticky-save {
   box-shadow: 0 2px 6px rgba(10,30,60,0.18);
   z-index: 2;
 }
+/* Real BT "More Boats from this Dealer" link uses #0051AD (darker
+   blue than the main BT-blue #2566b0). Probed at Pursuit BDP. */
 .more-from-dealer-link {
   display: inline-block;
   margin-top: 8px;
-  color: var(--bt-blue);
+  color: #0051AD;
   font-size: 14px;
   font-weight: 600;
+  text-decoration: none;
 }
+.more-from-dealer-link:hover { text-decoration: underline; }
 
 /* ── Still have a question? card ──────────────────────────── */
 /* "Still have a question?" — matched to real BT: h3 24/700 #303030,
