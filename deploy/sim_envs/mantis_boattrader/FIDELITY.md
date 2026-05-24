@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=96** (2026-05-23) — SRP sort row + pagination typography re-measured: `.sort-row` 14/500/#404040 → 12/400/#333; `.pagination` 14/400 m=26px → 15/400 m=15px; `.page-link` color `#0a0a0a` → `#A5A5A5` (real BT pagination uses medium-grey, not near-black).
+Last updated: **v=97** (2026-05-23) — FIDELITY.md Sort row + Pagination rows updated with the re-measured values from v=96 (were still showing stale pre-fix values). SRP listing card section re-verified against real BT probes — all rows ✅.
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `rzsrm967ibbct7vgbgpzdzudgofezmmv`)
@@ -182,7 +182,7 @@ the current state. Status legend:
 |---|---|---|---|
 | Layout | plain inline "Sort:[strong] Recommended ▾" | same | ✅ |
 | Border | none | none | ✅ |
-| Font | 14/500 #404040 | 14/500 #404040 | ✅ |
+| Font | **12/400 #333** (re-probed v=96; earlier 14/500 #404040 was wrong) | 12/400 #333 (`.sort-label strong { font-weight: 400 }` overrides the bold default) | ✅ |
 | Chevron | inline SVG | inline SVG (bg-image data URL) | ✅ |
 
 ### Pagination
@@ -190,10 +190,13 @@ the current state. Status legend:
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
 | Style | plain text links | plain text links | ✅ |
-| Font | 14/400 #0a0a0a | 14/400 #0a0a0a | ✅ |
-| Active page | bold dark + underline | bold dark + 2px blue underline | ✅ |
-| Prev/Next | plain blue | plain blue | ✅ |
-| "of N" | dim gray | #757575 dim | ✅ |
+| Wrapper font + margin | **15/400, margin 15px 0** (re-probed v=96; earlier 14/400 was wrong) | 15/400, margin 15px 0 | ✅ |
+| Page link color | **#A5A5A5 medium-grey** (both active + inactive) | #A5A5A5 | ✅ |
+| Page link font-weight | 700 (both active + inactive) | 700 | ✅ |
+| Page link padding | 5px 10px | 5px 10px | ✅ |
+| Active page distinguisher | 2px blue underline only (color matches inactive) | 2px var(--bt-blue) bottom border | ✅ |
+| Prev/Next | plain blue | plain blue (`var(--bt-blue) !important`) | ✅ |
+| "of N" | dim gray, regular weight | #757575 font-weight 400 | ✅ |
 
 ## BDP page
 
@@ -428,6 +431,18 @@ the current state. Status legend:
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=97` FIDELITY.md Sort + Pagination row sync (doc-only):
+       • The v=96 CSS edits flipped Sort row to 12/400/#333 and
+         Pagination to 15/400/#A5A5A5, but the matching FIDELITY.md
+         rows still showed stale values ("14/500 #404040" and
+         "14/400 #0a0a0a") — copying old assumptions from earlier
+         iterations.
+       • Updated both rows with the re-probed values + linked back to
+         v=96's iteration log entry so the doc and CSS now agree.
+       • Re-verified SRP listing card section against real BT — all
+         rows still ✅ (card 350×384, title 18/700 #404040, price
+         16/400 #404040, monthly 14/700 #139af5, meta 12/400 #9e9e9e).
+         No code changes needed for listing cards.
 `v=96` SRP sort row + pagination re-measured:
        • `.sort-row` 14/500 → 12/400; color #404040 → #333. Real BT's
          "Sort: Recommended" inline label is much smaller and lighter
