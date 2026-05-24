@@ -1458,8 +1458,12 @@ header.main {
   display: none;
 }
 body.bdp-scrolled .bdp-sticky-bar { display: block; }
+/* Sticky bar inner — share the .bdp-grid 1336px content column so
+   sticky `< Search` / Previous / Next / Contact Seller anchor to the
+   same x-positions as the (non-sticky) .bdp-nav-row below. Was using
+   the wider 1440px --container. */
 .bdp-sticky-bar-inner {
-  max-width: var(--container);
+  max-width: 1336px;
   margin: 0 auto;
   padding: 12px 16px;
   display: flex;
@@ -2720,10 +2724,13 @@ body.bdp-scrolled-deep .sticky-save {
 .spec-grid dt { color: var(--bt-text-dim); width: 130px; flex: 0 0 130px; }
 .spec-grid dd { margin: 0; color: var(--bt-text); font-weight: 600; }
 
+/* Lead-confirm banner sits outside .bdp-grid; cap width to 1336px so
+   it aligns with the gallery + right rail content. */
 .lead-confirm {
   background: #ddf3e6; color: #1a6f3f;
   padding: 12px 16px; border-radius: var(--bt-radius);
-  margin: 12px 0;
+  max-width: 1336px;
+  margin: 12px auto;
 }
 
 /* ── Footer ───────────────────────────────────────────────────── */
