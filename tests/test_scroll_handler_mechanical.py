@@ -205,3 +205,112 @@ def test_notches_per_count_param_passes_through_to_env():
         _ctx(env),
     )
     assert env.step.call_args.args[0].params["amount"] == 5
+
+
+# ── #643 follow-up: CDP backend (skips Chrome wheel handlers entirely) ──
+
+
+def test_applies_to_when_backend_is_cdp_even_without_count():
+    """``params.backend == "cdp"`` activates the mechanical handler
+    even when no count is specified — operator pinning the CDP backend
+    is enough to opt out of vision scroll."""
+    h = MechanicalScrollHandler(MagicMock())
+    yes = MicroIntent(
+        intent="scroll", type="scroll", params={"backend": "cdp"},
+    )
+    assert h.applies_to(yes) is True
+
+
+def test_applies_to_when_hint_prefer_cdp_scroll_set():
+    """``hints.prefer_cdp_scroll == True`` is the plan-author / hint-
+    memory channel for opting into CDP scroll. Same activation as the
+    explicit ``params.backend``."""
+    h = MechanicalScrollHandler(MagicMock())
+    yes = MicroIntent(
+        intent="scroll", type="scroll", hints={"prefer_cdp_scroll": True},
+    )
+    assert h.applies_to(yes) is True
+
+
+def test_cdp_backend_dispatches_scrollBy_js_per_count():
+    """``params.backend=cdp count=3`` → 3 cdp_evaluate calls that
+    each carry the scrollBy + scrollingElement.scrollBy + KeyboardEvent
+    payload (the same triple-prong dispatch used by step_recovery.py).
+    No env.step (xdotool) calls fire."""
+    env = MagicMock()
+    # 1 pre-scroll readback + 3 dispatch calls + 1 post-scroll readback = 5
+    env.cdp_evaluate = MagicMock(side_effect=[0.0, None, None, None, 2000.0])
+    h = MechanicalScrollHandler(MagicMock())
+    res = h.execute(
+        MicroIntent(
+            intent="x", type="scroll",
+            params={"count": 3, "backend": "cdp"},
+        ),
+        _ctx(env),
+    )
+    assert res.success is True
+    # xdotool path is dormant.
+    assert env.step.call_count == 0
+    # 1 pre-readback + 3 dispatches + 1 post-readback.
+    assert env.cdp_evaluate.call_count == 5
+    # Inspect one of the dispatch calls to confirm the JS payload.
+    dispatch_js = env.cdp_evaluate.call_args_list[1].args[0]
+    assert "window.scrollBy" in dispatch_js
+    assert "scrollingElement" in dispatch_js
+    assert "PageDown" in dispatch_js
+
+
+def test_cdp_backend_direction_up_uses_pageup_and_negative_height():
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(side_effect=[1000.0, None, 400.0])
+    h = MechanicalScrollHandler(MagicMock())
+    res = h.execute(
+        MicroIntent(
+            intent="x", type="scroll",
+            params={"count": 1, "backend": "cdp", "direction": "up"},
+        ),
+        _ctx(env),
+    )
+    assert res.success is True
+    dispatch_js = env.cdp_evaluate.call_args_list[1].args[0]
+    assert "-window.innerHeight" in dispatch_js
+    assert "PageUp" in dispatch_js
+
+
+def test_cdp_backend_falls_back_to_xdotool_when_no_cdp_evaluate():
+    """If the env doesn't expose ``cdp_evaluate`` (test stubs, etc.),
+    the operator's hint was optimistic — fall through to xdotool
+    rather than crash. The handler still produces a valid result so
+    the runner doesn't halt."""
+    env = MagicMock(spec=["step"])  # no cdp_evaluate
+    h = MechanicalScrollHandler(MagicMock())
+    res = h.execute(
+        MicroIntent(
+            intent="x", type="scroll",
+            params={"count": 2, "backend": "cdp"},
+        ),
+        _ctx(env),
+    )
+    assert res.success is True
+    # Fell through to xdotool because env had no CDP.
+    assert env.step.call_count == 2
+
+
+def test_cdp_backend_dispatch_error_returned_with_failure_class():
+    """When CDP dispatch raises (Chrome devtools disconnected etc.),
+    the handler returns ``scroll_dispatch_error`` rather than
+    propagating."""
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(
+        side_effect=[0.0, RuntimeError("devtools disconnected")],
+    )
+    h = MechanicalScrollHandler(MagicMock())
+    res = h.execute(
+        MicroIntent(
+            intent="x", type="scroll",
+            params={"count": 1, "backend": "cdp"},
+        ),
+        _ctx(env),
+    )
+    assert res.success is False
+    assert res.failure_class == "scroll_dispatch_error"
