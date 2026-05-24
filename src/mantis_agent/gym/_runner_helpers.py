@@ -934,6 +934,16 @@ def execute_step(
         )
 
     if step.claude_only:
+        # Type-based dispatch wins when a registered handler exists for
+        # the specific step.type — covers new claude-only types like
+        # ``collect_urls`` (#615) without losing the legacy
+        # extract_url / extract_data fallback for plans that set
+        # claude_only=True without a matching specific handler.
+        if step.type and registry.get(step.type) is not None:
+            ctx = build_step_context(runner, index)
+            return _stamp_backend(
+                registry.get(step.type).execute(step, ctx), ctx,
+            )
         ctx = build_step_context(runner, index)
         return _stamp_backend(registry.get("extract_url").execute(step, ctx), ctx)
 
