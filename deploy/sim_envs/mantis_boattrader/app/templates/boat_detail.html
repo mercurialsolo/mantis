@@ -254,7 +254,7 @@
     <div class="stat-icon" aria-hidden="true">
       <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><circle cx="20" cy="22" r="8" fill="none" stroke="#3a6a93" stroke-width="1.5"/><line x1="20" y1="22" x2="20" y2="16" stroke="#3a6a93" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="22" x2="25" y2="22" stroke="#3a6a93" stroke-width="2" stroke-linecap="round"/><line x1="20" y1="13" x2="20" y2="11" stroke="#3a6a93" stroke-width="1.5"/></svg>
     </div>
-    <div class="stat-text"><span class="stat-label">Engine Hours</span><span class="stat-value">{{ boat.hours if boat.hours else '-' }}</span></div>
+    <div class="stat-text"><span class="stat-label">Engine(s) Hours <span class="info-tip stat-info" title="Reported by the seller">ⓘ</span></span><span class="stat-value">{{ boat.hours if boat.hours else '-' }}</span></div>
   </div>
   <div class="stat-card">
     <div class="stat-icon" aria-hidden="true">
@@ -270,7 +270,7 @@
   </div>
   <div class="stat-card">
     <div class="stat-icon" aria-hidden="true">
-      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><rect x="11" y="11" width="18" height="18" rx="2" fill="none" stroke="#3a6a93" stroke-width="1.5"/><line x1="11" y1="16" x2="29" y2="16" stroke="#3a6a93" stroke-width="1.5"/><line x1="15" y1="11" x2="15" y2="14" stroke="#3a6a93" stroke-width="1.5"/><line x1="25" y1="11" x2="25" y2="14" stroke="#3a6a93" stroke-width="1.5"/><text x="20" y="26" font-size="6" font-family="Arial" font-weight="700" fill="#3a6a93" text-anchor="middle">YEAR</text></svg>
+      <svg viewBox="0 0 40 40" width="32" height="32"><circle cx="20" cy="20" r="19" fill="none" stroke="#7da4c8" stroke-width="1.5"/><rect x="11" y="11" width="18" height="18" rx="2" fill="none" stroke="#3a6a93" stroke-width="1.5"/><line x1="11" y1="16" x2="29" y2="16" stroke="#3a6a93" stroke-width="1.5"/><line x1="15" y1="11" x2="15" y2="14" stroke="#3a6a93" stroke-width="1.5"/><line x1="25" y1="11" x2="25" y2="14" stroke="#3a6a93" stroke-width="1.5"/></svg>
     </div>
     <div class="stat-text"><span class="stat-label">Year</span><span class="stat-value">{{ boat.year }}</span></div>
   </div>
@@ -381,35 +381,11 @@
     </div>
   </details>
 
-  <details class="bdp-accordion">
-    <summary>
-      <h3 class="accordion-title">More Details</h3>
-      <span class="accordion-chevron"></span>
-    </summary>
-    <div class="accordion-body">
-      <dl class="spec-grid">
-        <div><dt>Condition</dt><dd>{{ boat.condition|capitalize }}</dd></div>
-        <div><dt>Class</dt><dd>{{ boat.boat_type }}</dd></div>
-        <div><dt>Hull Material</dt><dd>{{ boat.hull_material }}</dd></div>
-        <div><dt>Hull Color</dt><dd>{{ boat.hull_color }}</dd></div>
-        <div><dt>Passenger Capacity</dt><dd>{{ boat.capacity_people }}</dd></div>
-        <div><dt>Listing ID</dt><dd>{{ boat.id }}</dd></div>
-      </dl>
-    </div>
-  </details>
-
-  <details class="bdp-accordion">
-    <summary>
-      <h3 class="accordion-title">Location</h3>
-      <span class="accordion-chevron"></span>
-    </summary>
-    <div class="accordion-body">
-      <p>{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</p>
-      <div class="bdp-map-placeholder" data-testid="map-placeholder">
-        <span>Map of {{ boat.city }}, {{ boat.state }}</span>
-      </div>
-    </div>
-  </details>
+  {# Real BT BDP only renders Description / Measurements / Propulsion
+     at this accordion level. The Condition / Hull / Listing ID fields
+     are already surfaced in the stats strip + Propulsion accordion; the
+     Location section duplicates the right-rail city/state line — both
+     dropped here to mirror real BT exactly. #}
 </section>
 
 {# ─── Sponsor banner #2 — INSIDE left column ──── #}
@@ -516,19 +492,9 @@
   </div>
   <a href="#" class="more-from-dealer-link">More Boats from this Dealer</a>
 </section>
-{% else %}
-<section class="bdp-listed-by" data-testid="listed-by-private">
-  <h2 class="bdp-listed-by-h2">Listed By</h2>
-  <div class="listed-by-card listed-by-private">
-    <div class="listed-by-logo private">{{ boat.owner_name[0] }}</div>
-    <div class="listed-by-body">
-      <h3 class="listed-by-dealer">{{ boat.owner_name }}</h3>
-      <p class="listed-by-address">Private Seller · {{ boat.city }}, {{ boat.state }}</p>
-      <p class="listed-by-private-note">Listed for <strong>{{ boat.listed_days_ago }} days</strong>. Not a verified dealer.</p>
-    </div>
-  </div>
-</section>
 {% endif %}
+{# Real BT private-seller BDP omits the "Listed By" section entirely —
+   the right-rail card already names the seller. #}
 
 {# ─── Still have a question? ────────────────────────────────── #}
 <section class="bdp-question-card" data-testid="still-have-question">
@@ -539,7 +505,10 @@
   <a href="#contact" class="btn-secondary question-contact-btn">Contact seller</a>
 </section>
 
-{# ─── OTHER SERVICES tiles ──────────────────────────────────── #}
+{# ─── OTHER SERVICES tiles ──────────────────────────────────────
+   Real BT renders 6 tiles in a flexible row (Surveyors, Documentation,
+   Boat Loans, Insurance, Warranty, Transport). Logos remain procedural
+   SVG placeholders per SCOPE.md §Out-of-scope. #}
 <section class="bdp-other-services" data-testid="other-services">
   <h3 class="other-services-label">OTHER SERVICES</h3>
   <div class="other-services-tiles">
@@ -547,13 +516,37 @@
       <div class="other-service-icon" aria-hidden="true">
         <svg viewBox="0 0 60 60" width="44" height="44"><circle cx="30" cy="30" r="29" fill="#0a3d62"/><path d="M10 38 L 30 26 L 50 38" stroke="#fff" stroke-width="3" fill="none"/><text x="30" y="50" font-family="Arial" font-size="7" font-weight="700" fill="#fff" text-anchor="middle">ELITE</text></svg>
       </div>
-      <span class="other-service-name">Elite Marine Surveyors</span>
+      <span class="other-service-name">Marine Surveyors</span>
     </a>
     <a class="other-service-tile" href="#">
       <div class="other-service-icon other-service-icon-yc" aria-hidden="true">
         <svg viewBox="0 0 60 60" width="44" height="44"><circle cx="30" cy="30" r="29" fill="#fff" stroke="#1f6cd1" stroke-width="2"/><text x="30" y="36" font-family="Arial" font-size="22" font-weight="700" fill="#1f6cd1" text-anchor="middle">yc</text></svg>
       </div>
       <span class="other-service-name">Boat Documentation</span>
+    </a>
+    <a class="other-service-tile" href="#">
+      <div class="other-service-icon" aria-hidden="true">
+        <svg viewBox="0 0 60 60" width="44" height="44"><circle cx="30" cy="30" r="29" fill="#2566b0"/><text x="30" y="36" font-family="Arial" font-size="20" font-weight="700" fill="#fff" text-anchor="middle">$</text></svg>
+      </div>
+      <span class="other-service-name">Boat Loans</span>
+    </a>
+    <a class="other-service-tile" href="#">
+      <div class="other-service-icon" aria-hidden="true">
+        <svg viewBox="0 0 60 60" width="44" height="44"><circle cx="30" cy="30" r="29" fill="#fff" stroke="#3a6a93" stroke-width="2"/><path d="M30 14 L 42 19 L 42 33 Q 42 42 30 48 Q 18 42 18 33 L 18 19 Z" fill="#3a6a93"/></svg>
+      </div>
+      <span class="other-service-name">Boat Insurance</span>
+    </a>
+    <a class="other-service-tile" href="#">
+      <div class="other-service-icon" aria-hidden="true">
+        <svg viewBox="0 0 60 60" width="44" height="44"><circle cx="30" cy="30" r="29" fill="#0a3d62"/><circle cx="30" cy="30" r="15" fill="none" stroke="#fff" stroke-width="2"/><path d="M22 30 L 28 36 L 40 24" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/></svg>
+      </div>
+      <span class="other-service-name">Boat Warranty</span>
+    </a>
+    <a class="other-service-tile" href="#">
+      <div class="other-service-icon" aria-hidden="true">
+        <svg viewBox="0 0 60 60" width="44" height="44"><circle cx="30" cy="30" r="29" fill="#fff" stroke="#0a3d62" stroke-width="2"/><rect x="14" y="26" width="32" height="10" rx="1" fill="#0a3d62"/><circle cx="22" cy="40" r="4" fill="#0a3d62"/><circle cx="40" cy="40" r="4" fill="#0a3d62"/></svg>
+      </div>
+      <span class="other-service-name">Boat Transport</span>
     </a>
   </div>
 </section>

@@ -1895,6 +1895,14 @@ body.bdp-scrolled-deep .sticky-save {
   font-weight: 700;
   color: #303030;
   letter-spacing: 0.2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* Inline info ⓘ next to "Engine(s) Hours" — slightly smaller than
+   the default 16×16 to fit the 14/700 label line cleanly. */
+.stat-label .stat-info {
+  width: 14px; height: 14px; font-size: 10px;
 }
 .stat-value {
   font-size: 14px;
@@ -2348,11 +2356,16 @@ body.bdp-scrolled-deep .sticky-save {
   text-transform: uppercase;
   margin: 0 0 14px;
 }
+/* Real BT BDP Other Services row: 6 tiles in a 3-col × 2-row grid at
+   1440-class viewports (wraps to 2-col on narrower windows). Was 2-col
+   to match the previous 2-tile count; bumped to 3-col now that we
+   render the full 6-tile row. */
 .other-services-tiles {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
 }
+@media (max-width: 980px) { .other-services-tiles { grid-template-columns: 1fr 1fr; } }
 .other-service-tile {
   display: flex;
   gap: 18px;
