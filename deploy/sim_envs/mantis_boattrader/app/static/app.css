@@ -172,6 +172,19 @@ header.main {
   padding: 0;
   min-height: 480px;
 }
+/* SRP + Home sections need their own page-container width since
+   `.bt-main` no longer provides one. Matches the previous behavior
+   (1440 - 40 padding ≈ 1400 effective content width). */
+.srp {
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 0 20px;
+}
+.home-section {
+  max-width: var(--container);
+  margin: 36px auto;
+  padding: 0 20px;
+}
 
 /* ── Home: hero ─────────────────────────────────────────────────── */
 .home-hero {
