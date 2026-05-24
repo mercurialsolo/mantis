@@ -14,7 +14,6 @@ Pins the contracts for:
 from __future__ import annotations
 
 from mantis_agent.gym.fanout_runner import (
-    LoopGroup,
     dedup_urls_across_workers,
     find_url_collect_group,
     partition_pages,
