@@ -41,10 +41,24 @@ logger = logging.getLogger(__name__)
 
 # JS payload: takes (sx, sy) in screen-space, translates to viewport
 # coords using the same chromeH offset cdp_click_at_point applies,
-# walks up the DOM from elementFromPoint to find the nearest ``<a>``
-# ancestor, returns its absolute href. Returns None when no anchor is
-# found above the point — caller treats that as a card without a
-# resolvable URL and silently drops it from the partition.
+# walks the element tree at that point to find a navigable URL. Returns
+# the resolved URL string or null when no candidate is found.
+#
+# Resolution priority (matches what production listing cards use across
+# common marketplace sites):
+#   1. ``<a href>`` ancestor — BoatTrader's listing card wraps in an
+#      anchor. ``el.closest('a[href]')`` finds it cross-browser.
+#   2. ``[href]`` ancestor — anchor-less elements that nevertheless
+#      carry an href attribute (rare but seen on some SPAs).
+#   3. ``<a href>`` descendant of the topmost ancestor at the point —
+#      catches cards where the click target is a wrapping ``<div>``
+#      with the navigable ``<a>`` rendered INSIDE (BoatTrader's
+#      sponsored-listing variant does this).
+#   4. ``data-href`` / ``data-url`` on any ancestor — common React
+#      pattern for click-handled divs that synthesise navigation in JS.
+#
+# Returns null only when none of the above yield a value, indicating
+# the card is genuinely non-navigable (e.g. an in-page modal trigger).
 _HREF_LOOKUP_JS = """
 (() => {
   const oh = window.outerHeight;
@@ -54,13 +68,32 @@ _HREF_LOOKUP_JS = """
   const sy = {sy};
   const vx = sx;
   const vy = sy - chromeH;
-  let el = document.elementFromPoint(vx, vy);
+  const el = document.elementFromPoint(vx, vy);
   if (!el) return null;
-  while (el && el.tagName !== 'A') {
-    el = el.parentElement;
+  // 1. anchor ancestor (most common)
+  const anchor = el.closest('a[href]');
+  if (anchor && anchor.href) return anchor.href;
+  // 2. any [href] ancestor
+  const hrefAncestor = el.closest('[href]');
+  if (hrefAncestor && hrefAncestor.href) return hrefAncestor.href;
+  // 3. find an anchor inside the topmost "card-like" ancestor at the
+  //    point — walk up to the nearest element with role="link",
+  //    data-test*="listing", or a class hint, then look for an <a>
+  //    descendant. Cap at 5 levels to bound search.
+  let card = el;
+  for (let i = 0; i < 5 && card; i++) {
+    const aDesc = card.querySelector && card.querySelector('a[href]');
+    if (aDesc && aDesc.href) return aDesc.href;
+    card = card.parentElement;
   }
-  if (!el) return null;
-  return el.href || null;
+  // 4. data-href / data-url ancestor (React click-handled cards)
+  const dataAncestor = el.closest('[data-href], [data-url]');
+  if (dataAncestor) {
+    const v = dataAncestor.getAttribute('data-href')
+              || dataAncestor.getAttribute('data-url');
+    if (v) return v;
+  }
+  return null;
 })()
 """
 
@@ -96,10 +129,13 @@ class CollectUrlsHandler:
                 data="no_extractor",
             )
 
-        # Settle briefly so lazy-rendered cards are present in the
-        # screenshot. Same min/max as ClaudeStepHandler's pre-extract
-        # pause for behavioral parity with the click loop.
-        adaptive_content_settle(env, min_seconds=0.2, max_seconds=1.0)
+        # Settle for the cold-load case. BoatTrader on a proxied
+        # cold-cache fetch can take 3-5s before listings render; the
+        # 1s pre-extract pause is the right floor for warm pages but
+        # leaves Phase-1 fan-out scanning a half-rendered page (cards
+        # not yet hydrated). Settle up to 4s here — collect_urls runs
+        # ONCE per Phase-1 dispatch, so the cost is bounded.
+        adaptive_content_settle(env, min_seconds=1.0, max_seconds=4.0)
 
         screenshot = env.screenshot()
         scan = extractor.find_all_listings(screenshot)
@@ -113,18 +149,31 @@ class CollectUrlsHandler:
                 signal,
             )
             runner._collected_urls = []
+            # Skip envelope (success=False, skip=True) so the runner's
+            # retry policy advances past this step instead of burning
+            # ~9 retries (each costs another Claude scan call) on the
+            # same blocked / empty page state.
             return StepResult(
                 step_index=index, intent=step.intent, success=False,
                 data=f"scan_signal:{signal}",
+                skip=True, skip_reason=f"collect_urls_signal_{signal}",
             )
 
         runner.costs["claude_extract"] += 1
         card_count = len(scan)
+        # Always-on WARNING so operators (and the orchestrator's local
+        # CLI grep) see the scan outcome even when Modal trims worker
+        # log tails. Format: ``[collect_urls] scan returned N cards``.
+        logger.warning(
+            "  [collect_urls] scan returned %d card(s)", card_count,
+        )
         urls: list[str] = []
         seen: set[str] = set()
+        unresolved = 0
         for x, y, _title in scan:
             href = self._resolve_href(env, int(x), int(y))
             if not href:
+                unresolved += 1
                 continue
             # Dedup: lazy-loaded results pages occasionally render the
             # same card twice with slightly different y; the URL is the
@@ -138,18 +187,32 @@ class CollectUrlsHandler:
         runner._last_known_url = runner._last_known_url or ""
         resolved = len(urls)
         coverage = resolved / max(card_count, 1)
-        # WARNING when coverage is degraded so Modal logs surface the
-        # fallback signal; INFO for the healthy case.
+        # Always-on WARNING so the resolved-vs-found ratio is visible.
+        # When unresolved == card_count the CDP href lookup is failing
+        # universally (elementFromPoint miss, wrong chromeH calc, page
+        # not yet hydrated) — operator needs this signal to diagnose.
         if coverage < 0.8:
             logger.warning(
                 "  [collect_urls] coverage degraded: %d/%d cards resolved hrefs "
-                "(%.0f%%) — fan-out runner should consider sequential fallback",
-                resolved, card_count, coverage * 100,
+                "(%.0f%%, %d unresolved) — fan-out runner should consider "
+                "sequential fallback",
+                resolved, card_count, coverage * 100, unresolved,
             )
         else:
-            logger.info(
+            logger.warning(
                 "  [collect_urls] resolved %d/%d card hrefs (%.0f%% coverage)",
                 resolved, card_count, coverage * 100,
+            )
+
+        # Fail-fast skip envelope when EVERY card failed CDP resolution.
+        # Triggers the same runner-side advance as the scan-signal path
+        # — no point retrying because the cdp_evaluate JS will return
+        # the same null on every retry against the same screenshot.
+        if card_count > 0 and resolved == 0:
+            return StepResult(
+                step_index=index, intent=step.intent, success=False,
+                data=f"urls:0/{card_count}:all_unresolved",
+                skip=True, skip_reason="collect_urls_all_unresolved",
             )
 
         return StepResult(

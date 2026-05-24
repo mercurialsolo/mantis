@@ -185,7 +185,40 @@ class RunExecutor:
         # tokens to this run without being passed the meter as an arg.
         # Mirrors the dispatch-context publish for ``TimeMeter``.
         with publish_cost_meter(getattr(runner, "cost_meter", None)):
-            return self._execute_inner(plan, state, resume=resume)
+            try:
+                return self._execute_inner(plan, state, resume=resume)
+            except BaseException:
+                # #544: ensure the Augur DebugSession closes even when
+                # ``_execute_inner`` exits abnormally (uncaught exception,
+                # KeyboardInterrupt). The normal path calls _finalize →
+                # augur.close(); abnormal paths bypass _finalize and
+                # would leave the bundle in ``status: "running"``
+                # forever, which Augur consumers (CLI, MCP, training)
+                # then mis-render as live.
+                self._maybe_close_augur_on_abnormal_exit()
+                raise
+
+    def _maybe_close_augur_on_abnormal_exit(self) -> None:
+        """Close the Augur session when the run's normal terminate path
+        (``_finalize``) was bypassed by an exception (#544).
+
+        Idempotent — ``_finalize`` clears ``runner._augur`` to None
+        after its normal close, so re-entry on a successful path is a
+        no-op. Status is forced to ``"halted"`` so the bundle's
+        terminal status reflects the abnormal exit, not the SDK's
+        default ``"succeeded"`` inference.
+        """
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        if augur is None:
+            return
+        try:
+            augur.close(status="halted")
+        except Exception as exc:  # noqa: BLE001 — never re-raise in cleanup
+            logger.debug(
+                "AugurAdapter.close on abnormal exit failed: %s", exc,
+            )
+        runner._augur = None
 
     def _execute_inner(
         self,
@@ -225,6 +258,12 @@ class RunExecutor:
             extra_tags={
                 "plan_signature": runner.plan_signature or "",
                 "model": model_name,
+                # #542: surface the plan's total step count as a tag so
+                # the Augur runs-list can render "X / N steps" instead
+                # of just "X". The Augur UI reads ``plan_step_count``
+                # off the session tag set; consumers fall back to no-
+                # denominator behaviour when the tag is absent.
+                "plan_step_count": str(len(plan.steps)),
             },
             # #631: fan-out workers carry a branch_context that labels
             # their session under a shared parent_run_id so the Augur

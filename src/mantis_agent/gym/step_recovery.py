@@ -1130,6 +1130,21 @@ class StepRecoveryPolicy:
             "  [%d] agentic recovery: mode=%s — %s",
             step_index, decision.mode, decision.reasoning[:200],
         )
+        # #634 follow-up: surface recovery rationale to the Augur
+        # Reasoning-trace tab. ``decision.reasoning`` is the Claude
+        # explanation for why this recovery mode was chosen — already
+        # logged at WARN, also worth structured surfacing alongside
+        # brain + verifier reasoning.
+        augur = getattr(runner, "_augur", None)
+        if augur is not None and decision.reasoning:
+            try:
+                augur.record_reasoning(
+                    step_index=step_index,
+                    format="recovery",
+                    content=f"mode={decision.mode}: {decision.reasoning}",
+                )
+            except Exception:  # noqa: BLE001 — never block recovery
+                pass
 
         if decision.mode == "halt":
             return None  # fall through to legacy halt

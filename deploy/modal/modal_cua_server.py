@@ -1038,6 +1038,17 @@ def _run_holo3_executor(
             # otherwise sees a stripped dict and writes nothing).
             "leads": leads,
             "artifacts": result.get("artifacts", []),
+            # #628 / #631 follow-up: forward the orchestrator-side
+            # contract fields. read_partition_result on the orchestrator
+            # reads these to drive Phase-2 (collected_urls), aggregate
+            # phone counts (leads_with_phone), and report shared-seen
+            # savings (shared_seen_hits). Without this re-export, the
+            # envelope at line 1016 strips them — Phase-1 silently
+            # collected URLs and silently dropped them on return,
+            # making Phase-1/Phase-2 fail every time.
+            "collected_urls": result.get("collected_urls", []),
+            "leads_with_phone": result.get("leads_with_phone", 0),
+            "shared_seen_hits": result.get("shared_seen_hits", 0),
         }
         # #347: surface paused state to the Modal API container. The poll
         # path detects ``_paused`` on the FunctionCall result and writes
@@ -2566,7 +2577,13 @@ def _print_shared_seen_metrics(
         try:
             import modal as _modal
             _shared = _modal.Dict.from_name(dict_name)
-            final_size = len(_shared)
+            # modal.Dict doesn't implement __len__; use .len() method
+            # (returns int) and fall back to counting keys() on older
+            # SDKs that may not expose it.
+            if hasattr(_shared, "len"):
+                final_size = int(_shared.len())
+            else:
+                final_size = sum(1 for _ in _shared.keys())
         except Exception as exc:
             print(
                 f"  [shared-seen] could not query final dict size "
@@ -2939,7 +2956,25 @@ def main(
                 dedup_leads_by_url, read_partition_result,
             )
             try:
-                phase1_summary = read_partition_result(phase1_handle.get())
+                _phase1_raw = phase1_handle.get()
+                # Diagnostic: surface the raw result keys + lengths so a
+                # collected_urls vs viable mismatch is debuggable from
+                # the orchestrator log (worker container logs are tail-
+                # trimmed by Modal on stopped ephemeral apps).
+                if isinstance(_phase1_raw, dict):
+                    _urls_in_result = _phase1_raw.get("collected_urls", "MISSING")
+                    _urls_type = type(_urls_in_result).__name__
+                    _urls_len = (
+                        len(_urls_in_result)
+                        if isinstance(_urls_in_result, list) else "n/a"
+                    )
+                    print(
+                        f"    [phase1] raw result: "
+                        f"viable={_phase1_raw.get('viable', 'MISSING')} "
+                        f"collected_urls_type={_urls_type} "
+                        f"collected_urls_len={_urls_len}"
+                    )
+                phase1_summary = read_partition_result(_phase1_raw)
                 collected_urls = phase1_summary["collected_urls"]
             except Exception as exc:
                 print(f"    [phase1] ERROR: {exc} — aborting fan-out")
@@ -3019,7 +3054,10 @@ def main(
                 )
                 return
 
-            print("    [phase1] no URLs harvested — falling through to single worker")
+            print(
+                "    [phase1] no URLs harvested — falling through to "
+                "pagination-partition path (#617)"
+            )
 
         # ── #617: per-page partitioning for parallelizable_pagination ─
         partitions = prepare_modal_partitions(task_suite, workers)

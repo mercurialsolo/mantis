@@ -138,8 +138,13 @@ class _ModalDictSharedSeenSet:
             logger.warning("[shared-seen] add() raised: %s", exc)
 
     def size(self) -> int:
+        # modal.Dict doesn't implement __len__; use the SDK's .len()
+        # method (returns int) and fall back to counting keys() if even
+        # that's missing on older SDKs.
         try:
-            return len(self._dict)
+            if hasattr(self._dict, "len"):
+                return int(self._dict.len())
+            return sum(1 for _ in self._dict.keys())
         except Exception as exc:  # noqa: BLE001
             logger.debug("[shared-seen] size() raised: %s", exc)
             return 0
@@ -764,7 +769,13 @@ def prepare_phase1_suite(
         "section": "extraction",
         "claude_only": True,
         "budget": 0,
-        "required": True,
+        # required=False (not True) so the runner's step-recovery
+        # policy doesn't trigger agentic_recovery + add_hint retries
+        # on collect_urls failure. The orchestrator already handles
+        # empty collect_urls by falling through to the pagination
+        # path — burning ~$0.20 on 3 doomed Claude scan retries +
+        # critic-row-link recovery attempts is wasted budget.
+        "required": False,
         "params": {},
         "hints": {},
         "gate": False,
