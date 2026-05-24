@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=101** (2026-05-23) — Re-probed Boat Loan Calculator widget; confirmed sandbox uses an input-first concept while real BT uses an output-first concept (Monthly Payment headline + inputs below). FIDELITY rows flipped from ✅ to 🟡 with the concept divergence documented; no code change — rewriting needs user buy-in on which version to keep.
+Last updated: **v=102** (2026-05-23) — Ribbon `position: fixed; top: 44px` → `position: sticky; top: 0`. At scroll=0 the ribbon sits flush under the nav (matches the user-supplied real-BT screenshot); on scroll past the nav the ribbon flushes to the very top of the viewport (user wanted top:0 on scroll, not v=100's 44px-gap pattern).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
@@ -50,7 +50,7 @@ the current state. Status legend:
 | Bg | rgb(37,102,176) | same | ✅ |
 | Inner padding | 10px 16px | 10px 16px | ✅ |
 | "Get started" CTA | plain inline bold text | plain inline bold text | ✅ |
-| **Sticky on scroll** | `position: fixed; top: 62px` — stays visible at y=62 across scroll (real BT nav is 62px tall) | `position: fixed; top: 44px` — stays at y=44 across scroll (sandbox nav is 44px tall). `.bt-main` compensates with `margin-top: 40px` since the ribbon is removed from flow. Verified live: ribbon y stays at 44 across scrollY 0/800/2000 (v=100). | ✅ |
+| **Sticky on scroll** | `position: fixed; top: 62px` — stays visible at y=62 across scroll (real BT nav is 62px tall, leaves 62px gap above ribbon on scroll) | `position: sticky; top: 0` — at scroll=0 ribbon sits flush under the nav (y=44, in flow); on scroll past the nav, ribbon flushes to viewport top (y=0). User-preferred behavior per v=102 — matches real BT visually at scroll=0 and tucks tight to the top on scroll instead of leaving a 44px gap. | ✅ (intentional divergence from real BT's fixed-top:62 pattern) |
 | Hidden on BDP | yes (no ribbon on BDP) | hidden via `{% block ribbon %}{% endblock %}` | ✅ |
 
 ## SRP page
@@ -440,6 +440,25 @@ Calculator" (18/700 #303030), then a result row.
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=102` Ribbon switched to `position: sticky; top: 0`:
+       • v=100's `position: fixed; top: 44px` left a 44px gap above the
+         ribbon on scroll (the area where the nav used to be) — user
+         pointed out via screenshot that they wanted the ribbon flush
+         to top:0 on scroll.
+       • Changed to `position: sticky; top: 0; z-index: 100`:
+         * At scroll=0: ribbon stays in flow at y=44, right under the
+           nav — matches the user-supplied real-BT screenshot's
+           nav-above-ribbon stacking with no gap
+         * On scroll past the nav: ribbon flushes to viewport top (y=0)
+       • `.bt-main` margin-top: 40px reverted to `margin: 0 auto`
+         since position:sticky stays in flow (no compensation needed).
+       • Cache-buster bumped to `?v=102`.
+       • Live-verified: ribbon y goes from 44 (scroll=0) → 0 (scroll≥100).
+       • This is an intentional divergence from real BT's behavior —
+         real BT uses `position: fixed; top: 62px` which leaves a 62px
+         gap above the ribbon on scroll. User preferred the flush-to-top
+         pattern.
+       • Updated regression test to match new sticky behavior.
 `v=101` Boat Loan Calculator widget re-probed (doc-only):
        • Sandbox's `.loan-calc-card` and real BT's `.calc-calculator-body`
          are STRUCTURALLY DIFFERENT widget concepts:

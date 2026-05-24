@@ -417,18 +417,20 @@ def test_pagination_is_15_400(base_css):
 
 
 def test_ribbon_is_sticky_on_scroll(base_css):
-    """v=100: real BT's blue pre-qualify ribbon is `position: fixed;
-    top: 62px` so it stays visible at the top while the rest of the
-    page scrolls. Sandbox was rendering it `position: static` (just
-    a regular flow element under the nav). Now `position: fixed;
-    top: 44px` (sandbox nav is 44px tall vs real BT's 62px)."""
+    """v=102: blue pre-qualify ribbon uses `position: sticky; top: 0`
+    so it stays in flow at scroll=0 (right under the nav) and sticks
+    flush to the viewport top once the nav scrolls past. User
+    wanted top:0 on scroll, not v=100's 44px-gap pattern.
+    Position:sticky stays in flow so .bt-main needs no compensation
+    margin."""
     block = _rule_block(base_css, ".ribbon-prequal {")
-    assert "position: fixed" in block
-    assert "top: 44px" in block
-    # .bt-main needs matching top margin to compensate for the ribbon
-    # being out of flow.
+    assert "position: sticky" in block
+    assert "top: 0" in block
+    # .bt-main should NOT have margin-top compensation (ribbon in flow).
+    # Check the literal property line — `margin: 0 auto;` — not the
+    # historical mention in the comment.
     main_block = _rule_block(base_css, ".bt-main {")
-    assert "margin: 40px auto 0" in main_block
+    assert "  margin: 0 auto;" in main_block
 
 
 def test_pagination_link_color_is_a5a5a5(base_css):
