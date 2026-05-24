@@ -2000,11 +2000,13 @@ body.bdp-scrolled-deep .sticky-save {
   padding: 20px 16px;
   margin: 24px 0;
 }
+/* Real BT Boat Details H2: 20/700, margin 0 (accordions sit flush
+   right under the heading inside the #f5f9ff tinted card). */
 .bdp-details-h2 {
   font-size: 20px;
   font-weight: 700;
   color: var(--bt-text);
-  margin: 0 0 16px;
+  margin: 0;
 }
 .bdp-accordion summary { font-size: 16px; font-weight: 700; }
 .bdp-accordion .accordion-title {
