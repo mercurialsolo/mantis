@@ -27,10 +27,14 @@
   <div class="bdp-sticky-bar-inner">
     <a href="/boats/" class="bdp-back">{# real BT uses plain word, no chevron #}&lt; Search</a>
 
+    {# Breadcrumb category 2: real BT uses "Sail" for sailboats and
+       "Power" for everything else (verified at boattrader.com/boat/
+       2024-catalina-355-...). #}
+    {% set _bc_category = 'Sail' if 'Sail' in boat.boat_type else 'Power' %}
     <div class="bdp-sticky-content">
       <nav class="breadcrumb sticky-breadcrumb bdp-sticky-state bdp-sticky-state-shallow" aria-label="Breadcrumb">
         <a href="/">Home</a> / <a href="/boats/">Boats For Sale</a> /
-        <a href="/boats/?fuel_type=Diesel">Power</a> /
+        <a href="/boats/?type={{ _bc_category|urlencode }}">{{ _bc_category }}</a> /
         <a href="/boats/?type={{ boat.boat_type|urlencode }}">{{ boat.boat_type }}</a> /
         <a href="/boats/?make={{ boat.make|urlencode }}">{{ boat.make }}</a>
       </nav>
@@ -58,7 +62,7 @@
   <a href="/boats/" class="bdp-back">&lt; Search</a>
   <nav class="breadcrumb" aria-label="Breadcrumb">
     <a href="/">Home</a> / <a href="/boats/">Boats For Sale</a> /
-    <a href="/boats/?fuel_type=Diesel">Power</a> /
+    <a href="/boats/?type={{ _bc_category|urlencode }}">{{ _bc_category }}</a> /
     <a href="/boats/?type={{ boat.boat_type|urlencode }}">{{ boat.boat_type }}</a> /
     <a href="/boats/?make={{ boat.make|urlencode }}">{{ boat.make }}</a>
   </nav>
