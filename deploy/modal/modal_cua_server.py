@@ -924,6 +924,16 @@ def _run_holo3_executor(
         except Exception as exc:  # noqa: BLE001
             print(f"  WARNING: fanout branch_context init failed: {exc}")
 
+        # #638 axis 2 follow-up: derive a short worker tag from the
+        # fan-out branch_id so per-step log lines can be greppable per-
+        # worker in the interleaved orchestrator stdout. The branch_id
+        # shape is ``{parent_run_id}:{phase_tag}`` (e.g.
+        # ``fanout-XXX:phase2_w3``) — take only the suffix after ``:``.
+        # Empty when no branch_id is set (single-container runs) so
+        # ``log_progress`` falls back to the legacy format unchanged.
+        branch_id = str(task_suite.get("_fanout_branch_id", "") or "")
+        micro_runner._worker_tag = branch_id.rsplit(":", 1)[-1] if ":" in branch_id else ""
+
         # Reasoning-trace stream → ``<run_dir>/reasoning.jsonl``. The
         # API container's ``action=reasoning_trace`` reads this file
         # so a viewer overlay can render a structured timeline of

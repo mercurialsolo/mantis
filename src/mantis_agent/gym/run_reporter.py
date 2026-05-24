@@ -54,6 +54,7 @@ class RunReporter:
         proxy_cost: float,
         total_cost: float,
         elapsed_seconds: float,
+        worker_tag: str = "",
     ) -> str:
         """Build the single-line progress message printed after each step.
 
@@ -61,12 +62,19 @@ class RunReporter:
         verbatim — same field order, same number widths, same minute
         rounding. Tests in test_micro_runner_hooks.py compare this line
         format.
+
+        ``worker_tag`` (#638 axis 2 follow-up): when set, emitted as a
+        ``[tag]`` prefix BEFORE the ``[step_index]`` so per-worker lines
+        in fan-out runs can be grepped out of the interleaved
+        orchestrator stdout. Empty (default) preserves single-container
+        format byte-for-byte — existing format-pinning tests stay green.
         """
         unique_leads, phone_leads = ListingDedup.lead_counts(results)
         cost_per_lead = total_cost / max(unique_leads, 1)
         cost_per_phone_lead = total_cost / max(phone_leads, 1)
+        tag_prefix = f"[{worker_tag}]" if worker_tag else ""
         return (
-            f"  [{step_index:2d}] {'OK' if success else 'FAIL'} "
+            f"  {tag_prefix}[{step_index:2d}] {'OK' if success else 'FAIL'} "
             f"| {unique_leads} leads ({phone_leads} phone) | ${total_cost:.2f} total "
             f"(${cost_per_lead:.2f}/lead, ${cost_per_phone_lead:.2f}/phone lead) | "
             f"GPU ${gpu_cost:.2f} Claude ${claude_cost:.2f} Proxy ${proxy_cost:.2f} | "
