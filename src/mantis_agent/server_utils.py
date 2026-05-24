@@ -1215,6 +1215,22 @@ def build_micro_suite(
     # param then the default.
     if pagination_url_template:
         suite["_pagination_url_template"] = str(pagination_url_template)
+    # #657 PR 2: resolve a per-domain ``SiteConfig`` from the
+    # DomainProfile registry and persist it as ``_site_config`` so the
+    # HTTP path's executor can pick it up. Without this, every HTTP
+    # submission silently inherits ``SiteConfig.default_boattrader()``
+    # via the runner's fallback at ``micro_runner.py:233`` — boattrader
+    # URL regex applied to lu.ma / mantis-crm / any non-boattrader plan.
+    # Empty DomainProfile match means we skip writing the field; the
+    # runner's fallback then takes over (still boattrader-shaped today;
+    # #657 PR 3 flips that default to ``SiteConfig.generic()``).
+    try:
+        from .plan_tuning import resolve_domain_profile
+        _profile = resolve_domain_profile(domain or "")
+    except Exception:  # noqa: BLE001 — never break suite construction
+        _profile = None
+    if _profile is not None:
+        suite["_site_config"] = _profile.to_site_config().to_dict()
     return suite
 
 
