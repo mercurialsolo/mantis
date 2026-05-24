@@ -1503,28 +1503,51 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
   font-size: 13px;
   padding: 8px 18px;
 }
-/* Real BT BDP breadcrumb (inside bdp-nav-row): 15/400 #333. */
+/* Real BT BDP breadcrumb inside the sticky bar: 12/400 #616161 (matches
+   the non-sticky breadcrumb row). The sticky bar swaps this out for a
+   title/price line at deep scroll. */
 .sticky-breadcrumb {
-  flex: 1;
   margin: 0;
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 400;
-  color: #333;
+  color: #616161;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.sticky-breadcrumb a { color: #333; }
+.sticky-breadcrumb a { color: #616161; text-decoration: none; }
 .sticky-breadcrumb a:hover { color: var(--bt-blue); }
+
+.bdp-sticky-content { flex: 1; min-width: 0; display: flex; align-items: center; }
+.bdp-sticky-state { display: none; min-width: 0; }
+.bdp-sticky-state-shallow { display: block; }
+body.bdp-scrolled-deep .bdp-sticky-state-shallow { display: none; }
+body.bdp-scrolled-deep .bdp-sticky-state-deep {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px; color: #333; min-width: 0;
+}
+body.bdp-scrolled-deep .sticky-title { font-weight: 700; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.bdp-scrolled-deep .sticky-price { font-weight: 700; color: #333; white-space: nowrap; }
+body.bdp-scrolled-deep .sticky-loc { color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+body.bdp-scrolled-deep .sticky-sep { color: #c4c4c4; font-weight: 400; }
+body.bdp-scrolled-deep .sticky-save {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: transparent; border: 0; padding: 0;
+  color: var(--bt-blue); font: inherit; font-size: 14px; font-weight: 400;
+  cursor: pointer; white-space: nowrap;
+}
 
 .bdp-nav-row {
   display: flex; align-items: center; justify-content: space-between;
   margin: 8px 0 14px;
-  font-size: 13px; color: var(--bt-blue);
+  font-size: 12px; color: var(--bt-blue);
+  gap: 24px;
 }
-/* Real BT BDP top links 'Back to Search' / 'Next Boat': 12/400 #139af5. */
-.bdp-back, .bdp-next { font-size: 12px; font-weight: 400; color: #139af5; }
-.bdp-back:hover, .bdp-next:hover { color: var(--bt-blue); text-decoration: underline; }
+.bdp-nav-actions { display: flex; gap: 16px; }
+/* Real BT BDP top links 'Back to Search' / 'Next Boat' / 'Previous Boat':
+   12/400 #139af5 (plain words, no chevrons). */
+.bdp-back, .bdp-next, .bdp-prev { font-size: 12px; font-weight: 400; color: #139af5; text-decoration: none; }
+.bdp-back:hover, .bdp-next:hover, .bdp-prev:hover { color: var(--bt-blue); text-decoration: underline; }
 /* Real BT BDP uses ~890 gallery + ~80 gap + 366 rail at 1512 viewport.
    That's ratio gallery:rail ≈ 2.43:1, with ~80px gap. */
 .bdp-grid {
@@ -2515,7 +2538,9 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
 }
 
 .bdp-dealer-card { border-top: 1px solid var(--bt-border); padding-top: 14px; }
-.dealer-card-heading { font-size: 18px; font-weight: 500; color: var(--bt-text); margin: 0 0 10px; }
+/* Real BT 'Contact Private Seller' / 'Contact <Salesperson>' heading: 20/700 #333.
+   Was 18/500 — bumped to match real boattrader exactly. */
+.dealer-card-heading { font-size: 20px; font-weight: 700; color: var(--bt-text); margin: 0 0 12px; }
 .dealer-card-meta { display: flex; gap: 12px; align-items: center; margin: 0 0 12px; }
 .dealer-logo {
   width: 60px; height: 60px; border-radius: 50%;
@@ -2548,6 +2573,24 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
   font-weight: 700;
   border-radius: 50px;
 }
+/* Real BT BDP lead-form submit: FILLED blue pill bg rgb(37,102,176),
+   white text 14/700, full-width 40px tall. (The legacy `.contact-seller-btn`
+   class above is intentionally the outline variant used by SRP cards —
+   the BDP submit gets its own class so it doesn't get overridden.) */
+.bdp-contact-submit.btn-block {
+  width: 100%;
+  height: 40px;
+  padding: 0 24px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 50px;
+  background: rgb(37, 102, 176);
+  color: #fff;
+  border: 0;
+  cursor: pointer;
+  line-height: 1;
+}
+.bdp-contact-submit.btn-block:hover { background: var(--bt-blue-3); }
 
 .bdp-section { background: #fff; padding: 18px; border-bottom: 1px solid var(--bt-border); }
 .bdp-section h2 { font-size: 18px; margin-bottom: 12px; }

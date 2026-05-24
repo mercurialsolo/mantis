@@ -111,15 +111,18 @@
 </div>
 {% endif %}
 <script>
-  // Toggle .bdp-scrolled on <body> once the gallery is scrolled past so
-  // the sticky title/price/contact bar can appear (matches real boattrader).
+  // Two-state sticky bar (matches real boattrader):
+  //   y > 320  → .bdp-scrolled        (sticky bar visible, breadcrumb state)
+  //   y > 700  → .bdp-scrolled-deep   (swap breadcrumb for title/price/save)
   (function(){
     var threshold = 320;
+    var deep = 700;
     var raf = null;
     function check(){
       raf = null;
-      if (window.scrollY > threshold) document.body.classList.add('bdp-scrolled');
-      else document.body.classList.remove('bdp-scrolled');
+      var y = window.scrollY;
+      document.body.classList.toggle('bdp-scrolled', y > threshold);
+      document.body.classList.toggle('bdp-scrolled-deep', y > deep);
     }
     window.addEventListener('scroll', function(){ if (!raf) raf = requestAnimationFrame(check); }, { passive: true });
     check();
