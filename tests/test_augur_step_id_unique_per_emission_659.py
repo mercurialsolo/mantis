@@ -28,7 +28,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from mantis_agent.observability.augur import AugurAdapter
+import pytest
+
+# Match the convention from ``tests/test_observability_augur.py``:
+# skip the whole module when ``augur_sdk`` isn't importable so CI
+# environments that don't bundle the SDK don't fail on attribute access
+# against a ``None`` session.
+pytest.importorskip("augur_sdk")
+
+from mantis_agent.observability.augur import AugurAdapter  # noqa: E402
 
 
 def _stub_step_result(step_index: int, *, success: bool = True) -> SimpleNamespace:
@@ -184,6 +192,12 @@ def test_record_step_increments_counter_via_public_api(tmp_path, monkeypatch):
     surface (not just the internal ``_build_step_trace`` helper)."""
     monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
     a = _open_adapter(tmp_path)
+    # Guard against environments where ``augur-sdk`` is importable but
+    # the SDK refuses to open a session (DSN policy / version skew).
+    # Without this the spy on the next line dereferences ``None``.
+    if not a.active:
+        pytest.skip("AugurAdapter inactive — SDK opened no session")
+
     # Stash a spy on the session so we capture the trace dicts the
     # SDK would have received.
     captured: list[dict] = []
