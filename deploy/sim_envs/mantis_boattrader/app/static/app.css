@@ -1648,11 +1648,15 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 
 /* Stacked variant: all sections live in column 1 stacked vertically.
    The .bdp-summary aside is positioned absolutely over the right rail
-   so its tall content doesn't blow up the gallery row's height. */
+   so its tall content doesn't blow up the gallery row's height.
+   v=128: row-gap: 0 to override the inherited `gap: 80px` from
+   `.bdp-grid` — that was adding 80px between every section vertically
+   (caught between More-From-Dealer and Still-have-a-question). */
 .bdp-grid-stack {
   position: relative;
   grid-template-columns: minmax(0, 1fr);
   padding-right: calc(400px + 80px);
+  row-gap: 0;
 }
 .bdp-grid-stack > .bdp-gallery,
 .bdp-grid-stack > .bdp-stats-strip,
