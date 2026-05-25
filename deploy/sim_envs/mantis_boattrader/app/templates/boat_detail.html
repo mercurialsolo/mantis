@@ -206,7 +206,14 @@
       {% endif %}{# /if false (v=107 hide bdp-dealership-card) #}
     {% endif %}
 
-    {# ─── Get pre-qualified card (always last in the right rail) ─── #}
+    {# v=123: `.prequal-card` ("Get pre-qualified in minutes" with
+       3 bullets + Get-Pre-Qualified button) HIDDEN in the right rail.
+       Real BT probe of `.summary-section` shows only contact-card
+       contents; no prequal mini-card after the contact form. The
+       same prequal content is already present inside the loan calc
+       section so removing here doesn't lose any UX. Wrapped in
+       `{% if false %}` to keep markup as reference. #}
+    {% if false %}
     <div class="prequal-card">
       <h3 class="prequal-card-heading">Get pre-qualified in minutes</h3>
       <ul class="prequal-bullets">
@@ -216,6 +223,7 @@
       </ul>
       <a href="/boat-loans/" class="btn-secondary btn-block prequal-btn">Get Pre-Qualified</a>
     </div>
+    {% endif %}
   </aside>
 
 {# ─── Top stats strip (8 cells in a 4-col × 2-row grid) ──────── #}
