@@ -1409,3 +1409,262 @@ def prepare_modal_partitions(
             len(sub_suites), workers, template, base_url[:80],
         )
     return sub_suites
+
+
+# ── #673: shared fanout dispatcher (CLI + HTTP path) ────────────────────
+
+
+def run_fanout_dispatch(
+    task_suite: dict,
+    *,
+    executor_fn: Any,
+    model: str,
+    claude_model: str,
+    max_steps: int,
+    workers: int,
+    fanout_parent_run_id: str,
+    json_dumps: Callable[[Any], str] | None = None,
+    shared_seen_printer: Callable[[dict, int], None] | None = None,
+) -> dict | None:
+    """Run Phase-1/Phase-2 fan-out dispatch and return the aggregate result.
+
+    Returns
+    -------
+    dict
+        ``{"viable": int, "leads_with_phone": int, "leads": list,
+        "collected_urls": list, "shared_seen_hits": int}`` shaped like
+        :func:`mantis_agent.server_utils.build_micro_result` when the
+        fan-out completed.
+    None
+        When the suite is not fan-out eligible (no
+        ``parallelizable_url_collect`` group) OR Phase-1 harvested zero
+        URLs — caller should fall through to the legacy per-page
+        partition path (or to single-runner execution).
+
+    The body is the verbatim lift of the Phase-1/Phase-2 spawn block
+    that lived in :func:`deploy.modal.modal_cua_server.main` lines
+    3060-3270 before #673. Same control flow, same print statements,
+    same per-partition ``_fanout_branch_id`` labels — the only thing
+    that changes is the call site (CLI + HTTP `/v1/predict` now both
+    call this single helper).
+
+    Recursion guard: callers that route through this helper must check
+    ``task_suite.get("_fanout_phase")`` first. Sub-suites produced by
+    :func:`prepare_phase1_suite` / :func:`prepare_phase2_suites` carry
+    that key set; a sub-worker re-entering the dispatcher would spawn
+    grand-children indefinitely. The single-runner path handles them.
+
+    Why this is a free function not a method: the CLI entrypoint and
+    the HTTP-path Modal executor both spawn workers via the same
+    ``executor_fn`` (a ``modal.Function`` ref). Passing ``executor_fn``
+    in keeps the helper Modal-agnostic — tests can pass a MagicMock.
+    """
+    _json = json_dumps if json_dumps is not None else _default_json_dumps
+
+    url_collect_group = find_url_collect_group(task_suite)
+    if url_collect_group is None:
+        return None
+
+    phase1_max_pages, phase1_template = resolve_phase1_max_pages(task_suite)
+    phase1_workers_req = task_suite.get("_fanout_phase1_workers")
+    try:
+        phase1_workers = max(1, int(phase1_workers_req or 1))
+    except (TypeError, ValueError):
+        phase1_workers = 1
+    phase1_workers = min(phase1_workers, phase1_max_pages)
+
+    if phase1_workers <= 1:
+        # Serial path — exactly the #638 axis-2 behaviour.
+        print(
+            f"\n  ═══ PHASE-1 (#628): URL collection on 1 container "
+            f"(max_pages={phase1_max_pages}, "
+            f"template={phase1_template!r}) ═══"
+        )
+        phase1_suite = prepare_phase1_suite(
+            task_suite, url_collect_group,
+            max_pages=phase1_max_pages,
+            pagination_url_template=phase1_template,
+        )
+        phase1_suite["_fanout_branch_id"] = (
+            f"{fanout_parent_run_id}:phase1"
+        )
+        spawn_kwargs = {
+            "task_file_contents": _json(phase1_suite),
+            "max_steps": max_steps,
+        }
+        if model == "claude":
+            spawn_kwargs["claude_model"] = claude_model
+        phase1_handle = executor_fn.spawn(**spawn_kwargs)
+        print("    [phase1] worker spawned")
+        try:
+            _phase1_raw = phase1_handle.get()
+            if isinstance(_phase1_raw, dict):
+                _urls_in_result = _phase1_raw.get(
+                    "collected_urls", "MISSING"
+                )
+                _urls_type = type(_urls_in_result).__name__
+                _urls_len = (
+                    len(_urls_in_result)
+                    if isinstance(_urls_in_result, list) else "n/a"
+                )
+                print(
+                    f"    [phase1] raw result: "
+                    f"viable={_phase1_raw.get('viable', 'MISSING')} "
+                    f"collected_urls_type={_urls_type} "
+                    f"collected_urls_len={_urls_len}"
+                )
+            phase1_summary = read_partition_result(_phase1_raw)
+            collected_urls = phase1_summary["collected_urls"]
+        except Exception as exc:  # noqa: BLE001
+            print(f"    [phase1] ERROR: {exc} — aborting fan-out")
+            collected_urls = []
+        print(
+            f"    [phase1] harvested {len(collected_urls)} "
+            f"unique URL(s)"
+        )
+    else:
+        # #644: M parallel Phase-1 workers each scanning a page-slice.
+        phase1_sub_suites = prepare_phase1_partitions(
+            task_suite, url_collect_group,
+            n_workers=phase1_workers,
+            max_pages=phase1_max_pages,
+            pagination_url_template=phase1_template,
+        )
+        print(
+            f"\n  ═══ PHASE-1 (#644 axis 3): URL collection "
+            f"on {len(phase1_sub_suites)} containers "
+            f"(max_pages={phase1_max_pages}, "
+            f"template={phase1_template!r}) ═══"
+        )
+        phase1_handles: list = []
+        for i, sub in enumerate(phase1_sub_suites):
+            sub["_fanout_branch_id"] = (
+                f"{fanout_parent_run_id}:phase1_w{i + 1}"
+            )
+            spawn_kwargs = {
+                "task_file_contents": _json(sub),
+                "max_steps": max_steps,
+            }
+            if model == "claude":
+                spawn_kwargs["claude_model"] = claude_model
+            handle = executor_fn.spawn(**spawn_kwargs)
+            phase1_handles.append((i, handle))
+            print(
+                f"    [phase1] worker {i + 1}/"
+                f"{len(phase1_sub_suites)} spawned "
+                f"(pages={sub['_fanout_phase1_page_set']})"
+            )
+        per_worker_urls: list[list[str]] = []
+        for i, handle in phase1_handles:
+            try:
+                summary = read_partition_result(handle.get())
+                urls = summary["collected_urls"]
+                per_worker_urls.append(urls)
+                print(
+                    f"    [phase1] worker {i + 1}: "
+                    f"collected_urls={len(urls)}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"    [phase1] worker {i + 1} ERROR: {exc}")
+                per_worker_urls.append([])
+        collected_urls = dedup_urls_across_workers(per_worker_urls)
+        raw_total = sum(len(c) for c in per_worker_urls)
+        if raw_total > len(collected_urls):
+            print(
+                f"    [phase1] cross-worker dedup: "
+                f"{raw_total} → {len(collected_urls)} unique URL(s)"
+            )
+        else:
+            print(
+                f"    [phase1] harvested {len(collected_urls)} "
+                f"unique URL(s) (no cross-worker duplicates)"
+            )
+
+    if not collected_urls:
+        print(
+            "    [phase1] no URLs harvested — caller should fall "
+            "through to pagination-partition path"
+        )
+        return None
+
+    phase2_suites = prepare_phase2_suites(
+        task_suite, collected_urls, url_collect_group, workers,
+    )
+    print(
+        f"\n  ═══ PHASE-2 (#628): "
+        f"{len(phase2_suites)} worker(s) × "
+        f"{len(collected_urls)} URL(s) ═══"
+    )
+    phase2_handles: list = []
+    for i, sub_suite in enumerate(phase2_suites):
+        sub_suite["_fanout_branch_id"] = (
+            f"{fanout_parent_run_id}:phase2_w{i + 1}"
+        )
+        kwargs = {
+            "task_file_contents": _json(sub_suite),
+            "max_steps": max_steps,
+        }
+        if model == "claude":
+            kwargs["claude_model"] = claude_model
+        handle = executor_fn.spawn(**kwargs)
+        phase2_handles.append((i, handle))
+        print(
+            f"    [phase2] worker {i + 1}/{len(phase2_suites)} "
+            f"spawned ({sub_suite.get('_fanout_url_count', '?')} URLs)"
+        )
+
+    merged_phone = 0
+    merged_shared_seen_hits = 0
+    per_worker_leads: list[list[dict]] = []
+    for i, handle in phase2_handles:
+        try:
+            summary = read_partition_result(handle.get())
+            merged_phone += summary["with_phone"]
+            merged_shared_seen_hits += summary["shared_seen_hits"]
+            per_worker_leads.append(summary["leads"])
+            print(
+                f"    [phase2] worker {i + 1}: "
+                f"viable={summary['viable']} "
+                f"phone={summary['with_phone']} "
+                f"shared_seen_hits={summary['shared_seen_hits']}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"    [phase2] worker {i + 1}: ERROR — {exc}")
+            per_worker_leads.append([])
+
+    leads, raw_total, dedup_total = dedup_leads_by_url(per_worker_leads)
+    print("\n  ═══ PHASE-1/PHASE-2 RESULTS (#628) ═══")
+    print(f"  URLs collected (Phase 1):  {len(collected_urls)}")
+    print(f"  Workers (Phase 2):         {len(phase2_suites)}")
+    print(f"  Total leads (raw):         {raw_total}")
+    print(f"  Total leads (deduped):     {dedup_total}")
+    if raw_total > dedup_total:
+        print(
+            f"  Duplicates collapsed:      {raw_total - dedup_total} "
+            f"(unexpected — Phase 1 URLs were already unique)"
+        )
+    print(f"  With phone:                {merged_phone}")
+    if shared_seen_printer is not None:
+        try:
+            shared_seen_printer(task_suite, merged_shared_seen_hits)
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            print(f"  [shared-seen] printer raised: {exc}")
+
+    return {
+        "viable": dedup_total,
+        "leads_with_phone": merged_phone,
+        "leads": leads,
+        "collected_urls": collected_urls,
+        "shared_seen_hits": merged_shared_seen_hits,
+    }
+
+
+def _default_json_dumps(obj: Any) -> str:
+    """Default JSON serializer used by :func:`run_fanout_dispatch`.
+
+    Standard library only — no torch / pydantic transitive deps —
+    so the helper stays importable in the slim ``orchestrator``
+    extras footprint the HTTP API container ships with.
+    """
+    import json
+    return json.dumps(obj)
