@@ -295,6 +295,14 @@ class RunExecutor:
             # orchestrator (Modal main) sets ``_fanout_branch_context``
             # on the runner before run() — None for non-fanout runs.
             branch_context=getattr(runner, "_fanout_branch_context", None),
+            # #680: fan-out workers also carry ``group_id`` so the
+            # viewer's GRPO sibling-rollout correlation works without
+            # joining steps back to the session record. The
+            # orchestrator sets ``_fanout_group_id`` on the runner
+            # (same value as branch_context.parent_run_id today; kept
+            # as separate hook so a future GRPO loop with rollouts
+            # that don't share a parent can set group_id alone).
+            group_id=getattr(runner, "_fanout_group_id", None),
         )
 
         if not runner._results_base_url and plan.steps:

@@ -114,7 +114,24 @@ observability = [
     # (mercurialsolo/augur#138) instead of flat siblings. Exports
     # ``ORCHESTRATOR_TAG_KEY`` / ``ORCHESTRATOR_TAG_VALUE`` constants
     # used by ``observability/augur.open_orchestrator_session``.
-    "augur-sdk>=0.4.0,<0.5",
+    #
+    # 0.5.0 — per-token logprob capture (training-data quality).
+    # Adds ``DebugSession(capture_logprobs=True)`` + the
+    # ``ModelApiAdapterBase.extract_logprobs_from_response`` helper
+    # that maps OpenAI ``choices[].logprobs.content[]`` and Anthropic
+    # ``content[].logprobs[]`` to a canonical
+    # ``[{token, token_id?, logprob, top_alternatives?}]`` shape.
+    # Mantis Phase B opt-in via ``MANTIS_CAPTURE_LOGPROBS=1``.
+    #
+    # 0.6.0 — TaskSpec, group_id, set_loop_detected, set_score(...,
+    # should_stop=, uncertainty=), record_subgoal_completion. Wired
+    # into ``observability/augur.open_orchestrator_session`` (task_spec
+    # + group_id on the orchestrator row) and the AugurAdapter init
+    # path (group_id propagation to fan-out children). The schema
+    # floor is ``augur-schema>=0.4.1`` (0.4.0 had a loader bug that
+    # left ``task_spec`` / ``subgoals_completed`` unregistered; pip
+    # resolves transitively).
+    "augur-sdk>=0.6.0,<0.7",
 ]
 # Self-host the FastAPI server that fronts /predict and /v1/chat/completions.
 # Used by the Baseten / EKS / GKE deployments.

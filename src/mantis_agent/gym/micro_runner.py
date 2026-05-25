@@ -283,6 +283,11 @@ class MicroPlanRunner:
         # ``None`` for non-fanout / single-worker runs — AugurAdapter
         # opens without branch_context, preserving today's shape.
         self._fanout_branch_context: dict | None = None
+        # #680 (augur-sdk 0.6.0): per-rollout ``group_id`` for GRPO
+        # sibling correlation. Same fan-out parent_run_id today;
+        # separate attr so a future loop with non-parent rollouts can
+        # set group_id alone.
+        self._fanout_group_id: str | None = None
         self._active_checkpoint_context = None
         self._pre_step_snapshot, self._final_status = None, "running"
         # #audit item 4: halt_reason last set by ``_persist`` — read by
