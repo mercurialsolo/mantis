@@ -2070,12 +2070,14 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 /* ── Boat Details accordion ───────────────────────────────────
    v=114: added `border-bottom: 1px solid #ededed` per real BT's
    `.accordion-details-section` probe (bb: 1px solid #ededed). */
+/* v=122: real BT `.accordion-details-section` has full 1px solid
+   #ededed border (all 4 sides), not just border-bottom. */
 .bdp-details-section {
   background: #f5f9ff;
+  border: 1px solid #ededed;
   border-radius: 8px;
   padding: 20px 16px;
   margin: 24px 0;
-  border-bottom: 1px solid #ededed;
 }
 .bdp-details-h2 {
   font-size: 20px;

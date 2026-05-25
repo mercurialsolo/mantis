@@ -3,33 +3,46 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=117** (2026-05-24) — BDP exact-mirror saga
-(v=105..v=117, 11 deploys across 6 rounds). Re-probed real BT
-dealer (2024 Catalina 355) + private (2015 Pioneer 197 Sportfish)
-at 1440×900 and landed structural deltas in 6 iteration rounds —
-including 3 prompted by user screenshot feedback.
+Last updated: **v=121** (2026-05-24) — BDP exact-mirror marathon
+(v=105..v=121, 15 deploys across 8 rounds). Re-probed real BT
+dealer (2024 Catalina 355), private (2015 Pioneer 197 Sportfish),
+and Pursuit 3070 listings at 1440×900 and landed structural
+deltas in 8 iteration rounds — 6 prompted by user screenshot
+feedback (sticky-bar layout, white margins, light-blue card bgs +
+✦ sparkle, gradient page wrapper, white gutter on ad strip,
+stats-strip → owners-card gap, loan-calc design, breadcrumb font).
 
-Round 1 (v=105): heading hierarchy + cleanup. Round 2 (v=106): sticky-
-bar layout fix per user screenshot. Round 3 (v=107): H1 length-suffix
-span restored + dealer-card sublines + dealership-card hidden.
-Round 4 (v=108–v=109): simplified sticky bar to `‹ Search /
-breadcrumb / Prev / Next` per user screenshot, inner-wrapper
-constraint (max-width 1400px + margin 0 80px); v=110/v=111 white-
-wash regressed and were reverted in v=112 (light-blue `#f5f9ff`
-restored on Owners/Boat Details/More-From-Dealer + ✦ sparkle re-
-added). v=113 sticky-bar full-viewport bleed (100vw + neg margin).
-v=114 top-section polish: removed sticky-bar border-bottom, removed
-ad-strip 24px margin, added accordion-body white nested-card chrome,
-fixed `.bdp-price` to 20/700, H1 margin → 0, added Boat Details
-border-bottom. Round 5 (v=115): right-rail width 366px → 400px.
-Round 6 (v=116–v=117): ad-strip full-viewport bleed; engagement row
-simplified to plain "Views | Saves" with 1×12px #dee2e3 divider
-(removed icons + Listed/days-ago row).
+Recent rounds:
+- Round 7 (v=118): stripped `.bdp-question-card` chrome (white bg,
+  border, padding) — real BT renders inline on page bg.
+- Round 8 (v=119): tightened stats-strip → owners-card gap from
+  118px to ~32px to match real BT; added 1px #ededed border to
+  `.bdp-owners-card` per real BT probe.
+- Round 8 (v=120): loan calculator redesigned to match real BT:
+  Loan Term (Months) field replaces Credit Score (FICO); right
+  pane stripped to centered heading + huge 64/700 $monthly +
+  TOTAL LOAN AMOUNT + divider + See Important Disclosure (removed
+  APR, 180 MONTHS, Get-Pre-Qualified button, pre-qualified
+  bullets). 12px border-radius outer card with overflow:hidden so
+  the white form + light-blue preview share corners cleanly.
+- Round 8 (v=121): breadcrumb font 15/400 #333 → **12/400 #616161**
+  per user screenshot — v=109's enlarged values mistook the
+  `.next-previous-info-container` wrapper computed style for the
+  actual `.breadcrumb` UL.
 
 Suite **83 passing** (16 new BDP tests).
 
+v=118 stripped `.bdp-question-card` chrome (real BT inline on page bg).
+v=119 stats-strip / owners-card gap fix (118px → 32px) + owners-card
+border + removed strip's spurious border-bottom.
+v=120 loan calc redesign — Loan Term field replaces FICO; right
+pane stripped to monthly + total + disclosure.
+v=121 breadcrumb 15/400 #333 → 12/400 #616161 per user screenshot.
+v=122 `.bdp-details-section` border-bottom → full border (1px
+#ededed on all 4 sides) per real BT probe.
+
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
+(token rotates per sandbox restart; current: `syyxwc54axpktn5xcpo91iedvskoeqhv`)
 
 ## Methodology
 
