@@ -1621,7 +1621,7 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 /* Real BT BDP uses ~890 gallery + ~80 gap + 366 rail at 1512 viewport.
    That's ratio gallery:rail ≈ 2.43:1, with ~80px gap. */
 .bdp-grid {
-  display: grid; grid-template-columns: 1fr 366px; gap: 80px;
+  display: grid; grid-template-columns: 1fr 400px; gap: 80px;
   align-items: start;
   /* Real BT's BDP renders at ~1319px content area (left col 890 + 79
      gap + right col 334). Cap at 1336 to match — also auto-shrinks
@@ -1637,7 +1637,7 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 .bdp-grid-stack {
   position: relative;
   grid-template-columns: minmax(0, 1fr);
-  padding-right: calc(366px + 80px);
+  padding-right: calc(400px + 80px);
 }
 .bdp-grid-stack > .bdp-gallery,
 .bdp-grid-stack > .bdp-stats-strip,
@@ -1669,7 +1669,7 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   position: absolute;
   top: 0;
   right: 0;
-  width: 366px;
+  width: 400px;
   margin: 0;
 }
 /* Real BT BDP main gallery image: 3:2 aspect ratio (890×593 at width 890,
