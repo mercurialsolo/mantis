@@ -1650,12 +1650,14 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
    The .bdp-summary aside is positioned absolutely over the right rail
    so its tall content doesn't blow up the gallery row's height.
    v=128: row-gap: 0 to override the inherited `gap: 80px` from
-   `.bdp-grid` — that was adding 80px between every section vertically
-   (caught between More-From-Dealer and Still-have-a-question). */
+   `.bdp-grid` — that was adding 80px between every section vertically.
+   v=129: padding-right `480px → 510px` so gallery is 890px (not 920)
+   matching real BT exactly. Combined with `.bdp-summary right: 34px`
+   below, summary sits at x=1066 with 34px right margin to wrapper. */
 .bdp-grid-stack {
   position: relative;
   grid-template-columns: minmax(0, 1fr);
-  padding-right: calc(400px + 80px);
+  padding-right: 510px;
   row-gap: 0;
 }
 .bdp-grid-stack > .bdp-gallery,
@@ -1690,10 +1692,12 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   margin-left: 0;
 }
 .bdp-grid-stack > .ad-strip .ad-banner { max-width: 100%; }
+/* v=129: right offset 0 → 34px so summary lands at x=1066 (matching
+   real BT's 76px gap between gallery and summary). */
 .bdp-grid-stack > .bdp-summary {
   position: absolute;
   top: 0;
-  right: 0;
+  right: 34px;
   width: 400px;
   margin: 0;
 }
