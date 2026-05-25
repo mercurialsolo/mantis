@@ -52,10 +52,21 @@ from mantis_agent.plan_decomposer import MicroIntent, MicroPlan, PlanDecomposer
 @pytest.fixture
 def force_augur_available(monkeypatch):
     """CI runners don't install ``augur-sdk`` (it's an opt-in extra).
-    Flip the module's SDK-available flag and patches against
-    ``DebugSession`` start landing."""
+    Flip the module's SDK-available flag AND stub the imported names
+    so the adapter init's pre-DebugSession helpers (notably
+    ``_resolve_capture_mode``, which calls ``CaptureMode(...)``) don't
+    crash before the test's ``patch.object`` on ``DebugSession`` even
+    has a chance to land.
+    """
     monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
     monkeypatch.setattr(augur_mod, "_AUGUR_AVAILABLE", True)
+    # CaptureMode is a real enum at runtime; on CI without augur-sdk
+    # it's None at module load. Use a lambda that returns a sentinel
+    # so ``_resolve_capture_mode`` succeeds — the DebugSession mock
+    # in each test ignores the actual value.
+    monkeypatch.setattr(
+        augur_mod, "CaptureMode", lambda v=None: f"capture_mode:{v}",
+    )
 
 
 # ── _build_task_spec_from_suite ────────────────────────────────────
