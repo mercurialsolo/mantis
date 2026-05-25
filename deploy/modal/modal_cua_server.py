@@ -226,13 +226,17 @@ executor_image = (
         # 0.1.2+ fires an immediate session-opened heartbeat so the
         # workspace's connection badge updates the moment the SDK is
         # wired up, before the first step lands.
-        # Must match pyproject.toml (``augur-sdk>=0.3.1,<0.4``). 0.2.x
+        # Must match pyproject.toml (``augur-sdk>=0.4.0,<0.5``). 0.2.x
         # added ``branch_context`` to ``DebugSession.__init__``, which
         # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.3.1,<0.4",
+        # sessions under a shared parent_run_id. 0.4.0
+        # (mercurialsolo/augur-sdk#38) adds
+        # ``DebugSession.open_orchestrator(...)`` — the parent-only
+        # session that surfaces the fan-out grouping row in the viewer
+        # (mercurialsolo/augur#138). Stale <0.4 pins make the
+        # orchestrator opener fall back to no-op (server still
+        # synthesizes a parent row from children, but no aggregate tags).
+        "augur-sdk>=0.4.0,<0.5",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -1482,13 +1486,17 @@ def _run_gemma4_cua_executor(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
         # #509: parity with run_holo3 — Gemma4 also runs the augur wedge.
-        # Must match pyproject.toml (``augur-sdk>=0.3.1,<0.4``). 0.2.x
+        # Must match pyproject.toml (``augur-sdk>=0.4.0,<0.5``). 0.2.x
         # added ``branch_context`` to ``DebugSession.__init__``, which
         # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.3.1,<0.4",
+        # sessions under a shared parent_run_id. 0.4.0
+        # (mercurialsolo/augur-sdk#38) adds
+        # ``DebugSession.open_orchestrator(...)`` — the parent-only
+        # session that surfaces the fan-out grouping row in the viewer
+        # (mercurialsolo/augur#138). Stale <0.4 pins make the
+        # orchestrator opener fall back to no-op (server still
+        # synthesizes a parent row from children, but no aggregate tags).
+        "augur-sdk>=0.4.0,<0.5",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -1535,13 +1543,17 @@ claude_executor_image = (
         # #509: parity with run_holo3 / run_gemma4_cua — Claude executor
         # also runs the augur wedge so bundles + streaming work for the
         # Anthropic-API tier.
-        # Must match pyproject.toml (``augur-sdk>=0.3.1,<0.4``). 0.2.x
+        # Must match pyproject.toml (``augur-sdk>=0.4.0,<0.5``). 0.2.x
         # added ``branch_context`` to ``DebugSession.__init__``, which
         # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.3.1,<0.4",
+        # sessions under a shared parent_run_id. 0.4.0
+        # (mercurialsolo/augur-sdk#38) adds
+        # ``DebugSession.open_orchestrator(...)`` — the parent-only
+        # session that surfaces the fan-out grouping row in the viewer
+        # (mercurialsolo/augur#138). Stale <0.4 pins make the
+        # orchestrator opener fall back to no-op (server still
+        # synthesizes a parent row from children, but no aggregate tags).
+        "augur-sdk>=0.4.0,<0.5",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -1674,13 +1686,17 @@ api_image = (
         # is lazy-imported but if augur_sdk is missing it falls back
         # silently — keeping the dep here makes the import succeed and
         # lets future API-side bundle reads work without a redeploy.
-        # Must match pyproject.toml (``augur-sdk>=0.3.1,<0.4``). 0.2.x
+        # Must match pyproject.toml (``augur-sdk>=0.4.0,<0.5``). 0.2.x
         # added ``branch_context`` to ``DebugSession.__init__``, which
         # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.3.1,<0.4",
+        # sessions under a shared parent_run_id. 0.4.0
+        # (mercurialsolo/augur-sdk#38) adds
+        # ``DebugSession.open_orchestrator(...)`` — the parent-only
+        # session that surfaces the fan-out grouping row in the viewer
+        # (mercurialsolo/augur#138). Stale <0.4 pins make the
+        # orchestrator opener fall back to no-op (server still
+        # synthesizes a parent row from children, but no aggregate tags).
+        "augur-sdk>=0.4.0,<0.5",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -2539,13 +2555,17 @@ def api():
         # so augur-sdk has to be added here separately. Without this the
         # AugurAdapter init logs sdk_available=False and is a no-op even
         # though the package is in executor_image for the other tiers.
-        # Must match pyproject.toml (``augur-sdk>=0.3.1,<0.4``). 0.2.x
+        # Must match pyproject.toml (``augur-sdk>=0.4.0,<0.5``). 0.2.x
         # added ``branch_context`` to ``DebugSession.__init__``, which
         # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.3.1,<0.4",
+        # sessions under a shared parent_run_id. 0.4.0
+        # (mercurialsolo/augur-sdk#38) adds
+        # ``DebugSession.open_orchestrator(...)`` — the parent-only
+        # session that surfaces the fan-out grouping row in the viewer
+        # (mercurialsolo/augur#138). Stale <0.4 pins make the
+        # orchestrator opener fall back to no-op (server still
+        # synthesizes a parent row from children, but no aggregate tags).
+        "augur-sdk>=0.4.0,<0.5",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE).add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
