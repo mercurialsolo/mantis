@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=121** (2026-05-24) — BDP exact-mirror marathon
+Last updated: **v=128** (2026-05-25) — BDP exact-mirror marathon
 (v=105..v=121, 15 deploys across 8 rounds). Re-probed real BT
 dealer (2024 Catalina 355), private (2015 Pioneer 197 Sportfish),
 and Pursuit 3070 listings at 1440×900 and landed structural
@@ -40,6 +40,17 @@ pane stripped to monthly + total + disclosure.
 v=121 breadcrumb 15/400 #333 → 12/400 #616161 per user screenshot.
 v=122 `.bdp-details-section` border-bottom → full border (1px
 #ededed on all 4 sides) per real BT probe.
+v=123 hide right-rail `.prequal-card` (not in real BT).
+v=124 contact form Email+Phone split row + transparent input bg.
+v=125 dealer card "Verified Broker" label + subline 16/#474c4a +
+heading color #1a2022.
+v=126 tighter Still-have-a-question body 18→15px + button 20→14px
++ section margin 24→12px.
+v=127 collapse .bdp-more-from-dealer / .bdp-question-card padding
++ margin (was 116px gap).
+**v=128 ROOT CAUSE — `.bdp-grid-stack` was inheriting `gap: 80px`
+from `.bdp-grid`, which became row-gap between every section.
+Added `row-gap: 0` so sections sit only on their own margins.**
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `syyxwc54axpktn5xcpo91iedvskoeqhv`)
