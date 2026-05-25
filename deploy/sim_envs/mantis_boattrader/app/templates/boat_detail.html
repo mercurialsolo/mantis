@@ -41,6 +41,13 @@
   </div>
 </div>
 
+{# v=111: real BT wraps the BDP body in a `.boat-details-gradient` div
+   that applies a subtle `linear-gradient(180deg, #f7f7f7, transparent
+   20%)` page background — soft grey fade at the top of the BDP that
+   transitions to transparent by 20% down. Sections inside this
+   wrapper render directly on the gradient (no card tints). #}
+<div class="boat-details boat-details-gradient">
+
 {# v=105: `.bdp-nav-row` removed — the breadcrumb + Back/Next links
    are now inside the always-sticky `.next-previous` bar, matching
    real BT's layout (no separate page-header nav row). #}
@@ -269,6 +276,7 @@
   <div class="owners-card-grid">
     <div class="owners-card-text">
       <h2 class="owners-card-heading">
+        <span class="sparkle-icon" aria-hidden="true">✦</span>
         What Owners Say<span class="info-tip" title="Generated from owner reviews and editorial sources">ⓘ</span>
       </h2>
       <p class="owners-card-paragraph">{{ boat.what_owners_say }}</p>
@@ -509,4 +517,6 @@
 
 
 </div>  {# ─── close .bdp-grid — page ends here; footer follows ── #}
+
+</div>  {# ─── close .boat-details.boat-details-gradient (v=111) ── #}
 {% endblock %}

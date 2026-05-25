@@ -683,10 +683,10 @@ def test_bdp_no_listed_by_section(bdp_html):
     assert 'bdp-listed-by-h2' not in bdp_html
 
 
-def test_bdp_no_sparkle_on_what_owners_say(bdp_html):
-    """v=105: real BT renders "What Owners Say" without the ✦
-    sparkle prefix. Sandbox's decorative ✦ removed."""
-    # The owners-card-heading should not contain a sparkle-icon span
+def test_bdp_has_sparkle_on_what_owners_say(bdp_html):
+    """v=112: REVERTED v=105's removal. Real BT renders "What Owners
+    Say" WITH the ✦ sparkle prefix (per user screenshot 2026-05-24).
+    v=105 wrongly removed it; v=112 restored it."""
     import re
     m = re.search(
         r'<h2 class="owners-card-heading">.*?</h2>',
@@ -694,8 +694,8 @@ def test_bdp_no_sparkle_on_what_owners_say(bdp_html):
         re.DOTALL,
     )
     assert m, "owners-card-heading H2 missing"
-    assert 'sparkle-icon' not in m.group(0)
-    assert '✦' not in m.group(0)
+    assert 'sparkle-icon' in m.group(0), "sparkle-icon span missing from heading"
+    assert '✦' in m.group(0), "✦ glyph missing from heading"
 
 
 def test_bdp_no_key_features_heading(bdp_html):
