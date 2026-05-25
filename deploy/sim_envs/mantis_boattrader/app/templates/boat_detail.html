@@ -16,36 +16,36 @@
   </a>
 </section>
 
-{# ─── Sticky boat header bar (shows on scroll).
-   Matches real BT: breadcrumb stays in the sticky row, NOT the
-   title/price line — that lives only in the right-rail summary. ── #}
-<div class="bdp-sticky-bar" data-testid="bdp-sticky-bar">
-  <div class="bdp-sticky-bar-inner">
-    <a href="/boats/" class="bdp-back">‹ Search</a>
-    <nav class="breadcrumb sticky-breadcrumb" aria-label="Breadcrumb">
+{# ─── `.next-previous` always-sticky bar (v=105) — matches real BT
+   pattern exactly: 54px tall, bg #f7f7f7, sticky top:0, z:110,
+   contains Back-to-Search + listing name/price/location + Next Boat
+   link. Always visible on BDP, sticks to top on scroll. Replaces the
+   old `.bdp-sticky-bar` which only appeared after 320px scroll. ── #}
+<div class="next-previous" data-testid="bdp-sticky-bar">
+  <a href="/boats/" class="next-previous-button next-previous-back">‹ Back to Search</a>
+  <div class="next-previous-info-container">
+    <nav class="breadcrumb next-previous-breadcrumb" aria-label="Breadcrumb">
       <a href="/">Home</a> / <a href="/boats/">Boats For Sale</a> /
       <a href="/boats/?fuel_type=Diesel">Power</a> /
       <a href="/boats/?type={{ boat.boat_type|urlencode }}">{{ boat.boat_type }}</a> /
       <a href="/boats/?make={{ boat.make|urlencode }}">{{ boat.make }}</a>
     </nav>
-    <div class="sticky-actions">
-      {% if next_boat %}<a href="/boat/{{ next_boat.slug }}/" class="bdp-next">Next Boat</a>{% endif %}
-      <a href="#contact" class="btn-primary sticky-contact-btn">Contact Seller</a>
+    <div class="next-previous-info">
+      <span class="next-previous-listing-name">{{ boat.title }}</span>
+      <span class="next-previous-listing-price">{{ boat.display_price }}</span>
+      <span class="next-previous-listing-loc">{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</span>
     </div>
+  </div>
+  <div class="next-previous-actions">
+    <button type="button" class="next-previous-save" aria-label="Save listing">♡ Save</button>
+    {% if not boat.is_owner_listed %}<span class="next-previous-offered-by">Offered By: <strong>{{ dealer.name }}</strong></span>{% endif %}
+    {% if next_boat %}<a href="/boat/{{ next_boat.slug }}/" class="next-previous-button next-previous-next">Next Boat ›</a>{% endif %}
   </div>
 </div>
 
-{# ─── Breadcrumb row ─────────────────────────────────────────── #}
-<div class="bdp-nav-row">
-  <a href="/boats/" class="bdp-back">‹ Search</a>
-  <nav class="breadcrumb" aria-label="Breadcrumb">
-    <a href="/">Home</a> / <a href="/boats/">Boats For Sale</a> /
-    <a href="/boats/?fuel_type=Diesel">Power</a> /
-    <a href="/boats/?type={{ boat.boat_type|urlencode }}">{{ boat.boat_type }}</a> /
-    <a href="/boats/?make={{ boat.make|urlencode }}">{{ boat.make }}</a>
-  </nav>
-  {% if next_boat %}<a href="/boat/{{ next_boat.slug }}/" class="bdp-next">Next Boat ›</a>{% endif %}
-</div>
+{# v=105: `.bdp-nav-row` removed — the breadcrumb + Back/Next links
+   are now inside the always-sticky `.next-previous` bar, matching
+   real BT's layout (no separate page-header nav row). #}
 
 {% if lead_confirmation %}
 <div class="lead-confirm" data-testid="lead-confirmation">
@@ -93,7 +93,11 @@
       {% for badge in boat.badges %}<span class="listing-tag listing-tag-{{ badge|lower|replace(' ','-') }}">{{ badge }}</span>{% endfor %}
       </div>
     {% endif %}
-    <h1 class="bdp-title">{{ boat.title }}</h1>
+    {# v=107: H1 + sibling length-suffix SPAN to match real BT exactly.
+       Real BT renders `<h1>Year Make Model</h1><span>| <len>'</span>`
+       inline, both 20/700 #333. v=104 over-corrected by removing the
+       span entirely. #}
+    <h1 class="bdp-title">{{ boat.title }}<span class="bdp-length"> | {{ boat.length_ft|int }}'</span></h1>
     <p class="bdp-location">{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</p>
     <div class="bdp-price-block" data-testid="price-block">
       <p class="bdp-price">
@@ -121,70 +125,58 @@
     </ul>
 
     {# ─── Contact card (owner vs dealer/sponsored) ──────────────
-       v=104: "Meet Your Seller" H2 above the contact card matches
-       real BT's pattern (same heading for both seller types). #}
-    <h2 class="meet-your-seller-h2">Meet Your Seller</h2>
+       v=105: removed "Meet Your Seller" H2 — real BT does not show
+       one above the contact card on either dealer or private listings.
+       Contact heading is H3 18/500 #303030 matching real BT. #}
     {% if boat.is_owner_listed %}
+      {# v=107: real BT private lead form: just Name/Email/Phone (no
+         message textarea, no Show Phone button by default). Show Phone
+         retained as cookie-gated interaction surface for agent training. #}
       <div class="bdp-private-seller-card" id="contact" data-testid="private-seller-card">
-        <div class="private-seller-tag">Private Seller</div>
-        <h2 class="dealer-card-heading">Contact {{ boat.owner_name }}, the owner</h2>
-        <p class="private-seller-note">
-          This boat is being sold directly by the owner. Boat Trader does not verify
-          private-seller listings — please ask for a survey, title, and registration before purchase.
-        </p>
+        <h3 class="dealer-card-heading">Contact Private Seller</h3>
+        <form class="dealer-lead-form" method="post" action="/boat/{{ boat.slug }}/contact" data-testid="dealer-lead-form">
+          <input type="text" name="name" placeholder="First &amp; Last Name" required class="lead-input" />
+          <input type="email" name="email" placeholder="Your Email" required class="lead-input" />
+          <input type="tel" name="phone" placeholder="Your Phone" class="lead-input" />
+          <button type="submit" class="btn-primary btn-block contact-seller-btn srp-apply-now-button" data-testid="contact-seller-submit">Contact Seller</button>
+        </form>
         <div class="private-seller-phone-row" data-testid="phone-row">
           {% set show_phone = request.cookies.get('bt_show_phone_' ~ boat.id) == '1' %}
           {% if show_phone %}
             <img class="phone-svg" src="/assets/phone/{{ boat.slug }}.svg?_t={{ boat.id }}" alt="Phone number" data-testid="phone-svg" />
-            <span class="phone-note">Call between 9am – 6pm local time.</span>
           {% else %}
             <form method="post" action="/boat/{{ boat.slug }}/show-phone">
-              <button type="submit" class="btn-secondary show-phone-btn" data-testid="show-phone-btn"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> Show Phone Number</button>
+              <button type="submit" class="btn-secondary btn-block show-phone-btn" data-testid="show-phone-btn"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> Show Phone Number</button>
             </form>
-            <span class="phone-note">The seller's number is hidden until you confirm you're a buyer.</span>
           {% endif %}
         </div>
-        <form class="dealer-lead-form" method="post" action="/boat/{{ boat.slug }}/contact" data-testid="dealer-lead-form">
-          <input type="text" name="name" placeholder="First &amp; Last Name" required class="lead-input" />
-          <div class="lead-row">
-            <input type="email" name="email" placeholder="Your Email" required class="lead-input" />
-            <input type="tel" name="phone" placeholder="Your Phone" class="lead-input" />
-          </div>
-          <textarea name="message" rows="3" class="lead-textarea" placeholder="Hi {{ boat.owner_name }}, I'm interested in your {{ boat.year }} {{ boat.make }} {{ boat.model }}. Is it still available?"></textarea>
-          <button type="submit" class="btn-primary btn-block contact-seller-btn srp-apply-now-button" data-testid="contact-seller-submit">Email Seller</button>
-        </form>
       </div>
     {% else %}
+      {# v=107: dealer card — salesperson H3 + dealer name+city + phone
+         sublines INSIDE the contact card (matches real BT pattern).
+         Separate `.bdp-dealership-card` deleted since real BT integrates
+         dealer info here instead of below. #}
       <div class="bdp-dealer-card" id="contact" data-testid="dealer-card">
         {% set _sp_idx = (boat.id|length + boat.year) % 6 %}
-        <h2 class="dealer-card-heading">Contact {{ ['Michael Mandery','Jennifer Cole','Marcus Webb','Elena Patel','Tom Hartwell','Priya Shah'][_sp_idx] }}</h2>
-        <div class="dealer-card-meta">
-          <div class="dealer-headshot" aria-label="Salesperson headshot">
-            <svg viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" width="60" height="60">
-              <defs><linearGradient id="hs{{ _sp_idx }}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#9bbcdb"/><stop offset="1" stop-color="#3a6a93"/></linearGradient></defs>
-              <rect width="60" height="60" rx="30" fill="url(#hs{{ _sp_idx }})"/>
-              <circle cx="30" cy="24" r="11" fill="#f2e3c8"/>
-              <path d="M8 60 Q 30 36 52 60 Z" fill="#f2e3c8"/>
-            </svg>
-          </div>
-          <address class="dealer-address">
-            {{ dealer.name }}<br/>
-            <a href="tel:{{ dealer.phone }}" class="dealer-phone"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> {{ dealer.phone }}</a>
-          </address>
-        </div>
+        <h3 class="dealer-card-heading">Contact {{ ['Michael Mandery','Jennifer Cole','Marcus Webb','Elena Patel','Tom Hartwell','Priya Shah'][_sp_idx] }}</h3>
+        <p class="dealer-card-subline dealer-card-name">{{ dealer.name }} - {{ dealer.city }}</p>
+        <a href="tel:{{ dealer.phone }}" class="dealer-card-subline dealer-card-phone">{{ dealer.phone }}</a>
         <form class="dealer-lead-form" method="post" action="/boat/{{ boat.slug }}/contact" data-testid="dealer-lead-form">
           <input type="text" name="name" placeholder="First &amp; Last Name" required class="lead-input" />
-          <div class="lead-row">
-            <input type="email" name="email" placeholder="Your Email" required class="lead-input" />
-            <input type="tel" name="phone" placeholder="Your Phone" class="lead-input" />
-          </div>
+          <input type="email" name="email" placeholder="Your Email" required class="lead-input" />
+          <input type="tel" name="phone" placeholder="Your Phone" class="lead-input" />
           <textarea name="message" rows="3" class="lead-textarea" placeholder="I'm interested in your {{ boat.year }} {{ boat.make }} {{ boat.model }}. Please contact me with more information."></textarea>
           <button type="submit" class="btn-primary btn-block contact-seller-btn srp-apply-now-button" data-testid="contact-seller-submit">Contact Seller</button>
-          <a href="tel:{{ dealer.phone }}" class="btn-secondary btn-block call-btn"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> Call</a>
         </form>
       </div>
 
-      {# Separate dealership card with logo + address + active/sold stats. #}
+      {# v=107: `.bdp-dealership-card` (right-rail logo + stats block)
+         hidden — real BT does not render a separate dealership card in
+         the right rail; dealer identity is conveyed via the contact card
+         + the `.next-previous-offered-by` tag in the sticky bar. The
+         block below is wrapped in `{% if false %}` so it stays in the
+         template for reference but is never rendered. #}
+      {% if false %}
       <div class="bdp-dealership-card" data-testid="dealership-card">
         <div class="dealership-logo-wrap">
           <div class="dealership-logo">
@@ -206,6 +198,7 @@
         </div>
         <a href="https://www.{{ dealer.name|lower|replace(' ','-')|replace(',','')|replace('--','-') }}.com" class="visit-seller-link dealership-link" target="_blank" rel="nofollow">Visit Seller Website ↗</a>
       </div>
+      {% endif %}{# /if false (v=107 hide bdp-dealership-card) #}
     {% endif %}
 
     {# ─── Get pre-qualified card (always last in the right rail) ─── #}
@@ -278,9 +271,7 @@
   <div class="owners-card-grid">
     <div class="owners-card-text">
       <h2 class="owners-card-heading">
-        <span class="sparkle-icon" aria-hidden="true">✦</span>
-        What Owners Say
-        <span class="info-tip" title="Generated from owner reviews and editorial sources">ⓘ</span>
+        What Owners Say<span class="info-tip" title="Generated from owner reviews and editorial sources">ⓘ</span>
       </h2>
       <p class="owners-card-paragraph">{{ boat.what_owners_say }}</p>
     </div>
@@ -310,7 +301,9 @@
         {% for para in boat.description %}<p>{{ para }}</p>{% endfor %}
       </div>
       {% if boat.description_features %}
-        <h3 class="bdp-feature-h3">Key Features</h3>
+        {# v=105: removed "Key Features" H3 — real BT doesn't render
+           this heading on probed dealer or private listings. List
+           content kept as part of the Description body. #}
         <ul class="bdp-feature-list">
           {% for f in boat.description_features %}<li>{{ f }}</li>{% endfor %}
         </ul>
@@ -346,6 +339,13 @@
         <div><dt>Fuel Capacity</dt><dd>{{ boat.fuel_capacity_gal }} gal</dd></div>
         <div><dt>Fresh Water Capacity</dt><dd>{{ (boat.length_ft * 1.2)|int }} gal</dd></div>
       </dl>
+      {# v=105: Accommodations H4 — present on real BT BDP under
+         Measurements. Sandbox derives berth count from length. #}
+      <h4 class="accordion-subhead">Accommodations</h4>
+      <dl class="spec-grid">
+        <div><dt>Number of Cabins</dt><dd>{{ ((boat.length_ft - 14) // 8)|int if boat.length_ft > 22 else 1 }}</dd></div>
+        <div><dt>Number of Berths</dt><dd>{{ (boat.capacity_people // 2)|int if boat.capacity_people else 2 }}</dd></div>
+      </dl>
     </div>
   </details>
 
@@ -368,7 +368,7 @@
 
   <details class="bdp-accordion">
     <summary>
-      <h3 class="accordion-title">More Details</h3>
+      <h4 class="accordion-title">More Details</h4>
       <span class="accordion-chevron"></span>
     </summary>
     <div class="accordion-body">
@@ -385,7 +385,7 @@
 
   <details class="bdp-accordion">
     <summary>
-      <h3 class="accordion-title">Location</h3>
+      <h4 class="accordion-title">Location</h4>
       <span class="accordion-chevron"></span>
     </summary>
     <div class="accordion-body">
@@ -447,43 +447,19 @@
   </div>
 </section>
 
-{# ─── Listed By / enhanced dealer card (left column) ─────────── #}
-{% if not boat.is_owner_listed %}
-<section class="bdp-listed-by enhanced-seller-details-card" data-testid="listed-by">
-  <h2 class="bdp-listed-by-h2">Listed By</h2>
-  <div class="enhanced-seller-details-card-container">
-    <div class="enhanced-seller-card-left">
-      <div class="enhanced-dealer-logo">
-        <span class="logo-mark">{{ dealer.logo_initial }}</span>
-        <span class="logo-name">{{ dealer.name|upper }}</span>
-      </div>
-      <h3 class="enhanced-dealer-name">{{ dealer.name }}</h3>
-      <p class="enhanced-dealer-address">
-        <a href="#">{{ dealer.address }}, {{ dealer.city }}, {{ dealer.state }}, {{ dealer.zip }}</a>
-      </p>
-      <p class="enhanced-dealer-phone"><a href="tel:{{ dealer.phone }}"><svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg> {{ dealer.phone }}</a></p>
-      <a href="#" class="enhanced-dealer-link">Visit Seller Website</a>
-    </div>
-    <div class="enhanced-seller-card-right">
-      <p class="trusted-partner enhanced-trusted">Trusted Boat Trader Partner | <strong>{{ dealer.trusted_partner_label }}</strong></p>
-      <div class="enhanced-stat-row">
-        <div class="enhanced-stat-num">{{ dealer.active_listings }}</div>
-        <div class="enhanced-stat-label">Active listings</div>
-      </div>
-      <div class="enhanced-stat-row">
-        <div class="enhanced-stat-num">{{ "{:,}".format(dealer.sold_listings) }}</div>
-        <div class="enhanced-stat-label">Sold listings</div>
-      </div>
-    </div>
-  </div>
-</section>
+{# v=105: `.bdp-listed-by` section deleted — real BT does not render
+   a separate "Listed By" section on either dealer or private listings.
+   Dealer identity is conveyed via the contact card + the
+   `.next-previous` sticky bar's "Offered By: <dealer>" tag. #}
 
 {# ─── More From This Dealer — horizontally scrolling carousel
    matching real boattrader: image-only cards (no heart/badge/contact),
    visible scrollbar, › next button on right, "More Boats from this
-   Dealer" link at the bottom. ────────────────────────────────── #}
+   Dealer" link at the bottom. v=105: H2 → H4 to match real BT
+   (heading tag is H4 with carousel-special color #414d4a). ── #}
+{% if not boat.is_owner_listed %}
 <section class="bdp-more-from-dealer" data-testid="more-from-dealer">
-  <h2 class="more-from-dealer-h2">More From This Dealer</h2>
+  <h4 class="more-from-dealer-h2">More From This Dealer</h4>
   <div class="more-from-dealer-rail-wrap">
     <div class="more-from-dealer-rail" role="region" aria-label="More from this dealer">
       {% for b in similar[:8] %}
@@ -501,23 +477,13 @@
   </div>
   <a href="#" class="more-from-dealer-link">More Boats from this Dealer</a>
 </section>
-{% else %}
-<section class="bdp-listed-by" data-testid="listed-by-private">
-  <h2 class="bdp-listed-by-h2">Listed By</h2>
-  <div class="listed-by-card listed-by-private">
-    <div class="listed-by-logo private">{{ boat.owner_name[0] }}</div>
-    <div class="listed-by-body">
-      <h3 class="listed-by-dealer">{{ boat.owner_name }}</h3>
-      <p class="listed-by-address">Private Seller · {{ boat.city }}, {{ boat.state }}</p>
-      <p class="listed-by-private-note">Listed for <strong>{{ boat.listed_days_ago }} days</strong>. Not a verified dealer.</p>
-    </div>
-  </div>
-</section>
 {% endif %}
+{# v=105: private-seller Listed By section removed — real BT does not
+   render a separate Listed By block on private listings either. #}
 
-{# ─── Still have a question? ────────────────────────────────── #}
+{# ─── Still have a question? (v=105: H2 → H3 24/700 #303030 per real BT) #}
 <section class="bdp-question-card" data-testid="still-have-question">
-  <h2 class="question-card-h2">Still have a question?</h2>
+  <h3 class="question-card-h2">Still have a question?</h3>
   <span class="question-card-rule" aria-hidden="true"></span>
   <p>Get answers, schedule a visit to see the boat, or find a good time for a sea trial.</p>
   <p>Take the next step and contact the seller.</p>

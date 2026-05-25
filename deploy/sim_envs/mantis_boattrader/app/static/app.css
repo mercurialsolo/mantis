@@ -1144,15 +1144,11 @@ header.main {
 .apply-filters { margin: 18px 0 10px; }
 .filter-clear { display: block; text-align: center; font-size: 14px; margin: 0 0 8px; }
 
-/* "Meet Your Seller" h2 above the BDP contact card (v=104) —
-   matches real BT's 20/700 #404040 heading that appears before
-   the seller info on both private + dealer listings. */
-.meet-your-seller-h2 {
-  font-size: 20px;
-  font-weight: 700;
-  color: #404040;
-  margin: 24px 0 12px;
-}
+/* v=105: removed `.meet-your-seller-h2` — re-probed real BT BDPs
+   (both dealer 2024 Catalina 355 and private 2015 Pioneer 197) show
+   NO "Meet Your Seller" heading above the contact card. v=104's
+   addition was based on a stale measurement. Selector kept commented
+   for historical reference only. */
 
 /* ── Cookie consent banner (v=103) ─────────────────────────────────
    Shown on first visit only (server-rendered conditional in base.html
@@ -1447,17 +1443,129 @@ header.main {
 
 /* ── Boat Detail Page (BDP) ───────────────────────────────────── */
 
-/* Sticky header bar — slides in on scroll. */
-.bdp-sticky-bar {
+/* v=105: `.bdp-sticky-bar` (the 320px-scroll-triggered sticky) is
+   replaced by `.next-previous` (always-sticky, matches real BT). Old
+   selector kept but hidden so any residual JS toggling `bdp-scrolled`
+   doesn't reveal a duplicate bar. */
+.bdp-sticky-bar,
+body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
+
+/* ── `.next-previous` always-sticky bar (v=105) ────────────────────
+   Real BT: position:sticky top:0, full viewport width, h=54, padding
+   5px 20px, bg #f7f7f7, z:110, fs 15/400 #333. Holds Back-to-Search
+   (link 12/400 #139af5) + listing info (12/400 #616161) +
+   Next-Boat link + "Offered By: <dealer>" label on dealer listings. */
+.next-previous {
   position: sticky;
   top: 0;
-  background: rgba(255, 255, 255, 0.98);
-  z-index: 100;
-  border-bottom: 1px solid var(--bt-border);
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  height: 54px;
   margin: 0 calc(50% - 50vw);
-  display: none;
+  padding: 5px 20px;
+  background: #f7f7f7;
+  font-size: 15px;
+  font-weight: 400;
+  color: #333;
+  border-bottom: 1px solid #ededed;
 }
-body.bdp-scrolled .bdp-sticky-bar { display: block; }
+.next-previous-button {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 400;
+  color: #139af5;
+  padding: 11px 15px;
+  border-radius: 4px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.next-previous-button:hover { text-decoration: underline; }
+.next-previous-back { padding-left: 0; }
+.next-previous-next { padding-right: 0; }
+.next-previous-info-container {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  margin: 0 10px;
+  min-width: 0;
+  height: 100%;
+}
+.next-previous-info {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 12px;
+  font-weight: 400;
+  color: #616161;
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 100%;
+}
+.next-previous-listing-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #303030;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.next-previous-listing-price {
+  font-size: 12px;
+  font-weight: 700;
+  color: #303030;
+}
+.next-previous-listing-loc {
+  font-size: 12px;
+  font-weight: 400;
+  color: #616161;
+}
+.next-previous-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.next-previous-save {
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  color: #139af5;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+.next-previous-save:hover { text-decoration: underline; }
+.next-previous-offered-by {
+  font-size: 12px;
+  font-weight: 400;
+  color: #616161;
+}
+.next-previous-offered-by strong { color: #303030; }
+.next-previous-breadcrumb {
+  font-size: 12px;
+  font-weight: 400;
+  color: #616161;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  margin: 0;
+}
+.next-previous-breadcrumb a { color: #616161; text-decoration: none; }
+.next-previous-breadcrumb a:hover { color: var(--bt-blue); text-decoration: underline; }
+
+/* v=105: `.bdp-nav-row` hidden — breadcrumb + Back/Next links live
+   in the always-sticky `.next-previous` bar (matches real BT). */
+.bdp-nav-row { display: none !important; }
 .bdp-sticky-bar-inner {
   max-width: var(--container);
   margin: 0 auto;
@@ -1904,6 +2012,9 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
   color: var(--bt-text);
   margin: 0 0 12px;
 }
+/* v=105: `.sparkle-icon` is no longer used on the BDP — real BT does
+   not render a sparkle prefix on "What Owners Say". Selector kept
+   for any other future use. */
 .sparkle-icon {
   color: var(--bt-blue);
   font-size: 18px;
@@ -2189,10 +2300,13 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
   padding: 24px 28px 18px;
   margin: 24px 0;
 }
+/* v=105: Real BT renders this heading as H4 (carousel section title)
+   with 20/700 and a distinctive teal-grey #414d4a, not the body
+   #333. Tag flipped in boat_detail.html; color updated here. */
 .more-from-dealer-h2 {
   font-size: 20px;
   font-weight: 700;
-  color: var(--bt-text);
+  color: #414d4a;
   margin: 0 0 16px;
 }
 .more-from-dealer-rail-wrap {
@@ -2515,7 +2629,13 @@ body.bdp-scrolled .bdp-sticky-bar { display: block; }
 }
 
 .bdp-dealer-card { border-top: 1px solid var(--bt-border); padding-top: 14px; }
-.dealer-card-heading { font-size: 18px; font-weight: 500; color: var(--bt-text); margin: 0 0 10px; }
+/* Real BT contact card heading (dealer + private): H3 18/500 #303030. */
+.dealer-card-heading { font-size: 18px; font-weight: 500; color: #303030; margin: 0 0 4px; }
+/* v=107: dealer subline rows (dealer name + city, phone) — sit
+   directly under the salesperson H3, matching real BT pattern. */
+.dealer-card-subline { display: block; font-size: 14px; line-height: 1.4; margin: 0 0 2px; color: #303030; }
+.dealer-card-subline.dealer-card-phone { color: var(--bt-blue); font-weight: 400; margin: 0 0 12px; text-decoration: none; }
+.dealer-card-subline.dealer-card-phone:hover { text-decoration: underline; }
 .dealer-card-meta { display: flex; gap: 12px; align-items: center; margin: 0 0 12px; }
 .dealer-logo {
   width: 60px; height: 60px; border-radius: 50%;
