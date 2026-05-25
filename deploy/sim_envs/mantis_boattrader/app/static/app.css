@@ -1450,18 +1450,18 @@ header.main {
 .bdp-sticky-bar,
 body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 
-/* ── `.next-previous` always-sticky bar (v=105) ────────────────────
-   Real BT: position:sticky top:0, full viewport width, h=54, padding
-   5px 20px, bg #f7f7f7, z:110, fs 15/400 #333. Holds Back-to-Search
-   (link 12/400 #139af5) + listing info (12/400 #616161) +
-   Next-Boat link + "Offered By: <dealer>" label on dealer listings. */
+/* ── `.next-previous` always-sticky bar (v=109: inner-wrapper
+   constraint to match real BT exactly) ────────────────────────────
+   Outer bar: full-viewport-width, bg #f7f7f7, sticky top:0, z:110,
+   padding 5px 20px (the bar bleeds full-width via negative margin
+   so its bg covers edge to edge inside the constrained .bt-main).
+   Inner wrapper: max-width 1400px, margin 0 80px — matches real
+   BT's layout pattern that places "‹ Search" at x≈100 from the
+   viewport edge at 1600px viewport. */
 .next-previous {
   position: sticky;
   top: 0;
   z-index: 110;
-  display: flex;
-  align-items: center;
-  gap: 16px;
   width: 100%;
   height: 54px;
   margin: 0 calc(50% - 50vw);
@@ -1471,6 +1471,19 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   font-weight: 400;
   color: #333;
   border-bottom: 1px solid #ededed;
+}
+.next-previous-inner {
+  max-width: 1400px;
+  margin: 0 80px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+@media (max-width: 1280px) {
+  /* Below 1280px viewport the 80px side margins are excessive — fall
+     back to a more compact 16px gutter so the bar doesn't crowd out. */
+  .next-previous-inner { margin: 0 auto; }
 }
 .next-previous-button {
   display: inline-flex;
@@ -1485,83 +1498,27 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 .next-previous-button:hover { text-decoration: underline; }
 .next-previous-back { padding-left: 0; }
-.next-previous-next { padding-right: 0; }
-.next-previous-info-container {
-  position: relative;
+.next-previous-next { padding-right: 0; margin-left: 16px; }
+.next-previous-prev { padding-right: 15px; }
+.next-previous-breadcrumb {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 2px;
-  margin: 0 10px;
-  min-width: 0;
-  height: 100%;
-}
-.next-previous-info {
-  display: flex;
-  gap: 12px;
-  align-items: baseline;
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 400;
-  color: #616161;
+  color: #333;
   white-space: nowrap;
   overflow: hidden;
-  max-width: 100%;
-}
-.next-previous-listing-name {
-  font-size: 12px;
-  font-weight: 700;
-  color: #303030;
   text-overflow: ellipsis;
-  overflow: hidden;
+  margin: 0 10px;
+  padding: 0;
 }
-.next-previous-listing-price {
-  font-size: 12px;
-  font-weight: 700;
-  color: #303030;
-}
-.next-previous-listing-loc {
-  font-size: 12px;
-  font-weight: 400;
-  color: #616161;
-}
+.next-previous-breadcrumb a { color: #333; text-decoration: none; }
+.next-previous-breadcrumb a:hover { color: var(--bt-blue); text-decoration: underline; }
 .next-previous-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 0;
   flex-shrink: 0;
 }
-.next-previous-save {
-  background: transparent;
-  border: 0;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 400;
-  color: #139af5;
-  cursor: pointer;
-  padding: 0;
-  white-space: nowrap;
-}
-.next-previous-save:hover { text-decoration: underline; }
-.next-previous-offered-by {
-  font-size: 12px;
-  font-weight: 400;
-  color: #616161;
-}
-.next-previous-offered-by strong { color: #303030; }
-.next-previous-breadcrumb {
-  font-size: 12px;
-  font-weight: 400;
-  color: #616161;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-  margin: 0;
-}
-.next-previous-breadcrumb a { color: #616161; text-decoration: none; }
-.next-previous-breadcrumb a:hover { color: var(--bt-blue); text-decoration: underline; }
 
 /* v=105: `.bdp-nav-row` hidden — breadcrumb + Back/Next links live
    in the always-sticky `.next-previous` bar (matches real BT). */

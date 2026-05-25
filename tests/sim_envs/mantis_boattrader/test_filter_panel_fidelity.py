@@ -610,23 +610,26 @@ def test_bdp_has_next_previous_sticky_bar(bdp_html):
     assert 'class="next-previous-button next-previous-back"' in bdp_html
 
 
-def test_bdp_next_previous_has_breadcrumb_and_info(bdp_html):
-    """v=105: sticky bar contains both the breadcrumb nav AND the
-    listing name/price/location info row."""
+def test_bdp_next_previous_has_breadcrumb(bdp_html):
+    """v=108: sticky bar contains the breadcrumb nav only. (v=105/106
+    initially included a listing-name/price/location row beneath the
+    breadcrumb, but re-comparison with the real BT screenshot showed
+    that data is NOT visible in the sticky-bar row — only the
+    breadcrumb sits in the middle.)"""
     assert 'class="breadcrumb next-previous-breadcrumb"' in bdp_html
-    assert 'class="next-previous-info"' in bdp_html
-    assert 'next-previous-listing-name' in bdp_html
-    assert 'next-previous-listing-price' in bdp_html
-    assert 'next-previous-listing-loc' in bdp_html
+    # The listing-info row from v=105 should NOT be present anymore
+    assert 'next-previous-info"' not in bdp_html
+    assert 'next-previous-listing-name' not in bdp_html
 
 
-def test_bdp_next_previous_info_container_is_column_flex(base_css):
-    """v=106: `.next-previous-info-container` uses flex-direction:
-    column so the breadcrumb sits on top row and the listing info
-    sits on bottom row, matching real BT (NOT smashed onto one line
-    as v=105 first shipped)."""
-    block = _rule_block(base_css, ".next-previous-info-container {")
-    assert "flex-direction: column" in block
+def test_bdp_next_previous_actions_only_prev_next(bdp_html):
+    """v=108: real BT sticky bar's right action group has ONLY
+    "Previous Boat" + "Next Boat" links. No Save button, no
+    "Offered By" text."""
+    assert 'next-previous-prev' in bdp_html or 'next-previous-next' in bdp_html
+    # Removed in v=108: Save button and Offered-By tag
+    assert 'next-previous-save' not in bdp_html
+    assert 'next-previous-offered-by' not in bdp_html
 
 
 def test_bdp_no_legacy_nav_row(base_css):

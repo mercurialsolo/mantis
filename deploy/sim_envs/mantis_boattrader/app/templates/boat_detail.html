@@ -22,24 +22,22 @@
    link. Always visible on BDP, sticks to top on scroll. Replaces the
    old `.bdp-sticky-bar` which only appeared after 320px scroll. ── #}
 <div class="next-previous" data-testid="bdp-sticky-bar">
-  <a href="/boats/" class="next-previous-button next-previous-back">‹ Back to Search</a>
-  <div class="next-previous-info-container">
+  {# v=109: inner wrapper constrains content to max-width 1400px with
+     80px side margins, matching real BT's layout. At 1600px viewport
+     this places "‹ Search" at x≈100 (20px bar padding + 80px wrapper
+     margin), not at x≈25 as v=108 had. #}
+  <div class="next-previous-inner">
+    <a href="/boats/" class="next-previous-button next-previous-back">‹ Search</a>
     <nav class="breadcrumb next-previous-breadcrumb" aria-label="Breadcrumb">
       <a href="/">Home</a> / <a href="/boats/">Boats For Sale</a> /
       <a href="/boats/?fuel_type=Diesel">Power</a> /
       <a href="/boats/?type={{ boat.boat_type|urlencode }}">{{ boat.boat_type }}</a> /
       <a href="/boats/?make={{ boat.make|urlencode }}">{{ boat.make }}</a>
     </nav>
-    <div class="next-previous-info">
-      <span class="next-previous-listing-name">{{ boat.title }}</span>
-      <span class="next-previous-listing-price">{{ boat.display_price }}</span>
-      <span class="next-previous-listing-loc">{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</span>
+    <div class="next-previous-actions">
+      {% if prev_boat %}<a href="/boat/{{ prev_boat.slug }}/" class="next-previous-button next-previous-prev">Previous Boat</a>{% endif %}
+      {% if next_boat %}<a href="/boat/{{ next_boat.slug }}/" class="next-previous-button next-previous-next">Next Boat</a>{% endif %}
     </div>
-  </div>
-  <div class="next-previous-actions">
-    <button type="button" class="next-previous-save" aria-label="Save listing">♡ Save</button>
-    {% if not boat.is_owner_listed %}<span class="next-previous-offered-by">Offered By: <strong>{{ dealer.name }}</strong></span>{% endif %}
-    {% if next_boat %}<a href="/boat/{{ next_boat.slug }}/" class="next-previous-button next-previous-next">Next Boat ›</a>{% endif %}
   </div>
 </div>
 
