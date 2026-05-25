@@ -2397,16 +2397,17 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 
 /* ── Still have a question? card ──────────────────────────── */
-/* v=118: removed white card chrome (bg, border, br, large padding).
-   Real BT renders this section inline on the page background —
-   just the H3 + rule + body text + button, no surrounding white box.
-   Probed at x=150 y=2750 with `bg: rgba(0,0,0,0); border: 0 none`. */
+/* v=126: tightened margins + reduced body/button font-size per user
+   screenshot. Body text was 18px (now 15px), button was 20px (now
+   14px), section margin was 24px 0 (now 12px 0), paragraph spacing
+   was 0 0 18px (now 0 0 8px). Rule underline width 60px → 40px and
+   bottom margin tightened. */
 .bdp-question-card {
   background: transparent;
   border: 0;
   border-radius: 0;
-  padding: 28px 0;
-  margin: 24px 0;
+  padding: 24px 0;
+  margin: 12px 0;
 }
 .question-card-h2 {
   font-size: 24px;
@@ -2417,30 +2418,32 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 .question-card-rule {
   display: block;
-  width: 60px;
-  height: 3px;
+  width: 40px;
+  height: 2px;
   background: var(--bt-blue);
-  margin: 14px 0 24px;
+  margin: 10px 0 16px;
 }
-.bdp-question-card p { margin: 0 0 18px; font-size: 18px; color: #303030; line-height: 1.4; }
+.bdp-question-card p { margin: 0 0 8px; font-size: 15px; color: #303030; line-height: 1.45; }
 .question-contact-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 8px;
+  margin-top: 12px;
   border: 2px solid var(--bt-blue);
   background: #fff;
   color: var(--bt-blue);
   border-radius: 50px;
-  padding: 12px 36px;
+  padding: 10px 28px;
   font-weight: 700;
-  font-size: 20px;
+  font-size: 14px;
   line-height: 1;
 }
 
 /* ── OTHER SERVICES tiles ─────────────────────────────────── */
+/* v=126: tighter margin (was 24px 0) — reduces whitespace between
+   "Still have a question?" and OTHER SERVICES sections. */
 .bdp-other-services {
-  margin: 24px 0;
+  margin: 12px 0 24px;
   padding-top: 18px;
   border-top: 1px solid var(--bt-border);
 }
