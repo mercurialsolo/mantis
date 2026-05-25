@@ -2643,10 +2643,12 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 
 .bdp-dealer-card { border-top: 1px solid var(--bt-border); padding-top: 14px; }
 /* Real BT contact card heading (dealer + private): H3 18/500 #303030. */
-.dealer-card-heading { font-size: 18px; font-weight: 500; color: #303030; margin: 0 0 4px; }
-/* v=107: dealer subline rows (dealer name + city, phone) — sit
-   directly under the salesperson H3, matching real BT pattern. */
-.dealer-card-subline { display: block; font-size: 14px; line-height: 1.4; margin: 0 0 2px; color: #303030; }
+/* v=125: heading color #303030 → #1a2022 per real BT probe (rgb(26,32,34)). */
+.dealer-card-heading { font-size: 18px; font-weight: 500; color: #1a2022; margin: 0 0 4px; }
+/* v=125: subline font 14/#303030 → 16/#474c4a per real BT (rgb(71,76,74)). */
+.dealer-card-subline { display: block; font-size: 16px; line-height: 1.45; margin: 0 0 2px; color: #474c4a; font-weight: 400; }
+/* v=125: "Verified Broker" label above the dealer name. */
+.dealer-card-verified { display: block; font-size: 16px; font-weight: 400; color: #474c4a; margin: 0 0 2px; }
 .dealer-card-subline.dealer-card-phone { color: var(--bt-blue); font-weight: 400; margin: 0 0 12px; text-decoration: none; }
 .dealer-card-subline.dealer-card-phone:hover { text-decoration: underline; }
 .dealer-card-meta { display: flex; gap: 12px; align-items: center; margin: 0 0 12px; }

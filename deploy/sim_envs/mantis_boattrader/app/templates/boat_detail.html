@@ -169,7 +169,9 @@
       <div class="bdp-dealer-card" id="contact" data-testid="dealer-card">
         {% set _sp_idx = (boat.id|length + boat.year) % 6 %}
         <h3 class="dealer-card-heading">Contact {{ ['Michael Mandery','Jennifer Cole','Marcus Webb','Elena Patel','Tom Hartwell','Priya Shah'][_sp_idx] }}</h3>
-        <p class="dealer-card-subline dealer-card-name">{{ dealer.name }} - {{ dealer.city }}</p>
+        {# v=125: "Verified Broker" label above dealer name matches real BT pattern. #}
+        <span class="dealer-card-verified">Verified Broker</span>
+        <p class="dealer-card-subline dealer-card-name">{{ dealer.name }}</p>
         <a href="tel:{{ dealer.phone }}" class="dealer-card-subline dealer-card-phone">{{ dealer.phone }}</a>
         <form class="dealer-lead-form" method="post" action="/boat/{{ boat.slug }}/contact" data-testid="dealer-lead-form">
           <input type="text" name="name" placeholder="First &amp; Last Name" required class="lead-input" />
