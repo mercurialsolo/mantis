@@ -2305,11 +2305,13 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 /* ── More From This Dealer rail ───────────────────────────────
    v=112: REVERTED v=110/111. Match the light-blue card pattern
    per real BT (probed v=112 — same #f5f9ff family). */
+/* v=127: tightened bottom margin (24px → 8px) — was creating
+   ~116px gap to .bdp-question-card. */
 .bdp-more-from-dealer {
   background: #f5f9ff;
   border-radius: 8px;
-  padding: 24px 28px 18px;
-  margin: 24px 0;
+  padding: 24px 28px 12px;
+  margin: 24px 0 8px;
 }
 /* v=105: Real BT renders this heading as H4 (carousel section title)
    with 20/700 and a distinctive teal-grey #414d4a, not the body
@@ -2397,17 +2399,15 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 
 /* ── Still have a question? card ──────────────────────────── */
-/* v=126: tightened margins + reduced body/button font-size per user
-   screenshot. Body text was 18px (now 15px), button was 20px (now
-   14px), section margin was 24px 0 (now 12px 0), paragraph spacing
-   was 0 0 18px (now 0 0 8px). Rule underline width 60px → 40px and
-   bottom margin tightened. */
+/* v=127: tightened further — padding 24px 0 → 8px 0, margin 12px 0
+   → 0 — eliminates the rest of the ~116px gap user pointed out
+   between More-From-Dealer and Still-have-a-question. */
 .bdp-question-card {
   background: transparent;
   border: 0;
   border-radius: 0;
-  padding: 24px 0;
-  margin: 12px 0;
+  padding: 8px 0;
+  margin: 0;
 }
 .question-card-h2 {
   font-size: 24px;
@@ -2440,10 +2440,10 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 
 /* ── OTHER SERVICES tiles ─────────────────────────────────── */
-/* v=126: tighter margin (was 24px 0) — reduces whitespace between
-   "Still have a question?" and OTHER SERVICES sections. */
+/* v=127: removed top margin entirely (sat just under .bdp-question-
+   card with its 8px padding-bottom + 18px border-top padding). */
 .bdp-other-services {
-  margin: 12px 0 24px;
+  margin: 0 0 24px;
   padding-top: 18px;
   border-top: 1px solid var(--bt-border);
 }
