@@ -313,6 +313,12 @@ class AugurAdapter:
         # collapsing the trace down to one row per plan position. Keyed
         # by the 1-based ``augur_index`` (matches ``step_id`` prefix).
         self._step_emission_counts: dict[int, int] = {}
+        # augur-sdk 0.3.0 (#30) — once a canonical step exists for a
+        # given ``step_index``, subsequent emissions must route through
+        # ``record_step_iteration`` instead of ``record_step`` to land
+        # as iterations rather than emit a DeprecationWarning. Track
+        # which step_indices have already had their canonical emit.
+        self._canonical_step_recorded: set[int] = set()
         # Verbose diagnostic — gated by ``MANTIS_AUGUR_VERBOSE``. WARN
         # is the only level that survives Modal's INFO/DEBUG suppression,
         # so when verifying a deploy operators flip the flag and get one
@@ -530,7 +536,29 @@ class AugurAdapter:
                 costs=costs,
                 latency=latency,
             )
-            self._session.record_step(trace)
+            # augur-sdk 0.3.0 (#30, #31): first emission per
+            # ``step_index`` is the canonical step; subsequent
+            # emissions are iterations under it (Mantis loop bodies
+            # cycle through the same plan position 25-30 times during
+            # a typical extraction run). The SDK's EventRecorder is
+            # keyed on ``step_id`` after 0.3.0 — routing iterations
+            # through ``record_step_iteration`` bumps the canonical
+            # step's ``step_iterations`` counter (the Augur viewer
+            # then renders "N (M)" in the runs-list STEPS column).
+            # Pre-0.3.0 fallback: every call goes through
+            # ``record_step``; the SDK collapses iterations and the
+            # adapter behaves the same as today.
+            raw_index = int(getattr(step_result, "step_index", 0))
+            augur_index = raw_index + 1
+            iter_fn = getattr(self._session, "record_step_iteration", None)
+            if (
+                augur_index in self._canonical_step_recorded
+                and callable(iter_fn)
+            ):
+                iter_fn(augur_index, trace)
+            else:
+                self._session.record_step(trace)
+                self._canonical_step_recorded.add(augur_index)
         except Exception as exc:  # noqa: BLE001
             # Verbose deploys want this visible; production stays at debug.
             if is_verbose():
