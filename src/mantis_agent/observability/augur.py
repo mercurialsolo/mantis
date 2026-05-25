@@ -201,6 +201,8 @@ def open_orchestrator_session(
     tenant_id: str | None = None,
     session_name: str | None = None,
     tags: dict[str, str] | None = None,
+    task_spec: dict[str, Any] | None = None,
+    group_id: str | None = None,
 ):
     """Yield an Augur orchestrator (parent-only) :class:`DebugSession`.
 
@@ -210,6 +212,14 @@ def open_orchestrator_session(
     logical fan-out. Children carry ``branch_context.parent_run_id``
     pointing at ``run_id``; the server / viewer groups by that field
     (mercurialsolo/augur#138).
+
+    ``task_spec`` and ``group_id`` (augur-sdk 0.6.0+, #680) attach the
+    structured RL-training metadata that 0.4.0 lacked. Both flow
+    through the SDK's ``**session_kwargs`` passthrough, so older SDKs
+    that don't accept them silently degrade — the opener call still
+    succeeds, the fields just don't land in the bundle. When the
+    installed SDK predates 0.6.0 the kwargs are stripped before the
+    call to avoid ``TypeError: unexpected keyword argument``.
 
     Yields ``None`` (and runs the body unchanged) when:
 
@@ -241,6 +251,11 @@ def open_orchestrator_session(
     # helper also sets this internally; we set it eagerly so the
     # session-metadata flush at __enter__ already carries it.
     merged_tags.setdefault(_ORCHESTRATOR_TAG_KEY, _ORCHESTRATOR_TAG_VALUE)
+    extra_kwargs: dict[str, Any] = {}
+    if task_spec is not None:
+        extra_kwargs["task_spec"] = task_spec
+    if group_id is not None:
+        extra_kwargs["group_id"] = group_id
     try:
         ctx = opener(
             run_id=run_id,
@@ -249,7 +264,40 @@ def open_orchestrator_session(
             session_name=session_name,
             tenant_id=tenant_id,
             tags={str(k): str(v) for k, v in merged_tags.items()},
+            **extra_kwargs,
         )
+    except TypeError as exc:
+        # SDK predates 0.6.0 — ``task_spec`` / ``group_id`` aren't
+        # accepted kwargs yet. Retry without them so the orchestrator
+        # row still opens (server-side grouping by parent_run_id keeps
+        # working; only the RL-training metadata is dropped).
+        if extra_kwargs:
+            logger.warning(
+                "open_orchestrator_session: SDK rejected 0.6.0 kwargs "
+                "(%s) — retrying without task_spec/group_id", exc,
+            )
+            try:
+                ctx = opener(
+                    run_id=run_id,
+                    client_name="mantis",
+                    out_dir=str(target_dir),
+                    session_name=session_name,
+                    tenant_id=tenant_id,
+                    tags={str(k): str(v) for k, v in merged_tags.items()},
+                )
+            except Exception as retry_exc:  # noqa: BLE001
+                logger.warning(
+                    "open_orchestrator_session: retry without 0.6.0 "
+                    "kwargs raised: %s", retry_exc,
+                )
+                yield None
+                return
+        else:
+            logger.warning(
+                "open_orchestrator_session: opener raised: %s", exc,
+            )
+            yield None
+            return
     except Exception as exc:  # noqa: BLE001
         logger.warning("open_orchestrator_session: opener raised: %s", exc)
         yield None
@@ -403,6 +451,7 @@ class AugurAdapter:
         dsn: str | None = None,
         extra_tags: dict[str, str] | None = None,
         branch_context: dict | None = None,
+        group_id: str | None = None,
     ) -> None:
         self._session: Any = None
         self._emitted_event_count: int = 0
@@ -475,7 +524,31 @@ class AugurAdapter:
                         branch_context.get("parent_run_id", ""),
                         branch_context.get("branch_id", ""),
                     )
-            session = DebugSession(**session_kwargs)
+            # augur-sdk 0.6.0+ (#680): forward ``group_id`` for GRPO /
+            # fan-out sibling correlation. Carried separately from
+            # ``branch_context.parent_run_id`` because the viewer reads
+            # the two for different rollup behaviours (parent_run_id =
+            # tree grouping; group_id = sibling-rollout correlation).
+            # Stripped before the DebugSession call on older SDKs that
+            # raise TypeError on unknown kwargs.
+            if group_id:
+                session_kwargs["group_id"] = str(group_id)
+            try:
+                session = DebugSession(**session_kwargs)
+            except TypeError as exc:
+                # SDK predates 0.6.0 → ``group_id`` isn't accepted.
+                # Drop the 0.6.0 kwarg and retry — preserves the
+                # production path on older pins.
+                if "group_id" in session_kwargs:
+                    if _verbose:
+                        logger.warning(
+                            "AugurAdapter init: SDK rejected group_id "
+                            "(%s) — retrying without it", exc,
+                        )
+                    session_kwargs.pop("group_id", None)
+                    session = DebugSession(**session_kwargs)
+                else:
+                    raise
             # DebugSession is designed as a context manager — ``__enter__``
             # flips the open flag and starts the streaming sink (if any).
             # We drive that explicitly because the Mantis run lifecycle
@@ -661,12 +734,62 @@ class AugurAdapter:
             else:
                 self._session.record_step(trace)
                 self._canonical_step_recorded.add(augur_index)
+            # #680 (augur-sdk 0.6.0): auto-stamp ``set_loop_detected``
+            # whenever the step's ``failure_class`` is loop-shaped. The
+            # runner already classifies these explicitly — we just
+            # forward the signal to the bundle so RL trainers / the
+            # viewer's loop-detection chip read it without joining
+            # against ``failure_class``. Best-effort; no-op on older
+            # SDKs without the method.
+            self._maybe_stamp_loop_detected(
+                augur_index, getattr(step_result, "failure_class", ""),
+            )
         except Exception as exc:  # noqa: BLE001
             # Verbose deploys want this visible; production stays at debug.
             if is_verbose():
                 logger.warning("AugurAdapter.record_step failed: %r", exc)
             else:
                 logger.debug("AugurAdapter.record_step failed: %s", exc)
+
+    # Failure-class strings that indicate the runner detected a loop
+    # (perceptual or behavioural) at this step — surfaced to Augur via
+    # ``set_loop_detected`` per #680. Kept in one place so adding a
+    # new loop class is a one-line change.
+    _LOOP_FAILURE_CLASSES = frozenset({
+        "no_state_change",
+        "brain_loop_exhausted",
+        "scroll_no_movement",
+        "loop",
+        "hard_loop",
+        "soft_loop",
+    })
+
+    def _maybe_stamp_loop_detected(
+        self, augur_index: int, failure_class: Any,
+    ) -> None:
+        """Forward a runner-side loop signal to the SDK if available.
+
+        Reads the step's ``failure_class`` against the loop set and
+        calls ``session.set_loop_detected(step_index=...)`` when it
+        matches. Silently no-ops when the SDK predates 0.6.0 (no such
+        method) or the session is inactive — the failure_class is
+        still on the trace, so the loop-detection signal survives in
+        the bundle one way or the other.
+        """
+        if not failure_class:
+            return
+        if str(failure_class) not in self._LOOP_FAILURE_CLASSES:
+            return
+        loop_fn = getattr(self._session, "set_loop_detected", None)
+        if not callable(loop_fn):
+            return
+        try:
+            loop_fn(step_index=augur_index)
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning(
+                    "AugurAdapter.set_loop_detected failed: %r", exc,
+                )
 
     def set_score(
         self,

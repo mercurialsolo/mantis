@@ -1495,10 +1495,28 @@ def run_fanout_dispatch(
     session_name = (
         f"fanout-{plan_signature[:12]}" if plan_signature else "fanout"
     )
+    # augur-sdk 0.6.0 (#680): compose a TaskSpec from suite metadata
+    # and propagate ``group_id`` to every child session via the suite
+    # envelope. Both are passthrough kwargs on
+    # ``open_orchestrator_session`` — silently ignored by older SDKs.
+    task_spec = _build_task_spec_from_suite(
+        task_suite,
+        phase1_workers=phase1_workers,
+        phase1_max_pages=phase1_max_pages,
+        phase2_workers=workers,
+        max_steps=max_steps,
+    )
+    # Children read this on AugurAdapter init and forward to
+    # ``DebugSession(group_id=...)``; the GRPO/RL sibling correlation
+    # in the Augur viewer keys on the same field that already drives
+    # branch_context.parent_run_id grouping.
+    task_suite["_fanout_group_id"] = fanout_parent_run_id
     with open_orchestrator_session(
         run_id=fanout_parent_run_id,
         session_name=session_name,
         tags=orchestrator_tags,
+        task_spec=task_spec,
+        group_id=fanout_parent_run_id,
     ):
         return _dispatch_phases(
             task_suite,
@@ -1732,3 +1750,70 @@ def _default_json_dumps(obj: Any) -> str:
     """
     import json
     return json.dumps(obj)
+
+
+def _build_task_spec_from_suite(
+    task_suite: dict,
+    *,
+    phase1_workers: int,
+    phase1_max_pages: int,
+    phase2_workers: int,
+    max_steps: int,
+) -> dict[str, Any]:
+    """Compose an ``augur_sdk.TaskSpec`` dict from a fan-out suite.
+
+    Surfaces in the Augur viewer on the orchestrator (parent) row, so
+    downstream RL trainers can read the canonical task definition
+    instead of reconstructing it from worker bundles. Every field is
+    optional in the 0.6.0 schema; we only emit keys we have.
+
+    Field mapping (suite → task_spec):
+
+    * ``_plan_name`` + domain → ``task_spec_id`` (``<domain>.<plan>.v1``)
+    * ``_plan_name`` → ``instruction`` fallback when the plan didn't
+      ship a top-level natural-language brief
+    * domain from ``_site_config.url_patterns[0]`` → ``task_class``
+    * ``max_steps`` arg → ``max_steps`` (planner-level budget, not the
+      per-step LLM token budget)
+    * Fan-out shape (Phase-1 max-pages, worker counts) → ``env_id``
+      annotation so siblings produced by the same dispatch share an
+      env identity in the trainer's eyes.
+    """
+    plan_name = str(task_suite.get("_plan_name") or "").strip()
+    site_config = task_suite.get("_site_config") or {}
+    domain = ""
+    if isinstance(site_config, dict):
+        domain = str(site_config.get("domain") or "").strip()
+    if not domain:
+        # Fallback: try to read off the first URL pattern in the suite.
+        url_patterns = (
+            site_config.get("url_patterns") if isinstance(site_config, dict)
+            else None
+        )
+        if isinstance(url_patterns, list) and url_patterns:
+            first = str(url_patterns[0])
+            if "//" in first:
+                domain = first.split("//", 1)[1].split("/", 1)[0]
+    task_class = domain or "unknown"
+    task_spec_id = (
+        f"{task_class}.{plan_name}.v1" if plan_name and task_class != "unknown"
+        else (f"{task_class}.fanout.v1" if task_class != "unknown" else "")
+    )
+    spec: dict[str, Any] = {}
+    if task_spec_id:
+        spec["task_spec_id"] = task_spec_id
+    if plan_name:
+        spec["instruction"] = plan_name.replace("_", " ")
+    if task_class != "unknown":
+        spec["task_class"] = task_class
+    if max_steps and max_steps > 0:
+        spec["max_steps"] = int(max_steps)
+    # ``env_id`` is the trainer-visible identity of the env the
+    # rollout exercised. Stamp the Modal app + fan-out shape so
+    # sibling rollouts (Phase-1 workers, Phase-2 workers) read as
+    # variants of one env, not independent envs.
+    spec["env_id"] = (
+        f"modal:mantis-cua-server:fanout"
+        f"(p1={phase1_workers}xp{phase1_max_pages},p2={phase2_workers})"
+    )
+    return spec
