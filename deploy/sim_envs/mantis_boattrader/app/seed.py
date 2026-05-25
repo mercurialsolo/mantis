@@ -268,36 +268,36 @@ DEALER_SELLER_DESCRIPTIONS: list[str] = [
     (
         "The {model} features a long, firm, rampy wake, with a clean lip and no "
         "trough. The stern seat affords three different configurations so you can "
-        "customize your boat?s interior to suit you and {seat_n} of your closest "
+        "customize your boat's interior to suit you and {seat_n} of your closest "
         "friends. In its original position it completes an expansive stern seat. "
         "Remove the center section and position it midship and you have an aft "
-        "facing observer?s seat. Turn it around and you have a forward facing "
-        "companion seat. It?s up to you."
+        "facing observer's seat. Turn it around and you have a forward facing "
+        "companion seat. It's up to you."
     ),
     (
-        "This {year} {make} {model} represents the pinnacle of {make}?s offshore "
+        "This {year} {make} {model} represents the pinnacle of {make}'s offshore "
         "lineup. Hand-laid {hull_material} construction with a deep-V hull pattern "
         "deliver a dry, comfortable ride at any speed. The forward seating module "
-        "converts into a sun-pad and there?s an integrated cooler underneath. The "
-        "helm is sport-fishing focused but doesn?t sacrifice creature comforts — "
-        "you?ll find a removable galley insert, refrigerator drawer, and freshwater "
-        "spigot all within arm?s reach of the captain."
+        "converts into a sun-pad and there's an integrated cooler underneath. The "
+        "helm is sport-fishing focused but doesn't sacrifice creature comforts — "
+        "you'll find a removable galley insert, refrigerator drawer, and freshwater "
+        "spigot all within arm's reach of the captain."
     ),
     (
-        "We?re pleased to offer this clean and well-equipped {year} {make} {model}. "
-        "It?s a one-owner boat that?s been impeccably maintained — all service "
+        "We're pleased to offer this clean and well-equipped {year} {make} {model}. "
+        "It's a one-owner boat that's been impeccably maintained — all service "
         "records will transfer with the boat. The {hull_color} hull is in show "
-        "condition; gelcoat is in remarkable shape for the year. Below deck you?ll "
+        "condition; gelcoat is in remarkable shape for the year. Below deck you'll "
         "find {capacity} accommodations including a private master, and an enclosed "
-        "head with separate stall shower. Won?t last long — schedule a sea trial today."
+        "head with separate stall shower. Won't last long — schedule a sea trial today."
     ),
     (
-        "Don?t miss this opportunity! This {make} {model} won?t last on the brokerage "
-        "market. She?s been owner-operated since new and is being offered turn-key "
+        "Don't miss this opportunity! This {make} {model} won't last on the brokerage "
+        "market. She's been owner-operated since new and is being offered turn-key "
         "with everything you need to step aboard and enjoy. The galley is fully "
         "outfitted, the electronics suite has been refreshed within the last year, "
         "and the {engine_make} engine{engine_plural} {engine_verb_pres} just been "
-        "serviced. Whether you?re a first-time buyer or a seasoned captain, you?ll "
+        "serviced. Whether you're a first-time buyer or a seasoned captain, you'll "
         "appreciate the attention to detail."
     ),
 ]
@@ -435,7 +435,9 @@ def _gen_dealers(rng: random.Random) -> list[Dealer]:
         suffix = suffix_pool[idx % len(suffix_pool)]
         name = f"{prefix}{suffix}".strip(", ").strip()
         phone_seed = 4000000 + idx * 18371
-        phone = f"({rng.randint(200, 989)}) {rng.randint(200, 989)}-{phone_seed % 10000:04d}"
+        # Real BT renders dealer phones as raw `+1XXXXXXXXXX` (E.164,
+        # no parens/dashes). Match that format.
+        phone = f"+1{rng.randint(200, 989)}{rng.randint(200, 989):03d}{phone_seed % 10000:04d}"
         years = rng.choice([3, 6, 8, 12, 15, 18, 22])
         dealers.append(
             Dealer(
