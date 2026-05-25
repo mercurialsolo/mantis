@@ -412,7 +412,14 @@
   </a>
 </section>
 
-{# ─── Loan Calculator ──────────────────────────────────────── #}
+{# ─── Loan Calculator (v=120: redesigned to match real BT) ────
+     LEFT pane (white bg): 5 stacked fields — Loan Type, Year,
+     Purchase Price, Down Payment, Loan Term (Months) defaulting
+     to 240. RIGHT pane (light blue #f5f9ff bg): centered heading
+     + huge monthly payment + TOTAL LOAN AMOUNT line + divider +
+     See Important Disclosure link. Removed APR display, 180 MONTHS
+     caption, Get-Pre-Qualified button, pre-qualified bullets per
+     user real-BT screenshot. #}
 <section class="bdp-loan-card" id="loan-calculator" data-testid="loan-calculator">
   <div class="loan-card-grid">
     <div class="loan-form">
@@ -430,24 +437,15 @@
       <label class="loan-field"><span>Down Payment</span>
         <input type="text" class="filter-input" value="${{ ((boat.price or 0) * 0.10)|int }}" />
       </label>
-      <label class="loan-field"><span>Credit Score (FICO)</span>
-        <select class="filter-select"><option>800-850</option><option>740-799</option><option>670-739</option></select>
+      <label class="loan-field"><span>Loan Term (Months)</span>
+        <input type="text" class="filter-input" value="240" />
       </label>
     </div>
     <div class="loan-preview">
       <h3 class="loan-preview-heading">Here is what your monthly payment might look like:</h3>
-      <p class="loan-apr"><strong>{{ '%.2f'|format(7.49 if boat.condition == 'new' else 8.24) }}%</strong> APR</p>
       <p class="loan-payment">{{ boat.display_monthly|replace('/mo*','')|replace('/mo','') if boat.display_monthly else '$—' }}</p>
-      <p class="loan-total">TOTAL LOAN AMOUNT <strong>${{ ((boat.price or 0) * 0.90)|int }}</strong></p>
-      <p class="loan-term"><strong>180</strong> MONTHS</p>
-      <a href="/boat-loans/" class="btn-secondary loan-prequal-btn">Get Pre-Qualified</a>
+      <p class="loan-total">TOTAL LOAN AMOUNT <strong>${{ "{:,}".format(((boat.price or 0) * 0.90)|int) }}</strong></p>
       <hr class="loan-divider" />
-      <h4 class="loan-bullets-heading">Get pre-qualified in minutes</h4>
-      <ul class="prequal-bullets">
-        <li><span class="prequal-check">✓</span> We'll compare over 15 lenders to get you the best rate &amp; terms</li>
-        <li><span class="prequal-check">✓</span> Customized financing to meet your needs</li>
-        <li><span class="prequal-check">✓</span> Over 25 years of marine lending experience</li>
-      </ul>
       <a href="#" class="loan-disclosure-link">See Important Disclosure<sup>3</sup></a>
     </div>
   </div>

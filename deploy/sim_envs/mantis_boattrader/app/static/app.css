@@ -1953,16 +1953,21 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   margin-top: 6px;
 }
 
-/* ── Top stats strip — 4 columns × 2 rows (8 cells total) ───── */
+/* ── Top stats strip — 4 columns × 2 rows (8 cells total) ─────
+   v=119: aligned to real BT geometry: `.additional-boat-details`
+   margin 0 10px, padding 0, NO border. The horizontal divider line
+   was a sandbox artifact creating the visible separation user
+   pointed out. Reduced outer margin from 22px 0 14px → 0 0 8px so
+   the gap between strip and the next card matches real BT's 32px
+   (was 118px). */
 .bdp-stats-strip {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   grid-auto-rows: auto;
   column-gap: 18px;
   row-gap: 14px;
-  margin: 22px 0 14px;
+  margin: 0 0 8px;
   padding: 22px 8px;
-  border-bottom: 1px solid var(--bt-border);
 }
 .stat-card {
   display: flex;
@@ -1994,13 +1999,13 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 
 /* ── What Owners Say card ─────────────────────────────────── */
-/* v=112: REVERTED v=110/111 (white/transparent was wrong). Real BT
-   renders this section in a light-blue card. Probed real BT's
-   `.boat-overview-wrapper.ai-ratings-review-bundle`: bg #f5f9ff,
-   br 8px, padding 20px 16px. v=99-104 used #eef4fb which was a
-   slightly different blue tint — corrected to exact #f5f9ff. */
+/* v=119: added `border-top + border-bottom: 1px solid #ededed`
+   matching real BT's `.boat-overview-wrapper.ai-ratings-review-
+   bundle` probe (both borders present). bg #f5f9ff, br 8px,
+   pad 20px 16px, mar 0 0 16px. */
 .bdp-owners-card {
   background: #f5f9ff;
+  border: 1px solid #ededed;
   border-radius: 8px;
   padding: 20px 16px;
   margin: 0 0 16px;
@@ -2135,107 +2140,90 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   font-style: italic;
 }
 
-/* ── Loan calculator ─────────────────────────────────────── */
+/* ── Loan calculator (v=120: split-pane with white form + blue
+   preview, monthly payment huge in center) ─────────────────── */
 .bdp-loan-card {
   background: #fff;
-  border: 1px solid var(--bt-border);
-  border-radius: var(--bt-radius-lg);
-  padding: 26px;
+  border: 1px solid #ededed;
+  border-radius: 12px;
+  padding: 0;
   margin: 24px 0;
+  overflow: hidden;
 }
 .loan-card-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 32px;
+  gap: 0;
+}
+.loan-form {
+  background: #fff;
+  padding: 36px 56px 36px 56px;
 }
 .loan-form-heading, .loan-preview-heading {
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 700;
-  color: var(--bt-text);
+  color: #303030;
   text-align: center;
-  margin: 0 0 8px;
+  margin: 0 0 14px;
 }
 .loan-form-sub {
   text-align: center;
-  color: var(--bt-text-dim);
-  font-size: 13px;
-  margin: 0 0 18px;
+  color: #303030;
+  font-size: 14px;
+  margin: 0 0 28px;
+  line-height: 1.45;
 }
 .loan-field {
   display: block;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 .loan-field span {
   display: block;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
-  color: var(--bt-text);
+  color: #303030;
   margin-bottom: 6px;
 }
 .loan-preview {
-  background: var(--bt-bg-alt);
-  border-radius: var(--bt-radius);
-  padding: 22px;
+  background: #f5f9ff;
+  padding: 36px 56px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
-.loan-apr {
-  font-size: 16px;
-  color: var(--bt-text);
-  margin: 18px 0 0;
-}
-.loan-apr strong { font-size: 18px; font-weight: 700; }
 .loan-payment {
-  font-size: 48px;
+  font-size: 64px;
   font-weight: 700;
-  color: var(--bt-text);
-  margin: 4px 0 8px;
-  letter-spacing: -1px;
+  color: #303030;
+  margin: 24px 0 18px;
+  letter-spacing: -1.5px;
+  line-height: 1;
 }
 .loan-total {
-  font-size: 13px;
-  color: var(--bt-text);
-  letter-spacing: 0.8px;
-  margin: 8px 0;
-}
-.loan-term {
-  font-size: 13px;
-  color: var(--bt-text);
-  letter-spacing: 0.8px;
-  margin: 4px 0 18px;
-}
-.loan-term strong { font-weight: 700; }
-.loan-prequal-btn {
-  display: inline-block;
-  border: 2px solid var(--bt-blue);
-  background: #fff;
-  color: var(--bt-blue);
-  border-radius: 999px;
-  padding: 12px 36px;
-  font-weight: 700;
   font-size: 15px;
+  color: #303030;
+  letter-spacing: 0.4px;
+  margin: 8px 0 0;
+  font-weight: 400;
 }
+.loan-total strong { font-weight: 700; }
 .loan-divider {
   border: 0;
-  border-top: 1px solid var(--bt-border);
-  margin: 22px 0 14px;
-}
-.loan-bullets-heading {
-  text-align: center;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--bt-text);
-  margin: 0 0 12px;
-}
-.loan-preview .prequal-bullets li {
-  text-align: left;
+  border-top: 1px solid #d8dee4;
+  margin: 24px 0 18px;
 }
 .loan-disclosure-link {
   display: block;
   text-align: center;
-  margin-top: 14px;
   text-decoration: underline;
-  color: var(--bt-text);
-  font-size: 12px;
+  color: #303030;
+  font-size: 14px;
+  font-weight: 700;
+}
+@media (max-width: 720px) {
+  .loan-card-grid { grid-template-columns: 1fr; }
+  .loan-form, .loan-preview { padding: 28px 24px; }
 }
 
 /* ── Listed By section ───────────────────────────────────── */
@@ -2403,13 +2391,15 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 
 /* ── Still have a question? card ──────────────────────────── */
-/* "Still have a question?" — matched to real BT: h3 24/700 #303030,
-   body 18px regular, button 20/700 in a large pill. */
+/* v=118: removed white card chrome (bg, border, br, large padding).
+   Real BT renders this section inline on the page background —
+   just the H3 + rule + body text + button, no surrounding white box.
+   Probed at x=150 y=2750 with `bg: rgba(0,0,0,0); border: 0 none`. */
 .bdp-question-card {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 28px 32px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 28px 0;
   margin: 24px 0;
 }
 .question-card-h2 {
