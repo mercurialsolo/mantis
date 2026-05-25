@@ -125,13 +125,13 @@ def test_task_spec_fallback_domain_from_url_pattern():
     spec = _build_task_spec_from_suite(
         {
             "_plan_name": "foo",
-            "_site_config": {"url_patterns": ["https://staffai.crm/x"]},
+            "_site_config": {"url_patterns": ["https://mantis-crm/x"]},
         },
         phase1_workers=1, phase1_max_pages=1, phase2_workers=1,
         max_steps=10,
     )
-    assert spec["task_class"] == "staffai.crm"
-    assert spec["task_spec_id"] == "staffai.crm.foo.v1"
+    assert spec["task_class"] == "mantis-crm"
+    assert spec["task_spec_id"] == "mantis-crm.foo.v1"
 
 
 # ── open_orchestrator_session — passes task_spec + group_id ────────
