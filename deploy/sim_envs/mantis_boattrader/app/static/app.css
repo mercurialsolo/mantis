@@ -1520,18 +1520,22 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 .next-previous-back { padding-left: 0; }
 .next-previous-next { padding-right: 0; margin-left: 16px; }
 .next-previous-prev { padding-right: 15px; }
+/* v=121: dropped 15/400/#333 override per user screenshot comparison.
+   Real BT breadcrumb probe (`.breadcrumb` UL inside `.next-previous`):
+   12/400 #616161. v=109's enlarged values made the sandbox bar text
+   visibly larger + darker than real BT. */
 .next-previous-breadcrumb {
   flex: 1;
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 400;
-  color: #333;
+  color: #616161;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   margin: 0 10px;
   padding: 0;
 }
-.next-previous-breadcrumb a { color: #333; text-decoration: none; }
+.next-previous-breadcrumb a { color: #616161; text-decoration: none; }
 .next-previous-breadcrumb a:hover { color: var(--bt-blue); text-decoration: underline; }
 .next-previous-actions {
   display: flex;
