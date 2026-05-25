@@ -34,6 +34,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
+from ..observability.augur import open_orchestrator_session
 from ..plan_decomposer import LoopGroup, MicroIntent, MicroPlan
 from .checkpoint import StepResult
 
@@ -1473,6 +1474,69 @@ def run_fanout_dispatch(
         phase1_workers = 1
     phase1_workers = min(phase1_workers, phase1_max_pages)
 
+    # augur-sdk 0.4.0 (#38) — open a parent-only DebugSession that
+    # carries the fan-out's aggregate metadata (phase counts, fan-out
+    # pattern, plan signature) so the Augur viewer renders one parent
+    # row with N children grouped under it via the children's
+    # ``branch_context.parent_run_id`` (mercurialsolo/augur#138).
+    # The helper is a no-op when augur-sdk is unavailable / disabled /
+    # predates 0.4.0 — the server still synthesizes a parent row in
+    # those cases; the orchestrator session is purely for the
+    # aggregate tags the children can't supply on their own.
+    plan_signature = str(task_suite.get("_plan_signature") or "")
+    orchestrator_tags: dict[str, str] = {
+        "phase1_workers": str(phase1_workers),
+        "phase2_workers_configured": str(workers),
+        "fanout_pattern": "phase1_collect_phase2_extract",
+        "phase1_max_pages": str(phase1_max_pages),
+    }
+    if plan_signature:
+        orchestrator_tags["plan_signature"] = plan_signature[:64]
+    session_name = (
+        f"fanout-{plan_signature[:12]}" if plan_signature else "fanout"
+    )
+    with open_orchestrator_session(
+        run_id=fanout_parent_run_id,
+        session_name=session_name,
+        tags=orchestrator_tags,
+    ):
+        return _dispatch_phases(
+            task_suite,
+            _json=_json,
+            url_collect_group=url_collect_group,
+            phase1_max_pages=phase1_max_pages,
+            phase1_template=phase1_template,
+            phase1_workers=phase1_workers,
+            executor_fn=executor_fn,
+            model=model,
+            claude_model=claude_model,
+            max_steps=max_steps,
+            workers=workers,
+            fanout_parent_run_id=fanout_parent_run_id,
+            shared_seen_printer=shared_seen_printer,
+        )
+
+
+def _dispatch_phases(
+    task_suite: dict,
+    *,
+    _json: Callable[[Any], str],
+    url_collect_group: LoopGroup,
+    phase1_max_pages: int,
+    phase1_template: str | None,
+    phase1_workers: int,
+    executor_fn: Any,
+    model: str,
+    claude_model: str,
+    max_steps: int,
+    workers: int,
+    fanout_parent_run_id: str,
+    shared_seen_printer: Callable[[dict, int], None] | None,
+) -> dict | None:
+    """Inner Phase-1/Phase-2 spawn body — extracted so the outer
+    :func:`run_fanout_dispatch` can wrap it in the orchestrator-session
+    context manager without indenting the original 200-line block.
+    """
     if phase1_workers <= 1:
         # Serial path — exactly the #638 axis-2 behaviour.
         print(

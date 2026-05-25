@@ -22,8 +22,26 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from mantis_agent.gym.fanout_runner import run_fanout_dispatch
 from mantis_agent.plan_decomposer import MicroIntent, MicroPlan, PlanDecomposer
+
+
+@pytest.fixture(autouse=True)
+def _disable_augur_for_dispatch_tests(monkeypatch):
+    """Keep these dispatch tests focused on the spawn / dedup contract.
+
+    augur-sdk 0.4.0 (#38) added ``open_orchestrator_session`` inside
+    :func:`run_fanout_dispatch` — left enabled, the dispatch helper
+    opens a real ``DebugSession`` that writes a bundle under
+    ``data/augur/<fanout_parent_run_id>/`` and tries to close it on
+    exit. That's a separate concern from the dispatch logic these
+    tests pin, and the bundle close-on-exit interacts badly with the
+    tmp-cwd these tests run in. Orchestrator-session behaviour is
+    pinned by ``test_open_orchestrator_session_678.py``.
+    """
+    monkeypatch.setenv("MANTIS_AUGUR_DISABLED", "1")
 
 
 def _make_url_collect_suite(*, fanout_phase1_workers: int = 1) -> dict:

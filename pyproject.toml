@@ -104,7 +104,17 @@ observability = [
     # ``observability/augur.py``: first emission for a given
     # ``step_index`` routes through ``record_step``; subsequent
     # emissions route through ``record_step_iteration``.
-    "augur-sdk>=0.3.1,<0.4",
+    #
+    # 0.4.0 (mercurialsolo/augur-sdk#38) — fan-out grouping. Adds
+    # ``DebugSession.open_orchestrator(...)`` for opening parent-only
+    # sessions that carry aggregate metadata (phase counts, fanout
+    # pattern, total budget) for fan-out runs. Wired into
+    # ``gym/fanout_runner.run_fanout_dispatch`` so the Augur viewer
+    # renders one parent row with N children grouped under it
+    # (mercurialsolo/augur#138) instead of flat siblings. Exports
+    # ``ORCHESTRATOR_TAG_KEY`` / ``ORCHESTRATOR_TAG_VALUE`` constants
+    # used by ``observability/augur.open_orchestrator_session``.
+    "augur-sdk>=0.4.0,<0.5",
 ]
 # Self-host the FastAPI server that fronts /predict and /v1/chat/completions.
 # Used by the Baseten / EKS / GKE deployments.

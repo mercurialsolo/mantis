@@ -26,6 +26,7 @@ every :class:`AugurAdapter` instance is a no-op.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from datetime import datetime, timezone
@@ -43,12 +44,25 @@ def _utc_now_iso() -> str:
 
 # Lazy import — module must load even without augur-sdk installed.
 try:
+    import augur_sdk as _augur_sdk_module
     from augur_sdk import CaptureMode, DebugSession
     _AUGUR_AVAILABLE = True
+    # augur-sdk 0.4.0+ (#38) exports these constants for the orchestrator
+    # session marker; fall back to the documented literals when running
+    # against an older SDK.
+    _ORCHESTRATOR_TAG_KEY = getattr(
+        _augur_sdk_module, "ORCHESTRATOR_TAG_KEY", "augur.session_type",
+    )
+    _ORCHESTRATOR_TAG_VALUE = getattr(
+        _augur_sdk_module, "ORCHESTRATOR_TAG_VALUE", "orchestrator",
+    )
 except Exception:  # noqa: BLE001 — any import-time failure → disabled
+    _augur_sdk_module = None  # type: ignore[assignment]
     CaptureMode = None  # type: ignore[assignment]
     DebugSession = None  # type: ignore[assignment]
     _AUGUR_AVAILABLE = False
+    _ORCHESTRATOR_TAG_KEY = "augur.session_type"
+    _ORCHESTRATOR_TAG_VALUE = "orchestrator"
 
 
 # ── Mantis → Augur vocabulary maps ───────────────────────────────────
@@ -178,6 +192,94 @@ def default_out_dir(run_id: str) -> Path:
         return Path(override) / run_id
     root = os.environ.get("MANTIS_DATA_DIR", "./data").strip() or "./data"
     return Path(root) / "augur" / run_id
+
+
+@contextlib.contextmanager
+def open_orchestrator_session(
+    *,
+    run_id: str,
+    tenant_id: str | None = None,
+    session_name: str | None = None,
+    tags: dict[str, str] | None = None,
+):
+    """Yield an Augur orchestrator (parent-only) :class:`DebugSession`.
+
+    Wraps :py:meth:`augur_sdk.DebugSession.open_orchestrator` (augur-sdk
+    0.4.0+, mercurialsolo/augur-sdk#38) — opens a parent row in the
+    viewer's runs-list that aggregates N child sessions under one
+    logical fan-out. Children carry ``branch_context.parent_run_id``
+    pointing at ``run_id``; the server / viewer groups by that field
+    (mercurialsolo/augur#138).
+
+    Yields ``None`` (and runs the body unchanged) when:
+
+    * ``augur-sdk`` is not importable, OR
+    * ``MANTIS_AUGUR_DISABLED`` is set, OR
+    * the installed SDK predates 0.4.0 (no ``open_orchestrator``
+      attribute), OR
+    * opening the session raises.
+
+    The contract is "best-effort observability" — never fail the run
+    because the parent row didn't open. Errors during ``__enter__`` /
+    ``__exit__`` are logged at WARN and swallowed; the server falls
+    back to synthesizing a parent row from the children's shared
+    ``branch_context.parent_run_id`` in any of the no-op cases.
+    """
+    if not is_enabled() or DebugSession is None:
+        yield None
+        return
+    opener = getattr(DebugSession, "open_orchestrator", None)
+    if opener is None:
+        # SDK predates 0.4.0 — fall through, server synthesizes the
+        # parent row from children when augur#138 lands.
+        yield None
+        return
+    target_dir = default_out_dir(run_id)
+    merged_tags = dict(tags or {})
+    # Stamp the SDK's orchestrator marker so the viewer renders this
+    # row as a parent (no step list, aggregate stats only). The 0.4.0
+    # helper also sets this internally; we set it eagerly so the
+    # session-metadata flush at __enter__ already carries it.
+    merged_tags.setdefault(_ORCHESTRATOR_TAG_KEY, _ORCHESTRATOR_TAG_VALUE)
+    try:
+        ctx = opener(
+            run_id=run_id,
+            client_name="mantis",
+            out_dir=str(target_dir),
+            session_name=session_name,
+            tenant_id=tenant_id,
+            tags={str(k): str(v) for k, v in merged_tags.items()},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("open_orchestrator_session: opener raised: %s", exc)
+        yield None
+        return
+    session: Any = None
+    try:
+        session = ctx.__enter__()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("open_orchestrator_session: __enter__ raised: %s", exc)
+        yield None
+        return
+    if is_verbose():
+        logger.warning(
+            "orchestrator session opened: run_id=%s out_dir=%s tags=%s",
+            run_id, target_dir, list(merged_tags.keys()),
+        )
+    # From here on the helper holds the session open and is responsible
+    # for closing it on the way out — wrapping ``yield`` in a single
+    # try/finally is the only way to honour the @contextmanager
+    # generator protocol (a second yield inside an exception path
+    # would raise ``RuntimeError: generator didn't stop after throw()``).
+    try:
+        yield session
+    finally:
+        try:
+            ctx.__exit__(None, None, None)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "open_orchestrator_session: __exit__ raised: %s", exc,
+            )
 
 
 def _map_step_status(step_result: Any) -> str:
