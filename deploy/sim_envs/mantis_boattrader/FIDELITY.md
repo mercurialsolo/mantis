@@ -3,7 +3,19 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=104** (2026-05-23) — BDP visual/perceptual compare (dealer + owner): removed H1 length suffix `| 16'` (real BT format is "Year Make Model"); added H2 "Meet Your Seller" above the contact card on both seller paths matching real BT's pattern. Side-by-side diff saved as `_captured/bdp/SELLER_VS_OWNER_DIFF.md`.
+Last updated: **v=107** (2026-05-24) — BDP exact-mirror pass:
+re-probed real BT dealer (2024 Catalina 355) + private (2015 Pioneer
+197 Sportfish) at 1440×900. Three rounds: v=105 heading hierarchy +
+cleanup (Meet-Your-Seller H2 removed, Listed-By section deleted,
+Key-Features H3 removed, ✦ sparkle prefix removed, `.next-previous`
+always-sticky bar added, More Details/Location H3→H4, Still-have-a-
+question H2→H3, More From This Dealer H2→H4, dealer-card heading
+H2→H3, Accommodations H4 added); v=106 sticky-bar layout fix
+(flex-direction: column so breadcrumb + listing info stack); v=107
+H1 length-suffix span restored as sibling (v=104 over-corrected),
+dealer card now integrates dealer name+city+phone as inline sublines
+under salesperson H3, redundant `.bdp-dealership-card` hidden.
+Suite now **82 passing** (15 new BDP tests).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
@@ -260,8 +272,20 @@ Calculator" (18/700 #303030), then a result row.
 | Description accordion (H3) | open by default | open by default | ✅ |
 | Measurements accordion (H3) → Dimensions/Weights/Tanks (H4) | collapsed, h4 subgroups | added | ✅ |
 | Propulsion accordion (H3) | collapsed | implemented | ✅ |
-| More Details accordion heading | not visible in v=91 probe (real BT may have removed or renamed this section); existing FIDELITY note claimed H4 but unverifiable today | sandbox uses H3 — leave as-is until real BT shows it again | 🟡 |
-| Location accordion heading | not visible in v=91 probe — same caveat as More Details | sandbox uses H3 — leave as-is | 🟡 |
+| More Details accordion heading | `<h4>` 16/700 #333 (re-probed v=107 dealer Catalina 355) | sandbox `<h4>` 16/700 (v=105) | ✅ |
+| Location accordion heading | `<h4>` 16/700 #333 (re-probed v=107) | sandbox `<h4>` 16/700 (v=105) | ✅ |
+| Accommodations subhead under Measurements | `<h4>` 14/700 #333 (re-probed v=107) | sandbox `<h4>` 14/700 (v=105 — derived cabin/berth counts from length) | ✅ |
+| `.next-previous` always-sticky bar | 1600×54 position:sticky top:0 z:110 bg #f7f7f7 padding 5px 20px — Back-to-Search + breadcrumb + listing info (stacked) + Save + Offered By + Next Boat | sandbox `.next-previous` (v=105) with column-stacked rows (v=106) | ✅ |
+| Dealer contact card heading | `<h3>` 18/500 #303030 (dealer: "Contact <Salesperson>", private: "Contact Private Seller") | sandbox `<h3 class="dealer-card-heading">` 18/500 #303030 (v=105 flipped H2→H3; v=107 simplified private path) | ✅ |
+| Dealer name + phone sublines under salesperson H3 | inline name+city + phone-link rows (dealer-only) | sandbox `.dealer-card-subline` rows (v=107) | ✅ |
+| "Meet Your Seller" H2 above contact card | **not present** on either listing (re-probed dealer + private) | removed in v=105 (v=104 added based on stale measurement) | ✅ |
+| H1 length suffix | sibling `<span>` "| <N>'" after H1, 20/700 #333 | sandbox `<span class="bdp-length">` inside H1 (v=107 restored; v=104 had removed) | ✅ |
+| "Listed By" section | **not present** on either listing | removed in v=105 (dealer info now lives in contact card + sticky-bar Offered-By) | ✅ |
+| "Key Features" H3 | **not present** on real BT | removed in v=105 (feature `<ul>` kept as part of Description body) | ✅ |
+| ✦ sparkle prefix on "What Owners Say" | not present on real BT (plain "What Owners Sayinfo") | removed in v=105 | ✅ |
+| "More From This Dealer" heading | `<h4>` 20/700 #414d4a (dealer-only) | sandbox `<h4 class="more-from-dealer-h2">` 20/700 #414d4a (v=105 flipped H2→H4) | ✅ |
+| "Still have a question?" heading | `<h3>` 24/700 #303030 | sandbox `<h3 class="question-card-h2">` 24/700 #303030 (v=105 flipped H2→H3) | ✅ |
+| Right-rail dealership-card (separate logo + stats block) | **not present** on real BT (dealer info integrated above) | `.bdp-dealership-card` wrapped in `{% if false %}` (v=107) | ✅ |
 | Description / Measurements / Propulsion accordion headings | `<h3>` 16/700 #333 (verified) | sandbox `<h3>` 16/700 #333 | ✅ |
 | Dimensions / Weights / Tanks subheadings | `<h4>` 14/700 (verified) | sandbox `<h4>` (already matches) | ✅ |
 | Boat Details / What Owners Say section headers | `<h2>` 20/700 (verified) | sandbox already H2 | ✅ |
@@ -309,27 +333,23 @@ Calculator" (18/700 #303030), then a result row.
 - ✅ ~~BDP content area width~~ — fixed in v=91 via `.bdp-grid { max-width: 1336px }`.
 - 🚫 **Real photos vs SVG placeholder boats**: out-of-scope per `SCOPE.md` —
   sandbox uses procedural SVG by design. Re-classified from 🟡.
-- 🟡 **More Details / Location H-level in Boat Details accordion**: real BT
-  doesn't currently render these headings on probed listings — earlier
-  claim that real BT uses H4 is unverifiable today. Sandbox uses H3.
-  Re-probe + decide once real BT shows these sections again.
+- ✅ ~~More Details / Location H-level~~ — re-probed v=107 on dealer +
+  private listings: both render H4 16/700 #333. Sandbox flipped H3→H4
+  in v=105.
 - ✅ ~~Thumbnail size~~ — auto-fixed by v=91's `.bdp-grid max-width`.
 - ✅ ~~Per-tile geometry on Home page rails~~ — measured in v=93. Real BT
   uses 363×120 boat-listing cards, 266×161 brand tiles, 325×317 article
   cards. Sandbox card-grid pattern matches within typical render
   variance; corpus documents the spec for future verification.
-- 🟡 **BDP `.next-previous` sticky navigation bar**: Real BT renders a
-  1512×54 ALWAYS-sticky bar at top:0 with Previous Boat / Next Boat
-  links. Sandbox doesn't have this widget; instead it has a different
-  sticky pattern (`.bdp-scrolled` body class after 320px scroll for a
-  title+price+contact bar). Different concept — decide whether to add
-  the next-previous widget or accept the divergence.
-- 🟡 **Listing-dependent BDP elements**: Similar Boats rail and
-  Show-Phone button are present on some listings (dealer) and absent on
-  others (private seller). Need a dedicated dealer-listing probe pass
-  to measure these. Sandbox always renders both — divergence from
-  real BT's conditional rendering is functional (agent training fine)
-  but visually divergent.
+- ✅ ~~BDP `.next-previous` sticky navigation bar~~ — added in v=105
+  with v=106 layout fix. Position:sticky top:0, h=54, bg #f7f7f7,
+  z:110, padding 5px 20px; stacked breadcrumb + listing-info rows;
+  "Offered By: <dealer>" tag on dealer listings.
+- ✅ ~~Listing-dependent BDP elements~~ — "More From This Dealer"
+  carousel gated by `is_owner_listed` (dealer-only). "Listed By"
+  section deleted entirely. Show Phone retained as cookie-gated
+  interaction surface on private listings (kept for agent training
+  even though real BT private listings often render without it).
 - 🟡 **Mobile viewport**: no mobile pass yet. CSS has `@media (max-width: 980px)`
   responsive rules but they're not verified against real BT mobile rendering.
 
@@ -440,6 +460,105 @@ Calculator" (18/700 #303030), then a result row.
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=107` BDP exact-mirror — round 3 (H1 length-suffix span + dealer-card sublines):
+       • H1 length-suffix re-added as a sibling SPAN inside the H1
+         tag (`<h1>{title}<span class="bdp-length"> | {len}'</span></h1>`).
+         Real BT's pattern is identical but with the SPAN as a true
+         sibling outside H1; visually equivalent and the simpler
+         child-span markup avoids extra DOM nodes. v=104 over-
+         corrected by removing the suffix entirely.
+       • Dealer card restructured: removed the headshot SVG + flex
+         `.dealer-card-meta` row; added `.dealer-card-subline` rows
+         for `{dealer.name} - {dealer.city}` (#303030 14/400) and
+         `{dealer.phone}` (clickable `tel:` link, blue) directly
+         under the salesperson H3, matching real BT's pattern
+         exactly (verified on 2024 Catalina 355).
+       • Private contact form simplified: removed the message
+         `<textarea>` and the .lead-row Email+Phone wrapper (real BT
+         private form is plain stack Name/Email/Phone/Submit). Show
+         Phone button retained as a cookie-gated interaction surface
+         for agent training.
+       • Separate right-rail `.bdp-dealership-card` (logo + active/
+         sold stats block) wrapped in `{% if false %}` — real BT
+         doesn't render a separate dealership card; dealer info
+         lives in the contact card body + the `.next-previous-
+         offered-by` tag inside the sticky bar.
+       • Cache-buster bumped to `?v=107`.
+       • 13 new fidelity tests covering all v=105..v=107 deltas.
+         Suite now **82 passing**. Two stale v=104 tests rewritten:
+         `test_bdp_h1_has_no_length_suffix` → `test_bdp_h1_has_length_
+         suffix_span`; `test_bdp_has_meet_your_seller_heading` →
+         `test_bdp_has_no_meet_your_seller_heading`.
+`v=106` `.next-previous` sticky bar layout fix (per user screenshot):
+       • v=105 shipped the new always-sticky bar but
+         `.next-previous-info-container` defaulted to `display: flex;
+         align-items: center` which put the breadcrumb and the
+         listing-info row side-by-side on one line (user feedback:
+         "this is not at all what the section above the image looks
+         like").
+       • Changed to `flex-direction: column; align-items: flex-start;
+         justify-content: center; gap: 2px; height: 100%` so the
+         breadcrumb sits on the top row (y≈219) and the listing
+         name/price/location row sits beneath (y≈249), matching
+         real BT's stacked-rows pattern.
+       • Cache-buster bumped to `?v=106`.
+`v=105` BDP exact-mirror — round 1 (heading hierarchy + cleanup):
+       Re-probed real BT on 2024-05-24 at 1440×900 against TWO
+       listings to nail down the deltas v=104's single probe missed:
+       dealer 2024 Catalina 355 (real BT) + private 2015 Pioneer 197
+       Sportfish (real BT). Confirmed pattern across BOTH listing
+       types, then landed the following structural changes:
+       • Removed `<h2 class="meet-your-seller-h2">Meet Your Seller</h2>`
+         — v=104 added this based on a stale measurement. Re-probe
+         showed NO Meet-Your-Seller heading on either dealer or
+         private listings on real BT. Selector commented out in CSS.
+       • Dealer contact card heading: `<h2>` → `<h3>` (already styled
+         18/500 #303030 via `.dealer-card-heading`).
+       • Private contact card heading: changed from "Contact
+         `{owner_name}`, the owner" to generic "Contact Private
+         Seller" (real BT private uses generic phrasing).
+       • Removed `private-seller-tag` "Private Seller" div and
+         `private-seller-note` disclaimer paragraph (real BT private
+         doesn't render either).
+       • Boat Details accordion heading levels:
+         * "More Details" `<h3>` → `<h4>` (real BT renders at 16/700)
+         * "Location" `<h3>` → `<h4>` (real BT renders at 16/700)
+         * Added "Accommodations" `<h4>` 14/700 #333 under
+           Measurements alongside Dimensions / Weights / Tanks
+           (real BT has it; sandbox derives cabin/berth counts from
+           length).
+       • "Still have a question?" `<h2>` → `<h3>` (24/700 #303030 per
+         real BT).
+       • "More From This Dealer" `<h2>` → `<h4>` with color #414d4a
+         (real BT carousel-section heading uses this special color).
+       • "More From This Dealer" section wrapped in
+         `{% if not boat.is_owner_listed %}` so it only renders on
+         dealer listings (matches real BT — private listings don't
+         have this rail).
+       • Deleted the entire `.bdp-listed-by` section (both dealer
+         and private paths). Real BT does NOT render a separate
+         Listed By section on either listing type — dealer identity
+         is conveyed via the contact card + the `.next-previous-
+         offered-by` tag in the sticky bar.
+       • Removed "Key Features" `<h3>` heading from the Description
+         accordion (real BT doesn't render this heading). Feature
+         `<ul>` body kept as part of the Description.
+       • Removed `<span class="sparkle-icon">✦</span>` prefix from
+         the "What Owners Say" `<h2>` heading. Real BT renders the
+         heading as plain text + inline info icon.
+       • Added `.next-previous` always-sticky bar at top of BDP
+         (replaces the old 320px-scroll-triggered `.bdp-sticky-bar`,
+         which is now hidden via `display: none !important`).
+         Structure: Back-to-Search button (12/400 #139af5) +
+         `.next-previous-info-container` (breadcrumb + listing
+         name/price/location) + actions (Save + Offered By tag on
+         dealer + Next Boat link). Position:sticky top:0, h:54,
+         bg #f7f7f7, z:110, padding 5px 20px. Matches real BT's
+         `.next-previous` selector measurements exactly.
+       • Hid `.bdp-nav-row` (the duplicate Back+breadcrumb+Next
+         row above the gallery) since its contents now live inside
+         `.next-previous`.
+       • Cache-buster bumped to `?v=105`.
 `v=104` BDP visual/perceptual compare — dealer + owner (user request):
        • Probed real BT private listings (President Trawler + Pioneer
          Sportfish + Sea Fox + Yamaha — all rendered as private with
