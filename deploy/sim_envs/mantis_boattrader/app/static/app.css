@@ -402,11 +402,15 @@ header.main {
 
 /* ── Ad strips ─ Real BT BDP top sponsor: bg #f7f7f7, padding 16px 0,
    ad image inside is fixed 728×90 leaderboard. ─────────────────── */
+/* v=114: removed `margin: 24px 0` on .ad-strip — real BT renders the
+   top ad flush against the page header above and the .next-previous
+   sticky bar below (probed margin: 0). The 24px margin was creating
+   visible white-grey transitions in the screenshot. */
 .ad-strip {
   background: #f7f7f7;
   padding: 16px 0;
   display: flex; justify-content: center;
-  margin: 24px 0;
+  margin: 0;
 }
 .ad-banner {
   position: relative; max-width: 728px; width: 100%; height: 90px;
@@ -1462,15 +1466,20 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   position: sticky;
   top: 0;
   z-index: 110;
-  width: 100%;
+  /* v=113: width:100vw (NOT 100%) so the bar bleeds to viewport
+     edges instead of being constrained by .bt-main's max-width 1440.
+     Combined with margin-left to align the bar's left edge with the
+     viewport. Fixes the white gap on the right side reported by user. */
+  width: 100vw;
+  margin-left: calc(-50vw + 50%);
   height: 54px;
-  margin: 0 calc(50% - 50vw);
   padding: 5px 20px;
   background: #f7f7f7;
   font-size: 15px;
   font-weight: 400;
   color: #333;
-  border-bottom: 1px solid #ededed;
+  /* v=114: removed `border-bottom: 1px solid #ededed` — real BT has
+     no visible bottom border on .next-previous (probed border:0 none). */
 }
 .next-previous-inner {
   max-width: 1400px;
@@ -1530,10 +1539,13 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
    user's screenshot of real BT's styles.css:44. */
 .boat-details-gradient {
   background: linear-gradient(180deg, #f7f7f7, transparent 20%) !important;
-  /* Bleed full-viewport-width like .next-previous so the gradient
-     covers edge-to-edge (the .bt-main container is constrained). */
-  margin: 0 calc(50% - 50vw);
-  padding: 0 calc(50vw - 50%);
+  /* v=113: bleed via width:100vw + negative left-margin (same fix as
+     .next-previous). Inner padding compensates so children stay
+     visually inside the .bt-main centered column. */
+  width: 100vw;
+  margin-left: calc(-50vw + 50%);
+  padding-left: calc(50vw - 50%);
+  padding-right: calc(50vw - 50%);
 }
 
 /* v=105: `.bdp-nav-row` hidden — breadcrumb + Back/Next links live
@@ -1648,7 +1660,10 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 /* Make ad-strip inside the left col compact (it was full-page padding before). */
-.bdp-grid-stack > .ad-strip { margin: 24px 0; padding: 0; background: transparent; }
+/* v=114: inside `.bdp-grid-stack` (left column) keep ads transparent
+   and unmargined (mid-page leaderboard sits flush). Outside the grid
+   (top/bottom strips) keep the #f7f7f7 grey strip with 16px 0 padding. */
+.bdp-grid-stack > .ad-strip { margin: 0; padding: 0; background: transparent; }
 .bdp-grid-stack > .ad-strip .ad-banner { max-width: 100%; }
 .bdp-grid-stack > .bdp-summary {
   position: absolute;
@@ -1725,10 +1740,15 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 .bdp-badges { margin-bottom: 10px; }
 /* Right-rail typography matched to real boattrader desktop (1512px probe):
    title 20/700, location 16/400, price 20/700, own-link 16/400. */
-.bdp-title { font-size: 20px; line-height: 1.25; margin: 8px 0 6px; color: var(--bt-text); font-weight: 700; }
+/* v=114: H1 margin 8px 0 6px → 0 (real BT H1 has margin:0). */
+.bdp-title { font-size: 20px; line-height: 1.25; margin: 0; color: var(--bt-text); font-weight: 700; }
 .bdp-length { color: var(--bt-text); font-weight: 700; font-size: 20px; }
 .bdp-location { color: var(--bt-text); font-size: 16px; margin: 0 0 10px; font-weight: 400; }
-.bdp-price { margin: 0 0 4px; font-size: 16px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+/* v=114: real BT main price `$XX,XXX` renders at 20/700 #333 on the
+   wrapping element itself, not just the `<strong>` child. Bump
+   wrapper size + weight so the bare span (when not wrapped in <strong>)
+   still hits the right size. */
+.bdp-price { margin: 0 0 4px; font-size: 20px; font-weight: 700; color: var(--bt-text); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .bdp-price strong { font-size: 20px; color: var(--bt-text); font-weight: 700; }
 .bdp-price-drop {
   display: inline-flex; align-items: baseline; gap: 4px;
@@ -2029,13 +2049,14 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 
 /* ── Boat Details accordion ───────────────────────────────────
-   v=112: REVERTED v=110/111. Real BT's `.accordion-details-section`
-   uses bg #f5f9ff, br 8px, padding 20px 16px. */
+   v=114: added `border-bottom: 1px solid #ededed` per real BT's
+   `.accordion-details-section` probe (bb: 1px solid #ededed). */
 .bdp-details-section {
   background: #f5f9ff;
   border-radius: 8px;
   padding: 20px 16px;
   margin: 24px 0;
+  border-bottom: 1px solid #ededed;
 }
 .bdp-details-h2 {
   font-size: 20px;
@@ -2080,8 +2101,13 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   transition: transform 200ms ease;
 }
 .bdp-accordion[open] .accordion-chevron { transform: rotate(-135deg); }
+/* v=114: real BT's Description inner card (`.accordion-details-items`)
+   is white bg with 8px radius and `padding: 0 16px`, sitting on the
+   light-blue `.bdp-details-section` parent. */
 .accordion-body {
-  padding: 0 22px 18px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 0 16px 18px;
   font-size: 14px;
   color: var(--bt-text);
   line-height: 1.55;
