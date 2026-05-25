@@ -2663,12 +2663,15 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 .trusted-partner strong { color: var(--bt-navy); }
 .dealer-lead-form { display: flex; flex-direction: column; gap: 8px; }
 /* Real BT lead form input: 40px tall, 4px radius, 1px #c2c2c2 border,
-   8px 12px 4px padding (asymmetric so floating label sits properly). */
+   8px 12px 4px padding (asymmetric so floating label sits properly).
+   v=124: explicit transparent bg to match real BT input bg
+   (rgba(0,0,0,0)) — browser default would be white. */
 .lead-input, .lead-textarea {
   width: 100%; border: 1px solid #c2c2c2;
   border-radius: 4px; padding: 8px 12px 4px; font: inherit; font-size: 14px;
   color: var(--bt-text);
   height: 40px;
+  background: transparent;
   box-sizing: border-box;
 }
 .lead-textarea { height: auto; padding: 10px 12px; }
