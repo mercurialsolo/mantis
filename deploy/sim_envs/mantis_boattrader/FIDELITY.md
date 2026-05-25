@@ -3,19 +3,30 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=107** (2026-05-24) — BDP exact-mirror pass:
-re-probed real BT dealer (2024 Catalina 355) + private (2015 Pioneer
-197 Sportfish) at 1440×900. Three rounds: v=105 heading hierarchy +
-cleanup (Meet-Your-Seller H2 removed, Listed-By section deleted,
-Key-Features H3 removed, ✦ sparkle prefix removed, `.next-previous`
-always-sticky bar added, More Details/Location H3→H4, Still-have-a-
-question H2→H3, More From This Dealer H2→H4, dealer-card heading
-H2→H3, Accommodations H4 added); v=106 sticky-bar layout fix
-(flex-direction: column so breadcrumb + listing info stack); v=107
-H1 length-suffix span restored as sibling (v=104 over-corrected),
-dealer card now integrates dealer name+city+phone as inline sublines
-under salesperson H3, redundant `.bdp-dealership-card` hidden.
-Suite now **82 passing** (15 new BDP tests).
+Last updated: **v=117** (2026-05-24) — BDP exact-mirror saga
+(v=105..v=117, 11 deploys across 6 rounds). Re-probed real BT
+dealer (2024 Catalina 355) + private (2015 Pioneer 197 Sportfish)
+at 1440×900 and landed structural deltas in 6 iteration rounds —
+including 3 prompted by user screenshot feedback.
+
+Round 1 (v=105): heading hierarchy + cleanup. Round 2 (v=106): sticky-
+bar layout fix per user screenshot. Round 3 (v=107): H1 length-suffix
+span restored + dealer-card sublines + dealership-card hidden.
+Round 4 (v=108–v=109): simplified sticky bar to `‹ Search /
+breadcrumb / Prev / Next` per user screenshot, inner-wrapper
+constraint (max-width 1400px + margin 0 80px); v=110/v=111 white-
+wash regressed and were reverted in v=112 (light-blue `#f5f9ff`
+restored on Owners/Boat Details/More-From-Dealer + ✦ sparkle re-
+added). v=113 sticky-bar full-viewport bleed (100vw + neg margin).
+v=114 top-section polish: removed sticky-bar border-bottom, removed
+ad-strip 24px margin, added accordion-body white nested-card chrome,
+fixed `.bdp-price` to 20/700, H1 margin → 0, added Boat Details
+border-bottom. Round 5 (v=115): right-rail width 366px → 400px.
+Round 6 (v=116–v=117): ad-strip full-viewport bleed; engagement row
+simplified to plain "Views | Saves" with 1×12px #dee2e3 divider
+(removed icons + Listed/days-ago row).
+
+Suite **83 passing** (16 new BDP tests).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `a_oh4hg7awgeznbwwglbfml0sdlrywzw`)
@@ -460,6 +471,133 @@ Calculator" (18/700 #303030), then a result row.
          + blank placeholder (test_filter_panel_fidelity.py now 26 passing)
        • `.ai-search-v2__try-prefix` kept as a legacy alias for the
          non-rotating prefix used elsewhere (e.g. home hero search)
+`v=117` Engagement row simplified to real BT structure:
+       • Removed 3-item `<ul class="bdp-engagement-row">` (Views +
+         Saves + Listed-days icons) and replaced with a 2-item
+         `<div class="bdp-engagement-row listing-engagement-indicators">`
+         containing just "Views" and "Saves" with a 1×12px #dee2e3
+         vertical divider span between (`.listing-engagement-
+         indicators__divider`). 12/400 #757575 per real BT probe.
+       • No icons, no Listed/days-ago row (real BT doesn't show those).
+       • One new test (test_bdp_engagement_row_simplified_to_views_saves).
+         Suite now **83 passing**.
+`v=116` Ad-strip full-viewport bleed:
+       • User screenshot showed grey #f7f7f7 bg cut off at .bt-main
+         max-width 1440 with ~80px white gutters on each side of
+         the top sponsored ad-leaderboard.
+       • Same fix as v=113 sticky bar: `.ad-strip { width: 100vw;
+         margin-left: calc(-50vw + 50%) }`. Ad image stays centered
+         via flex `justify-content: center`.
+       • `.bdp-grid-stack > .ad-strip` overrides reset width to auto
+         so mid-page leaderboards stay inside their grid column.
+`v=115` Right-rail summary card width 366px → 400px:
+       • Real BT `.summary-section` probe: w=400 x=1066, pad 16px,
+         bg #fff, border 1px #ededed, br 8px, shadow 0 2px 2px
+         rgba(0,0,0,0.2). Sandbox was 366px (too narrow).
+       • Global replace `366px → 400px` (3 sites: .bdp-grid
+         template, .bdp-grid-stack padding offset, .bdp-summary).
+       • Lead-input geometry (border 1px #c2c2c2, br 4px, pad
+         8px 12px 4px, h 40px) already matched per v=55 — no change.
+`v=114` Top-section polish per comprehensive bg/margin/font probe:
+       • `.next-previous { border-bottom: 1px solid #ededed }`
+         REMOVED — real BT probe shows no bottom border. v=105's
+         border was creating a visible divider line in the user
+         screenshot between the top ad-strip and the sticky bar.
+       • `.ad-strip` outer margin `24px 0 → 0`. Real BT renders
+         the leaderboard flush against the page header above and
+         the sticky bar below.
+       • `.bdp-details-section`: added `border-bottom: 1px solid
+         #ededed` per real BT `.accordion-details-section` probe.
+       • `.bdp-price` wrapper bumped 16/400 → 20/700 #333. Real
+         BT price renders at 20/700 on the wrapping element.
+       • `.bdp-title` H1 margin `8px 0 6px → 0` per real BT.
+       • `.accordion-body` (Description inner): added `background:
+         #fff; border-radius: 8px; padding: 0 16px 18px` — real
+         BT renders Description as a nested WHITE card inside the
+         light-blue `.bdp-details-section` parent.
+`v=113` Sticky bar full-viewport bleed (per user screenshot):
+       • User screenshot showed `.next-previous` grey #f7f7f7 bg
+         cut off ~100px before the viewport right edge, leaving
+         a white gap.
+       • Bug: `width: 100%` referred to `.bt-main`'s constrained
+         max-width 1440px, not the viewport. Fix: switched to
+         `width: 100vw; margin-left: calc(-50vw + 50%)` so the
+         bar's bg spans edge-to-edge.
+       • Same fix applied to `.boat-details-gradient` wrapper.
+`v=112` Restored light-blue card bgs + ✦ sparkle (per user screenshot):
+       • v=110/v=111 whitewashed all section cards thinking real
+         BT was plain white. User's real-BT screenshot showed
+         clear light-blue (#f5f9ff) cards on "What Owners Say"
+         and "Boat Details", plus a ✦ sparkle prefix on
+         "What Owners Say".
+       • Re-probed precisely:
+         - `.accordion-details-section` (Boat Details): bg #f5f9ff,
+           br 8px, pad 20px 16px, border-bottom 1px #ededed
+         - `.boat-overview-wrapper.ai-ratings-review-bundle`
+           (Owners + Highlights): bg #f5f9ff, br 8px, pad 20px 16px
+         - `.accordion-details-items` (Description): bg #fff,
+           br 8px, pad 0 16px (nested white card on light-blue)
+       • Sandbox `.bdp-owners-card` bg `#eef4fb` → `#f5f9ff` (exact
+         match to real BT, not the older v=83 tint).
+       • `.bdp-details-section` and `.bdp-more-from-dealer` also
+         set to #f5f9ff with matching geometry.
+       • Re-added `<span class="sparkle-icon">✦</span>` prefix to
+         the `.owners-card-heading` H2 — v=105 had wrongly removed
+         it.
+       • Test `test_bdp_no_sparkle_on_what_owners_say` rewritten
+         to `test_bdp_has_sparkle_on_what_owners_say`.
+`v=111` BDP gradient page wrapper (REVERTED in v=112):
+       • User screenshot of real BT styles.css showed
+         `.boat-details-gradient { background: linear-gradient(180deg,
+         #f7f7f7, transparent 20%) !important }`.
+       • Added `<div class="boat-details boat-details-gradient">`
+         wrapper around the BDP body content after the sticky bar.
+       • Wrapper bleeds full viewport width via the same margin
+         trick as `.next-previous`.
+       • Section bgs (`.bdp-owners-card`, `.bdp-details-section`,
+         `.bdp-more-from-dealer`) set to transparent so the
+         gradient shows through.
+       • PARTIAL REVERT in v=112: kept the gradient wrapper but
+         restored light-blue card bgs since real BT actually has
+         BOTH the gradient wrapper AND the light-blue sections
+         (sections cover the gradient where they sit).
+`v=110` Whitewashed BDP sections (REVERTED in v=112):
+       • Mistakenly read user's "background isn't white it's #fff"
+         comment as wanting EVERY section white. Set
+         `.bdp-owners-card`, `.bdp-details-section`, `.bdp-more-
+         from-dealer` to bg #fff.
+       • Reverted in v=112 after user shared the actual real BT
+         screenshot showing light-blue cards.
+`v=109` Sticky bar inner wrapper + breadcrumb tightening:
+       • Added `.next-previous-inner` div with `max-width: 1400px;
+         margin: 0 80px` matching real BT's container exactly.
+         At 1600px viewport this places "‹ Search" at x≈100 (20px
+         bar padding + 80px wrapper margin), not at x≈25 as v=108
+         had.
+       • `@media (max-width: 1280px)` falls back to `margin: 0 auto`
+         so the bar doesn't crowd out at narrow viewports.
+       • Breadcrumb 14/400 #303030 → 15/400 #333 (matches real BT).
+       • Back/Next buttons: 14/400 → 12/400, padding 8px 14px →
+         11px 15px.
+`v=108` Sticky bar simplified per user real-BT screenshot:
+       • v=105/106/107 sticky bar had too much in it (listing
+         name/price/location row, Save button, Offered-By tag).
+         Real BT screenshot showed bar contains ONLY:
+         "‹ Search / breadcrumb / Previous Boat / Next Boat".
+       • Earlier JS probes had found the listing-info text via
+         `.next-previous-info` but that element is in a hidden
+         absolutely-positioned info layer, NOT the visible row.
+       • Removed `.next-previous-info-container`,
+         `.next-previous-info`, `.next-previous-listing-name`,
+         `.next-previous-listing-price`, `.next-previous-listing-
+         loc`, `.next-previous-save`, `.next-previous-offered-by`.
+       • Changed "‹ Back to Search" → "‹ Search".
+       • Added `Previous Boat` link (sandbox passes `prev_boat`
+         already from `db.adjacent_boats`).
+       • Tests rewritten: `test_bdp_next_previous_has_breadcrumb_
+         and_info` → `test_bdp_next_previous_has_breadcrumb`;
+         `test_bdp_next_previous_info_container_is_column_flex` →
+         `test_bdp_next_previous_actions_only_prev_next`.
 `v=107` BDP exact-mirror — round 3 (H1 length-suffix span + dealer-card sublines):
        • H1 length-suffix re-added as a sibling SPAN inside the H1
          tag (`<h1>{title}<span class="bdp-length"> | {len}'</span></h1>`).

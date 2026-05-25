@@ -1796,41 +1796,34 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   cursor: help;
 }
 .bdp-customize-link { color: var(--bt-blue); font-weight: 500; font-size: 16px; }
+/* v=117: simplified to match real BT `.listing-engagement-indicators`:
+   plain Views | Saves with a 1×12px #dee2e3 divider, 12/400 #757575,
+   container padding 11px 0, no border-top, no icons. */
 .bdp-engagement-row {
-  list-style: none;
-  padding: 12px 0 14px;
+  padding: 11px 0;
   margin: 0;
-  border-top: 1px solid var(--bt-border);
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
   font-size: 12px;
-  color: var(--bt-text-dim);
-  flex-wrap: wrap;
+  font-weight: 400;
+  color: #757575;
 }
 .bdp-engagement-row .engagement-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  position: relative;
 }
-.bdp-engagement-row .engagement-item:not(:last-child)::after {
-  content: "|";
-  color: var(--bt-border);
-  margin-left: 12px;
-  font-weight: 300;
+.listing-engagement-indicators__divider {
+  display: inline-block;
+  width: 1px;
+  height: 12px;
+  background: #dee2e3;
 }
-.bdp-engagement-row .ico {
-  font-size: 13px;
-  color: var(--bt-text-dim);
-  display: inline-flex; align-items: center;
-  margin-right: 4px;
-}
-.bdp-engagement-row .ico svg { display: block; }
 /* Inline phone SVG in dealer-phone link should align with the number. */
 .dealer-phone .ico-phone,
 .show-phone-btn .ico-phone { vertical-align: middle; margin-right: 4px; }
-.bdp-engagement-row strong { font-weight: 600; font-size: 12px; color: var(--bt-text); }
+.bdp-engagement-row strong { font-weight: 700; font-size: 12px; color: #303030; }
 .visit-seller-link {
   display: inline-block;
   margin: 14px 0;

@@ -737,6 +737,42 @@ def test_bdp_dealer_card_has_inline_sublines(bdp_html):
     assert 'class="dealer-card-subline dealer-card-phone"' in bdp_html
 
 
+def test_bdp_engagement_row_simplified_to_views_saves(bdp_html):
+    """v=117: engagement row simplified to plain "Views | Saves"
+    matching real BT's `.listing-engagement-indicators`. Removed
+    icons, removed "Listed days ago" row, added 1×12px #dee2e3
+    vertical divider span."""
+    assert 'listing-engagement-indicators' in bdp_html
+    assert 'listing-engagement-indicators__item' in bdp_html
+    assert 'listing-engagement-indicators__divider' in bdp_html
+    # Pull engagement row from <div class="bdp-engagement-row…"> to
+    # the matching </div> by counting open/close tags.
+    import re
+    start_match = re.search(r'<div class="bdp-engagement-row[^"]*"', bdp_html)
+    assert start_match, "engagement row container not found"
+    start = start_match.start()
+    # Naive depth-counter from `start`:
+    depth = 0
+    i = start
+    while i < len(bdp_html):
+        if bdp_html[i:i+4] == '<div':
+            depth += 1
+            i += 4
+        elif bdp_html[i:i+6] == '</div>':
+            depth -= 1
+            i += 6
+            if depth == 0:
+                break
+        else:
+            i += 1
+    block = bdp_html[start:i]
+    assert '<svg' not in block, "engagement row should have no icons"
+    assert 'Listed ' not in block and 'New to Market' not in block, \
+        "Listed/New-to-Market row should be removed"
+    assert 'Views' in block
+    assert 'Save' in block
+
+
 def test_bdp_dealership_card_not_rendered(bdp_html):
     """v=107: the separate `.bdp-dealership-card` (right-rail logo +
     active/sold stats block) is wrapped in `{% if false %}` and not
