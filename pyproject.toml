@@ -104,7 +104,7 @@ observability = [
     # ``observability/augur.py``: first emission for a given
     # ``step_index`` routes through ``record_step``; subsequent
     # emissions route through ``record_step_iteration``.
-    "augur-sdk>=0.3.0,<0.4",
+    "augur-sdk>=0.3.1,<0.4",
 ]
 # Self-host the FastAPI server that fronts /predict and /v1/chat/completions.
 # Used by the Baseten / EKS / GKE deployments.

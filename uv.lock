@@ -241,7 +241,7 @@ wheels = [
 
 [[package]]
 name = "augur-sdk"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "augur-schema" },
@@ -249,9 +249,9 @@ dependencies = [
     { name = "referencing" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a4/97/195ecb8983854d7f92e29bb03d8f024a6f748fcd2a5400e38bd5223dd2e9/augur_sdk-0.3.0.tar.gz", hash = "sha256:325f9bbb771759c4cb2bca31e52017be9c09428b495fb26d9fe651559d7288b5", size = 102238, upload-time = "2026-05-25T01:22:13.706Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/40/06/4a14358bce3751bd5cfa2febb09aef735fd3edd0be04f1fb5a1df7d925f7/augur_sdk-0.3.1.tar.gz", hash = "sha256:97851b296e1b2f7f0af422a663f6859234a98dda85dd7fdcc5b9b9c9f07ab4b7", size = 105678, upload-time = "2026-05-25T03:29:47.822Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/19/1c/b7cfff0f368da05febd4e42dd194dc75fc270394edcc8fd8b0971d41cf6d/augur_sdk-0.3.0-py3-none-any.whl", hash = "sha256:7107970308a1d96514fbd30a998114e1e90379ae2c4b426bb52b8eb40a31d4a4", size = 70246, upload-time = "2026-05-25T01:22:12.006Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/e2/145464dfd008e175d82b166a8d52da2f240e7ed3ee3437fa618470cbb9d5/augur_sdk-0.3.1-py3-none-any.whl", hash = "sha256:540011efa774da6061feb936edade69e67531c712ee55d82b56a90f2e452a829", size = 70968, upload-time = "2026-05-25T03:29:46.18Z" },
 ]
 
 [[package]]
@@ -1552,7 +1552,7 @@ viewer = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", marker = "extra == 'gpu'", specifier = ">=0.30" },
-    { name = "augur-sdk", marker = "extra == 'observability'", specifier = ">=0.3.0,<0.4" },
+    { name = "augur-sdk", marker = "extra == 'observability'", specifier = ">=0.3.1,<0.4" },
     { name = "bitsandbytes", marker = "extra == 'gpu'", specifier = ">=0.43" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.100" },
     { name = "fastapi", marker = "extra == 'viewer'", specifier = ">=0.100" },
