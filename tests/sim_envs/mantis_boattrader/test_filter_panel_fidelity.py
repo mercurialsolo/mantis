@@ -773,13 +773,18 @@ def test_bdp_engagement_row_simplified_to_views_saves(bdp_html):
     assert 'Save' in block
 
 
-def test_bdp_dealership_card_not_rendered(bdp_html):
-    """v=107: the separate `.bdp-dealership-card` (right-rail logo +
-    active/sold stats block) is wrapped in `{% if false %}` and not
-    rendered — real BT does not have a separate dealership card in
-    the right rail."""
-    assert 'class="bdp-dealership-card"' not in bdp_html
-    assert 'dealership-stat-num' not in bdp_html
+def test_bdp_dealership_card_rendered(bdp_html):
+    """v=130 (REVERTED v=107): the right-rail `.bdp-dealership-card` IS
+    rendered after re-probe — real BT's `.summary-section` contains
+    an `.enhanced-business-card-wrapper` at y=858 with dealer address
+    + Trusted Partner info. v=107's hide was based on a wrong probe.
+
+    Only renders on dealer (not owner) listings, so skip if the
+    fixture chose an owner listing."""
+    if 'bdp-private-seller-card' in bdp_html:
+        return  # owner listing — dealership card N/A
+    assert 'class="bdp-dealership-card"' in bdp_html
+    assert 'dealership-stat-num' in bdp_html
 
 
 def _details_block(html: str, anchor: str) -> str:

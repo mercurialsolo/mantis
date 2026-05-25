@@ -185,13 +185,10 @@
         </form>
       </div>
 
-      {# v=107: `.bdp-dealership-card` (right-rail logo + stats block)
-         hidden — real BT does not render a separate dealership card in
-         the right rail; dealer identity is conveyed via the contact card
-         + the `.next-previous-offered-by` tag in the sticky bar. The
-         block below is wrapped in `{% if false %}` so it stays in the
-         template for reference but is never rendered. #}
-      {% if false %}
+      {# v=130: RESTORED right-rail dealership card after re-probing
+         real BT — the .enhanced-business-card-wrapper at y=858 inside
+         .summary-section contains the dealer address + Trusted Partner
+         info. v=107's hide was based on a wrong measurement. #}
       <div class="bdp-dealership-card" data-testid="dealership-card">
         <div class="dealership-logo-wrap">
           <div class="dealership-logo">
@@ -213,7 +210,7 @@
         </div>
         <a href="https://www.{{ dealer.name|lower|replace(' ','-')|replace(',','')|replace('--','-') }}.com" class="visit-seller-link dealership-link" target="_blank" rel="nofollow">Visit Seller Website ↗</a>
       </div>
-      {% endif %}{# /if false (v=107 hide bdp-dealership-card) #}
+      {# v=130: end of restored .bdp-dealership-card block #}
     {% endif %}
 
     {# v=123: `.prequal-card` ("Get pre-qualified in minutes" with
