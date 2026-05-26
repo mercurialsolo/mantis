@@ -944,9 +944,26 @@ class RunExecutor:
         # runner orchestration outside any helper falls into
         # ``overhead`` automatically via :meth:`TimeMeter.breakdown`.
         from . import time_meter as _tm
+        # #689 — publish a default ``model`` modelio context for the
+        # duration of every step's execute. Any LLM call made inside
+        # (extractor, brain's action decision, form-targeting Claude)
+        # records a ``modelio/<step:04d>-model-<seq>.json`` entry
+        # without each call site needing its own wrapper. Critic,
+        # verifier, and step_recovery sub-paths already publish their
+        # own contexts deeper — contextvar nesting reapplies their
+        # layer for the inner block, then reverts to ``model`` on the
+        # way out. Reads ``_augur`` off the runner; the helper is a
+        # no-op when the adapter is inactive (Augur disabled / SDK
+        # missing), so this wrapper is free in those cases.
+        from ..observability.modelio import publish_modelio_context
         try:
-            with _tm.publish_dispatch(meter, state.step_index):
-                step_result = runner._execute_step(effective_step, state.step_index)
+            with publish_modelio_context(
+                getattr(runner, "_augur", None),
+                layer="model",
+                step_index=state.step_index,
+            ):
+                with _tm.publish_dispatch(meter, state.step_index):
+                    step_result = runner._execute_step(effective_step, state.step_index)
         finally:
             runner._active_checkpoint_context = None
         if step_result.screenshot_png is None:
