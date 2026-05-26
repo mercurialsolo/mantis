@@ -203,15 +203,12 @@ Calculator" (18/700 #303030), then a result row.
 
 | Element | Real BT | Mine | Status |
 |---|---|---|---|
-| Widget concept | output-first (Monthly Payment headline + inputs below) | input-first (Boat Loan Calculator title + inputs + result row) | 🟡 — different widget concept; both work for agent training; rewriting would need user buy-in on which version |
-| Container | `.calc-calculator-body` w=300, transparent bg, no border/radius/shadow | `.loan-calc-card` w=303, bg=#fff, 1px #e0e0e0 border, 6px br, `var(--bt-shadow)` (intentional sandbox chrome) | 🟡 |
-| Title | "Monthly Payment" 22/900 #404040 — also acts as the output display | "Boat Loan Calculator" 18/700 #303030 | 🟡 |
-| Input geometry | 262×39, fs 15.9px, 3.9px br, 1px rgba(0,0,0,0.2) border | 269×40, fs 14px, 4px br | 🟡 — close (within rendering tolerance) |
-| Input placeholders | "Enter purchase price", "Enter Down Payment", "Enter term in years" | "$" only | 🟡 — sandbox's `$` is less informative |
-| Field types | 4 fields (purchase price, down payment, term years, APR) | 3 fields (loan amount, term months, APR) | 🟡 — slightly different inputs but functionally equivalent calc |
-| Calculate button | outline secondary style | blue outline | ✅ visual style matches |
-| "Get Pre-Qualified" CTA | blue filled pill | blue filled pill | ✅ |
-| Fineprint help text | small gray | added | ✅ |
+| Widget concept | split-pane: white form (left) + light-blue preview (right) with huge monthly | sandbox `.bdp-loan-card` split-pane via `.loan-card-grid`, white `.loan-form` + #f5f9ff `.loan-preview` (v=120) | ✅ |
+| Container | `.bdp-loan-card { background: #fff; border: 1px solid #ededed; border-radius: 12px; padding: 0; overflow: hidden }` so the two panes share corners | sandbox matches exactly (v=120) | ✅ |
+| Title | "Boat Loan Payment Calculator" 22/700 #303030 centered | sandbox same (v=120) | ✅ |
+| Input geometry | 4 fields stacked: Loan Type, Year, Purchase Price, Down Payment, Loan Term (Months) defaulting to 240 | sandbox same field set + default (v=120: replaced FICO with Loan Term per real BT) | ✅ |
+| Monthly preview | `Here is what your monthly payment might look like:` heading + huge 64/700 #303030 monthly + TOTAL LOAN AMOUNT + divider + See Important Disclosure | sandbox same; removed APR display, 180 MONTHS caption, Get-Pre-Qualified button, prequal bullets that weren't on real BT (v=120) | ✅ |
+| Right pane bg | #f5f9ff (light blue) | sandbox same (v=120) | ✅ |
 
 ### Listing cards (SRP)
 
