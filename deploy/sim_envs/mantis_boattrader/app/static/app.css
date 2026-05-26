@@ -2709,11 +2709,31 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 .lead-input::placeholder, .lead-textarea::placeholder { color: #9ba5af; }
 .lead-row { display: flex; gap: 8px; }
 .lead-row .lead-input { flex: 1; min-width: 0; }
+/* v=133: BDP contact-seller submit button is a SOLID dark-navy pill
+   (not the white outline used on SRP listing cards). User screenshot
+   showed bg #082F4C (or similar very dark navy) + white text + large
+   pill radius + full-width + ~16/700 text. Overrides the outline
+   defaults from `.contact-seller-btn` via higher specificity. */
 .contact-seller-btn.btn-block {
-  padding: 10px 24px;
-  font-size: 14px;
+  background: #082F4C;
+  color: #fff;
+  border: 0;
+  padding: 16px 20px;
+  font-size: 16px;
   font-weight: 700;
   border-radius: 50px;
+  width: 100%;
+  height: auto;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
+}
+.contact-seller-btn.btn-block:hover {
+  background: #0a3d62;
+  text-decoration: none;
+  color: #fff;
 }
 
 .bdp-section { background: #fff; padding: 18px; border-bottom: 1px solid var(--bt-border); }
