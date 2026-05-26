@@ -2666,7 +2666,11 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   border-radius: 3px;
 }
 
-.bdp-dealer-card { border-top: 1px solid var(--bt-border); padding-top: 14px; }
+/* v=132: removed `border-top: 1px solid` per user screenshot — real BT
+   doesn't render a divider line between the engagement row and the
+   contact card. The dealer card sits flush. */
+.bdp-dealer-card { padding-top: 14px; }
+.bdp-private-seller-card { padding-top: 14px; }
 /* Real BT contact card heading (dealer + private): H3 18/500 #303030. */
 /* v=125: heading color #303030 → #1a2022 per real BT probe (rgb(26,32,34)). */
 .dealer-card-heading { font-size: 18px; font-weight: 500; color: #1a2022; margin: 0 0 4px; }
