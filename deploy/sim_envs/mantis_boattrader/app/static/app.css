@@ -160,30 +160,14 @@ header.main {
   font-size: 18px; cursor: pointer; line-height: 1;
 }
 
-/* ── Main + container — real boattrader probe (Pursuit BDP, 2026-05-24)
-   shows `<main class="page-container">` at width=1600 (FULL viewport)
-   with padding 0. Sections inside (.bdp-grid, .bdp-nav-row) apply
-   their own 1336px max-width centered. Previous `.bt-main { max-width:
-   1440 }` was indenting the full-bleed sections (ad-strip) ~80px
-   from each viewport edge — fixed by removing the cap. */
 .bt-main {
-  max-width: none;
-  margin: 0;
-  padding: 0;
-  min-height: 480px;
-}
-/* SRP + Home sections need their own page-container width since
-   `.bt-main` no longer provides one. Matches the previous behavior
-   (1440 - 40 padding ≈ 1400 effective content width). */
-.srp {
   max-width: var(--container);
+  /* v=102: ribbon is `position: sticky` (stays in flow), so no
+     compensating top margin needed. v=100's `margin: 40px auto 0`
+     reverted. */
   margin: 0 auto;
   padding: 0 20px;
-}
-.home-section {
-  max-width: var(--container);
-  margin: 36px auto;
-  padding: 0 20px;
+  min-height: 480px;
 }
 
 /* ── Home: hero ─────────────────────────────────────────────────── */
@@ -413,24 +397,28 @@ header.main {
 .dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.5); }
 .dot.active { background: #fff; }
 
-/* ── Ad strips — Real BT BDP top sponsor: 970×120 banner inside a
-   tight #f7f7f7 strip (~122px total height, ~1px breathing room above
-   and below the banner). Real BT renders ~30px white gap above and
-   below the strip — body bg is white, the strip has its own #f7f7f7
-   tinted band with vertical margin to separate from the header above
-   and the nav row below. ─────────────────────────────────────────── */
-/* The ad-strip's #f7f7f7 band must span the FULL viewport edge-to-edge
-   per real BT (probed at 1600px viewport: ad-leaderboard-top width =
-   1600). Since .bt-main caps its inner content at 1440px max-width
-   centered, we use the classic "full-bleed" trick: negative left+
-   right margins of `calc(50% - 50vw)` push the strip out to viewport
-   edges regardless of the parent's max-width. */
+/* ── Ad strips ─ Real BT BDP top sponsor: bg #f7f7f7, padding 16px 0,
+   ad image inside is fixed 728×90 leaderboard. ─────────────────── */
+/* v=114: removed `margin: 24px 0` on .ad-strip — real BT renders the
+   top ad flush against the page header above and the .next-previous
+   sticky bar below (probed margin: 0). The 24px margin was creating
+   visible white-grey transitions in the screenshot.
+   v=116: bleed bg full viewport width using the same trick as
+   `.next-previous` and `.boat-details-gradient`. Default `.ad-strip`
+   sits INSIDE `.bt-main` (max-width 1440px) which constrained the
+   grey #f7f7f7 bg to 1440px, leaving white gutters on wider
+   viewports (user screenshot shows ~80px white margins on each
+   side at a wider viewport). The 100vw + negative margin pattern
+   makes the bg span edge-to-edge while the ad image stays centered
+   via the flex justify-content. */
 .ad-strip {
   background: #f7f7f7;
   padding: 1px 0;
   display: flex; justify-content: center;
-  margin: 24px calc(50% - 50vw);
+  margin: 0;
   width: 100vw;
+  margin-left: calc(-50vw + 50%);
+  box-sizing: border-box;
 }
 .ad-banner {
   position: relative; max-width: 970px; width: 100%; height: 120px;
@@ -1168,15 +1156,11 @@ header.main {
 .apply-filters { margin: 18px 0 10px; }
 .filter-clear { display: block; text-align: center; font-size: 14px; margin: 0 0 8px; }
 
-/* "Meet Your Seller" h2 above the BDP contact card (v=104) —
-   matches real BT's 20/700 #404040 heading that appears before
-   the seller info on both private + dealer listings. */
-.meet-your-seller-h2 {
-  font-size: 20px;
-  font-weight: 700;
-  color: #404040;
-  margin: 24px 0 12px;
-}
+/* v=105: removed `.meet-your-seller-h2` — re-probed real BT BDPs
+   (both dealer 2024 Catalina 355 and private 2015 Pioneer 197) show
+   NO "Meet Your Seller" heading above the contact card. v=104's
+   addition was based on a stale measurement. Selector kept commented
+   for historical reference only. */
 
 /* ── Cookie consent banner (v=103) ─────────────────────────────────
    Shown on first visit only (server-rendered conditional in base.html
@@ -1471,21 +1455,114 @@ header.main {
 
 /* ── Boat Detail Page (BDP) ───────────────────────────────────── */
 
-/* Sticky header bar — slides in on scroll. */
-.bdp-sticky-bar {
+/* v=105: `.bdp-sticky-bar` (the 320px-scroll-triggered sticky) is
+   replaced by `.next-previous` (always-sticky, matches real BT). Old
+   selector kept but hidden so any residual JS toggling `bdp-scrolled`
+   doesn't reveal a duplicate bar. */
+.bdp-sticky-bar,
+body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
+
+/* ── `.next-previous` always-sticky bar (v=109: inner-wrapper
+   constraint to match real BT exactly) ────────────────────────────
+   Outer bar: full-viewport-width, bg #f7f7f7, sticky top:0, z:110,
+   padding 5px 20px (the bar bleeds full-width via negative margin
+   so its bg covers edge to edge inside the constrained .bt-main).
+   Inner wrapper: max-width 1400px, margin 0 80px — matches real
+   BT's layout pattern that places "‹ Search" at x≈100 from the
+   viewport edge at 1600px viewport. */
+.next-previous {
   position: sticky;
   top: 0;
-  background: rgba(255, 255, 255, 0.98);
-  z-index: 100;
-  border-bottom: 1px solid var(--bt-border);
-  margin: 0 calc(50% - 50vw);
-  display: none;
+  z-index: 110;
+  /* v=113: width:100vw (NOT 100%) so the bar bleeds to viewport
+     edges instead of being constrained by .bt-main's max-width 1440.
+     Combined with margin-left to align the bar's left edge with the
+     viewport. Fixes the white gap on the right side reported by user. */
+  width: 100vw;
+  margin-left: calc(-50vw + 50%);
+  height: 54px;
+  padding: 5px 20px;
+  background: #f7f7f7;
+  font-size: 15px;
+  font-weight: 400;
+  color: #333;
+  /* v=114: removed `border-bottom: 1px solid #ededed` — real BT has
+     no visible bottom border on .next-previous (probed border:0 none). */
 }
-body.bdp-scrolled .bdp-sticky-bar { display: block; }
-/* Sticky bar inner — share the .bdp-grid 1336px content column so
-   sticky `< Search` / Previous / Next / Contact Seller anchor to the
-   same x-positions as the (non-sticky) .bdp-nav-row below. Was using
-   the wider 1440px --container. */
+.next-previous-inner {
+  max-width: 1400px;
+  margin: 0 80px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+@media (max-width: 1280px) {
+  /* Below 1280px viewport the 80px side margins are excessive — fall
+     back to a more compact 16px gutter so the bar doesn't crowd out. */
+  .next-previous-inner { margin: 0 auto; }
+}
+.next-previous-button {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 400;
+  color: #139af5;
+  padding: 11px 15px;
+  border-radius: 4px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.next-previous-button:hover { text-decoration: underline; }
+.next-previous-back { padding-left: 0; }
+.next-previous-next { padding-right: 0; margin-left: 16px; }
+.next-previous-prev { padding-right: 15px; }
+/* v=121: dropped 15/400/#333 override per user screenshot comparison.
+   Real BT breadcrumb probe (`.breadcrumb` UL inside `.next-previous`):
+   12/400 #616161. v=109's enlarged values made the sandbox bar text
+   visibly larger + darker than real BT. */
+.next-previous-breadcrumb {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 400;
+  color: #616161;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0 10px;
+  padding: 0;
+}
+.next-previous-breadcrumb a { color: #616161; text-decoration: none; }
+.next-previous-breadcrumb a:hover { color: var(--bt-blue); text-decoration: underline; }
+.next-previous-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+/* ── BDP body wrapper — v=111 ────────────────────────────────────
+   Real BT wraps the entire BDP body (everything below the
+   `.next-previous` sticky bar) in a `.boat-details.boat-details-
+   gradient` div with `background: linear-gradient(180deg, #f7f7f7,
+   transparent 20%) !important`. This creates a soft grey fade at
+   the top of the BDP page that becomes transparent by 20% down.
+   Sandbox now mirrors this exactly so the page bg matches the
+   user's screenshot of real BT's styles.css:44. */
+.boat-details-gradient {
+  background: linear-gradient(180deg, #f7f7f7, transparent 20%) !important;
+  /* v=113: bleed via width:100vw + negative left-margin (same fix as
+     .next-previous). Inner padding compensates so children stay
+     visually inside the .bt-main centered column. */
+  width: 100vw;
+  margin-left: calc(-50vw + 50%);
+  padding-left: calc(50vw - 50%);
+  padding-right: calc(50vw - 50%);
+}
+
+/* v=105: `.bdp-nav-row` hidden — breadcrumb + Back/Next links live
+   in the always-sticky `.next-previous` bar (matches real BT). */
+.bdp-nav-row { display: none !important; }
 .bdp-sticky-bar-inner {
   max-width: 1336px;
   margin: 0 auto;
@@ -1608,7 +1685,7 @@ body.bdp-scrolled-deep .sticky-save {
 /* Real BT BDP uses ~890 gallery + ~80 gap + 366 rail at 1512 viewport.
    That's ratio gallery:rail ≈ 2.43:1, with ~80px gap. */
 .bdp-grid {
-  display: grid; grid-template-columns: 1fr 366px; gap: 80px;
+  display: grid; grid-template-columns: 1fr 400px; gap: 80px;
   align-items: start;
   /* Real BT's BDP renders at ~1319px content area (left col 890 + 79
      gap + right col 334). Cap at 1336 to match — also auto-shrinks
@@ -1620,11 +1697,17 @@ body.bdp-scrolled-deep .sticky-save {
 
 /* Stacked variant: all sections live in column 1 stacked vertically.
    The .bdp-summary aside is positioned absolutely over the right rail
-   so its tall content doesn't blow up the gallery row's height. */
+   so its tall content doesn't blow up the gallery row's height.
+   v=128: row-gap: 0 to override the inherited `gap: 80px` from
+   `.bdp-grid` — that was adding 80px between every section vertically.
+   v=129: padding-right `480px → 510px` so gallery is 890px (not 920)
+   matching real BT exactly. Combined with `.bdp-summary right: 34px`
+   below, summary sits at x=1066 with 34px right margin to wrapper. */
 .bdp-grid-stack {
   position: relative;
   grid-template-columns: minmax(0, 1fr);
-  padding-right: calc(366px + 80px);
+  padding-right: 510px;
+  row-gap: 0;
 }
 .bdp-grid-stack > .bdp-gallery,
 .bdp-grid-stack > .bdp-stats-strip,
@@ -1647,13 +1730,24 @@ body.bdp-scrolled-deep .sticky-save {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 /* Make ad-strip inside the left col compact (it was full-page padding before). */
-.bdp-grid-stack > .ad-strip { margin: 24px 0; padding: 0; background: transparent; }
+/* v=114: inside `.bdp-grid-stack` (left column) keep ads transparent
+   and unmargined (mid-page leaderboard sits flush). v=116: also
+   reset the 100vw bleed (mid-page ads stay inside the grid column). */
+.bdp-grid-stack > .ad-strip {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  width: auto;
+  margin-left: 0;
+}
 .bdp-grid-stack > .ad-strip .ad-banner { max-width: 100%; }
+/* v=129: right offset 0 → 34px so summary lands at x=1066 (matching
+   real BT's 76px gap between gallery and summary). */
 .bdp-grid-stack > .bdp-summary {
   position: absolute;
   top: 0;
-  right: 0;
-  width: 366px;
+  right: 34px;
+  width: 400px;
   margin: 0;
 }
 /* Real BT BDP main gallery image: 3:2 aspect ratio (890×593 at width 890,
@@ -1723,16 +1817,31 @@ body.bdp-scrolled-deep .sticky-save {
 }
 .bdp-badges { margin-bottom: 10px; }
 /* Right-rail typography matched to real boattrader desktop (1512px probe):
-   title 20/700, location 16/400, price 20/700, own-link 16/400.
-   The title-row keeps H1 + length-suffix span side-by-side (real BT
-   ships a header > h1 + span pattern so H1.textContent stays clean
-   while the visible title reads "<title> | <length>'"). */
-.bdp-title-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
+   title 20/700, location 16/400, price 20/700, own-link 16/400. */
+/* v=114: H1 margin 8px 0 6px → 0 (real BT H1 has margin:0). */
 .bdp-title { font-size: 20px; line-height: 1.25; margin: 0; color: var(--bt-text); font-weight: 700; }
 .bdp-length { color: var(--bt-text); font-weight: 700; font-size: 20px; }
 .bdp-location { color: var(--bt-text); font-size: 16px; margin: 0 0 10px; font-weight: 400; }
-.bdp-price { margin: 0 0 4px; font-size: 16px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+/* v=114: real BT main price `$XX,XXX` renders at 20/700 #333 on the
+   wrapping element itself, not just the `<strong>` child. Bump
+   wrapper size + weight so the bare span (when not wrapped in <strong>)
+   still hits the right size. */
+/* v=131: price + monthly estimate inline-right on same row, matching
+   real BT's title block ("$25,900  $4,000" pattern). The wrapper P
+   stays as flex row with baseline alignment. */
+.bdp-price { margin: 0 0 4px; font-size: 20px; font-weight: 700; color: var(--bt-text); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .bdp-price strong { font-size: 20px; color: var(--bt-text); font-weight: 700; }
+/* v=131: monthly estimate inline-right of price. Real BT renders at
+   18/400. Sits on same baseline as the price ($XX,XXX). Clickable
+   link to loan calculator (replaces old "Own this boat for / Customize"
+   wrapper that wasn't in real BT). */
+.bdp-monthly-est {
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--bt-text);
+  text-decoration: none;
+}
+.bdp-monthly-est:hover { color: var(--bt-blue); text-decoration: underline; }
 .bdp-price-drop {
   display: inline-flex; align-items: baseline; gap: 4px;
   font-size: 16px; font-weight: 700; color: var(--bt-text);
@@ -1762,50 +1871,34 @@ body.bdp-scrolled-deep .sticky-save {
   cursor: help;
 }
 .bdp-customize-link { color: var(--bt-blue); font-weight: 500; font-size: 16px; }
-/* Real BT engagement row: gap 10px (was 12), align center. */
+/* v=117: simplified to match real BT `.listing-engagement-indicators`:
+   plain Views | Saves with a 1×12px #dee2e3 divider, 12/400 #757575,
+   container padding 11px 0, no border-top, no icons. */
 .bdp-engagement-row {
-  list-style: none;
-  padding: 12px 0 14px;
+  padding: 11px 0;
   margin: 0;
-  border-top: 1px solid var(--bt-border);
   display: flex;
   gap: 10px;
   align-items: center;
   font-size: 12px;
-  color: var(--bt-text-dim);
-  flex-wrap: wrap;
+  font-weight: 400;
+  color: #757575;
 }
 .bdp-engagement-row .engagement-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  position: relative;
 }
-/* Real BT engagement-row divider: 1px wide × 12px tall vertical line
-   via bg color rgb(222,226,227). Sandbox used `content: "|"` which
-   renders as the actual pipe character — visibly thicker than real
-   BT's hairline separator. Replaced with a pseudo-element that paints
-   a real 1×12 rectangle. */
-.bdp-engagement-row .engagement-item:not(:last-child)::after {
-  content: "";
+.listing-engagement-indicators__divider {
   display: inline-block;
   width: 1px;
   height: 12px;
-  background: rgb(222, 226, 227);
-  margin-left: 10px;
-  vertical-align: middle;
+  background: #dee2e3;
 }
-.bdp-engagement-row .ico {
-  font-size: 13px;
-  color: var(--bt-text-dim);
-  display: inline-flex; align-items: center;
-  margin-right: 4px;
-}
-.bdp-engagement-row .ico svg { display: block; }
 /* Inline phone SVG in dealer-phone link should align with the number. */
 .dealer-phone .ico-phone,
 .show-phone-btn .ico-phone { vertical-align: middle; margin-right: 4px; }
-.bdp-engagement-row strong { font-weight: 600; font-size: 12px; color: var(--bt-text); }
+.bdp-engagement-row strong { font-weight: 700; font-size: 12px; color: #303030; }
 .visit-seller-link {
   display: inline-block;
   margin: 14px 0;
@@ -1936,18 +2029,20 @@ body.bdp-scrolled-deep .sticky-save {
 }
 
 /* ── Top stats strip — 4 columns × 2 rows (8 cells total) ─────
-   Real BT cards measure ~166×39 each. Switched from `1fr` columns
-   (which produced 205-wide cards in a 870-wide container) to fixed
-   166px tracks with a tighter gap. */
+   v=119: aligned to real BT geometry: `.additional-boat-details`
+   margin 0 10px, padding 0, NO border. The horizontal divider line
+   was a sandbox artifact creating the visible separation user
+   pointed out. Reduced outer margin from 22px 0 14px → 0 0 8px so
+   the gap between strip and the next card matches real BT's 32px
+   (was 118px). */
 .bdp-stats-strip {
   display: grid;
-  grid-template-columns: repeat(4, 166px);
-  grid-auto-rows: 39px;
-  column-gap: 16px;
-  row-gap: 12px;
-  margin: 22px 0 14px;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--bt-border);
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: auto;
+  column-gap: 18px;
+  row-gap: 14px;
+  margin: 0 0 8px;
+  padding: 22px 8px;
 }
 .stat-card {
   display: flex;
@@ -1993,11 +2088,16 @@ body.bdp-scrolled-deep .sticky-save {
 }
 
 /* ── What Owners Say card ─────────────────────────────────── */
+/* v=119: added `border-top + border-bottom: 1px solid #ededed`
+   matching real BT's `.boat-overview-wrapper.ai-ratings-review-
+   bundle` probe (both borders present). bg #f5f9ff, br 8px,
+   pad 20px 16px, mar 0 0 16px. */
 .bdp-owners-card {
-  background: #eef4fb;
-  border-radius: var(--bt-radius-lg);
-  padding: 26px 28px;
-  margin: 24px 0;
+  background: #f5f9ff;
+  border: 1px solid #ededed;
+  border-radius: 8px;
+  padding: 20px 16px;
+  margin: 0 0 16px;
 }
 .owners-card-grid {
   display: grid;
@@ -2014,6 +2114,9 @@ body.bdp-scrolled-deep .sticky-save {
   color: var(--bt-text);
   margin: 0 0 12px;
 }
+/* v=105: `.sparkle-icon` is no longer used on the BDP — real BT does
+   not render a sparkle prefix on "What Owners Say". Selector kept
+   for any other future use. */
 .sparkle-icon {
   color: var(--bt-blue);
   font-size: 18px;
@@ -2049,10 +2152,14 @@ body.bdp-scrolled-deep .sticky-save {
   white-space: nowrap;
 }
 
-/* ── Boat Details accordion — bg #f5f9ff (very light blue), pad 20px 16px,
-   8px radius, matches real BT. */
+/* ── Boat Details accordion ───────────────────────────────────
+   v=114: added `border-bottom: 1px solid #ededed` per real BT's
+   `.accordion-details-section` probe (bb: 1px solid #ededed). */
+/* v=122: real BT `.accordion-details-section` has full 1px solid
+   #ededed border (all 4 sides), not just border-bottom. */
 .bdp-details-section {
   background: #f5f9ff;
+  border: 1px solid #ededed;
   border-radius: 8px;
   padding: 20px 16px;
   margin: 24px 0;
@@ -2109,11 +2216,14 @@ body.bdp-scrolled-deep .sticky-save {
   transition: transform 200ms ease;
 }
 .bdp-accordion[open] .accordion-chevron { transform: rotate(-135deg); }
-/* Real BT accordion body: 15px / 1.3 line-height (19.5px), padding
-   8px 0 0 8px. Was 14/1.55 — too tight on font + too loose on lh. */
+/* v=114: real BT's Description inner card (`.accordion-details-items`)
+   is white bg with 8px radius and `padding: 0 16px`, sitting on the
+   light-blue `.bdp-details-section` parent. */
 .accordion-body {
-  padding: 8px 0 0 8px;
-  font-size: 15px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 0 16px 18px;
+  font-size: 14px;
   color: var(--bt-text);
   line-height: 1.3;
 }
@@ -2155,32 +2265,39 @@ body.bdp-scrolled-deep .sticky-save {
   font-style: italic;
 }
 
-/* ── Loan calculator ─────────────────────────────────────── */
+/* ── Loan calculator (v=120: split-pane with white form + blue
+   preview, monthly payment huge in center) ─────────────────── */
 .bdp-loan-card {
   background: #fff;
-  border: 1px solid var(--bt-border);
-  border-radius: var(--bt-radius-lg);
-  padding: 26px;
+  border: 1px solid #ededed;
+  border-radius: 12px;
+  padding: 0;
   margin: 24px 0;
+  overflow: hidden;
 }
 .loan-card-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 32px;
+  gap: 0;
+}
+.loan-form {
+  background: #fff;
+  padding: 36px 56px 36px 56px;
 }
 /* Real BT loan calc heading: 20/700 #333 (was 18). */
 .loan-form-heading, .loan-preview-heading {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  color: var(--bt-text);
+  color: #303030;
   text-align: center;
-  margin: 0 0 8px;
+  margin: 0 0 14px;
 }
 .loan-form-sub {
   text-align: center;
-  color: var(--bt-text-dim);
-  font-size: 13px;
-  margin: 0 0 18px;
+  color: #303030;
+  font-size: 14px;
+  margin: 0 0 28px;
+  line-height: 1.45;
 }
 /* Real BT loan calc form inputs/selects: 4px border-radius (was 8px
    from the SRP filter base) and 16px font (was 14px). Scoped to the
@@ -2192,83 +2309,55 @@ body.bdp-scrolled-deep .sticky-save {
 }
 .loan-field {
   display: block;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 .loan-field span {
   display: block;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
-  color: var(--bt-text);
+  color: #303030;
   margin-bottom: 6px;
 }
 .loan-preview {
-  background: var(--bt-bg-alt);
-  border-radius: var(--bt-radius);
-  padding: 22px;
+  background: #f5f9ff;
+  padding: 36px 56px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
-.loan-apr {
-  font-size: 16px;
-  color: var(--bt-text);
-  margin: 18px 0 0;
-}
-.loan-apr strong { font-size: 18px; font-weight: 700; }
-/* Real BT loan-preview monthly payment: 50px / 700 / centered, with
-   tight letter-spacing. Was 48px (close, bumped to match probe). */
 .loan-payment {
-  font-size: 50px;
+  font-size: 64px;
   font-weight: 700;
-  color: var(--bt-text);
-  margin: 16px 0 12px;
-  letter-spacing: -1px;
-  text-align: center;
+  color: #303030;
+  margin: 24px 0 18px;
+  letter-spacing: -1.5px;
+  line-height: 1;
 }
 .loan-total {
-  font-size: 13px;
-  color: var(--bt-text);
-  letter-spacing: 0.8px;
-  margin: 8px 0;
-  text-align: center;
-}
-.loan-term {
-  font-size: 13px;
-  color: var(--bt-text);
-  letter-spacing: 0.8px;
-  margin: 4px 0 18px;
-}
-.loan-term strong { font-weight: 700; }
-.loan-prequal-btn {
-  display: inline-block;
-  border: 2px solid var(--bt-blue);
-  background: #fff;
-  color: var(--bt-blue);
-  border-radius: 999px;
-  padding: 12px 36px;
-  font-weight: 700;
   font-size: 15px;
+  color: #303030;
+  letter-spacing: 0.4px;
+  margin: 8px 0 0;
+  font-weight: 400;
 }
+.loan-total strong { font-weight: 700; }
 .loan-divider {
   border: 0;
-  border-top: 1px solid var(--bt-border);
-  margin: 22px 0 14px;
-}
-.loan-bullets-heading {
-  text-align: center;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--bt-text);
-  margin: 0 0 12px;
-}
-.loan-preview .prequal-bullets li {
-  text-align: left;
+  border-top: 1px solid #d8dee4;
+  margin: 24px 0 18px;
 }
 .loan-disclosure-link {
   display: block;
   text-align: center;
-  margin-top: 14px;
   text-decoration: underline;
-  color: var(--bt-text);
-  font-size: 12px;
+  color: #303030;
+  font-size: 14px;
+  font-weight: 700;
+}
+@media (max-width: 720px) {
+  .loan-card-grid { grid-template-columns: 1fr; }
+  .loan-form, .loan-preview { padding: 28px 24px; }
 }
 
 /* ── Listed By section ─────────────────────────────────────
@@ -2346,19 +2435,24 @@ body.bdp-scrolled-deep .sticky-save {
   font-weight: 400;
 }
 
-/* ── More From This Dealer rail ─────────────────────────────
-   Real BT bg: matches the Listed By #f5f9ff tint (both panels live
-   in the same visual band). */
+/* ── More From This Dealer rail ───────────────────────────────
+   v=112: REVERTED v=110/111. Match the light-blue card pattern
+   per real BT (probed v=112 — same #f5f9ff family). */
+/* v=127: tightened bottom margin (24px → 8px) — was creating
+   ~116px gap to .bdp-question-card. */
 .bdp-more-from-dealer {
   background: #f5f9ff;
-  border-radius: var(--bt-radius-lg);
-  padding: 24px 28px 18px;
-  margin: 24px 0;
+  border-radius: 8px;
+  padding: 24px 28px 12px;
+  margin: 24px 0 8px;
 }
+/* v=105: Real BT renders this heading as H4 (carousel section title)
+   with 20/700 and a distinctive teal-grey #414d4a, not the body
+   #333. Tag flipped in boat_detail.html; color updated here. */
 .more-from-dealer-h2 {
   font-size: 20px;
   font-weight: 700;
-  color: var(--bt-text);
+  color: #414d4a;
   margin: 0 0 16px;
 }
 .more-from-dealer-rail-wrap {
@@ -2442,14 +2536,15 @@ body.bdp-scrolled-deep .sticky-save {
 .more-from-dealer-link:hover { text-decoration: underline; }
 
 /* ── Still have a question? card ──────────────────────────── */
-/* "Still have a question?" — matched to real BT: h3 24/700 #303030,
-   body 18px regular, button 20/700 in a large pill. */
+/* v=127: tightened further — padding 24px 0 → 8px 0, margin 12px 0
+   → 0 — eliminates the rest of the ~116px gap user pointed out
+   between More-From-Dealer and Still-have-a-question. */
 .bdp-question-card {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 28px 32px;
-  margin: 24px 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 8px 0;
+  margin: 0;
 }
 .question-card-h2 {
   font-size: 24px;
@@ -2460,30 +2555,32 @@ body.bdp-scrolled-deep .sticky-save {
 }
 .question-card-rule {
   display: block;
-  width: 60px;
-  height: 3px;
+  width: 40px;
+  height: 2px;
   background: var(--bt-blue);
-  margin: 14px 0 24px;
+  margin: 10px 0 16px;
 }
-.bdp-question-card p { margin: 0 0 18px; font-size: 18px; color: #303030; line-height: 1.4; }
+.bdp-question-card p { margin: 0 0 8px; font-size: 15px; color: #303030; line-height: 1.45; }
 .question-contact-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 8px;
+  margin-top: 12px;
   border: 2px solid var(--bt-blue);
   background: #fff;
   color: var(--bt-blue);
   border-radius: 50px;
-  padding: 12px 36px;
+  padding: 10px 28px;
   font-weight: 700;
-  font-size: 20px;
+  font-size: 14px;
   line-height: 1;
 }
 
 /* ── OTHER SERVICES tiles ─────────────────────────────────── */
+/* v=127: removed top margin entirely (sat just under .bdp-question-
+   card with its 8px padding-bottom + 18px border-top padding). */
 .bdp-other-services {
-  margin: 24px 0;
+  margin: 0 0 24px;
   padding-top: 18px;
   border-top: 1px solid var(--bt-border);
 }
@@ -2709,22 +2806,20 @@ body.bdp-scrolled-deep .sticky-save {
   border-radius: 3px;
 }
 
-/* Real BT BDP dealer card is a NESTED card inside .bdp-summary — its
-   own 1px #ededed border, 8px radius, white bg, ~16px padding. Was
-   rendered as a bare section with a top divider line. The nested look
-   makes the contact form visually distinct from the title/price area
-   above it. Same treatment for the private-seller variant. */
-.bdp-dealer-card,
-.bdp-private-seller-card {
-  background: #fff;
-  border: 1px solid #ededed;
-  border-radius: 8px;
-  padding: 16px;
-  margin-top: 14px;
-}
-/* Real BT 'Contact Private Seller' / 'Contact <Salesperson>' heading: 20/700 #333.
-   Was 18/500 — bumped to match real boattrader exactly. */
-.dealer-card-heading { font-size: 20px; font-weight: 700; color: var(--bt-text); margin: 0 0 12px; }
+/* v=132: removed `border-top: 1px solid` per user screenshot — real BT
+   doesn't render a divider line between the engagement row and the
+   contact card. The dealer card sits flush. */
+.bdp-dealer-card { padding-top: 14px; }
+.bdp-private-seller-card { padding-top: 14px; }
+/* Real BT contact card heading (dealer + private): H3 18/500 #303030. */
+/* v=125: heading color #303030 → #1a2022 per real BT probe (rgb(26,32,34)). */
+.dealer-card-heading { font-size: 18px; font-weight: 500; color: #1a2022; margin: 0 0 4px; }
+/* v=125: subline font 14/#303030 → 16/#474c4a per real BT (rgb(71,76,74)). */
+.dealer-card-subline { display: block; font-size: 16px; line-height: 1.45; margin: 0 0 2px; color: #474c4a; font-weight: 400; }
+/* v=125: "Verified Broker" label above the dealer name. */
+.dealer-card-verified { display: block; font-size: 16px; font-weight: 400; color: #474c4a; margin: 0 0 2px; }
+.dealer-card-subline.dealer-card-phone { color: var(--bt-blue); font-weight: 400; margin: 0 0 12px; text-decoration: none; }
+.dealer-card-subline.dealer-card-phone:hover { text-decoration: underline; }
 .dealer-card-meta { display: flex; gap: 12px; align-items: center; margin: 0 0 12px; }
 .dealer-logo {
   width: 60px; height: 60px; border-radius: 50%;
@@ -2756,23 +2851,46 @@ body.bdp-scrolled-deep .sticky-save {
 .trusted-partner strong { color: var(--bt-navy); }
 .dealer-lead-form { display: flex; flex-direction: column; gap: 8px; }
 /* Real BT lead form input: 40px tall, 4px radius, 1px #c2c2c2 border,
-   8px 12px 4px padding (asymmetric so floating label sits properly). */
+   8px 12px 4px padding (asymmetric so floating label sits properly).
+   v=124: explicit transparent bg to match real BT input bg
+   (rgba(0,0,0,0)) — browser default would be white. */
 .lead-input, .lead-textarea {
   width: 100%; border: 1px solid #c2c2c2;
   border-radius: 4px; padding: 8px 12px 4px; font: inherit; font-size: 14px;
   color: var(--bt-text);
   height: 40px;
+  background: transparent;
   box-sizing: border-box;
 }
 .lead-textarea { height: auto; padding: 10px 12px; }
 .lead-input::placeholder, .lead-textarea::placeholder { color: #9ba5af; }
 .lead-row { display: flex; gap: 8px; }
 .lead-row .lead-input { flex: 1; min-width: 0; }
+/* v=133: BDP contact-seller submit button is a SOLID dark-navy pill
+   (not the white outline used on SRP listing cards). User screenshot
+   showed bg #082F4C (or similar very dark navy) + white text + large
+   pill radius + full-width + ~16/700 text. Overrides the outline
+   defaults from `.contact-seller-btn` via higher specificity. */
 .contact-seller-btn.btn-block {
-  padding: 10px 24px;
-  font-size: 14px;
+  background: #082F4C;
+  color: #fff;
+  border: 0;
+  padding: 16px 20px;
+  font-size: 16px;
   font-weight: 700;
   border-radius: 50px;
+  width: 100%;
+  height: auto;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
+}
+.contact-seller-btn.btn-block:hover {
+  background: #0a3d62;
+  text-decoration: none;
+  color: #fff;
 }
 /* Real BT BDP lead-form submit: FILLED blue pill bg rgb(37,102,176),
    white text 14/700, full-width 40px tall. (The legacy `.contact-seller-btn`

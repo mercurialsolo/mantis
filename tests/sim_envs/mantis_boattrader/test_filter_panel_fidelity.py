@@ -509,23 +509,28 @@ def bdp_html(client) -> str:
     return r2.text
 
 
-def test_bdp_h1_has_no_length_suffix(bdp_html):
-    """v=104: real BT BDP H1 is just "Year Make Model" — no length
-    suffix like sandbox's old "| 16'". Removed in v=104."""
-    # H1 should not contain the bdp-length span anymore
-    assert 'class="bdp-length"' not in bdp_html
-    # H1 should not contain a vertical bar followed by a length unit
+def test_bdp_h1_has_length_suffix_span(bdp_html):
+    """v=107: real BT BDP renders the length as a sibling SPAN right
+    after H1 (not appended inside H1), styled 20/700 #333. v=104's
+    removal was based on a stale measurement — re-probed real BT
+    dealer + private listings both show the span. Sandbox restored
+    it as a SPAN child of H1 (visually identical, simpler markup)."""
+    assert 'class="bdp-length"' in bdp_html
+    # Length suffix should match the pattern "| <N>'"
     import re
-    h1_match = re.search(r'<h1[^>]*>([^<]+)</h1>', bdp_html)
-    assert h1_match, "no h1 found"
-    h1_text = h1_match.group(1)
-    assert "| " not in h1_text, f"H1 still has length suffix: {h1_text!r}"
+    assert re.search(r'<span class="bdp-length">\s*\|\s*\d+\'', bdp_html), \
+        "bdp-length span missing the '| <N>'' pattern"
 
 
-def test_bdp_has_meet_your_seller_heading(bdp_html):
-    """v=104: H2 "Meet Your Seller" sits above the contact card on both
-    private and dealer listings — matches real BT's pattern."""
-    assert '<h2 class="meet-your-seller-h2">Meet Your Seller</h2>' in bdp_html
+def test_bdp_has_no_meet_your_seller_heading(bdp_html):
+    """v=107 (was v=104): real BT BDP does NOT render a "Meet Your
+    Seller" H2 above the contact card on either dealer or private
+    listings — re-probed against 2024 Catalina 355 (dealer) and 2015
+    Pioneer 197 Sportfish (private) and both go straight to the
+    contact heading. v=104 added it based on a stale measurement;
+    v=107 removed it again."""
+    assert 'meet-your-seller-h2' not in bdp_html
+    assert 'Meet Your Seller' not in bdp_html
 
 
 def test_owner_highlights_is_h2(bdp_html):
@@ -590,6 +595,196 @@ def _rule_block(css: str, selector_line: str) -> str:
     end = css.find("}", idx)
     assert end > idx
     return css[idx:end + 1]
+
+
+# ── v=105..v=107 BDP exact-mirror tests ────────────────────────────
+# Each test below pins one of the structural changes from the
+# 2026-05-24 BDP re-probe of real boattrader (dealer 2024 Catalina
+# 355 + private 2015 Pioneer 197 Sportfish at 1440x900).
+
+def test_bdp_has_next_previous_sticky_bar(bdp_html):
+    """v=105: `.next-previous` always-sticky bar replaces the old
+    320px-scroll-triggered `.bdp-sticky-bar`. Real BT renders it at
+    position:sticky top:0, 54px tall, bg #f7f7f7, z:110."""
+    assert 'class="next-previous"' in bdp_html
+    assert 'class="next-previous-button next-previous-back"' in bdp_html
+
+
+def test_bdp_next_previous_has_breadcrumb(bdp_html):
+    """v=108: sticky bar contains the breadcrumb nav only. (v=105/106
+    initially included a listing-name/price/location row beneath the
+    breadcrumb, but re-comparison with the real BT screenshot showed
+    that data is NOT visible in the sticky-bar row — only the
+    breadcrumb sits in the middle.)"""
+    assert 'class="breadcrumb next-previous-breadcrumb"' in bdp_html
+    # The listing-info row from v=105 should NOT be present anymore
+    assert 'next-previous-info"' not in bdp_html
+    assert 'next-previous-listing-name' not in bdp_html
+
+
+def test_bdp_next_previous_actions_only_prev_next(bdp_html):
+    """v=108: real BT sticky bar's right action group has ONLY
+    "Previous Boat" + "Next Boat" links. No Save button, no
+    "Offered By" text."""
+    assert 'next-previous-prev' in bdp_html or 'next-previous-next' in bdp_html
+    # Removed in v=108: Save button and Offered-By tag
+    assert 'next-previous-save' not in bdp_html
+    assert 'next-previous-offered-by' not in bdp_html
+
+
+def test_bdp_no_legacy_nav_row(base_css):
+    """v=105: `.bdp-nav-row` (the duplicate breadcrumb + Back/Next
+    block above the gallery) is hidden — its contents now live inside
+    `.next-previous`."""
+    assert ".bdp-nav-row { display: none" in base_css
+
+
+def test_bdp_more_details_is_h4(bdp_html):
+    """v=105: real BT renders "More Details" as H4 16/700 (NOT H3)."""
+    assert '<h4 class="accordion-title">More Details</h4>' in bdp_html
+    assert '<h3 class="accordion-title">More Details</h3>' not in bdp_html
+
+
+def test_bdp_location_accordion_is_h4(bdp_html):
+    """v=105: real BT renders "Location" as H4 16/700 (NOT H3)."""
+    assert '<h4 class="accordion-title">Location</h4>' in bdp_html
+    assert '<h3 class="accordion-title">Location</h3>' not in bdp_html
+
+
+def test_bdp_has_accommodations_subhead(bdp_html):
+    """v=105: real BT renders an "Accommodations" H4 14/700 subhead
+    under the Measurements accordion alongside Dimensions/Weights/Tanks."""
+    assert '<h4 class="accordion-subhead">Accommodations</h4>' in bdp_html
+
+
+def test_bdp_still_have_a_question_is_h3(bdp_html):
+    """v=105: real BT renders "Still have a question?" as H3 24/700
+    #303030 (NOT H2 as sandbox previously had)."""
+    assert '<h3 class="question-card-h2">Still have a question?</h3>' in bdp_html
+    assert '<h2 class="question-card-h2">Still have a question?</h2>' not in bdp_html
+
+
+def test_bdp_more_from_dealer_is_h4(bdp_html):
+    """v=105: real BT renders "More From This Dealer" as H4 20/700
+    with the carousel-special color #414d4a (NOT H2)."""
+    # The page only includes this section for dealer listings, but
+    # the fixture used by `bdp_html` may pick either type. Skip if
+    # the section isn't rendered (private listing path)."""
+    if "more-from-dealer-h2" not in bdp_html:
+        return  # private listing — section absent by design
+    assert '<h4 class="more-from-dealer-h2">More From This Dealer</h4>' in bdp_html
+    assert '<h2 class="more-from-dealer-h2">' not in bdp_html
+
+
+def test_bdp_no_listed_by_section(bdp_html):
+    """v=105: the entire "Listed By" section deleted — real BT does
+    not render a separate Listed By block on either listing type."""
+    assert 'bdp-listed-by' not in bdp_html
+    assert 'bdp-listed-by-h2' not in bdp_html
+
+
+def test_bdp_has_sparkle_on_what_owners_say(bdp_html):
+    """v=112: REVERTED v=105's removal. Real BT renders "What Owners
+    Say" WITH the ✦ sparkle prefix (per user screenshot 2026-05-24).
+    v=105 wrongly removed it; v=112 restored it."""
+    import re
+    m = re.search(
+        r'<h2 class="owners-card-heading">.*?</h2>',
+        bdp_html,
+        re.DOTALL,
+    )
+    assert m, "owners-card-heading H2 missing"
+    assert 'sparkle-icon' in m.group(0), "sparkle-icon span missing from heading"
+    assert '✦' in m.group(0), "✦ glyph missing from heading"
+
+
+def test_bdp_no_key_features_heading(bdp_html):
+    """v=105: "Key Features" H3 removed — real BT doesn't render this
+    heading on probed listings. The feature list <ul> kept as part
+    of the Description body."""
+    assert 'bdp-feature-h3' not in bdp_html
+    assert '>Key Features<' not in bdp_html
+
+
+def test_bdp_dealer_card_heading_is_h3(bdp_html):
+    """v=105/107: contact card heading is H3 18/500 (was H2 20/700).
+    Dealer cards use the salesperson name, private cards use
+    "Contact Private Seller"."""
+    import re
+    h3_match = re.search(
+        r'<h3 class="dealer-card-heading">(Contact [^<]+)</h3>',
+        bdp_html,
+    )
+    assert h3_match, "dealer-card-heading H3 not found"
+    heading = h3_match.group(1)
+    # Either "Contact Private Seller" or "Contact <FirstName LastName>"
+    assert (
+        heading == "Contact Private Seller"
+        or re.match(r"^Contact [A-Z][a-z]+ [A-Z][a-z]+$", heading)
+    ), f"unexpected heading: {heading!r}"
+    # H2 dealer-card-heading should not exist anymore
+    assert '<h2 class="dealer-card-heading">' not in bdp_html
+
+
+def test_bdp_dealer_card_has_inline_sublines(bdp_html):
+    """v=107: dealer card renders dealer name + city as a subline
+    paragraph and dealer phone as a subline link directly under the
+    salesperson H3 (matches real BT pattern). Skip on private listing
+    fixture (those listings don't have a dealer)."""
+    if "bdp-private-seller-card" in bdp_html:
+        return  # private listing path doesn't have dealer sublines
+    assert 'class="dealer-card-subline dealer-card-name"' in bdp_html
+    assert 'class="dealer-card-subline dealer-card-phone"' in bdp_html
+
+
+def test_bdp_engagement_row_simplified_to_views_saves(bdp_html):
+    """v=117: engagement row simplified to plain "Views | Saves"
+    matching real BT's `.listing-engagement-indicators`. Removed
+    icons, removed "Listed days ago" row, added 1×12px #dee2e3
+    vertical divider span."""
+    assert 'listing-engagement-indicators' in bdp_html
+    assert 'listing-engagement-indicators__item' in bdp_html
+    assert 'listing-engagement-indicators__divider' in bdp_html
+    # Pull engagement row from <div class="bdp-engagement-row…"> to
+    # the matching </div> by counting open/close tags.
+    import re
+    start_match = re.search(r'<div class="bdp-engagement-row[^"]*"', bdp_html)
+    assert start_match, "engagement row container not found"
+    start = start_match.start()
+    # Naive depth-counter from `start`:
+    depth = 0
+    i = start
+    while i < len(bdp_html):
+        if bdp_html[i:i+4] == '<div':
+            depth += 1
+            i += 4
+        elif bdp_html[i:i+6] == '</div>':
+            depth -= 1
+            i += 6
+            if depth == 0:
+                break
+        else:
+            i += 1
+    block = bdp_html[start:i]
+    assert '<svg' not in block, "engagement row should have no icons"
+    assert 'Listed ' not in block and 'New to Market' not in block, \
+        "Listed/New-to-Market row should be removed"
+    assert 'Views' in block
+    assert 'Save' in block
+
+
+def test_bdp_dealership_card_rendered(bdp_html):
+    """v=130 (REVERTED v=107): the right-rail `.bdp-dealership-card` IS
+    rendered after re-probe — real BT's `.summary-section` contains
+    an `.enhanced-business-card-wrapper` at y=858 with dealer address
+    + Trusted Partner info. v=107's hide was based on a wrong probe.
+
+    Only renders on dealer (not owner) listings, so skip if the
+    fixture chose an owner listing."""
+    if 'bdp-private-seller-card' in bdp_html:
+        return  # owner listing — dealership card N/A
+    assert 'class="bdp-dealership-card"' in bdp_html
+    assert 'dealership-stat-num' in bdp_html
 
 
 def _details_block(html: str, anchor: str) -> str:
