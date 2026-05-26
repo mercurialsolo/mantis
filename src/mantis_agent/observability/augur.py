@@ -452,9 +452,16 @@ class AugurAdapter:
         extra_tags: dict[str, str] | None = None,
         branch_context: dict | None = None,
         group_id: str | None = None,
+        task_spec: dict | None = None,
+        brain_model_name: str | None = None,
     ) -> None:
         self._session: Any = None
         self._emitted_event_count: int = 0
+        # #684: stash the brain's model name once at adapter open so
+        # every step's ``set_step_versions`` call can stamp the typed
+        # ``captured_versions.model`` field without re-reading from
+        # the (possibly swapped) brain instance mid-run.
+        self._brain_model_name: str = str(brain_model_name or "")
         # #659: per-step-index emission counter — used by
         # :meth:`_build_step_trace` to mint a unique ``step_id`` for
         # each emission even when the same plan ``step_index`` fires
@@ -533,19 +540,31 @@ class AugurAdapter:
             # raise TypeError on unknown kwargs.
             if group_id:
                 session_kwargs["group_id"] = str(group_id)
+            # #683 (augur-sdk 0.6.0): forward the canonical TaskSpec
+            # so the trajectory buffer's task_spec_ids filter matches
+            # against child bundles too. Same TypeError fallback as
+            # group_id for pre-0.6.0 pins.
+            if task_spec:
+                session_kwargs["task_spec"] = dict(task_spec)
             try:
                 session = DebugSession(**session_kwargs)
             except TypeError as exc:
-                # SDK predates 0.6.0 → ``group_id`` isn't accepted.
-                # Drop the 0.6.0 kwarg and retry — preserves the
-                # production path on older pins.
-                if "group_id" in session_kwargs:
+                # SDK predates 0.6.0 → ``group_id`` / ``task_spec``
+                # aren't accepted. Drop the 0.6.0 kwargs and retry —
+                # preserves the production path on older pins.
+                stripped = [
+                    k for k in ("group_id", "task_spec")
+                    if k in session_kwargs
+                ]
+                if stripped:
                     if _verbose:
                         logger.warning(
-                            "AugurAdapter init: SDK rejected group_id "
-                            "(%s) — retrying without it", exc,
+                            "AugurAdapter init: SDK rejected 0.6.0 "
+                            "kwargs %s (%s) — retrying without them",
+                            stripped, exc,
                         )
-                    session_kwargs.pop("group_id", None)
+                    for k in stripped:
+                        session_kwargs.pop(k, None)
                     session = DebugSession(**session_kwargs)
                 else:
                     raise
@@ -744,6 +763,16 @@ class AugurAdapter:
             self._maybe_stamp_loop_detected(
                 augur_index, getattr(step_result, "failure_class", ""),
             )
+            # #684 (augur-sdk 0.6.0): stamp captured_versions per step
+            # so the policy registry can deduplicate runs by model +
+            # grounder + code revision. Without this, the registry
+            # collapses every run to the same policy signature.
+            self._maybe_stamp_step_versions(
+                augur_index,
+                executor_backend=str(
+                    getattr(step_result, "executor_backend", "") or "",
+                ),
+            )
         except Exception as exc:  # noqa: BLE001
             # Verbose deploys want this visible; production stays at debug.
             if is_verbose():
@@ -763,6 +792,48 @@ class AugurAdapter:
         "hard_loop",
         "soft_loop",
     })
+
+    def _maybe_stamp_step_versions(
+        self, augur_index: int, *, executor_backend: str,
+    ) -> None:
+        """Stamp ``captured_versions.model`` + ``.grounder`` +
+        ``.code_git_sha`` for this step via the augur-sdk 0.6.0
+        ``set_step_versions`` API (#684).
+
+        Without this, every mantis bundle hashes to the same policy
+        signature in ``/registry/policies`` — the registry can't
+        distinguish Holo3 vs Claude-driven runs, different grounder
+        backends (SoM vs vision), or code revisions.
+
+        Silently no-ops when the SDK predates 0.6.0 (no
+        ``set_step_versions`` method) or the session is inactive.
+        ``executor_backend`` is read off the per-step ``StepResult``
+        and maps directly to the augur ``grounder`` enum
+        (``som`` / ``vision`` / ``plan``).
+        """
+        versions_fn = getattr(self._session, "set_step_versions", None)
+        if not callable(versions_fn):
+            return
+        kwargs: dict[str, Any] = {"step_index": augur_index}
+        if self._brain_model_name:
+            kwargs["model"] = self._brain_model_name
+        if executor_backend:
+            kwargs["grounder"] = executor_backend
+        git_sha = os.environ.get("MANTIS_GIT_SHA", "").strip()
+        if git_sha:
+            kwargs["code_git_sha"] = git_sha
+        # Only call when we have at least one field beyond step_index
+        # — empty stamps would land an empty captured_versions
+        # block on the trace without adding signal.
+        if len(kwargs) <= 1:
+            return
+        try:
+            versions_fn(**kwargs)
+        except Exception as exc:  # noqa: BLE001
+            if is_verbose():
+                logger.warning(
+                    "AugurAdapter.set_step_versions failed: %r", exc,
+                )
 
     def _maybe_stamp_loop_detected(
         self, augur_index: int, failure_class: Any,
