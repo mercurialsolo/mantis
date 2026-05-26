@@ -3,7 +3,7 @@
 Working doc tracking each element's match status against
 `https://www.boattrader.com/`. Update as iterations land.
 
-Last updated: **v=128** (2026-05-25) — BDP exact-mirror marathon
+Last updated: **v=130** (2026-05-25) — BDP exact-mirror marathon
 (v=105..v=121, 15 deploys across 8 rounds). Re-probed real BT
 dealer (2024 Catalina 355), private (2015 Pioneer 197 Sportfish),
 and Pursuit 3070 listings at 1440×900 and landed structural
@@ -51,6 +51,11 @@ v=127 collapse .bdp-more-from-dealer / .bdp-question-card padding
 **v=128 ROOT CAUSE — `.bdp-grid-stack` was inheriting `gap: 80px`
 from `.bdp-grid`, which became row-gap between every section.
 Added `row-gap: 0` so sections sit only on their own margins.**
+v=129 column widths exactly match real BT: gallery 920→890,
+.bdp-summary right:0→34 so layout is 890+76+400+34=1400 vs real BT.
+v=130 restored right-rail `.bdp-dealership-card` (v=107's hide was
+a wrong probe — re-probe of Pursuit 3070 showed .enhanced-business-
+card-wrapper inside .summary-section at y=858).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
 (token rotates per sandbox restart; current: `syyxwc54axpktn5xcpo91iedvskoeqhv`)
