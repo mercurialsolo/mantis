@@ -1525,7 +1525,7 @@ def run_fanout_dispatch(
         tags=orchestrator_tags,
         task_spec=task_spec,
         group_id=fanout_parent_run_id,
-    ):
+    ) as orchestrator_session:
         return _dispatch_phases(
             task_suite,
             _json=_json,
@@ -1540,6 +1540,7 @@ def run_fanout_dispatch(
             workers=workers,
             fanout_parent_run_id=fanout_parent_run_id,
             shared_seen_printer=shared_seen_printer,
+            orchestrator_session=orchestrator_session,
         )
 
 
@@ -1558,10 +1559,19 @@ def _dispatch_phases(
     workers: int,
     fanout_parent_run_id: str,
     shared_seen_printer: Callable[[dict, int], None] | None,
+    orchestrator_session: Any = None,
 ) -> dict | None:
     """Inner Phase-1/Phase-2 spawn body — extracted so the outer
     :func:`run_fanout_dispatch` can wrap it in the orchestrator-session
     context manager without indenting the original 200-line block.
+
+    ``orchestrator_session`` (#686) is the yield value of
+    :func:`open_orchestrator_session`. When non-None and the SDK
+    exposes ``record_subgoal_completion``, we stamp the fan-out's
+    structural subgoals (``url_collection`` after Phase-1,
+    ``per_url_extraction`` after Phase-2) so the reward aggregator's
+    progress component reads non-zero. Best-effort observability —
+    swallow exceptions, never break the run.
     """
     if phase1_workers <= 1:
         # Serial path — exactly the #638 axis-2 behaviour.
@@ -1677,6 +1687,13 @@ def _dispatch_phases(
         )
         return None
 
+    # #686: Phase-1 produced URLs → mark url_collection subgoal complete
+    # on the orchestrator session. Reward aggregator's progress
+    # component reads this; empty across pre-#686 bundles meant
+    # progress defaulted to 0 even for plans that fully succeeded.
+    _record_subgoal(orchestrator_session, step_index=0,
+                    subgoal_id="url_collection", completion=1.0)
+
     phase2_suites = prepare_phase2_suites(
         task_suite, collected_urls, url_collect_group, workers,
     )
@@ -1739,6 +1756,21 @@ def _dispatch_phases(
             shared_seen_printer(task_suite, merged_shared_seen_hits)
         except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
             print(f"  [shared-seen] printer raised: {exc}")
+
+    # #686: Phase-2 returned leads → mark per_url_extraction subgoal
+    # complete. ``completion`` reflects what fraction of the workers
+    # produced viable leads — a partial completion (e.g. 3/4 workers
+    # halted with extract errors) is still useful signal for the
+    # reward aggregator vs. a binary 1.0/0.0.
+    if dedup_total > 0:
+        workers_with_leads = sum(1 for ws in per_worker_leads if ws)
+        completion = (
+            workers_with_leads / len(phase2_suites)
+            if phase2_suites else 1.0
+        )
+        _record_subgoal(orchestrator_session, step_index=1,
+                        subgoal_id="per_url_extraction",
+                        completion=completion)
 
     return {
         "viable": dedup_total,
@@ -1824,4 +1856,54 @@ def _build_task_spec_from_suite(
         f"modal:mantis-cua-server:fanout"
         f"(p1={phase1_workers}xp{phase1_max_pages},p2={phase2_workers})"
     )
+    # #686: declare the two structural subgoals the dispatcher records
+    # completion for. The orchestrator session stamps
+    # ``url_collection`` after Phase-1 returns URLs and
+    # ``per_url_extraction`` after Phase-2 returns leads. Declaring
+    # them in the task_spec lets the reward aggregator's progress
+    # component compute a max-progress baseline (= len(subgoals)).
+    spec["subgoals"] = [
+        {
+            "subgoal_id": "url_collection",
+            "description": "Phase-1 harvest of listing-detail URLs from paginated listings.",
+        },
+        {
+            "subgoal_id": "per_url_extraction",
+            "description": "Phase-2 extraction of lead records from each collected URL.",
+            "parent_subgoal_id": "url_collection",
+        },
+    ]
     return spec
+
+
+def _record_subgoal(
+    session: Any,
+    *,
+    step_index: int,
+    subgoal_id: str,
+    completion: float,
+) -> None:
+    """Forward a subgoal completion to the orchestrator session.
+
+    Best-effort observability (#686). Silently no-ops when:
+
+    * ``session`` is ``None`` (orchestrator session didn't open — SDK
+      disabled / missing / pre-0.4.0), OR
+    * the SDK predates 0.6.0 (no ``record_subgoal_completion``
+      method).
+
+    Reward aggregator's progress component reads these. Without them
+    the score defaults to 0 even on fully successful runs (see #686
+    / augur#148).
+    """
+    if session is None:
+        return
+    fn = getattr(session, "record_subgoal_completion", None)
+    if not callable(fn):
+        return
+    try:
+        fn(step_index=step_index, subgoal_id=subgoal_id, completion=completion)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "record_subgoal_completion(%s) raised: %s", subgoal_id, exc,
+        )
