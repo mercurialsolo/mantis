@@ -288,6 +288,13 @@ class MicroPlanRunner:
         # separate attr so a future loop with non-parent rollouts can
         # set group_id alone.
         self._fanout_group_id: str | None = None
+        # #683 (augur-sdk 0.6.0): canonical task_spec composed by the
+        # orchestrator and propagated through the suite envelope.
+        # ``None`` for non-fanout runs so AugurAdapter opens without
+        # the kwarg and the per-step trajectory buffer reads it from
+        # the bundle without needing the trainer to join on the
+        # parent's metadata.
+        self._fanout_task_spec: dict | None = None
         self._active_checkpoint_context = None
         self._pre_step_snapshot, self._final_status = None, "running"
         # #audit item 4: halt_reason last set by ``_persist`` — read by

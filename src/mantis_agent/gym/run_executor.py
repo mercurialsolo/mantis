@@ -303,6 +303,20 @@ class RunExecutor:
             # as separate hook so a future GRPO loop with rollouts
             # that don't share a parent can set group_id alone).
             group_id=getattr(runner, "_fanout_group_id", None),
+            # #683 (augur-sdk 0.6.0): canonical TaskSpec on every
+            # child session so the trajectory buffer's task_spec_ids
+            # filter matches against child bundles too. Orchestrator
+            # composes the spec from suite metadata; the Modal worker
+            # entrypoint plumbs it onto ``_fanout_task_spec``. ``None``
+            # for non-fanout runs — AugurAdapter omits the kwarg.
+            task_spec=getattr(runner, "_fanout_task_spec", None),
+            # #684 (augur-sdk 0.6.0): brain model name for the
+            # per-step ``captured_versions.model`` stamp. The session
+            # tag still carries it (existing #542 behaviour); this is
+            # the typed field the policy registry / training surface
+            # consumes. Read once at AugurAdapter open so we don't
+            # snapshot a swapped brain mid-run.
+            brain_model_name=model_name,
         )
 
         if not runner._results_base_url and plan.steps:

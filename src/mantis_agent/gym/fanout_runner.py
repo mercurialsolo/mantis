@@ -1511,6 +1511,14 @@ def run_fanout_dispatch(
     # in the Augur viewer keys on the same field that already drives
     # branch_context.parent_run_id grouping.
     task_suite["_fanout_group_id"] = fanout_parent_run_id
+    # #683: also stamp the composed task_spec onto the suite so every
+    # child Phase-1 / Phase-2 worker can open its DebugSession with
+    # the same canonical task definition the orchestrator surfaces.
+    # Without this, the trajectory buffer's task_spec_ids filter has
+    # nothing to match on child bundles (only the parent row carries
+    # the task_spec) and ``same_task_divergent_outcomes`` preference
+    # mining starves.
+    task_suite["_fanout_task_spec"] = task_spec
     with open_orchestrator_session(
         run_id=fanout_parent_run_id,
         session_name=session_name,

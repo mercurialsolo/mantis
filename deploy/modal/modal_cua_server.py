@@ -1038,6 +1038,17 @@ def _run_holo3_executor(
             task_suite.get("_fanout_group_id", "") or ""
         ) or None
 
+        # #683: forward the orchestrator-composed ``task_spec`` so the
+        # child Phase-1 / Phase-2 worker session opens with the same
+        # canonical task definition. The trajectory buffer's
+        # task_spec_ids filter matches against child bundles too —
+        # without this hop the parent row is the only one with a
+        # task_spec_id.
+        _ts = task_suite.get("_fanout_task_spec")
+        micro_runner._fanout_task_spec = (
+            dict(_ts) if isinstance(_ts, dict) and _ts else None
+        )
+
         # #638 axis 2 follow-up: derive a short worker tag from the
         # fan-out branch_id so per-step log lines can be greppable per-
         # worker in the interleaved orchestrator stdout. The branch_id
