@@ -1,8 +1,8 @@
 """#689 — runner-level ``publish_modelio_context`` default.
 
-Coverage of ``session.record_modelio()`` was sparse (1.3% on the
-staffai tenant) because most LLM call sites didn't have an outer
-``publish_modelio_context`` wrapping them. Step handlers and helpers
+Coverage of ``session.record_modelio()`` was sparse (1.3% across
+recent production runs) because most LLM call sites didn't have an
+outer ``publish_modelio_context`` wrapping them. Step handlers and helpers
 that already published contexts (form-targeting → grounding,
 step_recovery → step_recovery, runner verify → verifier) were the
 exceptions; the bulk of model-decision LLM calls (extractor,
