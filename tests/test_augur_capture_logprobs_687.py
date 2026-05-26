@@ -133,6 +133,25 @@ def test_adapter_retries_without_capture_logprobs_on_TypeError(
 # ── record_anthropic_modelio stamps response.logprobs ──────────────
 
 
+# These tests exercise the real ``record_anthropic_modelio`` mapper,
+# which imports ``augur_sdk.ModelApiAdapterBase`` to call
+# ``extract_logprobs_from_response``. CI doesn't install the
+# ``observability`` extra (.github/workflows/test.yml installs
+# dev + server + orchestrator + metrics only), so ``augur_sdk``
+# isn't on the path there and the silent ImportError inside the
+# mapper would leave ``response.logprobs`` unstamped. Skip when the
+# SDK genuinely isn't installed; the env-flag + adapter-forward
+# tests above still run because they patch ``augur_mod.DebugSession``
+# directly without touching the real SDK.
+import importlib.util  # noqa: E402
+
+_HAS_AUGUR_SDK = importlib.util.find_spec("augur_sdk") is not None
+
+
+@pytest.mark.skipif(
+    not _HAS_AUGUR_SDK,
+    reason="augur-sdk not installed (CI runs without the observability extra)",
+)
 def test_record_anthropic_modelio_stamps_logprobs_when_vendor_returns_them():
     """SDK extractor returns logprobs list → mapper stamps it on
     response.logprobs for the augur bundle."""
@@ -167,6 +186,10 @@ def test_record_anthropic_modelio_stamps_logprobs_when_vendor_returns_them():
     assert lp[0]["token"] == "hel"
 
 
+@pytest.mark.skipif(
+    not _HAS_AUGUR_SDK,
+    reason="augur-sdk not installed (CI runs without the observability extra)",
+)
 def test_record_anthropic_modelio_omits_logprobs_when_vendor_returned_none():
     """Vendor didn't return logprobs (typical Anthropic Messages
     today) → SDK extractor returns None → field absent from the
@@ -191,6 +214,10 @@ def test_record_anthropic_modelio_omits_logprobs_when_vendor_returned_none():
     assert "logprobs" not in record["response"]
 
 
+@pytest.mark.skipif(
+    not _HAS_AUGUR_SDK,
+    reason="augur-sdk not installed (CI runs without the observability extra)",
+)
 def test_record_anthropic_modelio_swallows_extractor_exception():
     """SDK extractor raised (corrupt response shape, schema drift) →
     mapper continues without logprobs. Telemetry never breaks the
