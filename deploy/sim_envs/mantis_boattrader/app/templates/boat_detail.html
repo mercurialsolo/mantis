@@ -104,20 +104,20 @@
        span entirely. #}
     <h1 class="bdp-title">{{ boat.title }}<span class="bdp-length"> | {{ boat.length_ft|int }}'</span></h1>
     <p class="bdp-location">{{ boat.city }}, {{ boat.state }} {{ boat.zip }}</p>
+    {# v=131: simplified price + monthly to match real BT exactly.
+       Real BT renders price (20/700 #333) inline-right with monthly
+       estimate (18/400) on the same row — no "Own this boat for /
+       Customize" wrapper text. Monthly is just the bare amount. #}
     <div class="bdp-price-block" data-testid="price-block">
       <p class="bdp-price">
         <strong>{{ boat.display_price }}</strong>
+        {% if boat.monthly_price %}
+          <a href="#loan-calculator" class="bdp-monthly-est">{{ boat.display_monthly|replace('*','')|replace('/mo','') }}</a>
+        {% endif %}
         {% if boat.price_drop_amount %}
           <span class="bdp-price-drop"><span class="bdp-price-drop-arrow">↓</span>{{ boat.price_drop_amount|replace('-','') }}</span>
         {% endif %}
       </p>
-      {% if boat.monthly_price %}
-        <p class="bdp-own-line">
-          <a href="#loan-calculator" class="bdp-own-link">Own this boat for {{ boat.display_monthly|replace('*','') }}</a>
-          <span class="info-tip" title="Estimated payment">ⓘ</span>
-          <a href="#loan-calculator" class="bdp-customize-link">Customize</a>
-        </p>
-      {% endif %}
     </div>
     {# v=117: simplified to match real BT's `.listing-engagement-
        indicators` exactly: just "Views | Saves", 12/400 #757575

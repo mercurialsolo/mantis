@@ -58,7 +58,7 @@ a wrong probe — re-probe of Pursuit 3070 showed .enhanced-business-
 card-wrapper inside .summary-section at y=858).
 
 Live URL: `https://8080-014f48ab-eeb1-4ca5-947e-42e169d1fcc8.daytonaproxy01.net/boats/`
-(token rotates per sandbox restart; current: `syyxwc54axpktn5xcpo91iedvskoeqhv`)
+(token rotates per sandbox restart; current: `vdn3e1danb38__v4trniindjgnfvuez8`)
 
 ## Methodology
 

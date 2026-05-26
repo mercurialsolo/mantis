@@ -1777,8 +1777,22 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
    wrapping element itself, not just the `<strong>` child. Bump
    wrapper size + weight so the bare span (when not wrapped in <strong>)
    still hits the right size. */
-.bdp-price { margin: 0 0 4px; font-size: 20px; font-weight: 700; color: var(--bt-text); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+/* v=131: price + monthly estimate inline-right on same row, matching
+   real BT's title block ("$25,900  $4,000" pattern). The wrapper P
+   stays as flex row with baseline alignment. */
+.bdp-price { margin: 0 0 4px; font-size: 20px; font-weight: 700; color: var(--bt-text); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .bdp-price strong { font-size: 20px; color: var(--bt-text); font-weight: 700; }
+/* v=131: monthly estimate inline-right of price. Real BT renders at
+   18/400. Sits on same baseline as the price ($XX,XXX). Clickable
+   link to loan calculator (replaces old "Own this boat for / Customize"
+   wrapper that wasn't in real BT). */
+.bdp-monthly-est {
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--bt-text);
+  text-decoration: none;
+}
+.bdp-monthly-est:hover { color: var(--bt-blue); text-decoration: underline; }
 .bdp-price-drop {
   display: inline-flex; align-items: baseline; gap: 4px;
   font-size: 16px; font-weight: 700; color: var(--bt-text);
