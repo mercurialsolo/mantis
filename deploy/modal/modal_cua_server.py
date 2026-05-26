@@ -226,13 +226,16 @@ executor_image = (
         # 0.1.2+ fires an immediate session-opened heartbeat so the
         # workspace's connection badge updates the moment the SDK is
         # wired up, before the first step lands.
-        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
-        # added ``branch_context`` to ``DebugSession.__init__``, which
-        # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.2.1,<0.3",
+        # Must match pyproject.toml (``augur-sdk>=0.6.0,<0.7``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``; 0.4.0
+        # (mercurialsolo/augur-sdk#38) added
+        # ``DebugSession.open_orchestrator(...)``; 0.6.0 (#680) adds
+        # ``task_spec`` / ``group_id`` / ``set_loop_detected`` /
+        # ``record_subgoal_completion`` and the ``set_score`` kwargs
+        # ``should_stop`` / ``uncertainty``. Stale <0.6 pins silently
+        # drop the new fields — adapter swallows the TypeError and the
+        # bundle ships without RL-training metadata.
+        "augur-sdk>=0.6.0,<0.7",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -642,11 +645,70 @@ def _run_holo3_executor(
     """
     from datetime import datetime, timezone
 
-    from mantis_agent.brain_holo3 import Holo3Brain
-    from mantis_agent.task_loop import setup_env, setup_viewer
-
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     t0 = time.time()
+
+    # ── #673: fanout dispatch gate (HTTP path) ──
+    # Before booting the Holo3 GGUF + llama-server (~30s cold), check
+    # whether this submission is in orchestrator mode:
+    #   * suite carries a ``parallelizable_url_collect`` loop AND
+    #   * caller opted in via ``_fanout_phase1_workers > 1`` AND
+    #   * we're NOT already a Phase-1/Phase-2 sub-worker
+    #     (``_fanout_phase`` set by prepare_phase1_suite /
+    #     prepare_phase2_suites — guards against recursive spawning)
+    # If all three hold, dispatch fanout via the shared helper in
+    # ``gym/fanout_runner.run_fanout_dispatch`` and return the
+    # aggregate envelope WITHOUT booting llama-server. The Phase-1/
+    # Phase-2 child workers spawned by the helper re-enter this
+    # function with ``_fanout_phase`` set; they fall through to the
+    # single-runner path below.
+    #
+    # Sub-workers and unopted single-runner submissions skip this
+    # block entirely and continue to the legacy boot path.
+    _suite_preview = json.loads(task_file_contents)
+    if not _suite_preview.get("_fanout_phase"):
+        from mantis_agent.gym.fanout_runner import (
+            find_url_collect_group,
+            run_fanout_dispatch,
+        )
+        _url_collect_eligible = find_url_collect_group(_suite_preview)
+        try:
+            _opt_in_workers = int(
+                _suite_preview.get("_fanout_phase1_workers") or 1
+            )
+        except (TypeError, ValueError):
+            _opt_in_workers = 1
+        if _url_collect_eligible is not None and _opt_in_workers > 1:
+            import uuid as _uuid_for_fanout
+            _fanout_parent = (
+                f"fanout-{_suite_preview.get('_plan_signature', 'unknown')[:12]}-"
+                f"{_uuid_for_fanout.uuid4().hex[:8]}"
+            )
+            _suite_preview["_fanout_parent_run_id"] = _fanout_parent
+            print(
+                f"\n  ═══ #673: HTTP-path fanout orchestrator "
+                f"(parent_run_id={_fanout_parent}, "
+                f"phase1_workers={_opt_in_workers}) ═══"
+            )
+            _result = run_fanout_dispatch(
+                _suite_preview,
+                executor_fn=run_holo3,
+                model="holo3",
+                claude_model="",
+                max_steps=max_steps,
+                workers=max(_opt_in_workers, 1),
+                fanout_parent_run_id=_fanout_parent,
+                shared_seen_printer=_print_shared_seen_metrics,
+            )
+            if _result is not None:
+                return _result
+            print(
+                "  [#673] Fanout fell through (no URLs harvested); "
+                "continuing to single-runner sequential path."
+            )
+
+    from mantis_agent.brain_holo3 import Holo3Brain
+    from mantis_agent.task_loop import setup_env, setup_viewer
 
     # Download GGUF if not cached
     model_path = os.path.join(HOLO3_MODEL_DIR, HOLO3_GGUF_FILE)
@@ -965,6 +1027,16 @@ def _run_holo3_executor(
             )
         except Exception as exc:  # noqa: BLE001
             print(f"  WARNING: fanout branch_context init failed: {exc}")
+
+        # #680: forward the orchestrator-set ``_fanout_group_id`` to
+        # the runner so AugurAdapter opens the child session with
+        # ``group_id=`` (GRPO sibling-rollout correlation). Same value
+        # as ``branch_context.parent_run_id`` today — kept on a
+        # separate attribute so a future loop with rollouts that don't
+        # share a parent can set group_id alone.
+        micro_runner._fanout_group_id = str(
+            task_suite.get("_fanout_group_id", "") or ""
+        ) or None
 
         # #638 axis 2 follow-up: derive a short worker tag from the
         # fan-out branch_id so per-step log lines can be greppable per-
@@ -1423,13 +1495,16 @@ def _run_gemma4_cua_executor(
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
         # #509: parity with run_holo3 — Gemma4 also runs the augur wedge.
-        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
-        # added ``branch_context`` to ``DebugSession.__init__``, which
-        # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.2.1,<0.3",
+        # Must match pyproject.toml (``augur-sdk>=0.6.0,<0.7``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``; 0.4.0
+        # (mercurialsolo/augur-sdk#38) added
+        # ``DebugSession.open_orchestrator(...)``; 0.6.0 (#680) adds
+        # ``task_spec`` / ``group_id`` / ``set_loop_detected`` /
+        # ``record_subgoal_completion`` and the ``set_score`` kwargs
+        # ``should_stop`` / ``uncertainty``. Stale <0.6 pins silently
+        # drop the new fields — adapter swallows the TypeError and the
+        # bundle ships without RL-training metadata.
+        "augur-sdk>=0.6.0,<0.7",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -1476,13 +1551,16 @@ claude_executor_image = (
         # #509: parity with run_holo3 / run_gemma4_cua — Claude executor
         # also runs the augur wedge so bundles + streaming work for the
         # Anthropic-API tier.
-        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
-        # added ``branch_context`` to ``DebugSession.__init__``, which
-        # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.2.1,<0.3",
+        # Must match pyproject.toml (``augur-sdk>=0.6.0,<0.7``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``; 0.4.0
+        # (mercurialsolo/augur-sdk#38) added
+        # ``DebugSession.open_orchestrator(...)``; 0.6.0 (#680) adds
+        # ``task_spec`` / ``group_id`` / ``set_loop_detected`` /
+        # ``record_subgoal_completion`` and the ``set_score`` kwargs
+        # ``should_stop`` / ``uncertainty``. Stale <0.6 pins silently
+        # drop the new fields — adapter swallows the TypeError and the
+        # bundle ships without RL-training metadata.
+        "augur-sdk>=0.6.0,<0.7",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -1615,13 +1693,16 @@ api_image = (
         # is lazy-imported but if augur_sdk is missing it falls back
         # silently — keeping the dep here makes the import succeed and
         # lets future API-side bundle reads work without a redeploy.
-        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
-        # added ``branch_context`` to ``DebugSession.__init__``, which
-        # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.2.1,<0.3",
+        # Must match pyproject.toml (``augur-sdk>=0.6.0,<0.7``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``; 0.4.0
+        # (mercurialsolo/augur-sdk#38) added
+        # ``DebugSession.open_orchestrator(...)``; 0.6.0 (#680) adds
+        # ``task_spec`` / ``group_id`` / ``set_loop_detected`` /
+        # ``record_subgoal_completion`` and the ``set_score`` kwargs
+        # ``should_stop`` / ``uncertainty``. Stale <0.6 pins silently
+        # drop the new fields — adapter swallows the TypeError and the
+        # bundle ships without RL-training metadata.
+        "augur-sdk>=0.6.0,<0.7",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -2480,13 +2561,16 @@ def api():
         # so augur-sdk has to be added here separately. Without this the
         # AugurAdapter init logs sdk_available=False and is a no-op even
         # though the package is in executor_image for the other tiers.
-        # Must match pyproject.toml (``augur-sdk>=0.2.1,<0.3``). 0.2.x
-        # added ``branch_context`` to ``DebugSession.__init__``, which
-        # the fan-out runner needs to label Phase-1/Phase-2 worker
-        # sessions under a shared parent_run_id. Stale 0.1.x pins
-        # silently drop events from every fan-out worker — the adapter
-        # catches the TypeError and the worker session never opens.
-        "augur-sdk>=0.2.1,<0.3",
+        # Must match pyproject.toml (``augur-sdk>=0.6.0,<0.7``). 0.2.x
+        # added ``branch_context`` to ``DebugSession.__init__``; 0.4.0
+        # (mercurialsolo/augur-sdk#38) added
+        # ``DebugSession.open_orchestrator(...)``; 0.6.0 (#680) adds
+        # ``task_spec`` / ``group_id`` / ``set_loop_detected`` /
+        # ``record_subgoal_completion`` and the ``set_score`` kwargs
+        # ``should_stop`` / ``uncertainty``. Stale <0.6 pins silently
+        # drop the new fields — adapter swallows the TypeError and the
+        # bundle ships without RL-training metadata.
+        "augur-sdk>=0.6.0,<0.7",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE).add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
@@ -3007,11 +3091,13 @@ def main(
     # synthesizer in mantis_agent.gym.fanout_runner.
     task_suite = json.loads(task_file_contents)
     if workers > 1 and task_suite.get("_micro_plan"):
+        # #673: Phase-1/Phase-2 spawn primitives are now consumed
+        # internally by ``run_fanout_dispatch`` (imported at the call
+        # site below). CLI still uses ``find_url_collect_group`` to
+        # gate and ``prepare_modal_partitions`` for the #617
+        # pagination-partition fallback.
         from mantis_agent.gym.fanout_runner import (
             find_url_collect_group, prepare_modal_partitions,
-            prepare_phase1_suite, prepare_phase1_partitions,
-            prepare_phase2_suites, resolve_phase1_max_pages,
-            dedup_urls_across_workers,
         )
 
         # #627: create a per-run shared seen-URL set keyed by a unique
@@ -3057,222 +3143,36 @@ def main(
         # Phase 2 partitions those URLs across N workers, each running
         # a one-shot navigate+scroll+extract sub-plan. No cross-partition
         # duplicates by construction.
+        # #673: the orchestration body that previously lived inline
+        # here moved into ``gym/fanout_runner.run_fanout_dispatch`` so
+        # the HTTP path can call the same code. We keep the CLI's
+        # gating + the post-fanout fall-through unchanged.
         url_collect_group = find_url_collect_group(task_suite)
         if url_collect_group is not None:
             executor_fn = EXECUTOR_MAP.get(model, run_holo3)
-            # #638 axis 2: walk N pagination pages in Phase-1 so the
-            # serial URL-harvest container can dominate the per-page
-            # fanout on coverage. Cap derived from the plan's
-            # parallelizable_pagination loop_count (clamped) or from an
-            # explicit ``_fanout_phase1_max_pages`` suite override.
-            phase1_max_pages, phase1_template = resolve_phase1_max_pages(
-                task_suite,
-            )
-            # #644 (axis 3): split Phase-1 across M parallel workers
-            # when the suite opts in via ``_fanout_phase1_workers``.
-            # Default 1 preserves the serial #638 behaviour. Cap at
-            # phase1_max_pages — round-robin partitioning would emit
-            # empty chunks otherwise.
-            phase1_workers_req = task_suite.get("_fanout_phase1_workers")
+            from mantis_agent.gym.fanout_runner import run_fanout_dispatch
+            _phase1_workers_req = task_suite.get("_fanout_phase1_workers", 1)
             try:
-                phase1_workers = max(1, int(phase1_workers_req or 1))
+                _phase1_workers_cli = max(1, int(_phase1_workers_req or 1))
             except (TypeError, ValueError):
-                phase1_workers = 1
-            phase1_workers = min(phase1_workers, phase1_max_pages)
-            from mantis_agent.gym.fanout_runner import (
-                dedup_leads_by_url, read_partition_result,
+                _phase1_workers_cli = 1
+            _fanout_result = run_fanout_dispatch(
+                task_suite,
+                executor_fn=executor_fn,
+                model=model,
+                claude_model=claude_model,
+                max_steps=max_steps,
+                workers=max(_phase1_workers_cli, workers),
+                fanout_parent_run_id=fanout_parent_run_id,
+                shared_seen_printer=_print_shared_seen_metrics,
             )
-
-            if phase1_workers <= 1:
-                # Serial path — exactly the #638 axis-2 behaviour.
-                print(
-                    f"\n  ═══ PHASE-1 (#628): URL collection on 1 container "
-                    f"(max_pages={phase1_max_pages}, "
-                    f"template={phase1_template!r}) ═══"
-                )
-                phase1_suite = prepare_phase1_suite(
-                    task_suite, url_collect_group,
-                    max_pages=phase1_max_pages,
-                    pagination_url_template=phase1_template,
-                )
-                # #631: per-partition branch_id for Augur grouping.
-                phase1_suite["_fanout_branch_id"] = (
-                    f"{fanout_parent_run_id}:phase1"
-                )
-                spawn_kwargs = {
-                    "task_file_contents": json.dumps(phase1_suite),
-                    "max_steps": max_steps,
-                }
-                if model == "claude":
-                    spawn_kwargs["claude_model"] = claude_model
-                phase1_handle = executor_fn.spawn(**spawn_kwargs)
-                print("    [phase1] worker spawned")
-                try:
-                    _phase1_raw = phase1_handle.get()
-                    if isinstance(_phase1_raw, dict):
-                        _urls_in_result = _phase1_raw.get(
-                            "collected_urls", "MISSING"
-                        )
-                        _urls_type = type(_urls_in_result).__name__
-                        _urls_len = (
-                            len(_urls_in_result)
-                            if isinstance(_urls_in_result, list) else "n/a"
-                        )
-                        print(
-                            f"    [phase1] raw result: "
-                            f"viable={_phase1_raw.get('viable', 'MISSING')} "
-                            f"collected_urls_type={_urls_type} "
-                            f"collected_urls_len={_urls_len}"
-                        )
-                    phase1_summary = read_partition_result(_phase1_raw)
-                    collected_urls = phase1_summary["collected_urls"]
-                except Exception as exc:
-                    print(f"    [phase1] ERROR: {exc} — aborting fan-out")
-                    collected_urls = []
-                print(
-                    f"    [phase1] harvested {len(collected_urls)} "
-                    f"unique URL(s)"
-                )
-            else:
-                # #644: M parallel Phase-1 workers each scanning a
-                # page-slice. Each worker's collected_urls are merged
-                # + deduped orchestrator-side; cross-worker dedup
-                # via ``shared_seen_set`` is a future-work optimisation.
-                phase1_sub_suites = prepare_phase1_partitions(
-                    task_suite, url_collect_group,
-                    n_workers=phase1_workers,
-                    max_pages=phase1_max_pages,
-                    pagination_url_template=phase1_template,
-                )
-                print(
-                    f"\n  ═══ PHASE-1 (#644 axis 3): URL collection "
-                    f"on {len(phase1_sub_suites)} containers "
-                    f"(max_pages={phase1_max_pages}, "
-                    f"template={phase1_template!r}) ═══"
-                )
-                phase1_handles: list = []
-                for i, sub in enumerate(phase1_sub_suites):
-                    sub["_fanout_branch_id"] = (
-                        f"{fanout_parent_run_id}:phase1_w{i + 1}"
-                    )
-                    spawn_kwargs = {
-                        "task_file_contents": json.dumps(sub),
-                        "max_steps": max_steps,
-                    }
-                    if model == "claude":
-                        spawn_kwargs["claude_model"] = claude_model
-                    handle = executor_fn.spawn(**spawn_kwargs)
-                    phase1_handles.append((i, handle))
-                    print(
-                        f"    [phase1] worker {i + 1}/"
-                        f"{len(phase1_sub_suites)} spawned "
-                        f"(pages={sub['_fanout_phase1_page_set']})"
-                    )
-                per_worker_urls: list[list[str]] = []
-                for i, handle in phase1_handles:
-                    try:
-                        summary = read_partition_result(handle.get())
-                        urls = summary["collected_urls"]
-                        per_worker_urls.append(urls)
-                        print(
-                            f"    [phase1] worker {i + 1}: "
-                            f"collected_urls={len(urls)}"
-                        )
-                    except Exception as exc:
-                        print(
-                            f"    [phase1] worker {i + 1} ERROR: {exc}"
-                        )
-                        per_worker_urls.append([])
-                collected_urls = dedup_urls_across_workers(per_worker_urls)
-                raw_total = sum(len(c) for c in per_worker_urls)
-                if raw_total > len(collected_urls):
-                    print(
-                        f"    [phase1] cross-worker dedup: "
-                        f"{raw_total} → {len(collected_urls)} unique URL(s)"
-                    )
-                else:
-                    print(
-                        f"    [phase1] harvested {len(collected_urls)} "
-                        f"unique URL(s) (no cross-worker duplicates)"
-                    )
-
-            if collected_urls:
-                phase2_suites = prepare_phase2_suites(
-                    task_suite, collected_urls, url_collect_group, workers,
-                )
-                print(
-                    f"\n  ═══ PHASE-2 (#628): "
-                    f"{len(phase2_suites)} worker(s) × "
-                    f"{len(collected_urls)} URL(s) ═══"
-                )
-                phase2_handles = []
-                for i, sub_suite in enumerate(phase2_suites):
-                    # #631: per-partition branch_id for Augur grouping.
-                    sub_suite["_fanout_branch_id"] = (
-                        f"{fanout_parent_run_id}:phase2_w{i + 1}"
-                    )
-                    kwargs = {
-                        "task_file_contents": json.dumps(sub_suite),
-                        "max_steps": max_steps,
-                    }
-                    if model == "claude":
-                        kwargs["claude_model"] = claude_model
-                    handle = executor_fn.spawn(**kwargs)
-                    phase2_handles.append((i, handle))
-                    print(
-                        f"    [phase2] worker {i + 1}/{len(phase2_suites)} "
-                        f"spawned ({sub_suite['_fanout_url_count']} URLs)"
-                    )
-
-                merged_phone = 0
-                merged_shared_seen_hits = 0
-                per_worker_leads: list[list[dict]] = []
-                for i, handle in phase2_handles:
-                    try:
-                        summary = read_partition_result(handle.get())
-                        merged_phone += summary["with_phone"]
-                        merged_shared_seen_hits += summary["shared_seen_hits"]
-                        per_worker_leads.append(summary["leads"])
-                        print(
-                            f"    [phase2] worker {i + 1}: "
-                            f"viable={summary['viable']} "
-                            f"phone={summary['with_phone']} "
-                            f"shared_seen_hits={summary['shared_seen_hits']}"
-                        )
-                    except Exception as exc:
-                        print(f"    [phase2] worker {i + 1}: ERROR — {exc}")
-
-                # Dedup is defense-in-depth — URLs from Phase 1 should
-                # already be unique, but in case Phase 1 collected the
-                # same URL twice (e.g. featured listing rendered twice)
-                # or workers retried, this catches the residual.
-                _, raw_total, dedup_total = dedup_leads_by_url(per_worker_leads)
-                print("\n  ═══ PHASE-1/PHASE-2 RESULTS (#628) ═══")
-                print(f"  URLs collected (Phase 1):  {len(collected_urls)}")
-                print(f"  Workers (Phase 2):         {len(phase2_suites)}")
-                print(f"  Total leads (raw):         {raw_total}")
-                print(f"  Total leads (deduped):     {dedup_total}")
-                if raw_total > dedup_total:
-                    print(
-                        f"  Duplicates collapsed:      {raw_total - dedup_total} "
-                        f"(unexpected — Phase 1 URLs were already unique)"
-                    )
-                print(f"  With phone:                {merged_phone}")
-                # #631 follow-up: shared-seen aggregate visibility.
-                # ``shared_seen_hits`` = sum of per-worker proactive
-                # skips (a sibling worker had already extracted the URL,
-                # so this worker short-circuited before paying the
-                # ~$0.20 Claude extract cost). Final dict size = unique
-                # URLs the fan-out has seen across all workers.
-                _print_shared_seen_metrics(
-                    task_suite, merged_shared_seen_hits,
-                )
+            if _fanout_result is not None:
                 return
-
             print(
                 "    [phase1] no URLs harvested — falling through to "
                 "pagination-partition path (#617)"
             )
+
 
         # ── #617: per-page partitioning for parallelizable_pagination ─
         partitions = prepare_modal_partitions(task_suite, workers)

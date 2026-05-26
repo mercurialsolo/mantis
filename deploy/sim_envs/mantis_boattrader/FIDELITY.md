@@ -1047,3 +1047,112 @@ Calculator" (18/700 #303030), then a result row.
        • `_captured/README.md` — format spec, methodology, what's intentionally
          not in the corpus (raw DOM, screenshots, HAR).
        • Closes "Done bar" item: `_captured/` corpus checked in.
+`v=86` BDP fidelity iter1 — nav row + sticky bar + private-seller card:
+       • Real-vs-sandbox BDP diff written to BDP_FIDELITY_PLAN.md;
+         _captured/bdp/structural.json filled with measured spec from
+         boattrader.com/boat/2010-contender-32-st-10169273/.
+       • Nav row + sticky bar: drop `‹`/`›` glyphs from back/next links
+         (plain words); wire `prev_boat` (template just wasn't using it);
+         add Previous Boat link in both static + sticky positions.
+       • Sticky bar gets TWO content states: shallow (breadcrumb) for
+         scrollY>320, deep (Title | $Price | City, ST ZIP | ♡ Save) for
+         scrollY>700 — matches real BT's `next-previous show-info` class
+         swap. base.html scroll listener toggles `bdp-scrolled-deep` on
+         body alongside `bdp-scrolled`.
+       • Breadcrumb color #757575 → #616161 to match real BT.
+       • Private-seller right rail: drop `Private Seller` pill; heading
+         is generic `Contact Private Seller` (no owner name); drop
+         disclaimer paragraph; drop owner-name from message prefill;
+         move Show Phone Number to AFTER the form and gate on
+         `boat.owner_phone`; drop badges above title; drop length suffix
+         from H1.
+       • Submit button: new `.bdp-contact-submit` class (filled blue
+         pill `rgb(37,102,176)` 40px tall full-width) replacing legacy
+         `.contact-seller-btn` outline override; same `Contact Seller`
+         text for both dealer + private (was "Email Seller" for private).
+       • `.dealer-card-heading` 18/500 → 20/700 to match real BT.
+       • K-format views >999 (e.g. 1.5k) in the engagement strip.
+`v=88` BDP fidelity iter2 — title suffix + accordion restore + clamp + stat sizing:
+       • Real-BT DEALER BDP probe (2026-05-24,
+         boattrader.com/boat/2008-pursuit-os-335-offshore-10161885/)
+         revealed three iter1 misses driven by the original
+         private-seller-only probe.
+       • Title length suffix restored as a SIBLING `<span class="bdp-length">`
+         inside a new `.bdp-title-row` flex header — real BT ships
+         `<header><h1>Title</h1><span>| 33'</span></header>` to keep
+         H1.textContent clean while the visible title reads
+         "Title | XX'". Iter1 dropped the suffix entirely; restored.
+       • Boat Details accordions: real BT renders ALL FIVE
+         (Description / Measurements / Propulsion / More Details /
+         Location). Iter1.2 removed the last two based on the
+         private-seller probe; both restored at H3 level.
+       • Description body clamp: real BT clamps to ~168px with
+         inline "Show More" button (13/400 BT-blue). Sandbox now wraps
+         the accordion body in `.bdp-description-clamped` and adds a
+         `.bdp-show-more` button. base.html gets a click handler that
+         toggles `.is-expanded` and swaps "Show More" ↔ "Show Less".
+       • Stat cards 205×44 → 166×39: grid switched from `repeat(4,1fr)`
+         to `repeat(4,166px)` w/ 16px/12px gaps; stat-icon container
+         44→32px; card gap 14→10px.
+       • "Visit Seller Website ↗" → "Visit Seller Website" (real BT
+         has no arrow on the dealership-card link).
+       • Verified live on 5 variants via Chrome MCP probes:
+         dealer (Princess F55), private (Chaparral 267 SSX),
+         sponsored (Robalo R230 — yellow SPONSORED LISTING pill),
+         POA (Boston Whaler 210 Dauntless — "Request a Price", no
+         monthly link), and price-drop (Crestliner VT 18 —
+         "$27,800 ↓ $1,500"). All structural anchors present, no
+         regressions.
+`v=87` BDP fidelity iter1.2 — stats + accordions + services:
+       • Stats label "Engine Hours" → "Engine(s) Hours" with inline
+         gray ⓘ tooltip trigger (matches real BT exactly). New
+         `.stat-label .stat-info` 14×14 keeps ⓘ inline.
+       • Drop inline `<text>YEAR</text>` from Year icon SVG.
+       • Drop `More Details` + `Location` accordions — real BT only
+         renders Description / Measurements / Propulsion at this level.
+       • Drop `bdp-listed-by` block for `is_owner_listed` — real BT
+         private-seller BDP omits this section entirely.
+       • Other Services tiles 2 → 6 (Marine Surveyors, Boat
+         Documentation, Boat Loans, Boat Insurance, Boat Warranty, Boat
+         Transport); grid 2-col → 3-col at desktop.
+       • Verified live on dealer (Princess F55) + private (Chaparral
+         267 SSX) BDPs via Chrome MCP probes: sticky deep-state fires
+         at y>700; rail width = 366; all 3 accordions only; 6 service
+         tiles; FILLED `Contact Seller` button on both variants.
+`v=89..v=117` BDP fidelity iter3..iter14:
+       • Description body restructure + Loan Calc form simplification
+         (4-field set; preview pane heading + monthly + total + disclosure)
+       • seed.py apostrophe encoding cleanup (Don?t → Don't, etc.)
+       • Listed By card matched real BT (#f5f9ff bg, stat-num 16/600,
+         "Trusted Boat Trader Partner" plain label without `| years`)
+       • Accordion summary padding 16/22 → 0 (details padding 18px 0
+         + 1px #ededed bottom border between sections)
+       • Stat label wrap fix (dropped inline ⓘ on Engine(s) Hours so
+         the label fits 166px card on one line)
+       • Engagement divider switched from `|` char to 1×12 rectangle
+         (bg rgb(222,226,227)); gap 12 → 10
+       • Description body 15/19.5 line-height (was 14/1.55); seller
+         blurb + DESCRIPTION label both at 15/700
+       • Boat Details H2 margin 16px → 0
+       • Nav row layout: NOT space-between — flex-start + margin-left:
+         auto on .bdp-nav-actions; max-width 1336 cap to align with
+         gallery underneath
+       • Sticky bar inner max-width 1336 (was 1440) for same alignment
+       • Ad-strip viewport breakout (margin: 24px calc(50% - 50vw);
+         width 100vw) so #f7f7f7 band spans full 1600px
+       • Ad-banner 728×90 → 970×120; strip padding 16 → 1px each side
+       • Previous Boat / Next Boat: padded 11px 15px button-shape with
+         4px radius; chevrons via ::before/::after pseudo-elements
+       • .bt-main max-width: none (was 1440) to let ad-strip break out;
+         compensating .srp / .home-section caps restored to keep SRP
+         and home centered
+       • Breadcrumb color BDP-scoped #757575 → #616161
+       • Dealer card pattern switched to dealership-name heading +
+         pin-led address + raw +1XXXXXXXXXX phone (Westchester pattern,
+         no headshot)
+       • Phone format E.164 in seed.py (was formatted with parens)
+       • Loan calc inputs scoped: 4px radius + 16px font; heading 20/700
+       • More Boats from this Dealer link color #2566b0 → #0051AD
+       • Right rail dedup: dropped legacy .bdp-dealership-card (was
+         duplicating dealer info already in the new nested .bdp-dealer-card;
+         dealership logo + stats stay only in full-width Listed By)

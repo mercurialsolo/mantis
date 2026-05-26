@@ -228,20 +228,20 @@ wheels = [
 
 [[package]]
 name = "augur-schema"
-version = "0.3.1"
+version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
     { name = "referencing" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/bb/1038e930623c65d562b5a06ed0cad3290d045bbd516915cbc5f4d06078ab/augur_schema-0.3.1.tar.gz", hash = "sha256:8835544a49d34031498fdd3c698b6f5a546f291330de137529fc3aa903db0270", size = 23638, upload-time = "2026-05-23T17:53:10.799Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/df/35/399d8fc8f3eab09ebae07f49a17278f25bfb79e7cd18fbbe877d6b768fcf/augur_schema-0.6.0.tar.gz", hash = "sha256:652fe15b0f712333a356e34fbdcf01f39465231846504a5f5a76e5b7116357fa", size = 35737, upload-time = "2026-05-26T00:58:54.706Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3d/36/8773a728d99804a8d88cdcf26efe58e5186f4d6c6781a7aa4981741f6b41/augur_schema-0.3.1-py3-none-any.whl", hash = "sha256:69dc30a70e36befccb1d9d83119f7f6a97e2d1140c6f8a2d3c0cd5a9d3b3da5c", size = 31305, upload-time = "2026-05-23T17:53:09.468Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/98/7c6e7f7f96625b63bf38645f4ffac157c0b3b5bba044a119fbfe44ea69c2/augur_schema-0.6.0-py3-none-any.whl", hash = "sha256:596147ba8618d073f2acf8ad6e8ea698d10952dcae38b36d05c3108a7674bf53", size = 42559, upload-time = "2026-05-26T00:58:53.056Z" },
 ]
 
 [[package]]
 name = "augur-sdk"
-version = "0.2.1"
+version = "0.6.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "augur-schema" },
@@ -249,9 +249,9 @@ dependencies = [
     { name = "referencing" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/3e/f5a04612b80b9624e05756017537ca92d65beb216a86ad52721a3eedfc13/augur_sdk-0.2.1.tar.gz", hash = "sha256:0e9ab3438b3c114f44a52d0da3af9cc4ea4679d694650e469ac6cf16f85ca99b", size = 93340, upload-time = "2026-05-23T22:21:49.117Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/67/1c/db87e9ef734f4ab02a3cc70a2651266676140d54283ba0c281b0d5cf256a/augur_sdk-0.6.1.tar.gz", hash = "sha256:5162b69bd7ab91601f3917762d1a3f3be7327f4dc1911b6c11f82cd93bd3336d", size = 124091, upload-time = "2026-05-26T01:07:23.105Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/b9/b02d8f19b6b728c0c262b001799d1f72243246f45192511ae4c6b2702ee0/augur_sdk-0.2.1-py3-none-any.whl", hash = "sha256:69f26079d6840b390e29ed0b2af8a1bf998646074616a819210ab178baf2a735", size = 66984, upload-time = "2026-05-23T22:21:47.22Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/75/4c5cdbc52ae76f5837fcc523536e071b1de5abf9e2c10540b2fa61ac2a3e/augur_sdk-0.6.1-py3-none-any.whl", hash = "sha256:3232c7271ba6ab4ca350da8c906ef1540688580e23de0297639da3e2def275d1", size = 78697, upload-time = "2026-05-26T01:07:21.584Z" },
 ]
 
 [[package]]
@@ -1552,7 +1552,7 @@ viewer = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", marker = "extra == 'gpu'", specifier = ">=0.30" },
-    { name = "augur-sdk", marker = "extra == 'observability'", specifier = ">=0.2.1,<0.3" },
+    { name = "augur-sdk", marker = "extra == 'observability'", specifier = ">=0.6.0,<0.7" },
     { name = "bitsandbytes", marker = "extra == 'gpu'", specifier = ">=0.43" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.100" },
     { name = "fastapi", marker = "extra == 'viewer'", specifier = ">=0.100" },

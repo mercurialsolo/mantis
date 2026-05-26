@@ -89,7 +89,49 @@ observability = [
     # partition sessions under a shared parent_run_id (see
     # observability/augur.py). Pinning to 0.2.1 minimum so consumers
     # don't accidentally downgrade past the branch surface.
-    "augur-sdk>=0.2.1,<0.3",
+    #
+    # 0.3.0 (mercurialsolo/augur-sdk#30, #31) — step-iteration semantics.
+    # EventRecorder is now keyed by ``step_id`` rather than
+    # ``step_index``, so loop iterations through the same plan position
+    # no longer collapse into one in-memory slot (the bug surfaced by
+    # boattrader rerun ``20260524_180432_d308f9de`` — 291 worker
+    # dispatches landed as 10 Augur rows). The SDK adds
+    # ``DebugSession.record_step_iteration(step_index, iteration)`` —
+    # producer-side helper that appends an iteration under an existing
+    # canonical step and bumps the canonical's ``step_iterations``
+    # counter. Augur server + viewer already render ``N (M)`` when
+    # iterations > canonical-steps. Mantis migration sits in
+    # ``observability/augur.py``: first emission for a given
+    # ``step_index`` routes through ``record_step``; subsequent
+    # emissions route through ``record_step_iteration``.
+    #
+    # 0.4.0 (mercurialsolo/augur-sdk#38) — fan-out grouping. Adds
+    # ``DebugSession.open_orchestrator(...)`` for opening parent-only
+    # sessions that carry aggregate metadata (phase counts, fanout
+    # pattern, total budget) for fan-out runs. Wired into
+    # ``gym/fanout_runner.run_fanout_dispatch`` so the Augur viewer
+    # renders one parent row with N children grouped under it
+    # (mercurialsolo/augur#138) instead of flat siblings. Exports
+    # ``ORCHESTRATOR_TAG_KEY`` / ``ORCHESTRATOR_TAG_VALUE`` constants
+    # used by ``observability/augur.open_orchestrator_session``.
+    #
+    # 0.5.0 — per-token logprob capture (training-data quality).
+    # Adds ``DebugSession(capture_logprobs=True)`` + the
+    # ``ModelApiAdapterBase.extract_logprobs_from_response`` helper
+    # that maps OpenAI ``choices[].logprobs.content[]`` and Anthropic
+    # ``content[].logprobs[]`` to a canonical
+    # ``[{token, token_id?, logprob, top_alternatives?}]`` shape.
+    # Mantis Phase B opt-in via ``MANTIS_CAPTURE_LOGPROBS=1``.
+    #
+    # 0.6.0 — TaskSpec, group_id, set_loop_detected, set_score(...,
+    # should_stop=, uncertainty=), record_subgoal_completion. Wired
+    # into ``observability/augur.open_orchestrator_session`` (task_spec
+    # + group_id on the orchestrator row) and the AugurAdapter init
+    # path (group_id propagation to fan-out children). The schema
+    # floor is ``augur-schema>=0.4.1`` (0.4.0 had a loader bug that
+    # left ``task_spec`` / ``subgoals_completed`` unregistered; pip
+    # resolves transitively).
+    "augur-sdk>=0.6.0,<0.7",
 ]
 # Self-host the FastAPI server that fronts /predict and /v1/chat/completions.
 # Used by the Baseten / EKS / GKE deployments.

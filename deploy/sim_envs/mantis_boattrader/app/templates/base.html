@@ -10,6 +10,7 @@
      from Google Fonts makes our text render heavier than real BT, so we
      match by NOT loading Roboto and letting the system fallback render. #}
   <link rel="stylesheet" href="/static/app.css?v=133" />
+
   <meta name="description" content="{% block description %}Buy and sell new & used boats. Find boats, yachts, sailboats, fishing boats, pontoons, and more.{% endblock %}" />
 </head>
 <body class="bt-body">
@@ -111,18 +112,35 @@
 </div>
 {% endif %}
 <script>
-  // Toggle .bdp-scrolled on <body> once the gallery is scrolled past so
-  // the sticky title/price/contact bar can appear (matches real boattrader).
+  // Two-state sticky bar (matches real boattrader):
+  //   y > 320  → .bdp-scrolled        (sticky bar visible, breadcrumb state)
+  //   y > 700  → .bdp-scrolled-deep   (swap breadcrumb for title/price/save)
   (function(){
     var threshold = 320;
+    var deep = 700;
     var raf = null;
     function check(){
       raf = null;
-      if (window.scrollY > threshold) document.body.classList.add('bdp-scrolled');
-      else document.body.classList.remove('bdp-scrolled');
+      var y = window.scrollY;
+      document.body.classList.toggle('bdp-scrolled', y > threshold);
+      document.body.classList.toggle('bdp-scrolled-deep', y > deep);
     }
     window.addEventListener('scroll', function(){ if (!raf) raf = requestAnimationFrame(check); }, { passive: true });
     check();
+  })();
+  // BDP Description "Show More" toggle — matches real BT's clamped
+  // description body w/ a right-aligned inline expand link.
+  (function(){
+    document.addEventListener('click', function(ev){
+      var btn = ev.target.closest && ev.target.closest('[data-show-more]');
+      if (!btn) return;
+      ev.preventDefault();
+      var body = btn.closest('.bdp-description-body');
+      if (!body) return;
+      var expanded = body.classList.toggle('is-expanded');
+      if (!expanded) btn.textContent = 'Show More';
+      else btn.textContent = 'Show Less';
+    });
   })();
   // Listing-card monthly-payment info: click info → toggle sticky tooltip
   // at card bottom. × closes; clicking outside closes the open tooltip too.

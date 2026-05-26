@@ -295,6 +295,14 @@ class RunExecutor:
             # orchestrator (Modal main) sets ``_fanout_branch_context``
             # on the runner before run() — None for non-fanout runs.
             branch_context=getattr(runner, "_fanout_branch_context", None),
+            # #680: fan-out workers also carry ``group_id`` so the
+            # viewer's GRPO sibling-rollout correlation works without
+            # joining steps back to the session record. The
+            # orchestrator sets ``_fanout_group_id`` on the runner
+            # (same value as branch_context.parent_run_id today; kept
+            # as separate hook so a future GRPO loop with rollouts
+            # that don't share a parent can set group_id alone).
+            group_id=getattr(runner, "_fanout_group_id", None),
         )
 
         if not runner._results_base_url and plan.steps:
@@ -572,6 +580,15 @@ class RunExecutor:
             )
         healing = getattr(runner, "_healing_events", None) or []
         augur.drain_healing_events(healing)
+        # #659 follow-up: refresh the run-level cost rollup so the
+        # Augur Runs-list COST column updates live during the run
+        # instead of waiting for ``_finalize`` (which silently meant
+        # the column showed $0.00 / a stale per-step delta for the
+        # entire wall-clock of a multi-minute run). ``set_costs``
+        # overwrites on each call so the cost reflects whatever the
+        # cost-meter currently totals. Best-effort: the helper logs
+        # at debug on any failure and returns.
+        self._publish_run_costs_to_augur()
 
     # Mantis TimeMeter bucket → Augur ``StepTrace.latency`` slot
     # (augur-sdk 0.1.6+ schema). The Augur slots are intentionally
@@ -2069,6 +2086,47 @@ class RunExecutor:
         except Exception as exc:  # noqa: BLE001
             logger.debug("AugurAdapter.finalize_outcome composition failed: %s", exc)
 
+    def _publish_run_costs_to_augur(self) -> None:
+        """Publish the cost-meter's current rollup to Augur via
+        ``set_costs``. Idempotent — Augur's ``set_costs`` overwrites
+        on each call so calling this many times throughout a run
+        keeps the Runs-list COST column live-updated.
+
+        Was originally only invoked from ``_emit_augur_aggregate_metrics``
+        at finalize, which meant the Augur UI showed $0.00 (or whatever
+        the last per-step delta happened to be via the ``set_step_costs``
+        fallback path) for the entire duration of a live run. After
+        this extraction the per-step emission hook (#660 follow-up)
+        also calls this on every step so cost updates in real time.
+
+        Best-effort: any failure path logs at debug and returns;
+        observability never breaks the run.
+        """
+        runner = self.parent
+        augur: AugurAdapter | None = getattr(runner, "_augur", None)
+        if augur is None or not augur.active:
+            return
+        meter = getattr(runner, "cost_meter", None)
+        if meter is None:
+            return
+        try:
+            gpu, claude, proxy, total = meter.totals()
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug("augur cost-meter totals() failed: %s", exc)
+            return
+        claude_input = int(meter.costs.get("claude_input_tokens", 0) or 0)
+        claude_output = int(meter.costs.get("claude_output_tokens", 0) or 0)
+        claude_cached_input = int(meter.costs.get("claude_cached_input_tokens", 0) or 0)
+        augur.set_costs(
+            total_usd=round(total, 4),
+            model_usd=round(claude, 4),
+            gpu_usd=round(gpu, 4),
+            proxy_usd=round(proxy, 4),
+            tokens_in=claude_input or None,
+            tokens_out=claude_output or None,
+            cache_hit_tokens=claude_cached_input or None,
+        )
+
     def _emit_augur_aggregate_metrics(self, results: list[StepResult]) -> None:
         """Send cost-meter totals as both session tags and metric
         DecisionEvents (#509).
@@ -2096,21 +2154,19 @@ class RunExecutor:
             elapsed = float(meter.elapsed_seconds() or 0.0)
         except Exception:  # noqa: BLE001
             pass
-        # #521: structured ``session.costs`` is the canonical surface
-        # as of augur-sdk 0.1.8. The workspace's Runs-list COST column
-        # now reads from here, not from tags — one source of truth.
+        # #521 (finalize side): structured ``session.costs`` is the
+        # canonical surface as of augur-sdk 0.1.8. Delegated to the
+        # shared helper so the per-step emission hook publishes the
+        # same shape during the run.
+        self._publish_run_costs_to_augur()
+        # Local copies of the token counts still used by the
+        # ``record_cost_metric`` event payload below — the helper
+        # encapsulates the ``set_costs`` call but the structured
+        # event surface needs the same numbers in its ``detail``
+        # dict.
         claude_input = int(meter.costs.get("claude_input_tokens", 0) or 0)
         claude_output = int(meter.costs.get("claude_output_tokens", 0) or 0)
         claude_cached_input = int(meter.costs.get("claude_cached_input_tokens", 0) or 0)
-        augur.set_costs(
-            total_usd=round(total, 4),
-            model_usd=round(claude, 4),
-            gpu_usd=round(gpu, 4),
-            proxy_usd=round(proxy, 4),
-            tokens_in=claude_input or None,
-            tokens_out=claude_output or None,
-            cache_hit_tokens=claude_cached_input or None,
-        )
         # Back-allocate the finalize residual to the last emitted
         # step so the per-step COST column visibly sums to the run
         # total. Residual = run total − Σ per-step ``total_usd``.

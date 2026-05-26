@@ -160,9 +160,6 @@ header.main {
   font-size: 18px; cursor: pointer; line-height: 1;
 }
 
-/* ── Main + container — matches real boattrader: max-width 1440px,
-   margin auto so at 1512px viewport the main element starts at x=36
-   with 20px internal padding (giving x=56 for the inner content). */
 .bt-main {
   max-width: var(--container);
   /* v=102: ribbon is `position: sticky` (stays in flow), so no
@@ -416,7 +413,7 @@ header.main {
    via the flex justify-content. */
 .ad-strip {
   background: #f7f7f7;
-  padding: 16px 0;
+  padding: 1px 0;
   display: flex; justify-content: center;
   margin: 0;
   width: 100vw;
@@ -424,8 +421,8 @@ header.main {
   box-sizing: border-box;
 }
 .ad-banner {
-  position: relative; max-width: 728px; width: 100%; height: 90px;
-  border-radius: var(--bt-radius); overflow: hidden;
+  position: relative; max-width: 970px; width: 100%; height: 120px;
+  border-radius: 0; overflow: hidden;
 }
 .ad-banner img { width: 100%; display: block; }
 .ad-card {
@@ -1567,7 +1564,7 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
    in the always-sticky `.next-previous` bar (matches real BT). */
 .bdp-nav-row { display: none !important; }
 .bdp-sticky-bar-inner {
-  max-width: var(--container);
+  max-width: 1336px;
   margin: 0 auto;
   padding: 12px 16px;
   display: flex;
@@ -1611,28 +1608,80 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   font-size: 13px;
   padding: 8px 18px;
 }
-/* Real BT BDP breadcrumb (inside bdp-nav-row): 15/400 #333. */
+/* Real BT BDP breadcrumb inside the sticky bar: 12/400 #616161 (matches
+   the non-sticky breadcrumb row). The sticky bar swaps this out for a
+   title/price line at deep scroll. */
 .sticky-breadcrumb {
-  flex: 1;
   margin: 0;
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 400;
-  color: #333;
+  color: #616161;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.sticky-breadcrumb a { color: #333; }
+.sticky-breadcrumb a { color: #616161; text-decoration: none; }
 .sticky-breadcrumb a:hover { color: var(--bt-blue); }
 
-.bdp-nav-row {
-  display: flex; align-items: center; justify-content: space-between;
-  margin: 8px 0 14px;
-  font-size: 13px; color: var(--bt-blue);
+.bdp-sticky-content { flex: 1; min-width: 0; display: flex; align-items: center; }
+.bdp-sticky-state { display: none; min-width: 0; }
+.bdp-sticky-state-shallow { display: block; }
+body.bdp-scrolled-deep .bdp-sticky-state-shallow { display: none; }
+body.bdp-scrolled-deep .bdp-sticky-state-deep {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 14px; color: #333; min-width: 0;
 }
-/* Real BT BDP top links 'Back to Search' / 'Next Boat': 12/400 #139af5. */
-.bdp-back, .bdp-next { font-size: 12px; font-weight: 400; color: #139af5; }
-.bdp-back:hover, .bdp-next:hover { color: var(--bt-blue); text-decoration: underline; }
+body.bdp-scrolled-deep .sticky-title { font-weight: 700; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.bdp-scrolled-deep .sticky-price { font-weight: 700; color: #333; white-space: nowrap; }
+body.bdp-scrolled-deep .sticky-loc { color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+body.bdp-scrolled-deep .sticky-sep { color: #c4c4c4; font-weight: 400; }
+body.bdp-scrolled-deep .sticky-save {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: transparent; border: 0; padding: 0;
+  color: var(--bt-blue); font: inherit; font-size: 14px; font-weight: 400;
+  cursor: pointer; white-space: nowrap;
+}
+
+/* Real BT BDP nav row layout (per Beneteau probe, 2026-05-24):
+     `< Search` (left) [gap] breadcrumb (left, after Search) [flex grow]
+     Previous Boat | Next Boat (right edge)
+   NOT space-between — breadcrumb hugs `< Search` rather than centering.
+   Achieved with `display: flex; gap: 24px` (default flex-start) and
+   `margin-left: auto` on `.bdp-nav-actions` to push Previous/Next
+   to the right edge. */
+.bdp-nav-row {
+  display: flex; align-items: center;
+  max-width: 1336px;
+  margin: 8px auto 14px;
+  font-size: 12px; color: var(--bt-blue);
+  gap: 24px;
+}
+.bdp-nav-actions { display: flex; gap: 16px; margin-left: auto; }
+/* Real BT BDP breadcrumb color: rgb(97,97,97) = #616161 (slightly
+   darker than SRP's #757575). The base `.breadcrumb` rule is used by
+   both SRP and BDP, so we scope the BDP override under `.bdp-nav-row`. */
+.bdp-nav-row .breadcrumb,
+.bdp-nav-row .breadcrumb a { color: #616161; }
+.bdp-nav-row .breadcrumb a:hover { color: var(--bt-blue); }
+/* Real BT BDP top links 12/400 #139af5. Pursuit BDP probe (2026-05-24):
+   `.next-previous-button` is a 104×34 padded button-shaped link with
+   border-radius 4px, padding 11px 15px (prev) / 11px 35px 11px 15px
+   (next has extra right pad to anchor the chevron). Both render
+   chevrons via CSS pseudo-elements:
+     prev::before content "<", next::after content ">"
+   `< Search` stays a plain text link with no padding. */
+.bdp-back { font-size: 12px; font-weight: 400; color: #139af5; text-decoration: none; }
+.bdp-prev, .bdp-next {
+  font-size: 12px; font-weight: 400; color: #139af5; text-decoration: none;
+  padding: 11px 15px;
+  border-radius: 4px;
+  display: inline-flex; align-items: center;
+  white-space: nowrap;
+}
+.bdp-next { padding: 11px 35px 11px 15px; }
+.bdp-prev::before { content: "< "; margin-right: 4px; }
+.bdp-next::after { content: " >"; margin-left: 4px; }
+.bdp-back:hover, .bdp-next:hover, .bdp-prev:hover { color: var(--bt-blue); text-decoration: underline; }
 /* Real BT BDP uses ~890 gallery + ~80 gap + 366 rail at 1512 viewport.
    That's ratio gallery:rail ≈ 2.43:1, with ~80px gap. */
 .bdp-grid {
@@ -1997,14 +2046,18 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 .stat-card {
   display: flex;
-  gap: 14px;
+  gap: 10px;
   align-items: center;
 }
+/* Real BT stat cards: 166×39 (vs sandbox prior 205×44). Tighter icon
+   and tighter card track; 32px icon was already correct, just shrink
+   the surrounding flex container. */
 .stat-icon {
   flex-shrink: 0;
-  width: 44px; height: 44px;
+  width: 32px; height: 32px;
   display: flex; align-items: center; justify-content: center;
 }
+.stat-icon svg { width: 32px; height: 32px; }
 .stat-text {
   display: flex; flex-direction: column;
   min-width: 0;
@@ -2013,7 +2066,17 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   font-size: 14px;
   font-weight: 700;
   color: #303030;
-  letter-spacing: 0.2px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+/* Inline info ⓘ next to "Engine(s) Hours" — smaller (12×12) so the
+   "Engine(s) Hours ⓘ" label still fits on one line inside the 166px
+   stat card without wrapping. */
+.stat-label .stat-info {
+  width: 12px; height: 12px; font-size: 9px;
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 2px;
 }
 .stat-value {
   font-size: 14px;
@@ -2101,11 +2164,13 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   padding: 20px 16px;
   margin: 24px 0;
 }
+/* Real BT Boat Details H2: 20/700, margin 0 (accordions sit flush
+   right under the heading inside the #f5f9ff tinted card). */
 .bdp-details-h2 {
   font-size: 20px;
   font-weight: 700;
   color: var(--bt-text);
-  margin: 0 0 16px;
+  margin: 0;
 }
 .bdp-accordion summary { font-size: 16px; font-weight: 700; }
 .bdp-accordion .accordion-title {
@@ -2118,17 +2183,24 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 .bdp-accordion .accordion-subhead:first-child { margin-top: 0; }
 .accordion-body { font-size: 15px; line-height: 1.45; }
+/* Real BT accordion: padding 18px 0 on the <details>, 0 on summary,
+   1px #ededed bottom border between sections (not a wrapper card per
+   accordion). Sandbox had 16px 22px padding on summary which inflated
+   the closed height 28→55. Tightened to match. */
 .bdp-accordion {
-  background: #fff;
-  border-radius: var(--bt-radius);
-  margin-bottom: 10px;
+  background: transparent;
+  border-radius: 0;
+  border-bottom: 1px solid #ededed;
+  padding: 18px 0;
+  margin: 0;
   overflow: hidden;
 }
+.bdp-accordion:last-of-type { border-bottom: 0; }
 .bdp-accordion summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 22px;
+  padding: 0;
   font-size: 16px;
   font-weight: 700;
   color: var(--bt-text);
@@ -2153,10 +2225,35 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   padding: 0 16px 18px;
   font-size: 14px;
   color: var(--bt-text);
-  line-height: 1.55;
+  line-height: 1.3;
 }
+/* Real BT description body <p>: 15px margin top and bottom. */
+.bdp-description p { margin: 15px 0; line-height: 1.3; }
+.bdp-description p:first-child { margin-top: 0; }
+.bdp-description p:last-child { margin-bottom: 0; }
+/* Real BT BDP Description body: the seller blurb (first paragraph) is
+   rendered bold like a sub-heading, followed by a small uppercase
+   "DESCRIPTION" label, then the body paragraphs. Together they take ~3
+   visible lines above the clamp boundary. */
+/* Real BT seller blurb (first paragraph): 15/700 #333, matches the
+   DESCRIPTION sub-label that follows. */
 .bdp-seller-blurb {
   margin: 0 0 14px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--bt-text);
+  line-height: 1.3;
+}
+/* Real BT DESCRIPTION sub-label inside Description body: `<strong>` at
+   15/700 with NO letter-spacing, NO uppercase transform (text is
+   literally "DESCRIPTION" in the source). Sits as a regular bold
+   paragraph between the seller blurb and the body paragraphs. */
+.bdp-description-label {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--bt-text);
+  letter-spacing: normal;
 }
 .bdp-map-placeholder {
   margin-top: 12px;
@@ -2187,6 +2284,7 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   background: #fff;
   padding: 36px 56px 36px 56px;
 }
+/* Real BT loan calc heading: 20/700 #333 (was 18). */
 .loan-form-heading, .loan-preview-heading {
   font-size: 22px;
   font-weight: 700;
@@ -2200,6 +2298,14 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   font-size: 14px;
   margin: 0 0 28px;
   line-height: 1.45;
+}
+/* Real BT loan calc form inputs/selects: 4px border-radius (was 8px
+   from the SRP filter base) and 16px font (was 14px). Scoped to the
+   loan calc so SRP filter styling is unaffected. */
+.bdp-loan-card .filter-input,
+.bdp-loan-card .filter-select {
+  border-radius: 4px;
+  font-size: 16px;
 }
 .loan-field {
   display: block;
@@ -2254,9 +2360,10 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   .loan-form, .loan-preview { padding: 28px 24px; }
 }
 
-/* ── Listed By section ───────────────────────────────────── */
+/* ── Listed By section ─────────────────────────────────────
+   Real BT bg: rgb(245,249,255) = #f5f9ff (matches Boat Details). */
 .bdp-listed-by {
-  background: #eef4fb;
+  background: #f5f9ff;
   border-radius: var(--bt-radius-lg);
   padding: 24px 26px;
   margin: 24px 0;
@@ -2303,25 +2410,29 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   font-weight: 600;
   margin-top: 8px;
 }
+/* Real BT "Trusted Boat Trader Partner" label sits at the BOTTOM of
+   the right column (no `| <years>` suffix). 14/400 text. */
 .enhanced-trusted {
   font-size: 14px;
   color: var(--bt-text);
-  margin: 0 0 14px;
+  margin: 14px 0 0;
 }
 .enhanced-stat-row {
-  border-top: 1px solid var(--bt-border);
-  padding: 12px 0;
+  border-bottom: 1px solid var(--bt-border);
+  padding: 10px 0;
 }
-.enhanced-stat-row:last-child { border-bottom: 1px solid var(--bt-border); }
+.enhanced-stat-row:first-child { border-top: 1px solid var(--bt-border); }
+/* Real BT stat number: 16/600 (was 22/700). Tighter, inline-looking. */
 .enhanced-stat-num {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 600;
   color: var(--bt-text);
   line-height: 1.2;
 }
 .enhanced-stat-label {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--bt-text);
+  font-weight: 400;
 }
 
 /* ── More From This Dealer rail ───────────────────────────────
@@ -2412,13 +2523,17 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   box-shadow: 0 2px 6px rgba(10,30,60,0.18);
   z-index: 2;
 }
+/* Real BT "More Boats from this Dealer" link uses #0051AD (darker
+   blue than the main BT-blue #2566b0). Probed at Pursuit BDP. */
 .more-from-dealer-link {
   display: inline-block;
   margin-top: 8px;
-  color: var(--bt-blue);
+  color: #0051AD;
   font-size: 14px;
   font-weight: 600;
+  text-decoration: none;
 }
+.more-from-dealer-link:hover { text-decoration: underline; }
 
 /* ── Still have a question? card ──────────────────────────── */
 /* v=127: tightened further — padding 24px 0 → 8px 0, margin 12px 0
@@ -2477,11 +2592,16 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   text-transform: uppercase;
   margin: 0 0 14px;
 }
+/* Real BT BDP Other Services row: 6 tiles in a 3-col × 2-row grid at
+   1440-class viewports (wraps to 2-col on narrower windows). Was 2-col
+   to match the previous 2-tile count; bumped to 3-col now that we
+   render the full 6-tile row. */
 .other-services-tiles {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 16px;
 }
+@media (max-width: 980px) { .other-services-tiles { grid-template-columns: 1fr 1fr; } }
 .other-service-tile {
   display: flex;
   gap: 18px;
@@ -2580,11 +2700,11 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   margin-bottom: 8px;
 }
 
-/* Private-seller card */
-.bdp-private-seller-card {
-  border-top: 1px solid var(--bt-border);
-  padding-top: 14px;
-}
+/* Private-seller card spec is now handled by the shared
+   `.bdp-dealer-card, .bdp-private-seller-card` rule above (nested card
+   with 1px border, 8px radius, 16px padding). Kept this block as a
+   marker so future edits don't accidentally re-add a border-top. */
+/* (see .bdp-dealer-card, .bdp-private-seller-card rule near line 2686) */
 .private-seller-tag {
   display: inline-block;
   background: var(--bt-bg-alt-2);
@@ -2625,7 +2745,27 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   color: var(--bt-text-dim);
 }
 
-/* Description section */
+/* Description section — real BT clamps the Description body to ~168px
+   (≈4 lines + heading) and shows an inline "Show More" button right-
+   aligned at the bottom. Click expands to full content. */
+.bdp-description-body { position: relative; }
+.bdp-description-clamped {
+  max-height: 168px;
+  overflow: hidden;
+  transition: max-height 200ms ease;
+}
+.bdp-description-body.is-expanded .bdp-description-clamped { max-height: none; overflow: visible; }
+.bdp-show-more {
+  background: transparent; border: 0; padding: 4px 0;
+  color: #139af5;
+  font: inherit; font-size: 13px; font-weight: 400;
+  cursor: pointer;
+  display: block;
+  margin-left: auto;
+}
+.bdp-show-more:hover { text-decoration: underline; }
+/* Label swap is handled by JS in base.html (sets textContent directly). */
+
 .bdp-description-section .bdp-description p { margin: 0 0 12px; }
 .bdp-feature-h3 {
   font-size: 14px;
@@ -2690,6 +2830,23 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 }
 .dealer-address { font-style: normal; font-size: 14px; color: var(--bt-text); line-height: 1.4; }
 .dealer-phone { color: var(--bt-blue); font-size: 14px; font-weight: 400; display: inline-block; margin-top: 2px; }
+/* Real BT dealer-card address row: 14/400 #333, pin SVG (14×14) before
+   the street address, ~6px gap between icon and text. Phone sits on
+   its own line below, blue link, no icon. */
+.dealer-address-row {
+  display: flex; align-items: flex-start; gap: 6px;
+  margin: 0 0 6px;
+  font-size: 14px; line-height: 1.4; color: var(--bt-text);
+}
+.dealer-address-row .ico-pin {
+  flex-shrink: 0; margin-top: 2px;
+  color: var(--bt-text-dim);
+}
+.dealer-phone-row { margin: 0 0 12px; font-size: 14px; }
+.dealer-phone-row .dealer-phone {
+  color: var(--bt-blue); font-weight: 400; text-decoration: none;
+}
+.dealer-phone-row .dealer-phone:hover { text-decoration: underline; }
 .trusted-partner { font-size: 13px; color: var(--bt-text-dim); margin: 0 0 12px; }
 .trusted-partner strong { color: var(--bt-navy); }
 .dealer-lead-form { display: flex; flex-direction: column; gap: 8px; }
@@ -2735,6 +2892,24 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
   text-decoration: none;
   color: #fff;
 }
+/* Real BT BDP lead-form submit: FILLED blue pill bg rgb(37,102,176),
+   white text 14/700, full-width 40px tall. (The legacy `.contact-seller-btn`
+   class above is intentionally the outline variant used by SRP cards —
+   the BDP submit gets its own class so it doesn't get overridden.) */
+.bdp-contact-submit.btn-block {
+  width: 100%;
+  height: 40px;
+  padding: 0 24px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 50px;
+  background: rgb(37, 102, 176);
+  color: #fff;
+  border: 0;
+  cursor: pointer;
+  line-height: 1;
+}
+.bdp-contact-submit.btn-block:hover { background: var(--bt-blue-3); }
 
 .bdp-section { background: #fff; padding: 18px; border-bottom: 1px solid var(--bt-border); }
 .bdp-section h2 { font-size: 18px; margin-bottom: 12px; }
@@ -2756,10 +2931,13 @@ body.bdp-scrolled .bdp-sticky-bar { display: none !important; }
 .spec-grid dt { color: var(--bt-text-dim); width: 130px; flex: 0 0 130px; }
 .spec-grid dd { margin: 0; color: var(--bt-text); font-weight: 600; }
 
+/* Lead-confirm banner sits outside .bdp-grid; cap width to 1336px so
+   it aligns with the gallery + right rail content. */
 .lead-confirm {
   background: #ddf3e6; color: #1a6f3f;
   padding: 12px 16px; border-radius: var(--bt-radius);
-  margin: 12px 0;
+  max-width: 1336px;
+  margin: 12px auto;
 }
 
 /* ── Footer ───────────────────────────────────────────────────── */

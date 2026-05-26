@@ -189,7 +189,13 @@ def test_step_index_field_unchanged_across_emissions(tmp_path):
 def test_record_step_increments_counter_via_public_api(tmp_path, monkeypatch):
     """``record_step`` is the canonical entrypoint — verify the
     per-emission counter advances when callers use the documented
-    surface (not just the internal ``_build_step_trace`` helper)."""
+    surface (not just the internal ``_build_step_trace`` helper).
+
+    After augur-sdk 0.3.0 the first emission for a given step_index
+    lands on ``record_step`` (canonical) and subsequent emissions
+    land on ``record_step_iteration`` — capture from BOTH sinks to
+    verify the full per-emission step_id sequence.
+    """
     monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
     a = _open_adapter(tmp_path)
     # Guard against environments where ``augur-sdk`` is importable but
@@ -198,11 +204,21 @@ def test_record_step_increments_counter_via_public_api(tmp_path, monkeypatch):
     if not a.active:
         pytest.skip("AugurAdapter inactive — SDK opened no session")
 
-    # Stash a spy on the session so we capture the trace dicts the
-    # SDK would have received.
+    # Spy on both the canonical (record_step) and iteration
+    # (record_step_iteration) sinks. After 0.3.0 the first emission
+    # goes through the former and the rest through the latter; the
+    # captured ``step_id`` sequence is identical to the pre-0.3.0
+    # all-on-record_step shape.
     captured: list[dict] = []
     real_record = a._session.record_step
-    a._session.record_step = MagicMock(side_effect=lambda t: captured.append(t) or real_record(t))
+    a._session.record_step = MagicMock(
+        side_effect=lambda t: captured.append(t) or real_record(t),
+    )
+    real_iter = getattr(a._session, "record_step_iteration", None)
+    if real_iter is not None:
+        a._session.record_step_iteration = MagicMock(
+            side_effect=lambda _idx, t: captured.append(t) or real_iter(_idx, t),
+        )
 
     for _ in range(4):
         a.record_step(
