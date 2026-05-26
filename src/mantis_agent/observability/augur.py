@@ -180,6 +180,28 @@ def is_verbose() -> bool:
     return flag in {"1", "true", "yes", "on"}
 
 
+def should_capture_logprobs() -> bool:
+    """Whether to open DebugSession with ``capture_logprobs=True``.
+
+    Gated by ``MANTIS_CAPTURE_LOGPROBS`` — off by default in
+    production because:
+
+    * Capture roughly doubles the OpenAI / Anthropic response payload
+      size when the vendor actually returns logprobs.
+    * Most production runs don't need the per-token data; only
+      training-data generation runs do.
+
+    Set ``MANTIS_CAPTURE_LOGPROBS=1`` on the runtime to enable. The
+    flag rides on the session — once a session is open with
+    ``capture_logprobs=True``, every modelio record the SDK writes on
+    close carries ``response.logprobs = []`` (empty list) when the
+    vendor didn't surface logprobs, so downstream consumers can tell
+    "requested but vendor returned nothing" from "not requested".
+    """
+    flag = os.environ.get("MANTIS_CAPTURE_LOGPROBS", "").strip().lower()
+    return flag in {"1", "true", "yes", "on"}
+
+
 def default_out_dir(run_id: str) -> Path:
     """Resolve the per-run bundle directory.
 
@@ -510,6 +532,16 @@ class AugurAdapter:
                 dsn=dsn if dsn is not None else (os.environ.get("AUGUR_DSN") or None),
                 tags=tags,
             )
+            # #687 (augur-sdk 0.5.0+): per-token logprob capture is
+            # opt-in via ``MANTIS_CAPTURE_LOGPROBS=1``. When on, the
+            # SDK writes ``response.logprobs = []`` on every modelio
+            # record by default; the modelio mapper (#689 +
+            # observability/modelio.py) stamps the canonical
+            # ``[{token, logprob, ...}]`` shape when the vendor
+            # returned logprobs. Off by default in production —
+            # capture roughly doubles vendor response payload size.
+            if should_capture_logprobs():
+                session_kwargs["capture_logprobs"] = True
             # augur-sdk 0.1.14+ ships ``branch_context=`` on DebugSession;
             # 0.2.1 documents the ``mode`` resolution. Mantis fan-out
             # partitions pass ``branch_context`` to label sessions under
@@ -549,17 +581,18 @@ class AugurAdapter:
             try:
                 session = DebugSession(**session_kwargs)
             except TypeError as exc:
-                # SDK predates 0.6.0 → ``group_id`` / ``task_spec``
-                # aren't accepted. Drop the 0.6.0 kwargs and retry —
-                # preserves the production path on older pins.
+                # SDK predates 0.5.0/0.6.0 → ``capture_logprobs`` /
+                # ``group_id`` / ``task_spec`` aren't accepted. Drop
+                # the new kwargs and retry — preserves the production
+                # path on older pins.
                 stripped = [
-                    k for k in ("group_id", "task_spec")
+                    k for k in ("group_id", "task_spec", "capture_logprobs")
                     if k in session_kwargs
                 ]
                 if stripped:
                     if _verbose:
                         logger.warning(
-                            "AugurAdapter init: SDK rejected 0.6.0 "
+                            "AugurAdapter init: SDK rejected new "
                             "kwargs %s (%s) — retrying without them",
                             stripped, exc,
                         )

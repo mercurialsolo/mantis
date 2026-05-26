@@ -210,6 +210,26 @@ def record_anthropic_modelio(
         response_block["stop_reason"] = stop_reason
     if usage:
         response_block["usage"] = usage
+    # #687 (augur-sdk 0.5.0+): when the vendor returns logprobs on the
+    # response, map them through the SDK's canonical extractor and
+    # stamp on ``response.logprobs``. Returns ``None`` when the
+    # response didn't carry logprobs (Anthropic Messages API today
+    # doesn't surface them on most call paths). The session-level
+    # ``capture_logprobs=True`` opt-in still gates the empty-vs-absent
+    # semantics: when the flag is on AND the vendor returned nothing,
+    # the SDK writes ``response.logprobs = []`` so downstream
+    # consumers can distinguish "requested but vendor returned
+    # nothing" from "not requested" (absent / null).
+    try:
+        from augur_sdk import ModelApiAdapterBase
+        logprobs = ModelApiAdapterBase.extract_logprobs_from_response(response_json)
+        if logprobs is not None:
+            response_block["logprobs"] = logprobs
+    except Exception:  # noqa: BLE001 — observability never fatal
+        # Pre-0.5.0 SDK, import failed, or extractor raised.
+        # Leave logprobs unset; the session-level opt-in still
+        # controls whether the SDK writes ``[]`` on close.
+        pass
 
     record: dict[str, Any] = {
         "schema_version": "0.1",
