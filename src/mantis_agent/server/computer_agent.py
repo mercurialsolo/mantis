@@ -34,7 +34,6 @@ from threading import Lock
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
 
 from ..gym.computer_wire import (
     CDPRequest,
