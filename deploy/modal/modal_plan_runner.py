@@ -495,7 +495,10 @@ def run_plan(
     from mantis_agent.grounding import ClaudeGrounding
     from mantis_agent.gym.micro_runner import MicroPlanRunner
     from mantis_agent.gym.result_payload import pack_step as _pack_step
-    from mantis_agent.gym.xdotool_env import XdotoolGymEnv
+    from mantis_agent.gym.computer_client import (
+        ComputerPlaneConfig,
+        make_computer_client,
+    )
     from mantis_agent.plan_decomposer import MicroPlan, PlanDecomposer
     from mantis_agent.site_config import SiteConfig
 
@@ -527,7 +530,8 @@ def run_plan(
     # connects directly via Modal egress.
     _ensure_xvfb_running()
     proxy_host_port = _ensure_tinyproxy_running(proxy_session) if use_proxy else None
-    env = XdotoolGymEnv(
+    env = make_computer_client(
+        ComputerPlaneConfig(),
         start_url=start_url,
         viewport=_XVFB_VIEWPORT,
         browser="chromium",

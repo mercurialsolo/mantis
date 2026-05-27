@@ -175,7 +175,8 @@ def test_setup_env_threads_reuse_session_through_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``setup_env(reuse_session=True)`` propagates the flag to the
-    constructed XdotoolGymEnv. Stub out the real ctor so the test
+    constructed env. Stubs the ``LocalXdotoolImpl`` class that
+    ``make_computer_client(backend="local")`` instantiates so the test
     doesn't try to start Xvfb."""
     captured: dict[str, Any] = {}
 
@@ -183,7 +184,9 @@ def test_setup_env_threads_reuse_session_through_kwargs(
         def __init__(self, **kwargs: Any) -> None:
             captured.update(kwargs)
 
-    monkeypatch.setattr("mantis_agent.gym.xdotool_env.XdotoolGymEnv", _StubEnv)
+    monkeypatch.setattr(
+        "mantis_agent.gym.local_xdotool_impl.LocalXdotoolImpl", _StubEnv
+    )
 
     from mantis_agent.task_loop import setup_env
     env, _, _ = setup_env(
@@ -206,7 +209,9 @@ def test_setup_env_default_reuse_session_is_false(
         def __init__(self, **kwargs: Any) -> None:
             captured.update(kwargs)
 
-    monkeypatch.setattr("mantis_agent.gym.xdotool_env.XdotoolGymEnv", _StubEnv)
+    monkeypatch.setattr(
+        "mantis_agent.gym.local_xdotool_impl.LocalXdotoolImpl", _StubEnv
+    )
 
     from mantis_agent.task_loop import setup_env
     setup_env(
