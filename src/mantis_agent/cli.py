@@ -816,7 +816,7 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
     env: Any
     if args.browser == "xdotool":
         try:
-            from .gym.xdotool_env import XdotoolGymEnv
+            from .gym.computer_client import ComputerPlaneConfig, make_computer_client
         except ImportError as exc:
             print(
                 f"error: xdotool env requires the local-cua extras: {exc}. "
@@ -825,7 +825,7 @@ def cmd_plan_run(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return EXIT_ERROR
-        env = XdotoolGymEnv()
+        env = make_computer_client(ComputerPlaneConfig())
     else:
         try:
             from .gym.playwright_env import PlaywrightGymEnv

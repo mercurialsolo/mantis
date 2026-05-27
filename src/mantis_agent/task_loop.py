@@ -141,7 +141,14 @@ def setup_env(
     save_screenshots_dir: str = "/data/screenshots",
     reuse_session: bool = False,
 ) -> tuple[Any, Any, dict[str, Any]]:
-    """Set up proxy + XdotoolGymEnv.
+    """Set up proxy + computer-plane env.
+
+    Routes through ``make_computer_client(cfg)`` so the seam introduced
+    in #697 (Computer Plane Phase 0) is the only construction path. The
+    returned env is always a ``ComputerClient`` — today that resolves to
+    ``LocalXdotoolImpl`` (a ``XdotoolGymEnv`` subclass with latency
+    instrumentation); Phase 1 swaps in ``RemoteComputerImpl`` per
+    ``ComputerPlaneConfig``.
 
     Args:
         proxy_disabled: When True, skip the upstream proxy entirely. Use for
@@ -153,7 +160,7 @@ def setup_env(
     success, ``{"disabled": True}`` when proxy is off, ``{"error": ...}``
     when the probe failed).
     """
-    from .gym.xdotool_env import XdotoolGymEnv
+    from .gym.computer_client import ComputerPlaneConfig, make_computer_client
 
     if proxy_disabled:
         proxy = None
@@ -202,7 +209,7 @@ def setup_env(
     if profile_dir:
         env_kwargs["profile_dir"] = profile_dir
 
-    env = XdotoolGymEnv(**env_kwargs)
+    env = make_computer_client(ComputerPlaneConfig(), **env_kwargs)
     return env, proxy_proc, proxy_diag
 
 
