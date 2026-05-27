@@ -1,9 +1,10 @@
 # Modal
 
-Modal is the easiest path for ad-hoc / batch runs that benefit from scale-to-zero. `deploy/modal/modal_cua_server.py` exposes two surfaces on the same app:
+Modal is the easiest path for ad-hoc / batch runs that benefit from scale-to-zero. `deploy/modal/modal_cua_server.py` exposes three surfaces on the same app:
 
 1. **HTTP API** ([#342](https://github.com/mercurialsolo/mantis/issues/342)) — `@modal.asgi_app()` at `https://<workspace>--mantis-cua-server-api.modal.run`, mirroring the Baseten `/v1/predict` shape. Tenant-keyed via `X-Mantis-Token`; the API container dispatches via `.spawn()` to the GPU executors and rehydrates `modal.FunctionCall.from_id(...)` on status polls.
-2. **`local_entrypoint`** — one-off CLI runs (`modal run deploy/modal/...`) for ad-hoc debugging.
+2. **Computer Plane** ([#698](https://github.com/mercurialsolo/mantis/issues/698)) — `@modal.asgi_app()` at `https://<workspace>--mantis-cua-server-computer-plane.modal.run`, exposing the wire contract in `mantis_agent.gym.computer_wire` (screenshot + xdotool + opt-in CDP). Off by default; brain executors call into it only when `ComputerPlaneConfig.backend='modal'` is set with `remote_base_url` pointing at this URL. See `docs/reference/computer-plane.md`.
+3. **`local_entrypoint`** — one-off CLI runs (`modal run deploy/modal/...`) for ad-hoc debugging.
 
 ## Prerequisites
 
