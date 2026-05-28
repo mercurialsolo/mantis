@@ -405,8 +405,15 @@ class ClaudeExtractor:
         max_tokens: int = 500,
         *,
         _bucket: str = "claude_extract",
+        cache_prompt: bool = True,
     ) -> str:
-        """Call Claude API with screenshot + prompt."""
+        """Call Claude API with screenshot + prompt.
+
+        #720 follow-up: ``cache_prompt=True`` (default) marks the
+        prompt block with ``cache_control: ephemeral`` so callers
+        firing the same extraction template repeatedly within the
+        5-min TTL hit the cache.
+        """
         import requests
 
         if not self.api_key:
@@ -415,6 +422,19 @@ class ClaudeExtractor:
 
         # #518 — JPEG/PNG/WEBP per env; same dimensions as source.
         b64, media_type = encode_screenshot_for_claude(screenshot)
+
+        # #720 — prompt block first (so cache_control caches the
+        # text prefix), screenshot mutable after. Reverses the pre-PR
+        # block order but Anthropic doesn't care about block ordering
+        # for the same role; tested in production via the cache
+        # telemetry.
+        prompt_block: dict[str, Any] = {"type": "text", "text": prompt}
+        if cache_prompt:
+            prompt_block["cache_control"] = {"type": "ephemeral"}
+        content = [
+            prompt_block,
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+        ]
 
         t0 = time.monotonic()
         try:
@@ -430,10 +450,7 @@ class ClaudeExtractor:
                     "max_tokens": max_tokens,
                     "messages": [{
                         "role": "user",
-                        "content": [
-                            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
-                            {"type": "text", "text": prompt},
-                        ],
+                        "content": content,
                     }],
                 },
                 timeout=20,
@@ -447,6 +464,19 @@ class ClaudeExtractor:
                 return ""
             payload_json = resp.json()
             credit_claude_tokens_from_response(payload_json)
+            if cache_prompt:
+                from .._anthropic.cache import extract_cache_telemetry
+                tele = extract_cache_telemetry(payload_json)
+                if tele.get("cache_read_input_tokens", 0) > 0 or tele.get(
+                    "cache_creation_input_tokens", 0
+                ) > 0:
+                    logger.warning(
+                        "  [cache] extract: read=%d created=%d input=%d output=%d",
+                        tele.get("cache_read_input_tokens", 0),
+                        tele.get("cache_creation_input_tokens", 0),
+                        tele.get("input_tokens", 0),
+                        tele.get("output_tokens", 0),
+                    )
             for block in payload_json.get("content", []):
                 if block.get("type") == "text":
                     return block["text"].strip()
@@ -550,8 +580,19 @@ class ClaudeExtractor:
         max_tokens: int = 350,
         *,
         _bucket: str = "claude_extract",
+        cache_prompt: bool = True,
     ) -> str:
-        """Call Claude API with multiple screenshots and one prompt."""
+        """Call Claude API with multiple screenshots and one prompt.
+
+        #720 follow-up: the ``prompt`` is the stable extraction
+        instruction block. Same plan + recipe = same prompt every
+        call → cache_control on the first content block lets Anthropic
+        cache the prompt prefix (per the 5-min ephemeral TTL).
+        Screenshots and labels come AFTER the prompt and remain
+        mutable. Default ON for production extract calls; opt out via
+        ``cache_prompt=False`` for one-off calls where caching is pure
+        overhead (no second call within TTL).
+        """
         import requests
 
         if not self.api_key:
@@ -559,7 +600,10 @@ class ClaudeExtractor:
             return ""
 
         labels = labels or []
-        content: list[dict] = [{"type": "text", "text": prompt}]
+        prompt_block: dict[str, Any] = {"type": "text", "text": prompt}
+        if cache_prompt:
+            prompt_block["cache_control"] = {"type": "ephemeral"}
+        content: list[dict] = [prompt_block]
         for i, screenshot in enumerate(screenshots, 1):
             label = labels[i - 1] if i - 1 < len(labels) else f"screenshot {i}"
             # #518 — JPEG/PNG/WEBP per env; same dimensions as source.
@@ -602,6 +646,21 @@ class ClaudeExtractor:
                 return ""
             payload_json = resp.json()
             credit_claude_tokens_from_response(payload_json)
+            # #720 — emit cache telemetry on hits so operators can
+            # audit the extract_multi cache rate in Modal logs.
+            if cache_prompt:
+                from .._anthropic.cache import extract_cache_telemetry
+                tele = extract_cache_telemetry(payload_json)
+                if tele.get("cache_read_input_tokens", 0) > 0 or tele.get(
+                    "cache_creation_input_tokens", 0
+                ) > 0:
+                    logger.warning(
+                        "  [cache] extract_many: read=%d created=%d input=%d output=%d",
+                        tele.get("cache_read_input_tokens", 0),
+                        tele.get("cache_creation_input_tokens", 0),
+                        tele.get("input_tokens", 0),
+                        tele.get("output_tokens", 0),
+                    )
             for block in payload_json.get("content", []):
                 if block.get("type") == "text":
                     return block["text"].strip()
