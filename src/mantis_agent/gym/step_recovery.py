@@ -1095,6 +1095,12 @@ class StepRecoveryPolicy:
                 model=recovery_model,
                 prior_hints=prior_hints,
                 page_context=page_ctx,
+                # Plan-evolution Phase 1 (#705): page_links source needs
+                # CDP access to read links off the currently-loaded page.
+                # The local impl + RemoteComputerImpl both expose
+                # ``cdp_evaluate``; the source degrades silently when
+                # env is None or lacks the method.
+                env=getattr(runner, "env", None),
             )
         if decision is None:
             # #431: even though analyse_failure_and_recover already logs
