@@ -2533,6 +2533,92 @@ def api():
     return build_api_app()
 
 
+# ═══════════════════════════════════════════════════════════════════
+# D2) Computer Plane (#698, Phase 1) — Xvfb + Chrome + xdotool behind
+#     a thin FastAPI service. Optional, off by default; brain executors
+#     still construct ``LocalXdotoolImpl`` in-process until a per-
+#     executor override flips them to ``ComputerPlaneConfig.backend=
+#     "modal"`` pointing at this function's web URL.
+# ═══════════════════════════════════════════════════════════════════
+
+# Reuses the run_holo3 image's apt layer (Xvfb + xdotool + Chrome + the
+# stealth fonts/locale/TZ). The brain image deliberately keeps these
+# layers too in Phase 1 — Phase 2 of the migration slims the brain
+# image once the computer plane is proven in production.
+computer_plane_image = (
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11"
+    )
+    .run_commands(
+        "DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get update && DEBIAN_FRONTEND=noninteractive TZ=America/New_York "
+        "apt-get install -y gnupg curl wget xvfb xdotool xclip scrot "
+        "fonts-liberation fonts-dejavu-core fonts-noto-color-emoji locales",
+        "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg",
+        "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
+        "DEBIAN_FRONTEND=noninteractive apt-get update && "
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable || true",
+        "sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen",
+        "ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime",
+    )
+    .env({
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+        "TZ": "America/New_York",
+        "DEBIAN_FRONTEND": "noninteractive",
+    })
+    .pip_install(
+        "fastapi>=0.110",
+        "uvicorn[standard]>=0.27",
+        "pydantic>=2",
+        "pillow",
+        "mss",
+        "requests",
+        "websocket-client",
+    )
+    .add_local_python_source("mantis_agent")
+    .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
+    .add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE)
+)
+
+
+@app.function(
+    image=computer_plane_image,
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],
+    timeout=14400,  # 4 hours — match executor timeouts
+    memory=8192,
+    cpu=4.0,
+    scaledown_window=600,
+)
+@modal.concurrent(max_inputs=1)  # one session per container; brain plane fans out
+@modal.asgi_app()
+def computer_plane():
+    """Computer Plane RPC server — Xvfb + Chrome + xdotool over HTTPS.
+
+    Exposes the wire contract defined in
+    ``mantis_agent.gym.computer_wire``:
+
+      * POST /session/init    — bind tenant/profile/run, launch Xvfb + Chrome
+      * POST /session/close   — SIGTERM Chrome, stop Xvfb
+      * POST /screenshot      — base64 PNG + viewport metadata
+      * POST /xdotool         — argv with step_id (LRU dedup, TTL=30s)
+      * POST /cdp             — opt-in, off by default
+      * GET  /health          — liveness + last-action timestamp
+
+    Phase 1 rollout (#698): brain executors call this via
+    ``RemoteComputerImpl`` once ``ComputerPlaneConfig.backend='modal'``
+    is set on the executor (with ``remote_base_url`` pointing at this
+    function's web URL — resolve via
+    ``modal.Function.from_name('mantis-cua-server', 'computer_plane').get_web_url()``).
+
+    Until then this function is built but unused, so deploys validate
+    that the image builds without affecting the local-in-process path.
+    """
+    from mantis_agent.server.computer_agent import build_app
+    return build_app()
+
+
 @app.function(
     gpu="A100-80GB",
     image=planner_base_image.run_commands(
