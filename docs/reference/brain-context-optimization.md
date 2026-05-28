@@ -6,7 +6,7 @@
 
 ## Summary
 
-Two patterns from the StaffAI `claude_stateful` backend solve cost / context problems Mantis still pays on every run:
+Two patterns from an upstream `claude_stateful` integration backend solve cost / context problems Mantis still pays on every run:
 
 1. **Prompt-cache split** — partition the brain prompt into a stable section (`system + tools + plan + recipe + site_config`) and a mutable section (`state + screenshot + recent_history`). The stable section caches across turns; the mutable section is re-sent each turn. Net: ~30-50% reduction in Claude grounding cost on long runs.
 2. **LLM-owned digest** — let the brain write one structured observation line per step (`digest_line`). The framework persists it in a ring buffer and re-injects it on subsequent steps. The brain amortizes its own reasoning instead of re-deriving "what page am I on, what have I collected" from screenshot pixels every turn.
@@ -190,7 +190,7 @@ This document specs the migration in two tracks. Track A (prompt-cache split) is
 
 ## References
 
-- `claude_stateful` design — StaffAI `tools/staffai_tools/vision_claude/stateful_loop.py` (the prompt-cache split is in `stateful_prompts.py:104`; the `state` tool surface in `state_adapter.py:44`).
+- `claude_stateful` design — upstream integration-side pattern (a `stateful_loop` module with a `stateful_prompts` cache-split helper and a `state_adapter` tool surface). Pattern names referenced abstractly to satisfy this repo's customer-name isolation policy.
 - Anthropic prompt caching docs — `https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching`
 - `docs/reference/plan-evolution.md` — same phase-by-phase shape; per-tenant storage approach informs how digest persistence (if ever added) would scope.
 - `docs/reference/computer-plane.md` — same docstyle.
