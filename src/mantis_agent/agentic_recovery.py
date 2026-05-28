@@ -225,6 +225,9 @@ def analyse_failure_and_recover(
     prior_hints: list[str] | None = None,
     page_context: dict | None = None,
     env: Any = None,
+    plan_hash: str = "",
+    workflow_id: str = "",
+    step_index: int = -1,
 ) -> RecoveryDecision | None:
     """Ask Claude to analyse a step failure and pick a recovery mode.
 
@@ -316,16 +319,46 @@ def analyse_failure_and_recover(
                 subclass, best.source, best.confidence,
                 best.new_url[:120], best.notes,
             )
+            edited_step = {
+                "intent": _rewrite_intent_url(
+                    getattr(step, "intent", "") or "",
+                    failed_url,
+                    best.new_url,
+                ),
+                "params": {"url": best.new_url},
+            }
+
+            # Plan-evolution Phase 2 (#706): persist the candidate so
+            # subsequent runs of the same plan can apply it via overlay
+            # once it promotes (3 consecutive successes). Failures here
+            # are non-fatal — the rewrite still applies in-memory for
+            # THIS run.
+            if plan_hash and workflow_id and step_index >= 0:
+                try:
+                    from .recipes.plan_evolution_store import (
+                        record_rewrite_candidate,
+                    )
+                    record_rewrite_candidate(
+                        plan_hash=plan_hash,
+                        workflow_id=workflow_id,
+                        step_index=step_index,
+                        original_step={
+                            "intent": getattr(step, "intent", "") or "",
+                            "type": getattr(step, "type", "") or "",
+                            "params": dict(getattr(step, "params", {}) or {}),
+                        },
+                        rewritten_step=edited_step,
+                        source=best.source,
+                        confidence=best.confidence,
+                    )
+                except Exception as exc:  # noqa: BLE001 — never block recovery
+                    logger.debug(
+                        "plan_evolution: record_rewrite_candidate raised: %s", exc,
+                    )
+
             return RecoveryDecision(
                 mode="edit_step",
-                edited_step={
-                    "intent": _rewrite_intent_url(
-                        getattr(step, "intent", "") or "",
-                        failed_url,
-                        best.new_url,
-                    ),
-                    "params": {"url": best.new_url},
-                },
+                edited_step=edited_step,
                 reasoning=(
                     f"rewrite_url:{best.source} {failed_url} → {best.new_url} "
                     f"(confidence={best.confidence:.2f}; {best.notes})"
