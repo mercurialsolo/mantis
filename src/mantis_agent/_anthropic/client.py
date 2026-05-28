@@ -459,6 +459,20 @@ class AnthropicToolUseClient:
                 return None
             payload_json = resp.json()
             credit_claude_tokens_from_response(payload_json)
+            # #720 — extractor cache telemetry (single-screenshot path).
+            if cache_tools:
+                from .cache import extract_cache_telemetry
+                tele = extract_cache_telemetry(payload_json)
+                if tele.get("cache_read_input_tokens", 0) > 0 or tele.get(
+                    "cache_creation_input_tokens", 0
+                ) > 0:
+                    logger.warning(
+                        "  [cache] extractor: read=%d created=%d input=%d output=%d",
+                        tele.get("cache_read_input_tokens", 0),
+                        tele.get("cache_creation_input_tokens", 0),
+                        tele.get("input_tokens", 0),
+                        tele.get("output_tokens", 0),
+                    )
             # #523 — capture the modelio record when an upstream caller
             # has published a layer context (planner / grounding /
             # verifier / step_recovery / judge). No-op otherwise.
@@ -491,6 +505,7 @@ class AnthropicToolUseClient:
         labels: list[str] | None = None,
         max_tokens: int = 500,
         time_bucket: str = "claude_extract",
+        cache_tools: bool = False,
     ) -> dict | None:
         """Multi-screenshot variant of :meth:`call_with_tool_schema`.
 
@@ -521,14 +536,17 @@ class AnthropicToolUseClient:
                 "source": {"type": "base64", "media_type": media_type, "data": b64},
             })
 
+        tool_def: dict[str, Any] = {
+            "name": tool_name,
+            "description": tool_description,
+            "input_schema": input_schema,
+        }
+        if cache_tools:
+            tool_def["cache_control"] = {"type": "ephemeral"}
         payload = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "tools": [{
-                "name": tool_name,
-                "description": tool_description,
-                "input_schema": input_schema,
-            }],
+            "tools": [tool_def],
             "tool_choice": {"type": "tool", "name": tool_name},
             "messages": [{"role": "user", "content": content}],
         }
@@ -547,6 +565,20 @@ class AnthropicToolUseClient:
                 return None
             payload_json = resp.json()
             credit_claude_tokens_from_response(payload_json)
+            # #720 — emit cache telemetry at WARNING so operators can audit
+            # extractor cache hit rate in Modal logs without an env flag.
+            from .cache import extract_cache_telemetry
+            tele = extract_cache_telemetry(payload_json)
+            if tele.get("cache_read_input_tokens", 0) > 0 or tele.get(
+                "cache_creation_input_tokens", 0
+            ) > 0:
+                logger.warning(
+                    "  [cache] extractor_multi: read=%d created=%d input=%d output=%d",
+                    tele.get("cache_read_input_tokens", 0),
+                    tele.get("cache_creation_input_tokens", 0),
+                    tele.get("input_tokens", 0),
+                    tele.get("output_tokens", 0),
+                )
             _record_modelio_if_active(
                 payload, payload_json, int((time.monotonic() - t0) * 1000),
             )
