@@ -1024,6 +1024,40 @@ def _run_holo3_executor(
                 f"plan_hash={micro_runner._plan_hash}"
             )
 
+        # Trajectory hint memory (#643 / #670). Tenant-scoped disk store
+        # at /data/hints/<tenant_id>/<plan_signature>.json. Producer
+        # side: ``run_executor._record_hint_memory`` reads ``_hint_store``
+        # off the runner after every step success. Consumer side: the
+        # holo3 step handler reads ``preferred_target_description`` from
+        # ``step.hints`` (stamped by ``apply_hint_overlay`` pre-flight
+        # below).
+        #
+        # Tenant id is the profile_id (which already carries the
+        # ``<tenant>__<workflow>`` shape from the API container's
+        # acquire_profile_lock) so customer A's anchors can never leak
+        # into customer B's runs.
+        try:
+            from mantis_agent.gym.hint_memory import (
+                DiskHintStore, apply_hint_overlay,
+            )
+            hint_tenant = str(task_suite.get("_profile_id", "") or "") or "default"
+            micro_runner._hint_store = DiskHintStore(tenant_id=hint_tenant)
+            applied = apply_hint_overlay(
+                micro_plan,
+                store=micro_runner._hint_store,
+                plan_signature=plan_signature,
+                start_url=str(task_suite.get("base_url", "") or ""),
+            )
+            if applied:
+                print(
+                    f"  Hint-memory: tenant={hint_tenant} "
+                    f"plan_sig={plan_signature[:12]} applied={applied} hints"
+                )
+        except Exception as exc:  # noqa: BLE001 — never block executor
+            print(f"  WARNING: hint memory init failed (recording disabled): {exc}")
+            from mantis_agent.gym.hint_memory import NullHintStore
+            micro_runner._hint_store = NullHintStore()
+
         # #627: bind a cross-worker shared seen-URL set from the suite
         # metadata. Modal orchestrator sets ``_fanout_seen_dict_name``
         # before spawning; workers re-attach to the same modal.Dict by
