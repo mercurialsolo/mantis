@@ -321,7 +321,7 @@ def test_step_recovery_passes_page_context_to_agentic_recovery(monkeypatch) -> N
 
     def _capture(*, step, failure_data, screenshot, plan_context,
                  attempts, model=None, api_key="", prior_hints=None,
-                 page_context=None):
+                 page_context=None, env=None):
         captured["page_context"] = page_context
         return None
 
@@ -485,7 +485,7 @@ def test_no_state_change_submit_uses_opus_model() -> None:
 
     def _capture(*, step, failure_data, screenshot, plan_context,
                  attempts, model=None, api_key="", prior_hints=None,
-                 page_context=None):
+                 page_context=None, env=None):
         captured["model"] = model
         captured["page_context"] = page_context
         return None  # short-circuit; we only care about the model arg.
@@ -926,7 +926,7 @@ def test_recovery_runs_tab_blur_traversal_on_no_state_change_submit() -> None:
 
     def _capture(*, step, failure_data, screenshot, plan_context,
                  attempts, model=None, api_key="", prior_hints=None,
-                 page_context=None):
+                 page_context=None, env=None):
         captured["screenshot"] = screenshot
         return None  # short-circuit; we only care about the pre-call sequence.
 

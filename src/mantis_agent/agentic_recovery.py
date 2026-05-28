@@ -224,6 +224,7 @@ def analyse_failure_and_recover(
     model: str = "claude-haiku-4-5-20251001",
     prior_hints: list[str] | None = None,
     page_context: dict | None = None,
+    env: Any = None,
 ) -> RecoveryDecision | None:
     """Ask Claude to analyse a step failure and pick a recovery mode.
 
@@ -283,26 +284,65 @@ def analyse_failure_and_recover(
         does NOT track budgets — it just performs the analysis when
         invoked.
     """
-    # Plan-evolution Phase 0 (#704): a `bad_url:<subclass>` failure means
+    # Plan-evolution Phase 1 (#705): a `bad_url:<subclass>` failure means
     # the navigate step landed somewhere unusable (DNS error, 404,
-    # wrong domain, soft-404). The four existing recovery modes
-    # (add_hint / edit_step / insert_steps) won't help — they're for
-    # element-level drift, not URL-level drift. Phase 1 (#705) will
-    # add a `rewrite_url` mode that runs pattern_transform → page_links
-    # → web_search before deciding. Until then, short-circuit to halt
-    # with a structured reason so we don't burn a Claude tool call on
-    # a failure class we can't fix.
+    # wrong domain, soft-404). Run the URL-rewrite sources in cheapness
+    # order (pattern_transform, then page_links if env supports CDP).
+    # If a candidate emerges, dispatch as an `edit_step` decision
+    # rewriting the navigate intent + params.url; the existing
+    # step_recovery dispatcher merges the params and the navigate
+    # handler picks up the new URL on retry. If no candidate emerges,
+    # halt cleanly with the structured reason so result.json + Augur
+    # show what was tried.
+    #
+    # `blocked` subclass is filtered upstream (handled by
+    # external_pause / CF challenge paths) and never reaches this point.
     fd_lc = (failure_data or "").lower()
     if fd_lc.startswith("bad_url:") or fd_lc.startswith("bad_url="):
+        from .gym.url_recovery import propose_url_rewrites
         subclass = (failure_data or "").split(":", 1)[-1].split("=", 1)[-1].strip()
+        failed_url = _extract_failed_url_from_step(step, page_context or {})
+        report = propose_url_rewrites(
+            failed_url=failed_url,
+            failure_subclass=subclass,
+            intent_text=getattr(step, "intent", "") or "",
+            env=env,
+        )
+        if report.proposals:
+            best = report.proposals[0]
+            logger.warning(
+                "agentic_recovery: bad_url subclass=%s → rewrite_url "
+                "source=%s confidence=%.2f new_url=%s (notes=%s)",
+                subclass, best.source, best.confidence,
+                best.new_url[:120], best.notes,
+            )
+            return RecoveryDecision(
+                mode="edit_step",
+                edited_step={
+                    "intent": _rewrite_intent_url(
+                        getattr(step, "intent", "") or "",
+                        failed_url,
+                        best.new_url,
+                    ),
+                    "params": {"url": best.new_url},
+                },
+                reasoning=(
+                    f"rewrite_url:{best.source} {failed_url} → {best.new_url} "
+                    f"(confidence={best.confidence:.2f}; {best.notes})"
+                ),
+            )
+
         logger.warning(
-            "agentic_recovery: bad_url subclass=%s — Phase 0 routes to halt "
-            "(rewrite_url lands in #705)",
-            subclass,
+            "agentic_recovery: bad_url subclass=%s — no rewrite_url candidates "
+            "(sources_tried=%s sources_skipped=%s); halting cleanly",
+            subclass, report.sources_tried, report.sources_skipped,
         )
         return RecoveryDecision(
             mode="halt",
-            reasoning=f"bad_url:{subclass} — no rewrite_url recovery yet (#705)",
+            reasoning=(
+                f"bad_url:{subclass} — rewrite_url found no candidates "
+                f"(tried {','.join(report.sources_tried)})"
+            ),
         )
 
     api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
@@ -498,6 +538,51 @@ def _format_plan_context(steps: list[str]) -> str:
     if not steps:
         return "  (this is the first step that failed)"
     return "\n".join(f"  [{i}] {s[:100]}" for i, s in enumerate(steps))
+
+
+# ── plan-evolution Phase 1 helpers ───────────────────────────────────
+
+import re as _re  # noqa: E402 — keep heavy imports up top, plain re here
+
+
+_URL_RE = _re.compile(r'https?://[^\s"]+')
+
+
+def _extract_failed_url_from_step(step: Any, page_context: dict) -> str:
+    """Find the URL the navigate step tried to load.
+
+    Order: step.params['url'] > URL match in step.intent > page_context
+    ['current_url']. Returns "" only if every source is empty (shouldn't
+    happen for a bad_url failure; defensive).
+    """
+    params = getattr(step, "params", None) or {}
+    params_url = str(params.get("url", "") or "").strip()
+    if params_url:
+        m = _URL_RE.search(params_url)
+        if m:
+            return m.group(0)
+        if params_url.startswith("http"):
+            return params_url
+    intent = getattr(step, "intent", "") or ""
+    m = _URL_RE.search(intent)
+    if m:
+        return m.group(0)
+    return str(page_context.get("current_url", "") or "").strip()
+
+
+def _rewrite_intent_url(intent: str, old_url: str, new_url: str) -> str:
+    """Swap old_url → new_url inside the intent prose, preserving the rest.
+
+    When the intent doesn't literally contain old_url (the decomposer
+    paraphrased), returns the intent unchanged — params.url is the
+    authoritative source for the navigate handler anyway. The intent
+    rewrite is for log readability + future audit.
+    """
+    if not intent or not old_url or old_url == new_url:
+        return intent
+    if old_url in intent:
+        return intent.replace(old_url, new_url)
+    return intent
 
 
 def _format_page_context(page: dict) -> str:
