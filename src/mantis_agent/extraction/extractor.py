@@ -493,6 +493,16 @@ class ClaudeExtractor:
         TimeMeter bucket / one image-encoding path. This method's
         signature is preserved because tests (and a few callers
         outside this module) reach into the extractor for it.
+
+        #720: ``cache_tools=True`` is now the default for extractor
+        calls. The tool definition + JSON Schema is the largest stable
+        block in any extract call (~1-3 KB for the boattrader leads
+        schema, ~5 KB for nested schemas); marking it for caching cuts
+        input-token cost ~30-40% on every extract call after the first
+        within a 5-minute window. Was the #715 Phase 0 deferral; the
+        post-merge validation showed extractor is the dominant Claude
+        cost driver on every holo3-brain run, so this is the actual
+        cost win.
         """
         return self._client.call_with_tool_schema(
             screenshot, prompt,
@@ -501,6 +511,7 @@ class ClaudeExtractor:
             input_schema=input_schema,
             max_tokens=max_tokens,
             time_bucket=_bucket,
+            cache_tools=True,
         )
 
     def _call_with_tool_schema_multi(
@@ -515,7 +526,11 @@ class ClaudeExtractor:
         max_tokens: int = 500,
         _bucket: str = "claude_extract",
     ) -> dict | None:
-        """Back-compat shim — see :meth:`AnthropicToolUseClient.call_with_tool_schema_multi`."""
+        """Back-compat shim — see :meth:`AnthropicToolUseClient.call_with_tool_schema_multi`.
+
+        #720: ``cache_tools=True`` default — see :meth:`_call_with_tool_schema`
+        rationale.
+        """
         return self._client.call_with_tool_schema_multi(
             screenshots, prompt,
             tool_name=tool_name,
@@ -524,6 +539,7 @@ class ClaudeExtractor:
             labels=labels,
             max_tokens=max_tokens,
             time_bucket=_bucket,
+            cache_tools=True,
         )
 
     def _call_many(
