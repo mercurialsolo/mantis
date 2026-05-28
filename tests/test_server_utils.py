@@ -546,6 +546,46 @@ def test_build_micro_suite_structure():
     assert suite["_micro_plan"] == steps
     assert suite["tasks"] == []
     assert suite["_checkpoint_path"].endswith("my_key.json")
+    # Plan-evolution Phase 2 (#706): fields absent when not passed.
+    assert "_plan_hash" not in suite
+    assert "_plan_evolution_scope_id" not in suite
+
+
+def test_build_micro_suite_carries_plan_hash_and_scope():
+    """When plan_hash is supplied, the suite carries both fields so the
+    Modal executor can stamp them on the runner."""
+    steps = [{"intent": "nav", "type": "navigate"}]
+    suite = build_micro_suite(
+        steps, "example.com",
+        profile_id="alice",
+        plan_hash="abc12345",
+        plan_evolution_scope_id="alice-stable",
+    )
+    assert suite["_plan_hash"] == "abc12345"
+    assert suite["_plan_evolution_scope_id"] == "alice-stable"
+
+
+def test_build_micro_suite_scope_defaults_to_profile_when_plan_hash_set():
+    """Sensible default: when plan_hash is supplied but scope is not,
+    use the resolved profile_id so runs of the same plan on the same
+    profile accumulate learning."""
+    steps = [{"intent": "nav", "type": "navigate"}]
+    suite = build_micro_suite(
+        steps, "example.com",
+        profile_id="alice", workflow_id="run-xyz",
+        plan_hash="abc12345",
+    )
+    assert suite["_plan_evolution_scope_id"] == "alice"
+
+
+def test_build_micro_suite_skips_scope_default_when_no_plan_hash():
+    """No plan_hash → no scope_id either (the store is the only consumer)."""
+    steps = [{"intent": "nav", "type": "navigate"}]
+    suite = build_micro_suite(
+        steps, "example.com", profile_id="alice",
+        plan_evolution_scope_id="",
+    )
+    assert "_plan_evolution_scope_id" not in suite
 
 
 # ── #341: profile_id / workflow_id split ─────────────────────────────

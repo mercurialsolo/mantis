@@ -229,6 +229,14 @@ class MicroPlan:
     # mentions a URL with a page indicator, OR set programmatically
     # by a future enhancer step that probes the site.
     pagination_url_template: str = ""
+    # Plan-evolution Phase 2 (#706): stable hash of (prompt_version +
+    # source_plan). Populated by :meth:`PlanDecomposer.decompose_text`
+    # (and the cache-load path) so downstream callers can key the
+    # plan-evolution store on a single field without re-deriving the
+    # hash. Empty when the plan was constructed directly (e.g. tests,
+    # CLI dry-run) — the plan-evolution layer treats empty as "no
+    # store interaction" so legacy callers see no change.
+    plan_hash: str = ""
 
     def summary(self) -> str:
         shape_tag = f" [{','.join(self.shapes)}]" if self.shapes else ""
@@ -874,7 +882,9 @@ class PlanDecomposer:
                     cached_steps = cached
                     cached_shapes = []
                     cached_template = ""
-                plan = MicroPlan(source_plan=plan_text, domain=domain)
+                plan = MicroPlan(
+                    source_plan=plan_text, domain=domain, plan_hash=plan_hash,
+                )
                 plan.shapes = self._normalize_shapes(cached_shapes)
                 if "{base}" in cached_template and "{n}" in cached_template:
                     plan.pagination_url_template = cached_template
@@ -984,7 +994,9 @@ class PlanDecomposer:
                 f"Decomposer returned unexpected JSON type: {type(parsed).__name__}"
             )
 
-        plan = MicroPlan(source_plan=plan_text, domain=domain)
+        plan = MicroPlan(
+            source_plan=plan_text, domain=domain, plan_hash=plan_hash,
+        )
         plan.shapes = self._normalize_shapes(shapes_raw)
         # Only accept the template when it contains both placeholders;
         # otherwise it's malformed and the orchestrator will reject it
