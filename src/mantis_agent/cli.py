@@ -78,6 +78,65 @@ def _format_issue(issue: Any, label: str) -> str:
     return line
 
 
+def cmd_plan_overlay_show(args: argparse.Namespace) -> int:
+    """``mantis plan overlay show`` — dump stored rewrites for a plan.
+
+    Useful for validating that the promotion gate is firing as expected:
+
+      MANTIS_PLAN_EVOLUTION_DIR=/tmp/store \\
+      mantis plan overlay show --workflow-id wf1 --plan-hash abc12345
+    """
+    from .recipes.plan_evolution_store import load_for_inspection
+
+    evo = load_for_inspection(
+        plan_hash=args.plan_hash,
+        workflow_id=args.workflow_id,
+    )
+    if args.json:
+        print(json.dumps(evo.to_dict(), indent=2))
+        return EXIT_OK
+
+    if not evo.rewrites:
+        print(
+            f"(no rewrites stored for workflow_id={args.workflow_id!r} "
+            f"plan_hash={args.plan_hash!r})"
+        )
+        return EXIT_OK
+
+    print(f"plan_hash:   {evo.plan_hash}")
+    print(f"scope:       {evo.scope}")
+    print(f"scope_id:    {evo.scope_id}")
+    print(f"rewrites:    {len(evo.rewrites)}")
+    print()
+    for i, r in enumerate(evo.rewrites):
+        url_to = r.rewritten.get("params", {}).get("url", "")
+        url_from = r.original.get("params", {}).get("url", "")
+        print(f"  [{i}] step={r.step_index} status={r.status} source={r.source}")
+        print(f"      confidence: {r.confidence:.2f}")
+        print(f"      counters:   {r.successful_runs}✓ / {r.failed_runs}✗  "
+              f"(consec: {r.consecutive_successes}✓ / {r.consecutive_failures}✗)")
+        print(f"      from URL:   {url_from[:120]}")
+        print(f"      to   URL:   {url_to[:120]}")
+        print(f"      seen:       {r.first_seen} → {r.last_seen}")
+        if r.demotion_reason:
+            print(f"      demoted:    {r.demotion_reason}")
+        print()
+    return EXIT_OK
+
+
+def cmd_plan_overlay_list(args: argparse.Namespace) -> int:
+    """``mantis plan overlay list`` — list stored plan_hashes for a workflow."""
+    from .recipes.plan_evolution_store import list_plans
+
+    hashes = list_plans(workflow_id=args.workflow_id)
+    if not hashes:
+        print(f"(no plans stored for workflow_id={args.workflow_id!r})")
+        return EXIT_OK
+    for h in hashes:
+        print(h)
+    return EXIT_OK
+
+
 def cmd_plan_validate(args: argparse.Namespace) -> int:
     """``mantis plan validate <path>`` — run :class:`PlanValidator` on a JSON plan.
 
@@ -1734,6 +1793,43 @@ def _build_parser() -> argparse.ArgumentParser:
              "reproducible across reruns of the same plan.",
     )
     run_modal.set_defaults(func=cmd_plan_run_modal)
+
+    # ── plan-overlay: inspect / seed the plan-evolution store (#706) ──
+    overlay = plan_sub.add_parser(
+        "overlay",
+        help="Inspect or seed the plan-evolution store (#706). "
+             "Reads /data/plan_evolution/workflow/<workflow_id>/<plan_hash>.json "
+             "(override the root via MANTIS_PLAN_EVOLUTION_DIR).",
+    )
+    overlay_sub = overlay.add_subparsers(dest="overlay_command", required=True)
+
+    overlay_show = overlay_sub.add_parser(
+        "show",
+        help="Dump the stored rewrites for a (workflow_id, plan_hash) pair.",
+    )
+    overlay_show.add_argument(
+        "--workflow-id", required=True,
+        help="Workflow identifier the rewrites are scoped to.",
+    )
+    overlay_show.add_argument(
+        "--plan-hash", required=True,
+        help="Plan hash (matches PlanDecomposer's cache key).",
+    )
+    overlay_show.add_argument(
+        "--json", action="store_true",
+        help="Emit raw JSON instead of human-formatted lines.",
+    )
+    overlay_show.set_defaults(func=cmd_plan_overlay_show)
+
+    overlay_list = overlay_sub.add_parser(
+        "list",
+        help="List plan_hashes with stored evolutions for a workflow.",
+    )
+    overlay_list.add_argument(
+        "--workflow-id", required=True,
+        help="Workflow identifier to list plans for.",
+    )
+    overlay_list.set_defaults(func=cmd_plan_overlay_list)
 
     # ── cua: pure Holo3 pass-through (no decomposition, no Claude) ──
     cua = sub.add_parser(

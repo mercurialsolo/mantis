@@ -132,6 +132,55 @@ class RecoveryDecision:
 DECISION_SUCCEED = RecoveryDecision(action=RecoveryAction.SUCCEED)
 
 
+def _track_plan_rewrite_candidate(
+    runner: Any, *, step_index: int, edited: dict,
+    decision: Any, original_step: Any,
+) -> None:
+    """Stash a URL-rewrite candidate on the runner for terminal accounting.
+
+    Plan-evolution Phase 2 (#706): consumed by
+    ``MicroPlanRunner.run`` → ``finalize_run_outcomes`` at run terminal
+    to apply the promotion / demotion gates. Errors here are debug-only
+    — store accounting must never block recovery.
+    """
+    try:
+        from ..recipes.plan_evolution_store import StepRewrite
+    except Exception:  # noqa: BLE001
+        return
+    # Extract source from the decision's reasoning ("rewrite_url:<source>: ...")
+    source = "pattern_transform"
+    reasoning = str(getattr(decision, "reasoning", "") or "")
+    if reasoning.startswith("rewrite_url:"):
+        head = reasoning.split(" ", 1)[0]  # "rewrite_url:<source>"
+        source = head.split(":", 1)[1] if ":" in head else source
+    confidence = 0.6
+    if "(confidence=" in reasoning:
+        try:
+            tail = reasoning.split("(confidence=", 1)[1]
+            confidence = float(tail.split(";", 1)[0].strip())
+        except (ValueError, IndexError):
+            pass
+    rewrite = StepRewrite(
+        step_index=step_index,
+        original={
+            "intent": getattr(original_step, "intent", "") or "",
+            "type": getattr(original_step, "type", "") or "",
+            "params": dict(getattr(original_step, "params", {}) or {}),
+        },
+        rewritten=dict(edited),
+        source=source if source in (
+            "pattern_transform", "page_links", "web_search",
+            "brain_proposal", "manual",
+        ) else "pattern_transform",
+        confidence=confidence,
+        scope="workflow",
+        status="candidate",
+    )
+    if not hasattr(runner, "_applied_plan_rewrites"):
+        runner._applied_plan_rewrites = []
+    runner._applied_plan_rewrites.append(rewrite)
+
+
 # ── Phase 1.3 dispatch lift — runtime policy ────────────────────────────────
 
 
@@ -1101,6 +1150,13 @@ class StepRecoveryPolicy:
                 # ``cdp_evaluate``; the source degrades silently when
                 # env is None or lacks the method.
                 env=getattr(runner, "env", None),
+                # Plan-evolution Phase 2 (#706): persistence hooks for
+                # the rewrite_url candidate the recovery may produce.
+                # Empty values disable persistence (legacy callers,
+                # tests, ad-hoc runs); production sets all three.
+                plan_hash=str(getattr(runner, "_plan_hash", "") or ""),
+                workflow_id=str(getattr(runner, "_workflow_id", "") or ""),
+                step_index=step_index,
             )
         if decision is None:
             # #431: even though analyse_failure_and_recover already logs
@@ -1203,6 +1259,19 @@ class StepRecoveryPolicy:
                     source="agentic_recovery",
                     failure_class=getattr(step_result, "failure_class", "") or "",
                 )
+
+            # Plan-evolution Phase 2 (#706): if this edit_step came from
+            # a URL-rewrite recovery (bad_url failure → rewrite_url),
+            # track the candidate on the runner so finalize_run_outcomes
+            # can record per-rewrite success / failure at run terminal.
+            # We recognise URL-rewrite edits by their reasoning prefix —
+            # `rewrite_url:<source>` — set by agentic_recovery.
+            if str(decision.reasoning or "").startswith("rewrite_url:"):
+                _track_plan_rewrite_candidate(
+                    runner, step_index=step_index, edited=edited,
+                    decision=decision, original_step=step,
+                )
+
             return RecoveryOutcome(
                 halt=False, step_index=step_index,
                 halt_reason=f"recovery_edit:{step.type}",

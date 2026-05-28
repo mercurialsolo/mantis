@@ -419,6 +419,27 @@ class MicroPlanRunner:
         )
         self._executor.execute(plan, state, resume=resume)
         self._final_summary(state.results)
+
+        # Plan-evolution Phase 2 (#706): record per-rewrite outcome at
+        # run terminal. The promotion / demotion gates fire here.
+        # No-op when the runner doesn't carry _plan_hash / _workflow_id
+        # (legacy callers, tests, ad-hoc runs).
+        applied = getattr(self, "_applied_plan_rewrites", None)
+        if applied:
+            try:
+                from ..recipes.plan_evolution_store import finalize_run_outcomes
+                finalize_run_outcomes(
+                    plan_hash=str(getattr(self, "_plan_hash", "") or ""),
+                    workflow_id=str(getattr(self, "_workflow_id", "") or ""),
+                    applied_rewrites=applied,
+                    step_results=state.results,
+                )
+            except Exception as exc:  # noqa: BLE001 — never block run terminal
+                logger = __import__("logging").getLogger(__name__)
+                logger.debug(
+                    "plan_evolution: finalize_run_outcomes raised: %s", exc,
+                )
+
         return state.results
 
     def _check_and_emit_context_budget(
