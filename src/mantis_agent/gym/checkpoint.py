@@ -129,12 +129,17 @@ class StepResult:
     # ``failure_class`` is one of the keys documented in
     # :mod:`~.failure_class` (cf_challenge / nav_timeout / http_4xx /
     # http_5xx / selector_miss / extractor_error / budget_exceeded /
-    # unknown). ``final_url`` and ``page_title`` snapshot the browser at
-    # the moment of failure so post-mortems land in result.json instead
-    # of Modal logs. All three are empty on success.
+    # bad_url / unknown). ``final_url`` and ``page_title`` snapshot the
+    # browser at the moment of failure so post-mortems land in
+    # result.json instead of Modal logs. All four are empty on success.
     failure_class: str = ""
     final_url: str = ""
     page_title: str = ""
+    # Plan-evolution Phase 0 (#704): when ``failure_class == 'bad_url'``,
+    # this carries the structured subclass from :mod:`~.url_health`
+    # (``dns`` / ``not_found`` / ``wrong_domain`` / ``soft_404`` /
+    # ``blocked``). Empty for every other failure_class and on success.
+    failure_subclass: str = ""
 
     # #508 structured extraction passthrough. When the step ran a
     # schema-driven ``extract_data`` and produced a viable row, the
@@ -151,7 +156,7 @@ class StepResult:
     _PERSISTED: ClassVar[tuple[str, ...]] = (
         "step_index", "intent", "success", "data", "steps_used", "duration", "reversed",
         "skip", "skip_reason", "executor_backend",
-        "failure_class", "final_url", "page_title",
+        "failure_class", "final_url", "page_title", "failure_subclass",
         "extracted_fields",
     )
 
