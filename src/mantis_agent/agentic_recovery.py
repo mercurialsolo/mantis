@@ -283,6 +283,28 @@ def analyse_failure_and_recover(
         does NOT track budgets — it just performs the analysis when
         invoked.
     """
+    # Plan-evolution Phase 0 (#704): a `bad_url:<subclass>` failure means
+    # the navigate step landed somewhere unusable (DNS error, 404,
+    # wrong domain, soft-404). The four existing recovery modes
+    # (add_hint / edit_step / insert_steps) won't help — they're for
+    # element-level drift, not URL-level drift. Phase 1 (#705) will
+    # add a `rewrite_url` mode that runs pattern_transform → page_links
+    # → web_search before deciding. Until then, short-circuit to halt
+    # with a structured reason so we don't burn a Claude tool call on
+    # a failure class we can't fix.
+    fd_lc = (failure_data or "").lower()
+    if fd_lc.startswith("bad_url:") or fd_lc.startswith("bad_url="):
+        subclass = (failure_data or "").split(":", 1)[-1].split("=", 1)[-1].strip()
+        logger.warning(
+            "agentic_recovery: bad_url subclass=%s — Phase 0 routes to halt "
+            "(rewrite_url lands in #705)",
+            subclass,
+        )
+        return RecoveryDecision(
+            mode="halt",
+            reasoning=f"bad_url:{subclass} — no rewrite_url recovery yet (#705)",
+        )
+
     api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         logger.warning(

@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 
 from ...actions import Action, ActionType
 from .. import adaptive_settle
+from .. import url_health
 from ..checkpoint import StepResult
 from ..step_context import StepContext
 
@@ -124,6 +125,46 @@ class NavigateHandler:
             adaptive_settle.settle_after_action(env, max_seconds=wait_seconds)
             env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Home"}))
             adaptive_settle.settle_after_action(env, max_seconds=2.0)
+
+            # Plan-evolution Phase 0 (#704): classify post-navigate URL
+            # health BEFORE arming the scanner. A bad_url here means
+            # nothing downstream will work — emit a structured failure
+            # so #705's rewrite_url recovery action has a clean trigger.
+            # The `blocked` subclass defers to existing CF / external-
+            # pause handling (which runs from the runner's scan loop)
+            # so we don't fight it here.
+            #
+            # Skip entirely when the env doesn't expose a real
+            # `current_url` (test mocks, embed surfaces without CDP) —
+            # we can't tell health from nothing, and silence here is
+            # the conservative choice. Real Modal / local Chrome envs
+            # always return a string.
+            cur_url, page_title, body_snippet = url_health.read_page_signals(env)
+            expected = url_health.expand_expected_domains(url)
+            if not cur_url:
+                subclass = "ok"
+            else:
+                subclass = url_health.classify(
+                    current_url=cur_url,
+                    expected_domains=expected,
+                    page_title=page_title,
+                    page_body_text=body_snippet,
+                )
+            if subclass not in ("ok", "blocked"):
+                logger.warning(
+                    "  [navigate] url_health=%s requested=%s landed=%s title=%r",
+                    subclass, url, cur_url, page_title[:60],
+                )
+                return StepResult(
+                    step_index=index,
+                    intent=step.intent,
+                    success=False,
+                    data=f"bad_url:{subclass}",
+                    failure_class="bad_url",
+                    failure_subclass=subclass,
+                    final_url=cur_url,
+                    page_title=page_title,
+                )
 
             # Anchor the results scan state to this URL.
             if scanner is not None:

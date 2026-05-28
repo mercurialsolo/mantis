@@ -33,6 +33,10 @@ Classes (stay small on purpose — anything not matched lands in
   (Phase B) is the right response.
 * ``extractor_error`` — Claude extractor failed or returned empty.
 * ``budget_exceeded`` — cost / time / context budget tripped.
+* ``bad_url`` — post-navigate URL health check failed. Carries a
+  subclass (``dns`` / ``not_found`` / ``wrong_domain`` / ``soft_404`` /
+  ``blocked``) in :attr:`StepResult.failure_subclass`. See
+  :mod:`~.url_health` for the classifier. Plan-evolution Phase 0 (#704).
 * ``unknown`` — no rule matched (caller should still surface ``data``).
 
 The classifier is pure-functional and runs in microseconds — it lives
@@ -72,6 +76,13 @@ _DATA_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # ``verify_post_click_navigation`` returns ``kind=wrong_target``;
     # rule below catches the substring on legacy result.json.
     ("wrong_target", ("wrong_target",)),
+    # Plan-evolution Phase 0 (#704): structured URL-failure class.
+    # Set by the navigate handler via `url_health.classify` when the
+    # post-navigate state is non-`ok`. The subclass (`dns` / `not_found`
+    # / `wrong_domain` / `soft_404` / `blocked`) is carried on the
+    # StepResult separately; this rule only catches the `bad_url:`
+    # prefix in legacy `data` blobs.
+    ("bad_url", ("bad_url:", "bad_url=")),
     ("cf_challenge", ("error 403", "403 forbidden", "cloudflare", "verify you are human")),
     ("http_4xx", ("error 404", "404", "error 401", "error 410", "error 4")),
     ("http_5xx", ("error 5", "502", "503", "504", "internal server error")),
