@@ -166,6 +166,22 @@ def _build_scoped_task(step: "MicroIntent", runner: Any, step_index: int) -> str
     layout = str(hints.get("layout") or "").strip()
     if layout:
         target_lines.append(f"  layout: {layout}")
+    # #643 / #670 — trajectory hint memory injection. When the dispatcher
+    # found a stored anchor from a prior successful run of THIS step on
+    # THIS plan + URL pattern, surface it as the strongest signal in the
+    # Target hints section. The brain treats it as a viewport bias — the
+    # anchor is visual text it can re-find on the current screenshot,
+    # not a coordinate.
+    preferred = str(hints.get("preferred_target_description") or "").strip()
+    if preferred:
+        target_lines.append(f"  preferred_target: {preferred}")
+    preferred_stage = hints.get("preferred_target_viewport_stage")
+    if preferred_stage is not None:
+        try:
+            stage_int = int(preferred_stage)
+            target_lines.append(f"  preferred_target_at_scroll_stage: {stage_int}")
+        except (TypeError, ValueError):
+            pass
     if target_lines:
         sections.append("Target hints:\n" + "\n".join(target_lines))
 

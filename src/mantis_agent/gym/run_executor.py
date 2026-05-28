@@ -436,8 +436,40 @@ class RunExecutor:
                 costs_before=costs_before_step,
             )
 
+            # #643 / #670: trajectory hint memory recording side. Fires
+            # only on success + grounding-bearing step + when the runner
+            # carries a HintStore (set by the dispatcher). Best-effort —
+            # store failures must never block a run. Sees the SoM
+            # diagnostic (``env._last_som_diag``) the click handler
+            # stashed via CDP verification.
+            self._record_hint_memory(step, step_result)
+
         self._finalize(plan, state)
         return state.results
+
+    def _record_hint_memory(self, step: Any, step_result: Any) -> None:
+        """Producer side of the trajectory hint memory (#643 Phase 1b).
+
+        Cheap gate: only fires on success + grounding-bearing step
+        types + when a HintStore is wired. NullHintStore (the default)
+        short-circuits inside :func:`record_hint_if_eligible`.
+        """
+        runner = self.parent
+        store = getattr(runner, "_hint_store", None)
+        if store is None:
+            return
+        try:
+            from .hint_memory import record_hint_if_eligible
+            record_hint_if_eligible(
+                store=store,
+                plan_signature=str(getattr(runner, "plan_signature", "") or ""),
+                step=step,
+                step_type=str(getattr(step, "type", "") or ""),
+                success=bool(getattr(step_result, "success", False)),
+                env=getattr(runner, "env", None),
+            )
+        except Exception as exc:  # noqa: BLE001 — never break the run
+            logger.debug("hint_memory recording raised: %s", exc)
 
     _COST_KEYS_FOR_DELTA: tuple[str, ...] = (
         "gpu_seconds",

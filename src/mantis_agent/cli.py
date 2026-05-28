@@ -137,6 +137,84 @@ def cmd_plan_overlay_list(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_plan_hints_show(args: argparse.Namespace) -> int:
+    """``mantis plan hints show`` — dump stored hint anchors for a plan.
+
+    Useful for validating the recording side fired as expected:
+
+      MANTIS_HINT_MEMORY_DIR=/tmp/hints \\
+      mantis plan hints show --tenant-id default__boattrader-urlnav-stable \\
+                             --plan-signature deadbeef1234
+    """
+    from .gym.hint_memory import DiskHintStore, HintKey
+
+    store = DiskHintStore(tenant_id=args.tenant_id)
+    buckets = store._load(args.plan_signature)  # type: ignore[attr-defined]
+
+    if args.json:
+        out: dict[str, list[dict]] = {}
+        for bk, recs in buckets.items():
+            out[bk] = [
+                {
+                    "anchor_text": r.anchor_text,
+                    "anchor_xy_offset": list(r.anchor_xy_offset),
+                    "viewport_stage": r.viewport_stage,
+                    "confidence": r.confidence,
+                    "recorded_at": r.recorded_at,
+                    "source_url": r.source_url,
+                }
+                for r in recs
+            ]
+        print(json.dumps(out, indent=2))
+        return EXIT_OK
+
+    if not buckets:
+        print(
+            f"(no hints stored for tenant_id={args.tenant_id!r} "
+            f"plan_signature={args.plan_signature!r})"
+        )
+        return EXIT_OK
+
+    print(f"tenant_id:        {args.tenant_id}")
+    print(f"plan_signature:   {args.plan_signature}")
+    print(f"buckets:          {len(buckets)}")
+    print(f"total records:    {sum(len(r) for r in buckets.values())}")
+    print()
+    for bk, recs in sorted(buckets.items()):
+        intent_hash, _, url_pattern = bk.partition("|")
+        # Reconstruct a HintKey for display.
+        HintKey(
+            plan_signature=args.plan_signature,
+            intent_hash=intent_hash,
+            url_pattern=url_pattern,
+        )
+        print(f"  intent_hash={intent_hash} url_pattern={url_pattern} ({len(recs)} records)")
+        for i, r in enumerate(reversed(recs)):  # newest first
+            print(
+                f"    [{i}] anchor={r.anchor_text!r}  "
+                f"xy={r.anchor_xy_offset}  stage={r.viewport_stage}  "
+                f"conf={r.confidence:.2f}"
+            )
+            if r.source_url:
+                print(f"         source: {r.source_url[:120]}")
+        print()
+    return EXIT_OK
+
+
+def cmd_plan_hints_list(args: argparse.Namespace) -> int:
+    """``mantis plan hints list`` — list plan_signatures stored for a tenant."""
+    from .gym.hint_memory import DiskHintStore
+
+    store = DiskHintStore(tenant_id=args.tenant_id)
+    sigs = store.list_plan_signatures()
+    if not sigs:
+        print(f"(no plans stored for tenant_id={args.tenant_id!r})")
+        return EXIT_OK
+    for s in sigs:
+        print(s)
+    return EXIT_OK
+
+
 def cmd_plan_validate(args: argparse.Namespace) -> int:
     """``mantis plan validate <path>`` — run :class:`PlanValidator` on a JSON plan.
 
@@ -1830,6 +1908,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Workflow identifier to list plans for.",
     )
     overlay_list.set_defaults(func=cmd_plan_overlay_list)
+
+    # ── hint-memory: inspect trajectory hint store (#643 / #670) ──
+    hints_cmd = plan_sub.add_parser(
+        "hints",
+        help="Inspect or seed the trajectory hint memory store (#643). "
+             "Reads /data/hints/<tenant_id>/<plan_signature>.json "
+             "(override the root via MANTIS_HINT_MEMORY_DIR).",
+    )
+    hints_sub = hints_cmd.add_subparsers(dest="hints_command", required=True)
+
+    hints_show = hints_sub.add_parser(
+        "show",
+        help="Dump the stored hint anchors for a (tenant_id, plan_signature) pair.",
+    )
+    hints_show.add_argument(
+        "--tenant-id", required=True,
+        help="Tenant id the hint store is scoped to.",
+    )
+    hints_show.add_argument(
+        "--plan-signature", required=True,
+        help="Plan signature (matches MicroPlan.plan_signature / suite._plan_signature).",
+    )
+    hints_show.add_argument(
+        "--json", action="store_true",
+        help="Emit raw JSON instead of human-formatted lines.",
+    )
+    hints_show.set_defaults(func=cmd_plan_hints_show)
+
+    hints_list = hints_sub.add_parser(
+        "list",
+        help="List plan_signatures with stored hints for a tenant.",
+    )
+    hints_list.add_argument(
+        "--tenant-id", required=True,
+        help="Tenant id to list plans for.",
+    )
+    hints_list.set_defaults(func=cmd_plan_hints_list)
 
     # ── cua: pure Holo3 pass-through (no decomposition, no Claude) ──
     cua = sub.add_parser(
