@@ -1127,6 +1127,8 @@ def build_micro_suite(
     max_recoveries_per_step: int | None = None,
     loop_groups: list[dict[str, Any]] | None = None,
     pagination_url_template: str = "",
+    plan_hash: str = "",
+    plan_evolution_scope_id: str = "",
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
@@ -1179,6 +1181,21 @@ def build_micro_suite(
         "_micro_plan": micro_plan_steps,
         "tasks": [],
     }
+    # Plan-evolution Phase 2 (#706): hash of the authored plan +
+    # stable scope id for the persistence store. Both default to
+    # empty — when empty, the executor never touches the store
+    # (legacy callers preserved). Production callers (the boattrader
+    # submit script, API integrations) set both.
+    if plan_hash:
+        suite["_plan_hash"] = plan_hash
+    if plan_evolution_scope_id:
+        suite["_plan_evolution_scope_id"] = plan_evolution_scope_id
+    elif plan_hash:
+        # Sensible default: use the profile_id as the scope so runs of
+        # the same plan on the same profile accumulate learning. Each
+        # tenant + profile gets its own store entry naturally.
+        suite["_plan_evolution_scope_id"] = resolved_profile
+
     if objective:
         suite["_objective"] = objective
     # #560: ``None`` means "let the runner apply DEFAULT_BRAIN_BUDGET_CAPS".

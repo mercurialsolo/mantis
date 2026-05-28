@@ -984,6 +984,9 @@ def _run_holo3_executor(
             on_checkpoint=vol.commit,
             max_cost=task_suite.get("_max_cost", 10.0),
             max_time_minutes=task_suite.get("_max_time_minutes", 180),
+            # Plan-evolution Phase 2 (#706) attrs are stamped AFTER
+            # construction (the runner doesn't accept them as kwargs).
+            # See the block below.
             # #657 PR 2: per-domain SiteConfig resolved from suite.
             # None means "use runner default" (preserves legacy
             # behaviour for callers that pre-build a suite without
@@ -1001,6 +1004,25 @@ def _run_holo3_executor(
             max_recoveries_per_run=task_suite.get("_max_recoveries_per_run"),
             max_recoveries_per_step=task_suite.get("_max_recoveries_per_step"),
         )
+
+        # Plan-evolution Phase 2 (#706): stamp the plan_hash + scope_id
+        # the recovery layer needs to record candidates and the
+        # micro_runner needs at terminal to finalize promotion gates.
+        # Empty strings disable persistence (no-op for legacy callers
+        # that don't pass plan_hash through build_micro_suite).
+        micro_runner._plan_hash = str(task_suite.get("_plan_hash", "") or "")
+        micro_runner._workflow_id = str(
+            task_suite.get("_plan_evolution_scope_id", "")
+            or task_suite.get("_profile_id", "")
+            or task_suite.get("_workflow_id", "")
+            or ""
+        )
+        micro_runner._applied_plan_rewrites = []
+        if micro_runner._plan_hash and micro_runner._workflow_id:
+            print(
+                f"  Plan-evolution: scope={micro_runner._workflow_id} "
+                f"plan_hash={micro_runner._plan_hash}"
+            )
 
         # #627: bind a cross-worker shared seen-URL set from the suite
         # metadata. Modal orchestrator sets ``_fanout_seen_dict_name``
