@@ -49,6 +49,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from mantis_agent.plan_decomposer import PlanDecomposer  # noqa: E402
+from mantis_agent.recipes.plan_evolution_store import (  # noqa: E402
+    apply_plan_overlay,
+)
 from mantis_agent.server_utils import (  # noqa: E402
     build_micro_suite,
     merge_runtime,
@@ -133,6 +136,29 @@ def main() -> int:
     )
     print(f"[decompose] → {len(micro_plan.steps)} steps")
 
+    # Plan-evolution Phase 2 (#706): apply any promoted URL rewrites
+    # to the decomposed plan BEFORE building the suite. PROFILE_ID is
+    # the stable scope (WORKFLOW_ID is per-run and would never
+    # accumulate). When no rewrites are promoted, this is a no-op +
+    # logs nothing. When rewrites apply, the warning logs print
+    # `[plan-overlay] step N rewritten via <source>` lines visible in
+    # Modal container output.
+    _overlaid_plan, _applied = apply_plan_overlay(
+        micro_plan, plan_hash=micro_plan.plan_hash, workflow_id=PROFILE_ID,
+    )
+    if _applied:
+        print(f"[plan-overlay] applied {len(_applied)} promoted rewrites:")
+        for r in _applied:
+            print(
+                f"  step={r.step_index} source={r.source} "
+                f"({r.successful_runs} successes)"
+            )
+    else:
+        print(
+            "[plan-overlay] no promoted rewrites for "
+            f"workflow_id={PROFILE_ID!r} plan_hash={micro_plan.plan_hash!r}"
+        )
+
     # 3. Build suite with proxy ENABLED
     runtime = merge_runtime({
         "proxy_disabled": False,
@@ -147,6 +173,11 @@ def main() -> int:
         micro_plan.domain or PLAN_PATH.stem,
         profile_id=PROFILE_ID,
         workflow_id=WORKFLOW_ID,
+        # Plan-evolution Phase 2 (#706): carry the plan_hash + scope_id
+        # so the Modal executor can stamp them on the runner and the
+        # mid-run recovery layer can record candidates.
+        plan_hash=micro_plan.plan_hash,
+        plan_evolution_scope_id=PROFILE_ID,
         **runtime,
     )
 

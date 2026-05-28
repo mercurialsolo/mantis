@@ -149,12 +149,12 @@ class ClaudeGrounding(GroundingModel):
     Only called for CLICK actions, not every step.
     """
 
-    GROUNDING_PROMPT = """\
-Look at this screenshot ({width}x{height} pixels).
-
-The user wants to click near ({init_x}, {init_y}) to: {description}
-
-Find the closest CLICKABLE TEXT element to ({init_x}, {init_y}).
+    # #715 — split into a static SYSTEM prompt (cacheable) + a
+    # per-call USER template (the dynamic geometry + description).
+    # The system prompt is the same for every grounding call in a run,
+    # so caching it saves ~150 input tokens / call after the first.
+    SYSTEM_PROMPT = """\
+Find the closest CLICKABLE TEXT element to the requested position.
 
 RULES:
 - Return the center coordinates of the nearest TEXT element (not an image)
@@ -163,6 +163,10 @@ RULES:
 
 Output ONLY two numbers: x y
 Nothing else."""
+
+    GROUNDING_PROMPT = """\
+Screenshot is {width}x{height} pixels. The user wants to click near \
+({init_x}, {init_y}) to: {description}"""
 
     def __init__(
         self,
@@ -232,6 +236,9 @@ Nothing else."""
             init_y=iy,
         )
 
+        # #715 — partition into cached system + per-call user.
+        from ._anthropic.cache import as_cached_system, extract_cache_telemetry
+
         try:
             resp = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -243,6 +250,7 @@ Nothing else."""
                 json={
                     "model": self.model,
                     "max_tokens": 30,
+                    "system": as_cached_system(self.SYSTEM_PROMPT),
                     "messages": [{
                         "role": "user",
                         "content": [
@@ -261,6 +269,16 @@ Nothing else."""
                     y=initial_y or screenshot.height // 2,
                     confidence=0.2,
                     description="api error",
+                )
+            # Cache telemetry — Modal suppresses INFO; WARNING-level so
+            # operators can audit hit rate without an env-var dance.
+            tele = extract_cache_telemetry(resp.json())
+            if tele.get("cache_read_input_tokens", 0) > 0:
+                logger.warning(
+                    "  [cache] grounding: read=%d created=%d input=%d",
+                    tele.get("cache_read_input_tokens", 0),
+                    tele.get("cache_creation_input_tokens", 0),
+                    tele.get("input_tokens", 0),
                 )
 
             text = ""
