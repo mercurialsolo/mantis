@@ -227,12 +227,19 @@ class ClaudeBrain:
             per_step_action_history=per_step_action_history,
         )
 
+        # #715 — prompt-cache split. The system prompt + tool array
+        # don't change across turns of the same run; mark them so the
+        # API caches the prefix and we only pay for the screenshot +
+        # task context on subsequent calls. Saves ~30-50% on cost-per-
+        # call once the cache is warm (5-minute TTL).
+        from ._anthropic.cache import as_cached_system, mark_last_tool_cached
+
         payload = {
             "model": self.model,
             "max_tokens": self.max_tokens,
-            "system": SYSTEM_PROMPT,
+            "system": as_cached_system(SYSTEM_PROMPT),
             "messages": messages,
-            "tools": tools,
+            "tools": mark_last_tool_cached(tools),
         }
 
         # Enable extended thinking for richer reasoning (better for distillation)
@@ -258,6 +265,21 @@ class ClaudeBrain:
             return InferenceResult(
                 action=Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=str(e)),
                 raw_output=str(e),
+            )
+
+        # #715 — cache telemetry. WARNING-level per
+        # `feedback_warning_level_for_modal_observability.md`.
+        from ._anthropic.cache import extract_cache_telemetry
+        tele = extract_cache_telemetry(data)
+        if tele.get("cache_read_input_tokens", 0) > 0 or tele.get(
+            "cache_creation_input_tokens", 0
+        ) > 0:
+            logger.warning(
+                "  [cache] brain_claude: read=%d created=%d input=%d output=%d",
+                tele.get("cache_read_input_tokens", 0),
+                tele.get("cache_creation_input_tokens", 0),
+                tele.get("input_tokens", 0),
+                tele.get("output_tokens", 0),
             )
 
         return self._parse_response(data)

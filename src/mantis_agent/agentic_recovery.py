@@ -462,17 +462,23 @@ def _call_recovery_tool(
             logger.debug("recovery: screenshot encode failed: %s", exc)
 
     try:
+        # #715 — prompt-cache split. The tool input_schema is the
+        # largest stable block in this call (~1.5KB of JSON Schema).
+        # Mark it for caching so the 5-minute TTL covers a typical
+        # 30-min boattrader run's recovery calls.
+        from ._anthropic.cache import mark_last_tool_cached
+        recovery_tool = {
+            "name": "record_recovery",
+            "description": (
+                "Record the recovery decision for the failed "
+                "step."
+            ),
+            "input_schema": _ANALYSIS_TOOL_INPUT_SCHEMA,
+        }
         request_body = {
             "model": model,
             "max_tokens": 1500,
-            "tools": [{
-                "name": "record_recovery",
-                "description": (
-                    "Record the recovery decision for the failed "
-                    "step."
-                ),
-                "input_schema": _ANALYSIS_TOOL_INPUT_SCHEMA,
-            }],
+            "tools": mark_last_tool_cached([recovery_tool]),
             "tool_choice": {"type": "tool", "name": "record_recovery"},
             "messages": [{"role": "user", "content": content}],
         }
@@ -493,6 +499,17 @@ def _call_recovery_tool(
                 resp.status_code, resp.text[:300],
             )
             return None
+        # #715 — cache telemetry. WARNING-level visible in Modal.
+        from ._anthropic.cache import extract_cache_telemetry as _cache_tele
+        _t = _cache_tele(resp.json() if resp.content else {})
+        if _t.get("cache_read_input_tokens", 0) > 0 or _t.get(
+            "cache_creation_input_tokens", 0
+        ) > 0:
+            logger.warning(
+                "  [cache] agentic_recovery: read=%d created=%d",
+                _t.get("cache_read_input_tokens", 0),
+                _t.get("cache_creation_input_tokens", 0),
+            )
         # #523 PR B-5 — capture this call as a ``step_recovery`` modelio
         # record when an upstream caller (step_recovery._try_agentic_
         # recovery via publish_modelio_context) has set the context.
