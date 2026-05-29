@@ -1129,6 +1129,7 @@ def build_micro_suite(
     pagination_url_template: str = "",
     plan_hash: str = "",
     plan_evolution_scope_id: str = "",
+    extractor_model: str = "",
 ) -> dict[str, Any]:
     """Build a task_suite dict for micro-intent execution.
 
@@ -1195,6 +1196,14 @@ def build_micro_suite(
         # the same plan on the same profile accumulate learning. Each
         # tenant + profile gets its own store entry naturally.
         suite["_plan_evolution_scope_id"] = resolved_profile
+
+    # A/B-able extractor model — empty defaults to ClaudeExtractor's
+    # built-in default (currently claude-sonnet-4-6). Operators set
+    # this to claude-haiku-4-5-20251001 to measure the cost / quality
+    # tradeoff. Per-plan so different plans on the same deployment can
+    # pick independently.
+    if extractor_model:
+        suite["_extractor_model"] = extractor_model
 
     if objective:
         suite["_objective"] = objective

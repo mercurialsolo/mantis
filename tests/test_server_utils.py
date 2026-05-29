@@ -588,6 +588,23 @@ def test_build_micro_suite_skips_scope_default_when_no_plan_hash():
     assert "_plan_evolution_scope_id" not in suite
 
 
+def test_build_micro_suite_carries_extractor_model_when_set():
+    """A/B-able extractor model — overrides ClaudeExtractor's default
+    when set, absent when empty (preserves back-compat)."""
+    steps = [{"intent": "nav", "type": "navigate"}]
+    suite = build_micro_suite(
+        steps, "example.com",
+        extractor_model="claude-haiku-4-5-20251001",
+    )
+    assert suite["_extractor_model"] == "claude-haiku-4-5-20251001"
+
+
+def test_build_micro_suite_omits_extractor_model_when_empty():
+    steps = [{"intent": "nav", "type": "navigate"}]
+    suite = build_micro_suite(steps, "example.com")
+    assert "_extractor_model" not in suite
+
+
 # ── #341: profile_id / workflow_id split ─────────────────────────────
 
 
