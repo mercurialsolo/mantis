@@ -801,7 +801,16 @@ def _run_holo3_executor(
         from mantis_agent.graph.objective import ObjectiveSpec
         objective = ObjectiveSpec.from_dict(objective_data)
         schema = ExtractionSchema.from_objective(objective)
-    extractor = ClaudeExtractor(schema=schema)
+    # Per-plan extractor model override — A/B-able from the submit
+    # payload via `build_micro_suite(extractor_model=...)`. Empty
+    # falls through to ClaudeExtractor's default. Print so operators
+    # see which side of the A/B each container is on.
+    extractor_model = str(task_suite.get("_extractor_model", "") or "")
+    extractor_kwargs: dict = {"schema": schema}
+    if extractor_model:
+        extractor_kwargs["model"] = extractor_model
+        print(f"  Extractor: model={extractor_model} (A/B override)")
+    extractor = ClaudeExtractor(**extractor_kwargs)
     # #416 follow-up: the live-viewer's screen-capture thread reads
     # ``os.environ["DISPLAY"]`` (via mss) but ``setup_env`` doesn't
     # propagate that into the executor process's environ — the env
