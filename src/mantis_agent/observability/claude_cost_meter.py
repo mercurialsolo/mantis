@@ -60,17 +60,20 @@ class ModelRates:
 # `_UNKNOWN` rates (set to the highest-billed model so cost estimates
 # err on the cautious side).
 MODEL_RATES: dict[str, ModelRates] = {
+    # Rates are per-TOKEN (Anthropic publishes per-million-token rates;
+    # we store divided by 1e6 so estimate_cost can multiply by raw
+    # token counts). Public USD rates as of 2026-05-29.
     "claude-opus-4-7": ModelRates(
-        input=15.0 / 1000, output=75.0 / 1000,
-        cache_read=1.5 / 1000, cache_creation=18.75 / 1000,
+        input=15.0 / 1_000_000, output=75.0 / 1_000_000,
+        cache_read=1.5 / 1_000_000, cache_creation=18.75 / 1_000_000,
     ),
     "claude-sonnet-4-6": ModelRates(
-        input=3.0 / 1000, output=15.0 / 1000,
-        cache_read=0.3 / 1000, cache_creation=3.75 / 1000,
+        input=3.0 / 1_000_000, output=15.0 / 1_000_000,
+        cache_read=0.3 / 1_000_000, cache_creation=3.75 / 1_000_000,
     ),
     "claude-haiku-4-5": ModelRates(
-        input=0.8 / 1000, output=4.0 / 1000,
-        cache_read=0.08 / 1000, cache_creation=1.0 / 1000,
+        input=0.8 / 1_000_000, output=4.0 / 1_000_000,
+        cache_read=0.08 / 1_000_000, cache_creation=1.0 / 1_000_000,
     ),
 }
 _UNKNOWN_RATES = MODEL_RATES["claude-opus-4-7"]  # conservative

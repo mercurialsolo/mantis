@@ -27,32 +27,33 @@ def temp_runs_dir(monkeypatch: pytest.MonkeyPatch, tmp_path) -> str:
 
 
 def test_rates_for_known_models() -> None:
-    assert rates_for("claude-opus-4-7").input == 0.015
-    assert rates_for("claude-sonnet-4-6").input == 0.003
-    assert rates_for("claude-haiku-4-5-20251001").input == 0.0008
+    # Rates are per-TOKEN (Anthropic per-Mtok rates / 1e6).
+    assert rates_for("claude-opus-4-7").input == 15.0 / 1_000_000
+    assert rates_for("claude-sonnet-4-6").input == 3.0 / 1_000_000
+    assert rates_for("claude-haiku-4-5-20251001").input == 0.8 / 1_000_000
 
 
 def test_rates_for_versioned_haiku_falls_back_to_base() -> None:
     """Versioned model names match by prefix."""
     rates = rates_for("claude-haiku-4-5-20260201")
-    assert rates.input == 0.0008  # haiku rate
+    assert rates.input == 0.8 / 1_000_000  # haiku rate
 
 
 def test_rates_for_unknown_model_uses_opus_conservative() -> None:
     """Unknown model → conservative (Opus) so cost never under-reports."""
-    assert rates_for("claude-future-x").input == 0.015
+    assert rates_for("claude-future-x").input == 15.0 / 1_000_000
 
 
 def test_estimate_cost_combines_input_output_cache() -> None:
-    # Haiku-4-5: input 0.0008/Mtok, output 0.004/Mtok,
-    # cache_read 0.00008/Mtok, cache_creation 0.001/Mtok
+    # Haiku-4-5: input $0.80/Mtok, output $4/Mtok,
+    # cache_read $0.08/Mtok, cache_creation $1/Mtok
     cost = estimate_cost(
         model="claude-haiku-4-5-20251001",
-        input_tokens=1000, output_tokens=100,
-        cache_read_tokens=5000, cache_creation_tokens=0,
+        input_tokens=1_000_000, output_tokens=100_000,
+        cache_read_tokens=5_000_000, cache_creation_tokens=0,
     )
-    # 1000 * 0.0008 + 100 * 0.004 + 5000 * 0.00008
-    expected = 0.8 + 0.4 + 0.4
+    # 1Mtok * $0.80 + 100Ktok * $4 + 5Mtok * $0.08
+    expected = 0.80 + 0.40 + 0.40
     assert abs(cost - expected) < 1e-6
 
 
