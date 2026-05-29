@@ -1014,6 +1014,34 @@ def _run_holo3_executor(
             max_recoveries_per_step=task_suite.get("_max_recoveries_per_step"),
         )
 
+        # Claude cost meter (#675 A/B follow-up). Bind a fresh meter
+        # per run + stamp api_run_id / api_tenant_id on the runner so
+        # finalize_to_disk can write /data/runs/<tenant>/<run_id>/
+        # claude_cost_by_path.json at terminal. The api_run_id is the
+        # one the API container assigned (the canonical run identifier
+        # operators see in status payloads); falls back to workflow_id
+        # for callers that don't propagate it.
+        try:
+            from mantis_agent.observability.claude_cost_meter import (
+                ClaudeCostMeter, set_current_meter,
+            )
+            _cost_meter = ClaudeCostMeter()
+            set_current_meter(_cost_meter)
+            micro_runner._cost_meter = _cost_meter
+            micro_runner._api_run_id = str(
+                api_run_id
+                or task_suite.get("_state_key", "")
+                or task_suite.get("_workflow_id", "")
+                or ""
+            )
+            micro_runner._api_tenant_id = str(
+                api_tenant_id
+                or task_suite.get("_profile_id", "")
+                or "default"
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"  WARNING: cost meter init failed: {exc}")
+
         # Plan-evolution Phase 2 (#706): stamp the plan_hash + scope_id
         # the recovery layer needs to record candidates and the
         # micro_runner needs at terminal to finalize promotion gates.

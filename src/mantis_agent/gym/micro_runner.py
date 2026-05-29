@@ -420,6 +420,22 @@ class MicroPlanRunner:
         self._executor.execute(plan, state, resume=resume)
         self._final_summary(state.results)
 
+        # Claude cost meter (#675 A/B follow-up). Finalize the per-
+        # source attribution to /data/runs/<tenant>/<run_id>/. No-op
+        # when no meter is bound (legacy callers).
+        try:
+            from ..observability.claude_cost_meter import finalize_to_disk
+            run_id = str(getattr(self, "_api_run_id", "") or "")
+            tenant = str(
+                getattr(self, "_api_tenant_id", "")
+                or getattr(self, "_workflow_id", "")
+                or "default"
+            )
+            if run_id:
+                finalize_to_disk(run_id=run_id, tenant_id=tenant)
+        except Exception:  # noqa: BLE001 — never break terminal
+            pass
+
         # Plan-evolution Phase 2 (#706): record per-rewrite outcome at
         # run terminal. The promotion / demotion gates fire here.
         # No-op when the runner doesn't carry _plan_hash / _workflow_id

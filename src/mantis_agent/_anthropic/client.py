@@ -473,6 +473,11 @@ class AnthropicToolUseClient:
                         tele.get("input_tokens", 0),
                         tele.get("output_tokens", 0),
                     )
+            from ..observability.claude_cost_meter import record_from_response
+            record_from_response(
+                source=time_bucket or "extract_tool",
+                model=self.model, response_json=payload_json,
+            )
             # #523 — capture the modelio record when an upstream caller
             # has published a layer context (planner / grounding /
             # verifier / step_recovery / judge). No-op otherwise.
@@ -579,6 +584,11 @@ class AnthropicToolUseClient:
                     tele.get("input_tokens", 0),
                     tele.get("output_tokens", 0),
                 )
+            from ..observability.claude_cost_meter import record_from_response
+            record_from_response(
+                source=time_bucket or "extract_tool_multi",
+                model=self.model, response_json=payload_json,
+            )
             _record_modelio_if_active(
                 payload, payload_json, int((time.monotonic() - t0) * 1000),
             )

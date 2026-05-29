@@ -510,6 +510,12 @@ def _call_recovery_tool(
                 _t.get("cache_read_input_tokens", 0),
                 _t.get("cache_creation_input_tokens", 0),
             )
+        # Cost meter (#675 A/B follow-up).
+        from .observability.claude_cost_meter import record_from_response
+        record_from_response(
+            source="recovery", model=model,
+            response_json=resp.json() if resp.content else None,
+        )
         # #523 PR B-5 — capture this call as a ``step_recovery`` modelio
         # record when an upstream caller (step_recovery._try_agentic_
         # recovery via publish_modelio_context) has set the context.

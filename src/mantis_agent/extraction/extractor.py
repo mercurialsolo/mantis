@@ -477,6 +477,10 @@ class ClaudeExtractor:
                         tele.get("input_tokens", 0),
                         tele.get("output_tokens", 0),
                     )
+            from ..observability.claude_cost_meter import record_from_response
+            record_from_response(
+                source="extract_single", model=self.model, response_json=payload_json,
+            )
             for block in payload_json.get("content", []):
                 if block.get("type") == "text":
                     return block["text"].strip()
@@ -661,6 +665,10 @@ class ClaudeExtractor:
                         tele.get("input_tokens", 0),
                         tele.get("output_tokens", 0),
                     )
+            from ..observability.claude_cost_meter import record_from_response
+            record_from_response(
+                source="extract_multi", model=self.model, response_json=payload_json,
+            )
             for block in payload_json.get("content", []):
                 if block.get("type") == "text":
                     return block["text"].strip()
