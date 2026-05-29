@@ -272,9 +272,16 @@ def _sanitize(s: str) -> str:
 def finalize_to_disk(
     *, meter: ClaudeCostMeter | None = None,
     run_id: str, tenant_id: str,
+    extras: dict[str, Any] | None = None,
 ) -> str:
     """Write the meter snapshot to disk. Returns the written path, or
     empty string when nothing was written (no meter / no run_id).
+
+    ``extras`` is merged into the top-level JSON so callers can record
+    run-outcome metadata alongside the cost breakdown — leads counted,
+    steps executed, halt reason, model used. Keeps the meter purely
+    about Claude spend while letting cost / outcome live in one file
+    operators can pull with a single ``modal volume get``.
 
     Best-effort: errors are logged at DEBUG and swallowed — the run
     terminal must never fail because of cost-meter I/O.
@@ -287,6 +294,11 @@ def finalize_to_disk(
         return ""
     snapshot["run_id"] = run_id
     snapshot["tenant_id"] = tenant_id
+    if extras:
+        # extras keys win over snapshot keys when they collide. Lets
+        # callers override e.g. ``run_id`` if they have a more
+        # authoritative identifier than what was passed.
+        snapshot.update(extras)
     path = _output_path(tenant_id=tenant_id, run_id=run_id)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)

@@ -208,6 +208,32 @@ def test_finalize_uses_current_meter_by_default(temp_runs_dir: str) -> None:
         set_current_meter(None)
 
 
+def test_finalize_merges_extras(temp_runs_dir: str) -> None:
+    """Extras dict is merged at the top level so cost + outcome share
+    one file. Useful for landing leads + steps + halt reason alongside
+    cost in a single artifact."""
+    meter = ClaudeCostMeter()
+    meter.record(source="x", model="claude-opus-4-7", input_tokens=10)
+    path = finalize_to_disk(
+        meter=meter, run_id="r1", tenant_id="acme",
+        extras={
+            "outcome": {
+                "leads_extracted": 7,
+                "steps_executed": 58,
+                "terminal_status": "halted",
+                "halt_reason": "budget_cap",
+            },
+            "plan_hash": "bda88bb5",
+        },
+    )
+    with open(path) as f:
+        data = json.load(f)
+    assert data["outcome"]["leads_extracted"] == 7
+    assert data["outcome"]["steps_executed"] == 58
+    assert data["outcome"]["terminal_status"] == "halted"
+    assert data["plan_hash"] == "bda88bb5"
+
+
 def test_path_includes_sanitized_tenant_and_run_id(temp_runs_dir: str) -> None:
     """Slashes / spaces in tenant_id or run_id are sanitized — no directory escape."""
     meter = ClaudeCostMeter()

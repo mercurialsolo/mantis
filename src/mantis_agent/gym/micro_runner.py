@@ -432,7 +432,35 @@ class MicroPlanRunner:
                 or "default"
             )
             if run_id:
-                finalize_to_disk(run_id=run_id, tenant_id=tenant)
+                # Build outcome extras from runner state so cost +
+                # outcome land in the same file. Lead counts come from
+                # the structured extraction_results path (#508); plain
+                # step success counts are a fallback.
+                results = state.results
+                extras: dict = {
+                    "outcome": {
+                        "steps_executed": len(results),
+                        "steps_succeeded": sum(
+                            1 for r in results if bool(getattr(r, "success", False))
+                        ),
+                        "leads_extracted": sum(
+                            1 for r in results
+                            if bool(getattr(r, "extracted_fields", None))
+                        ),
+                        "terminal_status": str(
+                            getattr(self, "_final_status", "completed") or "completed"
+                        ),
+                        "halt_reason": str(
+                            getattr(self, "_final_halt_reason", "") or ""
+                        ),
+                        "wall_seconds": round(
+                            float(getattr(self, "_final_wall_seconds", 0.0) or 0.0), 1,
+                        ),
+                    },
+                    "plan_signature": str(getattr(self, "plan_signature", "") or ""),
+                    "plan_hash": str(getattr(self, "_plan_hash", "") or ""),
+                }
+                finalize_to_disk(run_id=run_id, tenant_id=tenant, extras=extras)
         except Exception:  # noqa: BLE001 — never break terminal
             pass
 
