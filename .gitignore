@@ -94,3 +94,4 @@ scripts/run_*_with_proxy.py
 scripts/run_*_no_proxy.py
 scripts/run_staff_crm_long_no_proxy.py
 experiments/results.tsv
+scripts/run_*_parallel.sh
