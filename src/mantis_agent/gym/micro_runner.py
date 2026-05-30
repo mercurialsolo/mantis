@@ -461,6 +461,16 @@ class MicroPlanRunner:
                     "plan_hash": str(getattr(self, "_plan_hash", "") or ""),
                 }
                 finalize_to_disk(run_id=run_id, tenant_id=tenant, extras=extras)
+                # Per-run leads CSV — one row per extract_data step that
+                # produced fields. Lands at /data/runs/<tenant>/<run_id>/
+                # leads.csv. Operators pull per-zip CSVs and concatenate.
+                from ..observability.leads_csv import finalize_leads_csv
+                finalize_leads_csv(
+                    run_id=run_id,
+                    tenant_id=tenant,
+                    profile_id=str(getattr(self, "_workflow_id", "") or ""),
+                    results=results,
+                )
         except Exception:  # noqa: BLE001 — never break terminal
             pass
 
