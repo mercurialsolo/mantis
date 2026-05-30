@@ -779,7 +779,8 @@ def _run_holo3_executor(
         except Exception as exc:
             print(f"Claude fallback unavailable for failed Holo3 sections: {exc}")
 
-    # Claude Sonnet grounding for click targeting
+    # Claude Sonnet 4.6 grounding for click targeting (was Opus —
+    # 5× cheaper for the same different-model-from-Holo3 property).
     from mantis_agent.grounding import ClaudeGrounding
     grounding = ClaudeGrounding()
 
@@ -1041,6 +1042,27 @@ def _run_holo3_executor(
             )
         except Exception as exc:  # noqa: BLE001
             print(f"  WARNING: cost meter init failed: {exc}")
+
+        # Cross-run dedup: seed the scanner's seen_urls with any
+        # ``_skip_urls`` the suite carries. Callers (e.g. the 6-zip
+        # parallel script) pre-fetch prior runs' leads.csv files,
+        # union the URL column, and pass the result here so a
+        # re-run of the same zip doesn't re-extract listings it
+        # already processed (and doesn't pay the ~$0.20 / detail-page
+        # claude_extract cost on a confirmed duplicate).
+        # No-op when the field is absent.
+        skip_urls = task_suite.get("_skip_urls") or []
+        if isinstance(skip_urls, list) and skip_urls:
+            try:
+                for u in skip_urls:
+                    if isinstance(u, str) and u:
+                        micro_runner.scanner.seen_urls.add(u)
+                print(
+                    f"  [skip-urls] seeded scanner with {len(skip_urls)} "
+                    f"URLs from prior runs",
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"  WARNING: skip_urls seed failed: {exc}")
 
         # Plan-evolution Phase 2 (#706): stamp the plan_hash + scope_id
         # the recovery layer needs to record candidates and the
