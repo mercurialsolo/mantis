@@ -19,7 +19,7 @@ This budget includes both the Claude API spend reported by the cost meter AND yo
 To set up a new experiment:
 
 1. **Agree on a run tag** with the human: propose a tag like `may30`. The branch `autoresearch/cost-<tag>` must not already exist.
-2. **Create the branch**: `git checkout -b autoresearch/cost-<tag>` from current `main`.
+2. **Create the branch from current HEAD** (not necessarily main — the harness lives on whichever branch has the cost meter + leads CSV writer landed): `git checkout -b autoresearch/cost-<tag>`. Verify with `git log -1` that the new branch starts at the same commit you were on.
 3. **Read the in-scope files** in full (they're small):
    - `experiments/program.md` — this file. Read it now.
    - `experiments/experiment.py` — the knob bundle. The PRIMARY file you edit.
