@@ -61,7 +61,13 @@ _VERIFY_MODEL = os.environ.get("MANTIS_VERIFY_MODEL", "claude-haiku-4-5-20251001
 # spike (re-navigate + re-extract + re-verify ≈ $0.50+) so a ~$0.003
 # escalation pays for itself many times over.
 _VERIFY_ESCALATION_MODEL = os.environ.get(
-    "MANTIS_VERIFY_ESCALATION_MODEL", "claude-opus-4-7",
+    # Was ``claude-opus-4-7`` until 2026-05-30 — observed cost was 73 %
+    # of total Claude spend across the 3-round BoatTrader sweep (Opus
+    # 4.7 escalations: 63 calls × ~$0.047 = $2.97 of $4.07). Sonnet
+    # 4.6 is 5× cheaper per token, similar quality for gate
+    # disagreement re-checks. Override via env if you need Opus back
+    # for a specific run.
+    "MANTIS_VERIFY_ESCALATION_MODEL", "claude-sonnet-4-6",
 )
 
 logger = logging.getLogger(__name__)

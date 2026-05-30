@@ -171,7 +171,7 @@ Screenshot is {width}x{height} pixels. The user wants to click near \
     def __init__(
         self,
         api_key: str = "",
-        model: str = "claude-opus-4-7",
+        model: str = "claude-sonnet-4-6",
         cache: "GroundingCache | None" = None,
     ):
         import os
