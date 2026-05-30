@@ -85,6 +85,10 @@ _NOT_FOUND_TITLE_MARKERS: tuple[str, ...] = (
 _SOFT_404_BODY_MARKERS: tuple[str, ...] = (
     "we couldn't find",
     "we could not find",
+    "we cannot find",
+    "cannot find the page",
+    "page you requested",
+    "page may have moved",
     "no results found",
     "nothing matches",
     "page is no longer available",

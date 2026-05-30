@@ -385,10 +385,21 @@ Plans MUST be organized into sections. Each section has a purpose and a gate:
    - For form-only flows, end with an extract_data step that verifies the right
      page/state was reached (URL, header, and any read-back of the values just set)
    - If the gate FAILS, the entire pipeline HALTS — do not proceed
-   - Example listings gate: "Verify page heading shows the expected filters and a
-     reasonable result count"
-   - Example form gate: "Verify the page shows the just-saved record with the
-     updated values"
+   - GATE INTENTS MUST ASSERT POSITIVE EVIDENCE OF PROGRESS (not absence of error
+     text). A 404 page, an empty-results page, a CF challenge, a paywall, and an
+     expired-login redirect all share one trait: the thing the plan came here for
+     is not visible. Forcing the gate to name the artifact catches every one of
+     those without enumerating them. Per shape:
+       LISTINGS: "Verify ≥1 listing card with a price and a title is visible AND
+                  filter pills show <expected filters>"
+       FORM:     "Verify the form fields are populated with the values that were
+                  just submitted (read each value back from the visible page)"
+       WORKFLOW: "Verify the target <record/page section> is visible with
+                  <expected attribute>" (e.g. "the Acme lead row shows status=Qualified")
+       INSPECT:  "Verify the specific value <X> for <field> is rendered on the page"
+     Never accept generic chrome (footer links, nav menus, filter widgets in the
+     sidebar) as evidence the page is the expected results page — those render on
+     error pages too.
 
 2. EXTRACTION section (listings flows only — depends on setup gate passing):
    - Click → URL → scroll → extract → re-navigate or back → loop
@@ -400,6 +411,12 @@ Plans MUST be organized into sections. Each section has a purpose and a gate:
    - If any content section is collapsed, the extraction step must expand it first.
    - Prefer safe reveal controls (Show more, Read more, See details, View …,
      Expand). Never use generic contact / lead-generation forms.
+   - REVEAL CONTROLS MUST BE required=false. "Show more" / "Read more" /
+     "See details" / "View" / "Expand" steps are best-effort — many
+     listings show the content unconditionally after scroll, so requiring
+     a click halts the run on listings where the control doesn't exist.
+     Mark these steps required=false so the extract_data step that
+     follows can still run on either page state.
 
 3. PAGINATION section (listings flows only — depends on extraction):
    - Paginate → loop back to extraction
@@ -672,6 +689,39 @@ RULES:
       frontier critic propose a different recovery instead. Default
       to emitting fallback_url unless the source explicitly warns
       about URL-stripping or SPA-only state.
+    • `hints.preferred_target_description` — explicit description
+      of WHAT the click should target, used to bias visual grounding
+      toward a specific element when the brain's coarse pick is
+      ambiguous. Emit this whenever the source plan distinguishes
+      one clickable region from another in the same card / row /
+      tile and explicitly names which to hit.
+        Source: "click the boat TITLE TEXT (year + make + model
+                 line) — NOT the photo, which opens a gallery overlay"
+        → hints={"preferred_target_description": "boat title text —
+                                                   year + make + model line"}
+        Source: "click the row's record name (left column), not the
+                 status badge or action menu"
+        → hints={"preferred_target_description": "record name in
+                                                   the leftmost column"}
+        Source: "click the article headline link, not the
+                 thumbnail image"
+        → hints={"preferred_target_description": "article headline
+                                                   text link"}
+      Use whenever the source plan ELIMINATES alternatives ("click X,
+      not Y") — that elimination is itself a hint the grounding
+      model needs. Without it, the executor brain often picks the
+      largest visible target (usually a photo), which lands clicks
+      inside image carousels or other modal overlays instead of
+      navigating to the intended detail page.
+    • `hints.wait_after_load_seconds` — extra settle time the runner
+      should wait after this step before treating the page as ready
+      for the next action. Use when the source plan says the page is
+      JS-heavy, SPA-mounted, or lazy-loaded.
+        Source: "navigate to the dashboard and wait for the data
+                 grid to populate"
+        → hints={"wait_after_load_seconds": 8}
+      Default settle is ~4s; only emit for steps that explicitly
+      need more.
 - The "reverse" field must be a CUA-executable instruction
 - Set section="setup", section="extraction", or section="pagination"
 - Set required=true for all setup/filter/form steps (this is the default)
@@ -860,7 +910,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v32_pagination_url_template_neutral"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v35_preferred_target_description_hints"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -919,7 +969,7 @@ class PlanDecomposer:
 
         request_body = {
             "model": self.model,
-            "max_tokens": 4096,
+            "max_tokens": 16384,
             "messages": [{"role": "user", "content": prompt}],
         }
         t0 = time.monotonic()
