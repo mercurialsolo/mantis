@@ -282,6 +282,12 @@ class ClaudeBrain:
                 tele.get("output_tokens", 0),
             )
 
+        # Cost meter (#675 A/B follow-up).
+        from .observability.claude_cost_meter import record_from_response
+        record_from_response(
+            source="brain_claude", model=self.model, response_json=data,
+        )
+
         return self._parse_response(data)
 
     def _headers(self) -> dict:

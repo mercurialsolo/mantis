@@ -171,7 +171,7 @@ Screenshot is {width}x{height} pixels. The user wants to click near \
     def __init__(
         self,
         api_key: str = "",
-        model: str = "claude-opus-4-7",
+        model: str = "claude-sonnet-4-6",
         cache: "GroundingCache | None" = None,
     ):
         import os
@@ -272,7 +272,8 @@ Screenshot is {width}x{height} pixels. The user wants to click near \
                 )
             # Cache telemetry — Modal suppresses INFO; WARNING-level so
             # operators can audit hit rate without an env-var dance.
-            tele = extract_cache_telemetry(resp.json())
+            resp_json = resp.json()
+            tele = extract_cache_telemetry(resp_json)
             if tele.get("cache_read_input_tokens", 0) > 0:
                 logger.warning(
                     "  [cache] grounding: read=%d created=%d input=%d",
@@ -280,9 +281,14 @@ Screenshot is {width}x{height} pixels. The user wants to click near \
                     tele.get("cache_creation_input_tokens", 0),
                     tele.get("input_tokens", 0),
                 )
+            # Cost meter (#675 A/B follow-up).
+            from .observability.claude_cost_meter import record_from_response
+            record_from_response(
+                source="grounding", model=self.model, response_json=resp_json,
+            )
 
             text = ""
-            for block in resp.json().get("content", []):
+            for block in resp_json.get("content", []):
                 if block.get("type") == "text":
                     text = block["text"].strip()
                     break

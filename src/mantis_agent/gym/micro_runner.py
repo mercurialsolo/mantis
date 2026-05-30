@@ -420,6 +420,60 @@ class MicroPlanRunner:
         self._executor.execute(plan, state, resume=resume)
         self._final_summary(state.results)
 
+        # Claude cost meter (#675 A/B follow-up). Finalize the per-
+        # source attribution to /data/runs/<tenant>/<run_id>/. No-op
+        # when no meter is bound (legacy callers).
+        try:
+            from ..observability.claude_cost_meter import finalize_to_disk
+            run_id = str(getattr(self, "_api_run_id", "") or "")
+            tenant = str(
+                getattr(self, "_api_tenant_id", "")
+                or getattr(self, "_workflow_id", "")
+                or "default"
+            )
+            if run_id:
+                # Build outcome extras from runner state so cost +
+                # outcome land in the same file. Lead counts come from
+                # the structured extraction_results path (#508); plain
+                # step success counts are a fallback.
+                results = state.results
+                extras: dict = {
+                    "outcome": {
+                        "steps_executed": len(results),
+                        "steps_succeeded": sum(
+                            1 for r in results if bool(getattr(r, "success", False))
+                        ),
+                        "leads_extracted": sum(
+                            1 for r in results
+                            if bool(getattr(r, "extracted_fields", None))
+                        ),
+                        "terminal_status": str(
+                            getattr(self, "_final_status", "completed") or "completed"
+                        ),
+                        "halt_reason": str(
+                            getattr(self, "_final_halt_reason", "") or ""
+                        ),
+                        "wall_seconds": round(
+                            float(getattr(self, "_final_wall_seconds", 0.0) or 0.0), 1,
+                        ),
+                    },
+                    "plan_signature": str(getattr(self, "plan_signature", "") or ""),
+                    "plan_hash": str(getattr(self, "_plan_hash", "") or ""),
+                }
+                finalize_to_disk(run_id=run_id, tenant_id=tenant, extras=extras)
+                # Per-run leads CSV — one row per extract_data step that
+                # produced fields. Lands at /data/runs/<tenant>/<run_id>/
+                # leads.csv. Operators pull per-zip CSVs and concatenate.
+                from ..observability.leads_csv import finalize_leads_csv
+                finalize_leads_csv(
+                    run_id=run_id,
+                    tenant_id=tenant,
+                    profile_id=str(getattr(self, "_workflow_id", "") or ""),
+                    results=results,
+                )
+        except Exception:  # noqa: BLE001 — never break terminal
+            pass
+
         # Plan-evolution Phase 2 (#706): record per-rewrite outcome at
         # run terminal. The promotion / demotion gates fire here.
         # No-op when the runner doesn't carry _plan_hash / _workflow_id

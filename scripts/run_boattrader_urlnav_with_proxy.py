@@ -165,8 +165,8 @@ def main() -> int:
         "proxy_provider": os.environ.get("PROXY_PROVIDER", "privateproxy"),
         "proxy_city": os.environ.get("PROXY_CITY", "miami"),
         "proxy_state": os.environ.get("PROXY_STATE", "florida"),
-        "max_cost": 8.0,
-        "max_time_minutes": 30,
+        "max_cost": float(os.environ.get("MANTIS_MAX_COST", 8.0)),
+        "max_time_minutes": int(os.environ.get("MANTIS_MAX_TIME_MIN", 30)),
     })
     suite = build_micro_suite(
         micro_plan_steps_to_dicts(micro_plan.steps),
@@ -178,6 +178,9 @@ def main() -> int:
         # mid-run recovery layer can record candidates.
         plan_hash=micro_plan.plan_hash,
         plan_evolution_scope_id=PROFILE_ID,
+        # A/B-able extractor model. Override via env:
+        #   MANTIS_EXTRACTOR_MODEL=claude-haiku-4-5-20251001
+        extractor_model=os.environ.get("MANTIS_EXTRACTOR_MODEL", ""),
         **runtime,
     )
 

@@ -33,6 +33,47 @@ from .runner import GymRunner
 logger = logging.getLogger(__name__)
 
 
+def _infer_seller_type(text: str) -> str:
+    """Infer "private" / "dealer" from a body of trajectory thinking +
+    done() summary text. Returns the empty string when no signal fires
+    so the caller can choose whether to default.
+
+    Multi-signal cascade — same priority order used in the Priority-2
+    field-builder so Priority-1 (brain emitted structured fields) gets
+    the same Seller_Type column. Drove the BoatTrader plan-grounded
+    findings (2026-05-30): pipe + business-suffix in seller line, or
+    "Contact Private Seller" heading, or explicit "Seller_Type:" token.
+    """
+    if not text:
+        return ""
+    _re = _re_module
+    m = _re.search(
+        r"[Ss]eller[\s_]?[Tt]ype\s*[:=]\s*[\"']?(private|dealer|brokerage|broker)",
+        text,
+    )
+    if m:
+        v = m.group(1).lower()
+        return "dealer" if v in ("brokerage", "broker", "dealer") else "private"
+    if _re.search(r"Contact\s+Private\s+Seller", text, _re.IGNORECASE):
+        return "private"
+    if _re.search(
+        r"\|\s*[A-Z][A-Za-z0-9 &.,'\-]+?"
+        r"(?:Yacht|Yachts|Marine|Sales|Brokerage|Broker|Group|Marina|"
+        r"Boats|Boating|Inc\b|LLC\b|Co\.|Company)",
+        text,
+    ):
+        return "dealer"
+    if _re.search(
+        r"(?:Contact\s+Dealer|Dealer\s+Listing|Brokerage\s+Listing|"
+        r"Yacht\s+Broker|Featured\s+(?:Listing|Dealer)|Sponsored)",
+        text, _re.IGNORECASE,
+    ):
+        return "dealer"
+    if _re.search(r"/by-owner/", text):
+        return "private"
+    return ""
+
+
 def _extract_url_latest(trajectory: list, year: str = "") -> str | None:
     """Extract the most recent listing URL from a trajectory.
 
@@ -1302,6 +1343,30 @@ class WorkflowRunner:
                     # because the convention prefix was missing.
                     if not summary.lstrip().startswith("VIABLE"):
                         summary = "VIABLE | " + summary
+                    # Backfill Seller_Type when the brain's done() summary
+                    # doesn't include it. Priority 1 short-circuits before
+                    # Priority 2's field-builder runs, so Seller_Type was
+                    # silently missing from every lead the brain emitted
+                    # structured-style. Reapply the same 5-signal cascade
+                    # against the full trajectory thinking text.
+                    if "Seller_Type" not in summary:
+                        all_thinking = " ".join(
+                            str(s.thinking or "") for s in result.trajectory
+                        )
+                        st = _infer_seller_type(summary + " " + all_thinking)
+                        if st:
+                            summary += f" | Seller_Type: {st}"
+                    # Normalize the well-known BoatTrader vision-typo
+                    # ``boatrader.com`` (missing the second ``t``) to the
+                    # canonical host. The brain reads the URL from the
+                    # address bar visually and occasionally drops a
+                    # character; CDP-read URLs at the extract_url level
+                    # already use the canonical host, but the brain's
+                    # done()-summary URL was a separate transcription so
+                    # we patch it here as a final safety net.
+                    summary = _re.sub(
+                        r"\bboatrader\.com\b", "boattrader.com", summary,
+                    )
                     return summary
 
         # Priority 2: Build structured data from thinking text
@@ -1342,6 +1407,70 @@ class WorkflowRunner:
             url = _extract_url_latest(trajectory, year=extracted_year)
             if url:
                 parts.append(f"URL: {url}")
+
+            # Seller_Type — "private" | "dealer" — multi-signal detection.
+            # On BoatTrader the canonical hallmarks (verified on-site
+            # 2026-05-30) are:
+            #   - "Contact Private Seller" heading → private
+            #   - "Contact Dealer" / "Contact <Business>" heading → dealer
+            #   - Location line "City, ST ZIP | Business Name" → dealer
+            #     (pipe + business name suffix)
+            #   - Bare "City, ST ZIP" (no pipe) → private
+            #   - "Featured" / "Sponsored" badge in card area → dealer
+            # We try each signal in priority order and emit the first hit.
+            seller_type: str | None = None
+            # 1. Explicit "Seller_Type: dealer" / "Seller_Type: private"
+            #    if the brain wrote it.
+            m = _re.search(
+                r"[Ss]eller[\s_]?[Tt]ype\s*[:=]\s*[\"']?(private|dealer|brokerage|broker)",
+                search_text,
+            )
+            if m:
+                st = m.group(1).lower()
+                seller_type = "dealer" if st in ("brokerage", "broker", "dealer") else "private"
+            # 2. "Contact Private Seller" → private (BoatTrader canonical).
+            if seller_type is None and _re.search(
+                r"Contact\s+Private\s+Seller", search_text, _re.IGNORECASE,
+            ):
+                seller_type = "private"
+            # 3. Pipe + business-suffix pattern in seller line.
+            if seller_type is None and _re.search(
+                r"\|\s*[A-Z][A-Za-z0-9 &.,'\-]+?"
+                r"(?:Yacht|Yachts|Marine|Sales|Brokerage|Broker|Group|"
+                r"Marina|Boats|Boating|Inc\b|LLC\b|Co\.|Company)",
+                search_text,
+            ):
+                seller_type = "dealer"
+            # 4. Generic dealer keyword in seller-info / contact area.
+            #    Conservative — only trip when accompanied by a contact
+            #    cue so we don't false-positive on stray text elsewhere
+            #    on the page.
+            if seller_type is None and _re.search(
+                r"(?:Contact\s+Dealer|Dealer\s+Listing|Brokerage\s+Listing|"
+                r"Yacht\s+Broker|Featured\s+(?:Listing|Dealer)|Sponsored)",
+                search_text, _re.IGNORECASE,
+            ):
+                seller_type = "dealer"
+            # 5. Default to private when the URL came from the
+            #    by-owner filter (the search-page filter we navigate
+            #    to). Without this default, "no signal" leaves the
+            #    column empty even though the agent took the private
+            #    path and just didn't surface the hallmark in
+            #    thinking text. Empty < weak default; downstream
+            #    consumers can still verify against the URL.
+            if seller_type is None and _re.search(r"/by-owner/", search_text):
+                seller_type = "private"
+            if seller_type:
+                parts.append(f"Seller_Type: {seller_type}")
+
+            # Seller_Name — Name near phone or "Contact <Name>" / "Ask
+            # for <Name>" / signature in description.
+            name_match = _re.search(
+                r"(?:Contact|Ask for|Call|Signed|sincerely,?)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)",
+                search_text,
+            )
+            if name_match:
+                parts.append(f"Seller_Name: {name_match.group(1)}")
 
             if parts:
                 return "VIABLE | " + " | ".join(parts)

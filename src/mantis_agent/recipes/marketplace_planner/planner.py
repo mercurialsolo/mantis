@@ -162,14 +162,49 @@ PHONE NUMBER EXTRACTION RULES:
 - Phones are typically buried DEEP in listing pages: 5-6 scrolls below photos/gallery
 - Include explicit scrolling instructions: "scroll(direction='down', amount=5) AGGRESSIVELY \
   past the photo gallery to reach Description/Seller Notes where phone numbers appear"
-- If Description, Seller Notes, More Details, or Additional Equipment is collapsed, click \
-  a safe expander such as "Show more", "Read more", "See more", or a section chevron before reading
+- If Description, Seller Notes, More Details, Additional Equipment, About This Boat, Notes, \
+  or Comments is collapsed, click EVERY safe expander you see — "Show more", "Read more", \
+  "See more", "See details", "View more", "Expand", or a section chevron — before reading. \
+  Multiple sections may be collapsed; expand them all
 - Also inspect safe phone reveal controls such as "Show phone", "View phone", or "Call"
-- Phone formats to look for: (305)555-1234, 786-555-1234, 305.555.5678, +1-555-0123, +44 20 7946 0958, 10+ digit numbers
-- NOT phone numbers: prices ($45,000), years (2020), zip codes (33101), model numbers
-- Do NOT click "Contact Seller" or "Request Info" buttons — they open popup forms, not phone numbers
-- If only a generic "Contact Seller" form is visible after checking expanded text and safe phone \
-  reveal controls, report "Phone: none" and move on
+
+WHERE TO LOOK — TRY ALL OF THESE (sellers hide phones in many places):
+  * Inside the Description prose, including the closing line: "Call 555-1234 for details"
+  * The More Details section, especially custom-text fields
+  * "Owner contact" or "Seller info" sub-blocks below the price
+  * Phone numbers PAINTED ON BOAT PHOTOS (some sellers stencil the number on the hull as a \
+    "For Sale" sign — read the photo's pixels if a number is visible in the image)
+  * Marketing watermarks in the gallery photos that read "Call XXX-XXX-XXXX"
+  * Email signatures: "John, john@x.com, 555-1234"
+
+PHONE FORMATS — RECOGNIZE OBFUSCATED AND UNUSUAL VARIANTS:
+- Standard US: (305)555-1234, 305-555-1234, 305.555.1234, 305 555 1234
+- Run-together: 3055551234 (10 consecutive digits)
+- With US country code: +1 305-555-1234, 1-305-555-1234, 1.305.555.1234
+- Heavily spaced anti-scraper: "3 0 5 5 5 5 1 2 3 4" or "305 - 555 - 1234" with extra spaces
+- Dashed-out for spam protection: "305-555-1XX4" — REJECT only if partial; full numbers count
+- Letters mixed in marketing format: "1-800-CALL-NOW" (treat as phone if it's a real toll-free)
+- Digits spelled out in prose: "call me at five five five one two three four" — \
+  reconstruct only when ALL 7-10 digits are spelled out unambiguously in sequence
+- International: +44 20 7946 0958, +52 55 1234 5678, +1 (305) 555-1234, etc.
+- Country code with parens: "+1 (305) 555-1234"
+- Lowercased "tel:" prefix: "tel:3055551234" — strip the prefix, take the number
+- "(c)" / "(m)" / "(h)" suffixes for cell/mobile/home: take the number, drop the suffix
+- ANY sequence that looks like a dialable number (7-15 digits when normalized) counts
+
+NOT phone numbers (always reject these):
+- Prices ($45,000 — has a dollar sign; never a phone)
+- Years (2020, 1997 — only 4 digits)
+- Zip codes (33101 — only 5 digits, may be near a city name)
+- Model numbers (T22CC, 4087 Aft Cabin)
+- VIN / HIN (hull ID) numbers — long alphanumeric, not pure digits
+- Length/beam dimensions ("22.5 ft" — has units)
+
+DECISION RULE:
+- If you found ANY dialable number using ANY of the patterns above, report it as the phone
+- Do NOT click "Contact Seller" or "Request Info" buttons — they open popup forms, not phones
+- If after expanding all collapsibles AND scanning all photo text AND checking every section \
+  you find NO dialable number, report "Phone: none"
 - ALWAYS report phone: "Phone: 305-555-1234" or "Phone: none" — never omit the field
 
 OUTPUT FORMAT — exact format for done() calls with realistic examples

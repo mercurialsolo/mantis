@@ -179,12 +179,15 @@ def test_verify_gate_opts_into_cache_tools() -> None:
 
 
 def test_verify_gate_uses_haiku_default_model() -> None:
-    """#421 §2: the verify client defaults to Haiku 4.5; the
-    escalation client defaults to Opus 4.7. Operators can pin
-    either via env, but the constructor defaults must be stable."""
+    """#421 §2: the verify client defaults to Haiku 4.5; the escalation
+    client defaults to Sonnet 4.6 (was Opus 4.7 — flipped in PR #724
+    after the 3-round boattrader sweep showed Opus escalations
+    accounted for 73 % of total Claude spend at ~$0.047 per call).
+    Operators can pin either via env, but the constructor defaults
+    must be stable."""
     extractor = ClaudeExtractor(api_key="dummy")
     assert extractor._verify_client.model == "claude-haiku-4-5-20251001"
-    assert extractor._verify_escalation_client.model == "claude-opus-4-7"
+    assert extractor._verify_escalation_client.model == "claude-sonnet-4-6"
 
 
 # ── find_filter_target ──────────────────────────────────────────────────
