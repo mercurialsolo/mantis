@@ -204,6 +204,13 @@ class ClaudeStepHandler:
         screenshot = env.screenshot()
 
         if step.type == "extract_url":
+            # CUA rule (feedback_cua_no_dom_access.md): the runner must
+            # be screenshot-grounded only. Reading ``env.current_url``
+            # to derive the listing URL would use CDP to *derive* state
+            # — banned. Vision extraction is the only authorized path
+            # for extract_url, even at the cost of occasional
+            # transcription typos (which a downstream post-processor
+            # in workflow_runner._build_viable_row normalizes).
             data = extractor.extract(screenshot)
             url = data.url if data else ""
 
