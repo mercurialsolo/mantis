@@ -38,7 +38,7 @@ import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Iterable, Protocol
+from typing import Callable, Iterable, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -801,3 +801,61 @@ def apply_hint_overlay(
             best.confidence,
         )
     return applied
+
+
+# ── Modal-path store factory ────────────────────────────────────────
+
+
+def build_hint_store(
+    task_suite: object, *,
+    tenant_id: str,
+    modal_dict_factory: Callable[[str], object] | None = None,
+) -> HintStore:
+    """Pick the `HintStore` backend for a Modal micro-run from suite metadata.
+
+    The Modal dispatcher (``modal_cua_server``) calls this once before
+    ``MicroPlanRunner.run`` to choose the backend the run overlays from
+    and records into. Selection (first match wins):
+
+    * ``_hint_store_disabled`` truthy → :class:`NullHintStore`. The run
+      neither overlays nor records — the Learning Allocator's *frozen*
+      policy (cold-start behaviour, no improvement applied).
+    * ``_hint_store_dict_name`` non-empty → :class:`ModalDictHintStore`
+      against that named ``modal.Dict``: a cross-worker shared store the
+      Learning Allocator's *S0 retrieval* rung accumulates anchors in,
+      so its effect reaches sibling workers and later runs immediately.
+    * otherwise → :class:`DiskHintStore` keyed by ``tenant_id`` — today's
+      production default (per-tenant JSON on the ``/data`` volume).
+
+    ``modal_dict_factory`` is a test seam: when given, it's called with
+    the dict name to build the backing object (tests pass one returning a
+    plain dict), bypassing the lazy ``modal`` import inside
+    :meth:`ModalDictHintStore.from_name`.
+
+    Never raises. A ``modal.Dict`` open failure degrades to the
+    production :class:`DiskHintStore`; an empty ``tenant_id`` (shouldn't
+    happen on the Modal path, but DiskHintStore forbids it) degrades to
+    :class:`NullHintStore`. A malformed suite can never break a run.
+    """
+    suite = task_suite if isinstance(task_suite, dict) else {}
+
+    if bool(suite.get("_hint_store_disabled")):
+        return NullHintStore()
+
+    dict_name = str(suite.get("_hint_store_dict_name", "") or "").strip()
+    if dict_name:
+        try:
+            if modal_dict_factory is not None:
+                return ModalDictHintStore(
+                    modal_dict_factory(dict_name), tenant_id=tenant_id,
+                )
+            return ModalDictHintStore.from_name(dict_name, tenant_id=tenant_id)
+        except Exception as exc:  # noqa: BLE001 — never break a run
+            logger.warning(
+                "build_hint_store: ModalDictHintStore(%s) open failed (%s); "
+                "falling back to DiskHintStore", dict_name, exc,
+            )
+
+    if not tenant_id:
+        return NullHintStore()
+    return DiskHintStore(tenant_id=tenant_id)
