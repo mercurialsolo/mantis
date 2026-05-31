@@ -1,0 +1,54 @@
+{
+  "env": "mantis_boattrader",
+  "description": "Failure-cluster eval manifest for the Learning Allocator (PLAN §3). The allocator-beats-any-fixed-substrate claim is only meaningful if the winning substrate genuinely varies, so clusters are engineered, not hoped for. One real oracle (BT01) is wired across a visible/sealed seed split today; the knowledge + policy clusters are on the roadmap and need new oracles before they are runnable.",
+  "tasks": [
+    {
+      "name": "bt01_lead_capture_visible",
+      "task_id": "BT01_lead_capture_filtered_search",
+      "env": "mantis_boattrader",
+      "cluster": "capability",
+      "split": "visible",
+      "seed": 42,
+      "plan": "boattrader_scrape",
+      "expects_substrate": "S2",
+      "status": "ready",
+      "notes": "Multi-step macro: apply condition=used + make=Sea Ray + price_max=200000, click a matching listing, submit a clean dealer lead. Oracle = F1 over qualifying leads; pass = >=1 hit AND 0 misses. Capability gap: the base agent fumbles the multi-step filter+form macro."
+    },
+    {
+      "name": "bt01_lead_capture_sealed",
+      "task_id": "BT01_lead_capture_filtered_search",
+      "env": "mantis_boattrader",
+      "cluster": "capability",
+      "split": "sealed",
+      "seed": 7,
+      "plan": "boattrader_scrape",
+      "expects_substrate": "S2",
+      "status": "ready",
+      "notes": "Held-out instance: identical task graded against a different seeded catalog (seed=7). The visible-minus-sealed score gap is the overfitting check (PLAN §4)."
+    },
+    {
+      "name": "bt_help_doc_lookup",
+      "task_id": null,
+      "env": "mantis_boattrader",
+      "cluster": "knowledge",
+      "split": "visible",
+      "seed": 42,
+      "plan": null,
+      "expects_substrate": "S0",
+      "status": "needs_oracle",
+      "notes": "ROADMAP (needs a new oracle, BT02): the answer is an indexable fact — a help-doc or catalog spec row the agent must look up. S0 retrieval should win."
+    },
+    {
+      "name": "bt_byowner_drift",
+      "task_id": null,
+      "env": "mantis_boattrader",
+      "cluster": "policy",
+      "split": "visible",
+      "seed": 42,
+      "plan": null,
+      "expects_substrate": "S1",
+      "status": "needs_oracle",
+      "notes": "ROADMAP (needs a new oracle, BT03 + a layout-drift fixture): a recurring by-owner filter mis-click under layout drift. S1 exemplar early, S3 consolidation once the mis-handling is frequent."
+    }
+  ]
+}
