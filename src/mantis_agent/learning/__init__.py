@@ -9,12 +9,18 @@ The package has these parts, added across the phased plan:
     substrates/   the uniform action space (the ladder S0→S3)   — P0/P2/P3/P4
     reward.py     dual reward channels (oracle vs proxy)         — P0  (live)
     eval.py       the heterogeneous failure-cluster eval         — P0  (live)
-    allocator.py  the myopic contextual-bandit allocator         — P2
+    allocator.py  the myopic contextual-bandit allocator         — P2  (live)
 
-The substrate interface, reward channels, and eval scaffold are present; the
-concrete rungs and the allocator land in the P2–P4 PRs.
+The interface, reward channels, eval scaffold, the S0/S1 rungs, and the
+allocator are present; the S2/S3 rungs land in the P3–P4 PRs.
 """
 
+from .allocator import (
+    AllocationRecord,
+    MyopicAllocator,
+    SubstrateChoice,
+    ValueEstimate,
+)
 from .eval import EvalManifest, EvalTask, load_manifest
 from .reward import (
     DEFAULT_LAMBDA,
@@ -28,6 +34,8 @@ from .substrates.base import (
     SubstrateContext,
     SubstrateResult,
 )
+from .substrates.exemplar import ExemplarSubstrate
+from .substrates.retrieval import RetrievalSubstrate
 
 __all__ = [
     # substrates
@@ -35,6 +43,13 @@ __all__ = [
     "LearningSubstrate",
     "SubstrateContext",
     "SubstrateResult",
+    "RetrievalSubstrate",
+    "ExemplarSubstrate",
+    # allocator
+    "MyopicAllocator",
+    "SubstrateChoice",
+    "AllocationRecord",
+    "ValueEstimate",
     # reward
     "DEFAULT_LAMBDA",
     "RewardRecord",
