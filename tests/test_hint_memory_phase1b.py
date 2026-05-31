@@ -25,6 +25,7 @@ from mantis_agent.gym.hint_memory import (
     ModalDictHintStore,
     NullHintStore,
     apply_hint_overlay,
+    build_hint_store,
     extract_anchor_from_env,
     hint_key_for,
     record_hint_if_eligible,
@@ -306,6 +307,95 @@ def test_modal_store_read_fault_degrades_to_empty() -> None:
     store.add(key, HintRecord(anchor_text="X"))
     assert store.get(key) == []
     assert store.size() == 0
+
+
+# ── build_hint_store (Modal-path backend factory) ────────────────────
+
+
+def _fake_dict_factory():
+    """Mimic ``modal.Dict.from_name``: same name → same backing object, so
+    two workers naming the same dict share state."""
+    pool: dict[str, _FakeModalDict] = {}
+
+    def _for(name: str) -> _FakeModalDict:
+        return pool.setdefault(name, _FakeModalDict())
+
+    return _for
+
+
+def test_build_hint_store_default_returns_disk() -> None:
+    """No allocator flags → today's production DiskHintStore."""
+    store = build_hint_store({}, tenant_id="acme")
+    assert isinstance(store, DiskHintStore)
+
+
+def test_build_hint_store_disabled_returns_null() -> None:
+    """``_hint_store_disabled`` → frozen policy (NullHintStore)."""
+    store = build_hint_store({"_hint_store_disabled": True}, tenant_id="acme")
+    assert isinstance(store, NullHintStore)
+
+
+def test_build_hint_store_dict_name_returns_modal() -> None:
+    """``_hint_store_dict_name`` → ModalDictHintStore over that named Dict."""
+    store = build_hint_store(
+        {"_hint_store_dict_name": "la-hints"}, tenant_id="acme",
+        modal_dict_factory=_fake_dict_factory(),
+    )
+    assert isinstance(store, ModalDictHintStore)
+    key = HintKey(plan_signature="sig", intent_hash="ih", url_pattern="x")
+    store.add(key, HintRecord(anchor_text="A"))
+    assert [r.anchor_text for r in store.get(key)] == ["A"]
+
+
+def test_build_hint_store_disabled_takes_precedence_over_dict_name() -> None:
+    """Frozen wins when both flags are present (first match in the ladder)."""
+    store = build_hint_store(
+        {"_hint_store_disabled": True, "_hint_store_dict_name": "la-hints"},
+        tenant_id="acme", modal_dict_factory=_fake_dict_factory(),
+    )
+    assert isinstance(store, NullHintStore)
+
+
+def test_build_hint_store_empty_tenant_returns_null() -> None:
+    """No flags + empty tenant → NullHintStore (DiskHintStore forbids it)."""
+    store = build_hint_store({}, tenant_id="")
+    assert isinstance(store, NullHintStore)
+
+
+def test_build_hint_store_non_dict_suite_returns_disk() -> None:
+    """A malformed (non-dict) suite degrades to the production default."""
+    store = build_hint_store(None, tenant_id="acme")
+    assert isinstance(store, DiskHintStore)
+
+
+def test_build_hint_store_modal_open_failure_falls_back_to_disk() -> None:
+    """A modal.Dict open fault must not break the run — fall back to disk."""
+
+    def _boom(_name: str):
+        raise RuntimeError("modal.Dict.from_name unavailable")
+
+    store = build_hint_store(
+        {"_hint_store_dict_name": "la-hints"}, tenant_id="acme",
+        modal_dict_factory=_boom,
+    )
+    assert isinstance(store, DiskHintStore)
+
+
+def test_build_hint_store_shared_dict_name_is_cross_worker() -> None:
+    """Two workers naming the same Dict see each other's anchors — the
+    property the live S0 rung depends on."""
+    factory = _fake_dict_factory()
+    s1 = build_hint_store(
+        {"_hint_store_dict_name": "la-run-1"}, tenant_id="t",
+        modal_dict_factory=factory,
+    )
+    s2 = build_hint_store(
+        {"_hint_store_dict_name": "la-run-1"}, tenant_id="t",
+        modal_dict_factory=factory,
+    )
+    key = HintKey(plan_signature="sig", intent_hash="ih", url_pattern="x")
+    s1.add(key, HintRecord(anchor_text="cross-worker"))
+    assert [r.anchor_text for r in s2.get(key)] == ["cross-worker"]
 
 
 # ── extract_anchor_from_env ──────────────────────────────────────────

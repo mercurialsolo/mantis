@@ -1095,22 +1095,40 @@ def _run_holo3_executor(
         # ``<tenant>__<workflow>`` shape from the API container's
         # acquire_profile_lock) so customer A's anchors can never leak
         # into customer B's runs.
+        #
+        # The backend is suite-driven (``build_hint_store``): the
+        # Learning Allocator steers it per trial via ``_hint_store_disabled``
+        # (frozen → NullHintStore, no overlay/record) and
+        # ``_hint_store_dict_name`` (S0 retrieval → a shared modal.Dict so
+        # anchors accumulate across workers + runs). Absent both flags it
+        # stays the production DiskHintStore.
         try:
             from mantis_agent.gym.hint_memory import (
-                DiskHintStore, apply_hint_overlay,
+                apply_hint_overlay, build_hint_store,
             )
             hint_tenant = str(task_suite.get("_profile_id", "") or "") or "default"
-            micro_runner._hint_store = DiskHintStore(tenant_id=hint_tenant)
+            micro_runner._hint_store = build_hint_store(
+                task_suite, tenant_id=hint_tenant,
+            )
             applied = apply_hint_overlay(
                 micro_plan,
                 store=micro_runner._hint_store,
                 plan_signature=plan_signature,
                 start_url=str(task_suite.get("base_url", "") or ""),
             )
+            store_kind = type(micro_runner._hint_store).__name__
             if applied:
                 print(
-                    f"  Hint-memory: tenant={hint_tenant} "
+                    f"  Hint-memory[{store_kind}]: tenant={hint_tenant} "
                     f"plan_sig={plan_signature[:12]} applied={applied} hints"
+                )
+            elif store_kind != "DiskHintStore":
+                # Surface the allocator-steered backend (frozen / S0) even
+                # when nothing overlaid — e.g. first run of a fresh shared
+                # store — so the selection is greppable in Modal logs.
+                print(
+                    f"  Hint-memory[{store_kind}]: tenant={hint_tenant} "
+                    f"plan_sig={plan_signature[:12]} (no overlay yet)"
                 )
         except Exception as exc:  # noqa: BLE001 — never block executor
             print(f"  WARNING: hint memory init failed (recording disabled): {exc}")
