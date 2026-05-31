@@ -88,8 +88,8 @@ def _fake_cost(profile_id: str, workflow_id: str) -> tuple[float, str]:  # noqa:
 def _plan_file(tmp_path: Path) -> Path:
     p = tmp_path / "plan.txt"
     p.write_text(
-        "Search boats near {zip_code} within {search_radius} miles.\n"
-        "Log into PopYachts with password {pop_password}.\n",
+        "Navigate to {env_url}/boats/.\n"
+        "Search boats near {zip_code} within {search_radius} miles.\n",
     )
     return p
 
@@ -97,6 +97,7 @@ def _plan_file(tmp_path: Path) -> Path:
 def _make(tmp_path: Path, poster: FakePoster, decomposer: FakeDecomposer) -> LiveRunFn:
     return LiveRunFn(
         plan_path=_plan_file(tmp_path),
+        env_url="https://sim.example/env",
         post_fn=poster,
         pull_cost_fn=_fake_cost,
         decompose_fn=decomposer,
@@ -209,9 +210,8 @@ def test_submit_failure_yields_failed_result_without_spend(tmp_path: Path) -> No
 
 
 def test_plan_decomposed_once_with_substituted_placeholders(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("POP_PASSWORD", "s3cr3t-from-env")
     decomposer = FakeDecomposer()
     poster = FakePoster(statuses=["succeeded"], result_envelope={})
     run = _make(tmp_path, poster, decomposer)
@@ -223,8 +223,8 @@ def test_plan_decomposed_once_with_substituted_placeholders(
     assert len(decomposer.texts) == 1
     text = decomposer.texts[0]
     assert "33131" in text  # {zip_code} filled
-    assert "s3cr3t-from-env" in text  # {pop_password} from env, never hardcoded
-    assert "{pop_password}" not in text
+    assert "https://sim.example/env" in text  # {env_url} points the nav at the sim env
+    assert "{env_url}" not in text
     # Each submit gets a fresh workflow_id.
     wf0 = poster.submit_bodies[0]["workflow_id"]
     wf1 = poster.submit_bodies[1]["workflow_id"]

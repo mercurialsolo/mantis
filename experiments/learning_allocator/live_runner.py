@@ -181,6 +181,7 @@ class LiveRunFn:
     max_cost: float = 1.0
     max_time_minutes: int = 30
     extractor_model: str = "claude-haiku-4-5-20251001"
+    env_url: str = ""
     zip_code: str = "33131"
     search_radius: str = "50"
     poll_interval_s: float = 15.0
@@ -290,13 +291,13 @@ class LiveRunFn:
         return self._micro_plan
 
     def _plan_text(self) -> str:
-        """Plan text with placeholders filled. ``POP_PASSWORD`` comes from the
-        env — never hardcoded (this is a public repo)."""
+        """Plan text with placeholders filled. ``{env_url}`` points the nav at the
+        live sim env so the run reaches the sandbox directly (no proxy)."""
         raw = self.plan_path.read_text()
         return (
-            raw.replace("{zip_code}", self.zip_code)
+            raw.replace("{env_url}", self.env_url)
+            .replace("{zip_code}", self.zip_code)
             .replace("{search_radius}", self.search_radius)
-            .replace("{pop_password}", _read_env("POP_PASSWORD"))
         )
 
     # ── poll + verdict ─────────────────────────────────────────────────
@@ -355,10 +356,14 @@ _LIVE_BANNER = (
 )
 
 
-def bt01_tasks() -> list[EvalTask]:
-    """Runnable eval tasks that carry a plan — BT01 is the only cluster with a
-    plan wired today, and a live submit needs a plan to decompose."""
-    return [t for t in load_manifest().runnable() if t.plan]
+def tasks_for_plan(plan_name: str) -> list[EvalTask]:
+    """Runnable eval tasks wired to ``plan_name`` (a live submit decomposes that
+    plan). Matching on the basename keeps ``plans/foo`` and a bare ``foo`` equal."""
+    base = Path(plan_name).name
+    return [
+        t for t in load_manifest().runnable()
+        if t.plan and Path(t.plan).name == base
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -393,14 +398,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    tasks = bt01_tasks()
+    plan_name = Path(args.plan).name
+    tasks = tasks_for_plan(plan_name)
     if not tasks:
-        print("No runnable task carries a plan — nothing to submit.", file=sys.stderr)
+        print(
+            f"No runnable task is wired to plan {plan_name!r} — "
+            "set the cluster's plan field in clusters.json.",
+            file=sys.stderr,
+        )
         return 2
 
     policies = tuple(p.strip() for p in args.policies.split(",") if p.strip())
+    slug = f"la-{plan_name.replace('_', '-')}"
     live = LiveRunFn(
         plan_path=REPO_ROOT / args.plan,
+        env_url=env_url,
+        profile_id=slug,
+        hint_dict_name=f"{slug}-hints",
         max_cost=args.max_cost,
         max_time_minutes=args.max_time_minutes,
     )
