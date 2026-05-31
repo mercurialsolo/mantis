@@ -280,6 +280,40 @@ def hint_key_for(
     )
 
 
+# ── Record (de)serialization (shared by the persistent backends) ────
+
+
+def _record_to_dict(r: HintRecord) -> dict:
+    """JSON-serializable form of a :class:`HintRecord`. Shared by the
+    disk and modal.Dict backends so their on-the-wire shape can't drift."""
+    return {
+        "anchor_text": r.anchor_text,
+        "anchor_xy_offset": list(r.anchor_xy_offset),
+        "viewport_stage": r.viewport_stage,
+        "confidence": r.confidence,
+        "recorded_at": r.recorded_at,
+        "source_url": r.source_url,
+    }
+
+
+def _record_from_dict(r: object) -> HintRecord | None:
+    """Inverse of :func:`_record_to_dict`. Returns ``None`` for anything
+    malformed so callers can drop it without aborting the whole load."""
+    if not isinstance(r, dict):
+        return None
+    try:
+        return HintRecord(
+            anchor_text=str(r.get("anchor_text", "") or ""),
+            anchor_xy_offset=tuple(r.get("anchor_xy_offset") or (0, 0))[:2],
+            viewport_stage=int(r.get("viewport_stage", 0) or 0),
+            confidence=float(r.get("confidence", 0.0) or 0.0),
+            recorded_at=float(r.get("recorded_at", 0.0) or 0.0),
+            source_url=str(r.get("source_url", "") or ""),
+        )
+    except Exception:  # noqa: BLE001 — drop malformed record
+        return None
+
+
 # ── DiskHintStore (Phase 1b) — tenant-scoped persistence ────────────
 
 
@@ -361,21 +395,10 @@ class DiskHintStore:
         for bucket_key, records in (raw or {}).items():
             if not isinstance(records, list):
                 continue
-            parsed: list[HintRecord] = []
-            for r in records:
-                if not isinstance(r, dict):
-                    continue
-                try:
-                    parsed.append(HintRecord(
-                        anchor_text=str(r.get("anchor_text", "") or ""),
-                        anchor_xy_offset=tuple(r.get("anchor_xy_offset") or (0, 0))[:2],
-                        viewport_stage=int(r.get("viewport_stage", 0) or 0),
-                        confidence=float(r.get("confidence", 0.0) or 0.0),
-                        recorded_at=float(r.get("recorded_at", 0.0) or 0.0),
-                        source_url=str(r.get("source_url", "") or ""),
-                    ))
-                except Exception:  # noqa: BLE001 — drop malformed record
-                    continue
+            parsed = [
+                rec for rec in (_record_from_dict(r) for r in records)
+                if rec is not None
+            ]
             if parsed:
                 buckets[str(bucket_key)] = parsed
         return buckets
@@ -383,19 +406,10 @@ class DiskHintStore:
     def _save(self, plan_signature: str, buckets: dict[str, list[HintRecord]]) -> None:
         path = self._file_for(plan_signature)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        serializable: dict[str, list[dict]] = {}
-        for bucket_key, records in buckets.items():
-            serializable[bucket_key] = [
-                {
-                    "anchor_text": r.anchor_text,
-                    "anchor_xy_offset": list(r.anchor_xy_offset),
-                    "viewport_stage": r.viewport_stage,
-                    "confidence": r.confidence,
-                    "recorded_at": r.recorded_at,
-                    "source_url": r.source_url,
-                }
-                for r in records
-            ]
+        serializable: dict[str, list[dict]] = {
+            bucket_key: [_record_to_dict(r) for r in records]
+            for bucket_key, records in buckets.items()
+        }
         tmp_path = f"{path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
         with open(tmp_path, "w") as f:
             json.dump(serializable, f, indent=2)
@@ -464,6 +478,165 @@ class DiskHintStore:
         for plan_sig in self.list_plan_signatures():
             buckets = self._load(plan_sig)
             for bk, records in buckets.items():
+                intent_hash, _, url_pattern = bk.partition("|")
+                key = HintKey(
+                    plan_signature=plan_sig,
+                    intent_hash=intent_hash,
+                    url_pattern=url_pattern,
+                )
+                for r in records:
+                    yield (key, r)
+
+
+# ── ModalDictHintStore (Phase 1b) — cross-worker shared backend ─────
+
+
+class ModalDictHintStore:
+    """``modal.Dict``-backed `HintStore` shared across fan-out workers.
+
+    Where :class:`DiskHintStore` persists across *deploys* on a volume,
+    this backend is shared across the *workers of one deploy* through a
+    ``modal.Dict``: a recording made by the Phase-1 fan-out worker is
+    visible to the Phase-2 worker (and to the next run) immediately,
+    without waiting for a volume write/read cycle. This is the backend
+    the Learning Allocator's S0 retrieval rung reads/writes in prod so
+    its effect actually reaches the remote run.
+
+    Layout — one entry per ``(tenant_id, plan_signature)``::
+
+        "<tenant>/<plan_signature>"  →  {"<intent>|<url_pattern>": [record-dict, …]}
+
+    Tenant isolation is by key prefix, so one ``modal.Dict`` per deploy
+    serves every tenant without cross-talk. Bucket / LRU semantics match
+    :class:`DiskHintStore` (cap ``max_per_key``, newest-first ``get``).
+
+    The backing object is dependency-injected (anything with
+    ``get`` / ``__setitem__`` / ``keys``) so tests pass a plain ``dict``
+    and prod passes a ``modal.Dict`` via :meth:`from_name`. Every access
+    is best-effort: a store fault logs a warning and degrades to "no
+    hints", never breaking a run. We never call ``len()`` on the backing
+    object — ``modal.Dict`` raises ``TypeError`` on ``len()``
+    (see ``feedback_modal_dict_no_len``); :meth:`size` iterates ``keys()``.
+    """
+
+    def __init__(
+        self, backing: object, *, tenant_id: str, max_per_key: int = 10,
+    ) -> None:
+        if not tenant_id:
+            raise ValueError("ModalDictHintStore requires a non-empty tenant_id")
+        self._d = backing
+        self._tenant_id = tenant_id
+        self.max_per_key = max(1, int(max_per_key))
+
+    @classmethod
+    def from_name(
+        cls, dict_name: str, *, tenant_id: str,
+        max_per_key: int = 10, create_if_missing: bool = True,
+    ) -> "ModalDictHintStore":
+        """Build against a named ``modal.Dict``. ``modal`` is imported
+        lazily so this module stays importable off-Modal (tests use the
+        plain-``dict`` constructor instead)."""
+        import modal  # noqa: PLC0415 — lazy so the module imports without modal
+
+        backing = modal.Dict.from_name(dict_name, create_if_missing=create_if_missing)
+        return cls(backing, tenant_id=tenant_id, max_per_key=max_per_key)
+
+    # ── key + I/O ──
+
+    def _entry_key(self, plan_signature: str) -> str:
+        return (
+            f"{_sanitize_scope(self._tenant_id)}/"
+            f"{_sanitize_scope(plan_signature)}"
+        )
+
+    def _load(self, plan_signature: str) -> dict[str, list[HintRecord]]:
+        try:
+            raw = self._d.get(self._entry_key(plan_signature))  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001 — store fault ≠ run fault
+            logger.warning(
+                "ModalDictHintStore: read failed tenant=%s plan=%s (%s)",
+                self._tenant_id, plan_signature, exc,
+            )
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        buckets: dict[str, list[HintRecord]] = {}
+        for bucket_key, records in raw.items():
+            if not isinstance(records, list):
+                continue
+            parsed = [
+                rec for rec in (_record_from_dict(r) for r in records)
+                if rec is not None
+            ]
+            if parsed:
+                buckets[str(bucket_key)] = parsed
+        return buckets
+
+    def _save(self, plan_signature: str, buckets: dict[str, list[HintRecord]]) -> None:
+        serializable = {
+            bucket_key: [_record_to_dict(r) for r in records]
+            for bucket_key, records in buckets.items()
+        }
+        try:
+            self._d[self._entry_key(plan_signature)] = serializable  # type: ignore[index]
+        except Exception as exc:  # noqa: BLE001 — store fault ≠ run fault
+            logger.warning(
+                "ModalDictHintStore: write failed tenant=%s plan=%s (%s)",
+                self._tenant_id, plan_signature, exc,
+            )
+
+    @staticmethod
+    def _bucket_key(key: HintKey) -> str:
+        return f"{key.intent_hash}|{key.url_pattern}"
+
+    # ── HintStore protocol ──
+
+    def add(self, key: HintKey, record: HintRecord) -> None:
+        if not key.plan_signature:
+            return
+        buckets = self._load(key.plan_signature)
+        bucket = buckets.setdefault(self._bucket_key(key), [])
+        bucket.append(record)
+        if len(bucket) > self.max_per_key:
+            bucket.pop(0)
+        self._save(key.plan_signature, buckets)
+
+    def get(self, key: HintKey) -> list[HintRecord]:
+        if not key.plan_signature:
+            return []
+        buckets = self._load(key.plan_signature)
+        # Newest-first for the injection side's pick-top-N lookup.
+        return list(reversed(buckets.get(self._bucket_key(key), [])))
+
+    def size(self) -> int:
+        """Total record count for this tenant. Iterates ``keys()`` rather
+        than ``len()`` — ``modal.Dict`` has no ``__len__``."""
+        prefix = f"{_sanitize_scope(self._tenant_id)}/"
+        total = 0
+        for k in self._tenant_entry_keys(prefix):
+            try:
+                raw = self._d.get(k)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                continue
+            if not isinstance(raw, dict):
+                continue
+            total += sum(len(v) for v in raw.values() if isinstance(v, list))
+        return total
+
+    # ── inspector surface ──
+
+    def _tenant_entry_keys(self, prefix: str) -> list[str]:
+        try:
+            return [str(k) for k in self._d.keys() if str(k).startswith(prefix)]  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ModalDictHintStore: keys() failed (%s)", exc)
+            return []
+
+    def iter_records(self) -> Iterable[tuple[HintKey, HintRecord]]:
+        prefix = f"{_sanitize_scope(self._tenant_id)}/"
+        for k in self._tenant_entry_keys(prefix):
+            plan_sig = k[len(prefix):]
+            for bk, records in self._load(plan_sig).items():
                 intent_hash, _, url_pattern = bk.partition("|")
                 key = HintKey(
                     plan_signature=plan_sig,

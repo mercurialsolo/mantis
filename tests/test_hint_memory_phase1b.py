@@ -22,6 +22,7 @@ from mantis_agent.gym.hint_memory import (
     HintKey,
     HintRecord,
     InMemoryHintStore,
+    ModalDictHintStore,
     NullHintStore,
     apply_hint_overlay,
     extract_anchor_from_env,
@@ -157,6 +158,154 @@ def test_disk_store_iter_records(temp_dir: str) -> None:
     assert len(pairs) == 2
     texts = sorted(r.anchor_text for _, r in pairs)
     assert texts == ["A", "B"]
+
+
+# ── ModalDictHintStore ───────────────────────────────────────────────
+
+
+class _FakeModalDict:
+    """Stand-in for ``modal.Dict``: dict-like (get / __setitem__ / keys)
+    but raises on ``len()`` exactly as the real one does, so size() can't
+    cheat with ``len()``. One instance is shared across stores to mirror
+    the cross-worker / multi-tenant single-Dict deploy."""
+
+    def __init__(self) -> None:
+        self._inner: dict = {}
+
+    def get(self, key, default=None):
+        return self._inner.get(key, default)
+
+    def __setitem__(self, key, value) -> None:
+        self._inner[key] = value
+
+    def keys(self):
+        return list(self._inner.keys())
+
+    def __len__(self):  # noqa: D105
+        raise TypeError("modal.Dict has no __len__")
+
+
+def test_modal_store_requires_tenant_id() -> None:
+    with pytest.raises(ValueError, match="non-empty tenant_id"):
+        ModalDictHintStore({}, tenant_id="")
+
+
+def test_modal_store_round_trips_single_record() -> None:
+    store = ModalDictHintStore(_FakeModalDict(), tenant_id="acme")
+    key = HintKey(plan_signature="sig1", intent_hash="ih1", url_pattern="x.com/y")
+    store.add(key, HintRecord(
+        anchor_text="Show More", anchor_xy_offset=(120, 540),
+        viewport_stage=1, confidence=0.8, source_url="https://x.com/y/123",
+    ))
+    out = store.get(key)
+    assert len(out) == 1
+    assert out[0].anchor_text == "Show More"
+    assert out[0].anchor_xy_offset == (120, 540)
+    assert out[0].viewport_stage == 1
+    assert out[0].confidence == 0.8
+
+
+def test_modal_store_lru_evicts_oldest_at_cap() -> None:
+    store = ModalDictHintStore(_FakeModalDict(), tenant_id="acme", max_per_key=3)
+    key = HintKey(plan_signature="sig1", intent_hash="ih1", url_pattern="x.com/y")
+    for i in range(5):
+        store.add(key, HintRecord(anchor_text=f"Anchor {i}", confidence=0.5))
+    out = store.get(key)
+    assert [r.anchor_text for r in out] == ["Anchor 4", "Anchor 3", "Anchor 2"]
+
+
+def test_modal_store_tenant_isolation_in_one_dict() -> None:
+    """Two tenants share ONE backing Dict; key-prefix keeps them apart."""
+    backing = _FakeModalDict()
+    s1 = ModalDictHintStore(backing, tenant_id="customerA")
+    s2 = ModalDictHintStore(backing, tenant_id="customerB")
+    key = HintKey(plan_signature="sig1", intent_hash="ih1", url_pattern="x.com/y")
+
+    s1.add(key, HintRecord(anchor_text="A-only", confidence=0.9))
+    assert [r.anchor_text for r in s1.get(key)] == ["A-only"]
+    assert s2.get(key) == []  # B sees nothing
+
+    s2.add(key, HintRecord(anchor_text="B-only", confidence=0.9))
+    assert [r.anchor_text for r in s2.get(key)] == ["B-only"]
+    assert [r.anchor_text for r in s1.get(key)] == ["A-only"]  # A unaffected
+
+
+def test_modal_store_keys_isolated_within_tenant() -> None:
+    store = ModalDictHintStore(_FakeModalDict(), tenant_id="acme")
+    k1 = HintKey(plan_signature="sig1", intent_hash="ih1", url_pattern="x.com/a")
+    k2 = HintKey(plan_signature="sig1", intent_hash="ih2", url_pattern="x.com/a")
+    store.add(k1, HintRecord(anchor_text="A"))
+    store.add(k2, HintRecord(anchor_text="B"))
+    assert [r.anchor_text for r in store.get(k1)] == ["A"]
+    assert [r.anchor_text for r in store.get(k2)] == ["B"]
+
+
+def test_modal_store_size_iterates_keys_not_len() -> None:
+    """size() must count via keys() — _FakeModalDict raises on len()."""
+    store = ModalDictHintStore(_FakeModalDict(), tenant_id="acme")
+    store.add(HintKey(plan_signature="s1", intent_hash="i1", url_pattern="x"),
+              HintRecord(anchor_text="a"))
+    store.add(HintKey(plan_signature="s1", intent_hash="i2", url_pattern="x"),
+              HintRecord(anchor_text="b"))
+    store.add(HintKey(plan_signature="s2", intent_hash="i1", url_pattern="x"),
+              HintRecord(anchor_text="c"))
+    assert store.size() == 3  # no TypeError from len()
+
+
+def test_modal_store_size_excludes_other_tenants() -> None:
+    backing = _FakeModalDict()
+    a = ModalDictHintStore(backing, tenant_id="A")
+    b = ModalDictHintStore(backing, tenant_id="B")
+    a.add(HintKey(plan_signature="s", intent_hash="i", url_pattern="x"),
+          HintRecord(anchor_text="a"))
+    b.add(HintKey(plan_signature="s", intent_hash="i", url_pattern="x"),
+          HintRecord(anchor_text="b"))
+    assert a.size() == 1
+    assert b.size() == 1
+
+
+def test_modal_store_no_op_on_empty_plan_signature() -> None:
+    store = ModalDictHintStore(_FakeModalDict(), tenant_id="acme")
+    key = HintKey(plan_signature="", intent_hash="ih1", url_pattern="x")
+    store.add(key, HintRecord(anchor_text="X"))
+    assert store.get(key) == []
+    assert store.size() == 0
+
+
+def test_modal_store_get_missing_returns_empty() -> None:
+    store = ModalDictHintStore(_FakeModalDict(), tenant_id="acme")
+    key = HintKey(plan_signature="never", intent_hash="ih", url_pattern="x")
+    assert store.get(key) == []
+
+
+def test_modal_store_iter_records() -> None:
+    store = ModalDictHintStore(_FakeModalDict(), tenant_id="acme")
+    k = HintKey(plan_signature="sig", intent_hash="ih", url_pattern="x")
+    store.add(k, HintRecord(anchor_text="A"))
+    store.add(k, HintRecord(anchor_text="B"))
+    pairs = list(store.iter_records())
+    assert sorted(r.anchor_text for _, r in pairs) == ["A", "B"]
+
+
+def test_modal_store_read_fault_degrades_to_empty() -> None:
+    """A backing that raises on read must yield no hints, not crash."""
+
+    class _Exploding:
+        def get(self, key, default=None):  # noqa: ARG002
+            raise RuntimeError("modal.Dict down")
+
+        def __setitem__(self, key, value) -> None:  # noqa: ARG002
+            raise RuntimeError("modal.Dict down")
+
+        def keys(self):
+            raise RuntimeError("modal.Dict down")
+
+    store = ModalDictHintStore(_Exploding(), tenant_id="acme")
+    key = HintKey(plan_signature="sig", intent_hash="ih", url_pattern="x")
+    # add swallows the write fault, get/size degrade to empty — no raise.
+    store.add(key, HintRecord(anchor_text="X"))
+    assert store.get(key) == []
+    assert store.size() == 0
 
 
 # ── extract_anchor_from_env ──────────────────────────────────────────
