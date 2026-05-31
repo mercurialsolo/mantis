@@ -176,6 +176,67 @@ def test_submit_body_has_no_proxy_and_frozen_flag(tmp_path: Path) -> None:
     assert body["detached"] is True
 
 
+class FakeReset:
+    """Records env resets so ordering against the submit can be asserted."""
+
+    def __init__(self, log: list) -> None:
+        self.log = log
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, env_url: str, admin_token: str) -> None:
+        self.calls.append((env_url, admin_token))
+        self.log.append("reset")
+
+
+def test_reset_fires_before_submit_when_admin_token_set(tmp_path: Path) -> None:
+    # Shared log captures the interleaving of reset vs submit.
+    log: list[str] = []
+    reset = FakeReset(log)
+
+    class LoggingPoster(FakePoster):
+        def __call__(self, path: str, body: dict) -> tuple[int, dict]:
+            if "task_suite" in body:
+                log.append("submit")
+            return super().__call__(path, body)
+
+    poster = LoggingPoster(statuses=["succeeded"], result_envelope={})
+    run = LiveRunFn(
+        plan_path=_plan_file(tmp_path),
+        env_url="https://sim.example/env",
+        admin_token="tok-123",
+        post_fn=poster,
+        pull_cost_fn=_fake_cost,
+        decompose_fn=FakeDecomposer(),
+        reset_fn=reset,
+        poll_interval_s=0.0,
+    )
+
+    run(_task(seed=42), None, _result("frozen"))
+
+    # Each run resets the cumulative store *before* it submits, so the
+    # precision-sensitive oracle grades only this run's leads.
+    assert reset.calls == [("https://sim.example/env", "tok-123")]
+    assert log[0] == "reset" and log.index("reset") < log.index("submit")
+
+
+def test_reset_skipped_without_admin_token(tmp_path: Path) -> None:
+    reset = FakeReset([])
+    run = LiveRunFn(
+        plan_path=_plan_file(tmp_path),
+        env_url="https://sim.example/env",  # admin_token left empty
+        post_fn=FakePoster(statuses=["succeeded"], result_envelope={}),
+        pull_cost_fn=_fake_cost,
+        decompose_fn=FakeDecomposer(),
+        reset_fn=reset,
+        poll_interval_s=0.0,
+    )
+
+    run(_task(seed=42), None, _result("frozen"))
+
+    # No admin token → offline-inert: never touch the env.
+    assert reset.calls == []
+
+
 def test_verdict_falls_back_to_fail_on_halt(tmp_path: Path) -> None:
     poster = FakePoster(statuses=["halted"])
     run = _make(tmp_path, poster, FakeDecomposer())
@@ -231,8 +292,8 @@ def test_plan_decomposed_once_with_substituted_placeholders(
     assert wf0 != wf1
 
 
-def test_pop_password_not_hardcoded_in_source() -> None:
-    """The real PopYachts password must never live in a tracked file."""
+def test_credential_not_hardcoded_in_source() -> None:
+    """A real lead-site login password must never live in a tracked file."""
     src = Path(live_runner.__file__).read_text()
     assert "SelfService" not in src
 

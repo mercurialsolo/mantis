@@ -88,6 +88,7 @@ _TERMINAL = frozenset({"succeeded", "failed", "cancelled", "halted"})
 PostFn = Callable[[str, dict[str, Any]], tuple[int, dict[str, Any]]]
 PullCostFn = Callable[[str, str], tuple[float, str]]
 DecomposeFn = Callable[[str], MicroPlan]
+ResetFn = Callable[[str, str], None]
 
 
 # ── env + default I/O seams (the live, spending implementations) ────────────
@@ -121,6 +122,27 @@ def _default_post(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]
         return r.status_code, r.json()
     except ValueError:
         return r.status_code, {"raw": r.text}
+
+
+def _default_reset(env_url: str, admin_token: str) -> None:
+    """Reset the sim env to a clean, deterministically-reseeded state.
+
+    The BT02/BT03 oracles grade the *cumulative* leads in the store and are
+    precision-sensitive (one wrong lead fails the run), so without a reset
+    between runs the first run's leads contaminate every later run's grade —
+    in both directions. ``/__env__/reset`` clears the leads and rebuilds the
+    catalog from the fixed ``SEED`` (same boats, so S0's cross-run hints stay
+    valid). Best-effort: a reset failure must not crash the run loop, so it is
+    swallowed the way ``grade_run`` swallows oracle errors.
+    """
+    try:
+        requests.post(
+            f"{env_url.rstrip('/')}/__env__/reset",
+            headers={"X-Env-Admin": admin_token},
+            timeout=30,
+        )
+    except requests.RequestException:
+        pass
 
 
 def _default_pull_cost(profile_id: str, workflow_id: str) -> tuple[float, str]:
@@ -182,12 +204,14 @@ class LiveRunFn:
     max_time_minutes: int = 30
     extractor_model: str = "claude-haiku-4-5-20251001"
     env_url: str = ""
+    admin_token: str = ""
     zip_code: str = "33131"
     search_radius: str = "50"
     poll_interval_s: float = 15.0
     post_fn: PostFn = _default_post
     pull_cost_fn: PullCostFn = _default_pull_cost
     decompose_fn: DecomposeFn = _default_decompose
+    reset_fn: ResetFn = _default_reset
     _micro_plan: MicroPlan | None = field(default=None, init=False, repr=False)
     _submits: int = field(default=0, init=False, repr=False)
 
@@ -205,6 +229,11 @@ class LiveRunFn:
         """
         del plan  # remote submit decomposes its own plan_text
         substrate = substrate_result.substrate
+        # Isolate this run's grade: clear the prior run's leads so the
+        # cumulative, precision-sensitive oracle scores only what THIS run
+        # submits. No-op when admin_token is unset (keeps offline tests inert).
+        if self.env_url and self.admin_token:
+            self.reset_fn(self.env_url, self.admin_token)
         runtime = self._runtime()
         self._submits += 1
         workflow_id = f"la-{substrate}-s{task.seed}-{self._submits}-{int(time.time())}"
@@ -413,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
     live = LiveRunFn(
         plan_path=REPO_ROOT / args.plan,
         env_url=env_url,
+        admin_token=admin_token,
         profile_id=slug,
         hint_dict_name=f"{slug}-hints",
         max_cost=args.max_cost,
