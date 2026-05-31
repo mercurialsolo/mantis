@@ -22,6 +22,11 @@ from .allocator import (
     ValueEstimate,
 )
 from .eval import EvalManifest, EvalTask, load_manifest
+from .orchestrator import (
+    Phase2Orchestrator,
+    Phase2Report,
+    TaskOutcome,
+)
 from .reward import (
     DEFAULT_LAMBDA,
     RewardRecord,
@@ -59,4 +64,8 @@ __all__ = [
     "EvalManifest",
     "EvalTask",
     "load_manifest",
+    # orchestrator
+    "Phase2Orchestrator",
+    "Phase2Report",
+    "TaskOutcome",
 ]
