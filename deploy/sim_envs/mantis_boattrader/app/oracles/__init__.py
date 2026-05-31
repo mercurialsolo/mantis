@@ -29,13 +29,19 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from .. import db
-from . import bt01_lead_capture_filtered_search
+from . import (
+    bt01_lead_capture_filtered_search,
+    bt02_spec_lookup_engine,
+    bt03_byowner_phone_reveal,
+)
 
 GraderFn = Callable[..., dict[str, Any]]
 
 
 GRADERS: dict[str, GraderFn] = {
     "BT01_lead_capture_filtered_search": bt01_lead_capture_filtered_search.grade,
+    "BT02_spec_lookup_engine": bt02_spec_lookup_engine.grade,
+    "BT03_byowner_phone_reveal": bt03_byowner_phone_reveal.grade,
 }
 
 

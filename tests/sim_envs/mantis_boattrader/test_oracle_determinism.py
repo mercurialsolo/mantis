@@ -29,6 +29,8 @@ def seeded_store():
 
 @pytest.mark.parametrize("task_id", [
     "BT01_lead_capture_filtered_search",
+    "BT02_spec_lookup_engine",
+    "BT03_byowner_phone_reveal",
 ])
 def test_oracle_is_deterministic(seeded_store, task_id):
     from app.oracles import grade  # noqa: PLC0415
@@ -191,3 +193,191 @@ def test_oracle_bt01_rejects_malformed_payload(seeded_store):
     assert r["passed"] is False
     assert r["diff"]["hits"] == 0
     assert r["diff"]["malformed"] == 1
+
+
+# ── BT02_spec_lookup_engine ────────────────────────────────────────────
+
+
+def test_oracle_bt02_fails_on_seed(seeded_store):
+    """No leads submitted yet → BT02 must fail, but a qualifying boat exists."""
+    from app.oracles import grade  # noqa: PLC0415
+
+    r = grade(
+        "BT02_spec_lookup_engine",
+        seeded_store,
+        now="2026-01-15T09:00:00Z",
+        seed_val=42,
+    )
+    assert r["passed"] is False
+    assert r["score"] == 0.0
+    assert r["diff"]["leads_total"] == 0
+    assert r["diff"]["qualifying_boat_count"] >= 1, (
+        "expected the seed catalog to include at least one Caterpillar-"
+        "powered boat"
+    )
+
+
+def test_oracle_bt02_passes_when_caterpillar_lead_submitted(seeded_store):
+    from app import db  # noqa: PLC0415
+    from app.oracles import grade  # noqa: PLC0415
+    from app.oracles.bt02_spec_lookup_engine import _boat_matches_spec  # noqa: PLC0415
+
+    qualifying = next(
+        b for b in seeded_store.boats if _boat_matches_spec(b)
+    )
+    db.record_lead({
+        "boat_id": qualifying.id,
+        "boat_title": qualifying.title,
+        "dealer_id": qualifying.dealer_id,
+        "name": "Test Buyer",
+        "email": "buyer@example.test",
+        "phone": "",
+        "message": "Interested in this boat.",
+    })
+
+    r = grade(
+        "BT02_spec_lookup_engine",
+        seeded_store,
+        now="2026-01-15T09:00:00Z",
+        seed_val=42,
+    )
+    assert r["passed"] is True, r
+    assert r["score"] == 1.0
+    assert r["diff"]["hits"] == 1
+    assert r["diff"]["misses"] == 0
+    assert r["diff"]["malformed"] == 0
+
+
+def test_oracle_bt02_fails_on_non_caterpillar_lead(seeded_store):
+    from app import db  # noqa: PLC0415
+    from app.oracles import grade  # noqa: PLC0415
+    from app.oracles.bt02_spec_lookup_engine import _boat_matches_spec  # noqa: PLC0415
+
+    non_qualifying = next(
+        b for b in seeded_store.boats if not _boat_matches_spec(b)
+    )
+    db.record_lead({
+        "boat_id": non_qualifying.id,
+        "boat_title": non_qualifying.title,
+        "dealer_id": non_qualifying.dealer_id,
+        "name": "Test Buyer",
+        "email": "buyer@example.test",
+        "phone": "",
+        "message": "Interested in this boat.",
+    })
+
+    r = grade(
+        "BT02_spec_lookup_engine",
+        seeded_store,
+        now="2026-01-15T09:00:00Z",
+        seed_val=42,
+    )
+    assert r["passed"] is False
+    assert r["diff"]["hits"] == 0
+    assert r["diff"]["misses"] == 1
+
+
+def test_oracle_bt02_rejects_malformed_payload(seeded_store):
+    from app import db  # noqa: PLC0415
+    from app.oracles import grade  # noqa: PLC0415
+    from app.oracles.bt02_spec_lookup_engine import _boat_matches_spec  # noqa: PLC0415
+
+    qualifying = next(
+        b for b in seeded_store.boats if _boat_matches_spec(b)
+    )
+    db.record_lead({
+        "boat_id": qualifying.id,
+        "boat_title": qualifying.title,
+        "dealer_id": qualifying.dealer_id,
+        "name": "",  # empty name
+        "email": "buyer@example.test",
+        "phone": "",
+        "message": "Interested.",
+    })
+
+    r = grade(
+        "BT02_spec_lookup_engine",
+        seeded_store,
+        now="2026-01-15T09:00:00Z",
+        seed_val=42,
+    )
+    assert r["passed"] is False
+    assert r["diff"]["hits"] == 0
+    assert r["diff"]["malformed"] == 1
+
+
+# ── BT03_byowner_phone_reveal ──────────────────────────────────────────
+
+
+def test_oracle_bt03_fails_on_seed(seeded_store):
+    """No phone revealed yet → BT03 must fail, but a by-owner boat exists."""
+    from app.oracles import grade  # noqa: PLC0415
+
+    r = grade(
+        "BT03_byowner_phone_reveal",
+        seeded_store,
+        now="2026-01-15T09:00:00Z",
+        seed_val=42,
+    )
+    assert r["passed"] is False
+    assert r["score"] == 0.0
+    assert r["diff"]["reveals_total"] == 0
+    assert r["diff"]["qualifying_boat_count"] >= 1, (
+        "expected the seed catalog to include at least one by-owner listing"
+    )
+
+
+def test_oracle_bt03_passes_when_owner_phone_revealed(seeded_store):
+    """Synthesise the reveal via the same ``emit_mutation`` channel the
+    ``/show-phone`` route uses, and confirm the oracle approves."""
+    from app import db  # noqa: PLC0415
+    from app.oracles import grade  # noqa: PLC0415
+    from app.oracles.bt03_byowner_phone_reveal import _is_owner_listed  # noqa: PLC0415
+
+    owner_boat = next(
+        b for b in seeded_store.boats if _is_owner_listed(b)
+    )
+    db.emit_mutation(
+        operation="phone_revealed",
+        target_type="boat",
+        target_id=owner_boat.id,
+        payload={"slug": owner_boat.slug},
+    )
+
+    r = grade(
+        "BT03_byowner_phone_reveal",
+        seeded_store,
+        now="2026-01-15T09:00:00Z",
+        seed_val=42,
+    )
+    assert r["passed"] is True, r
+    assert r["score"] == 1.0
+    assert r["diff"]["hits"] == 1
+    assert r["diff"]["misses"] == 0
+
+
+def test_oracle_bt03_fails_on_nonowner_reveal(seeded_store):
+    """Revealing a dealer/sponsored listing's phone is the policy mistake."""
+    from app import db  # noqa: PLC0415
+    from app.oracles import grade  # noqa: PLC0415
+    from app.oracles.bt03_byowner_phone_reveal import _is_owner_listed  # noqa: PLC0415
+
+    dealer_boat = next(
+        b for b in seeded_store.boats if not _is_owner_listed(b)
+    )
+    db.emit_mutation(
+        operation="phone_revealed",
+        target_type="boat",
+        target_id=dealer_boat.id,
+        payload={"slug": dealer_boat.slug},
+    )
+
+    r = grade(
+        "BT03_byowner_phone_reveal",
+        seeded_store,
+        now="2026-01-15T09:00:00Z",
+        seed_val=42,
+    )
+    assert r["passed"] is False
+    assert r["diff"]["hits"] == 0
+    assert r["diff"]["misses"] == 1
