@@ -1,6 +1,6 @@
 {
   "env": "mantis_boattrader",
-  "description": "Failure-cluster eval manifest for the Learning Allocator (PLAN §3). The allocator-beats-any-fixed-substrate claim is only meaningful if the winning substrate genuinely varies, so clusters are engineered, not hoped for. All three clusters now name a real oracle across a visible/sealed (seed 42/7) split: capability=BT01 (filter+form lead macro), knowledge=BT02 (Caterpillar engine-spec lookup lead), policy=BT03 (by-owner phone reveal). 'status=ready' means the oracle exists and the task is gradeable; the canonical plan JSONs and (for the policy cluster) the layout-drift fixture are the run-wiring follow-up — only BT01 carries a plan today.",
+  "description": "Failure-cluster eval manifest for the Learning Allocator (PLAN §3). The allocator-beats-any-fixed-substrate claim is only meaningful if the winning substrate genuinely varies, so clusters are engineered, not hoped for. All three clusters name a real oracle across a visible/sealed (seed 42/7) split: capability=BT01 (filter+form lead macro), knowledge=BT02 (Caterpillar engine-spec lookup lead), policy=BT03 (by-owner phone reveal). 'status=ready' means the oracle exists and the task is gradeable. Live run-wiring (the 'plan' field): BT02 -> 'bt02_spec_lookup' and BT03 -> 'boattrader_scrape' (both retargeted to the high-fidelity sim env, reached directly with no proxy); the frozen-vs-S0 discriminator lives on BT02. BT01 carries no plan on purpose: its oracle is a clean *dealer* lead, which is held out of the live set under the no-dealer-lead run policy — the cluster stays gradeable for offline use. The policy cluster's layout-drift fixture is still the open follow-up.",
   "tasks": [
     {
       "name": "bt01_lead_capture_visible",
@@ -9,7 +9,7 @@
       "cluster": "capability",
       "split": "visible",
       "seed": 42,
-      "plan": "boattrader_scrape",
+      "plan": null,
       "expects_substrate": "S2",
       "status": "ready",
       "notes": "Multi-step macro: apply condition=used + make=Sea Ray + price_max=200000, click a matching listing, submit a clean dealer lead. Oracle = F1 over qualifying leads; pass = >=1 hit AND 0 misses. Capability gap: the base agent fumbles the multi-step filter+form macro."
@@ -21,7 +21,7 @@
       "cluster": "capability",
       "split": "sealed",
       "seed": 7,
-      "plan": "boattrader_scrape",
+      "plan": null,
       "expects_substrate": "S2",
       "status": "ready",
       "notes": "Held-out instance: identical task graded against a different seeded catalog (seed=7). The visible-minus-sealed score gap is the overfitting check (PLAN §4)."
@@ -33,7 +33,7 @@
       "cluster": "knowledge",
       "split": "visible",
       "seed": 42,
-      "plan": null,
+      "plan": "bt02_spec_lookup",
       "expects_substrate": "S0",
       "status": "ready",
       "notes": "Submit a lead on a Caterpillar-powered boat. Engine make is a detail-page spec, NOT a listing facet, so the agent must open listings and read the spec block — an indexable fact S0 retrieval can cache. Oracle = F1 over leads on Caterpillar boats; pass = >=1 hit AND 0 misses/malformed. 82 qualifying boats at seed=42. Plan JSON is the run-wiring follow-up (oracle is gradeable now)."
@@ -45,7 +45,7 @@
       "cluster": "knowledge",
       "split": "sealed",
       "seed": 7,
-      "plan": null,
+      "plan": "bt02_spec_lookup",
       "expects_substrate": "S0",
       "status": "ready",
       "notes": "Held-out instance: same engine-spec lookup graded against the seed=7 catalog (76 qualifying boats). The visible-minus-sealed gap is the overfitting check (PLAN §4)."
@@ -57,7 +57,7 @@
       "cluster": "policy",
       "split": "visible",
       "seed": 42,
-      "plan": null,
+      "plan": "boattrader_scrape",
       "expects_substrate": "S1",
       "status": "ready",
       "notes": "Reveal the private seller's phone on a by-owner ('private seller') listing. Policy task: only owner listings expose a phone, so a drift-induced mis-target hits a dealer card. Oracle reads the phone_revealed mutation channel (orthogonal to BT01/BT02 leads); pass = >=1 reveal on an owner listing AND 0 on non-owner. 135 owner listings at seed=42. S1 exemplar early, S3 once frequent. Plan JSON + layout-drift fixture are the run-wiring follow-up (oracle is gradeable now)."
@@ -69,7 +69,7 @@
       "cluster": "policy",
       "split": "sealed",
       "seed": 7,
-      "plan": null,
+      "plan": "boattrader_scrape",
       "expects_substrate": "S1",
       "status": "ready",
       "notes": "Held-out instance: same by-owner phone-reveal graded against the seed=7 catalog (170 owner listings). The visible-minus-sealed gap is the overfitting check (PLAN §4)."
