@@ -50,15 +50,17 @@ def test_default_manifest_has_a_visible_sealed_pair() -> None:
     assert all(vis[k] != seal[k] for k in shared), "splits must differ by seed"
 
 
-def test_roadmap_clusters_are_present_but_not_runnable() -> None:
+def test_all_three_clusters_are_runnable_across_both_splits() -> None:
     m = load_manifest()
-    # knowledge + policy are on the roadmap (needs_oracle) — present in the
-    # taxonomy but excluded from runnable until an oracle exists.
-    all_clusters = {t.cluster for t in m.tasks}
-    assert {"knowledge", "policy"} <= all_clusters
-    needs_oracle = [t for t in m.tasks if not t.runnable]
-    assert needs_oracle
-    assert all(t.status == "needs_oracle" for t in needs_oracle)
+    # All three failure clusters now name a real oracle (BT01 capability,
+    # BT02 knowledge, BT03 policy), so the allocator's per-cluster-winner
+    # claim is fully measurable — not just hoped for.
+    assert m.clusters_covered() == {"knowledge", "capability", "policy"}
+    assert all(t.task_id for t in m.runnable())
+    # Each cluster carries a visible/sealed (seed 42/7) overfitting pair.
+    for cluster in ("knowledge", "capability", "policy"):
+        splits = {t.split for t in m.by_cluster(cluster) if t.runnable}
+        assert splits == {"visible", "sealed"}, cluster
 
 
 # ── views ──────────────────────────────────────────────────────────────
