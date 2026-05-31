@@ -25,6 +25,13 @@ env boots and no spend**:
 * ``plan_loader(task) -> plan`` — returns the in-process plan object S0
   overlays grounding hints onto (and that ``run_fn`` submits). Optional:
   without it S0 simply finds nothing to overlay and S1 still runs.
+* ``reward_fn(*, env_url, admin_token, task_id, run_result, lam)`` — scores
+  a finished run into a :class:`~mantis_agent.learning.reward.RewardRecord`.
+  Defaults to the live :func:`~mantis_agent.learning.reward.reward_from_run`
+  (which calls the env's oracle over HTTP). Injecting it lets the experiment
+  runner drive the loop fully offline — outcomes baked into ``run_result``
+  rather than read from a live env — so Table 1 / Fig 1 can be produced and
+  the renderers exercised with no env boots and no spend.
 
 The experiment wiring that supplies the real Modal-submit ``run_fn`` lives
 under ``experiments/learning_allocator/`` — that is the only spend
@@ -51,6 +58,9 @@ RunFn = Callable[[EvalTask, Any, SubstrateResult], dict]
 PlanLoader = Callable[[EvalTask], Any]
 # Map a task to the plan_signature that keys the hint / exemplar stores.
 PlanSigFn = Callable[[EvalTask], str]
+# Score a finished run into a RewardRecord. Defaults to reward_from_run (live
+# oracle over HTTP); injectable so the loop can run fully offline.
+RewardFn = Callable[..., RewardRecord]
 
 
 @dataclass
@@ -101,6 +111,7 @@ class Phase2Orchestrator:
         budget: float,
         plan_loader: PlanLoader | None = None,
         plan_signature_fn: PlanSigFn | None = None,
+        reward_fn: RewardFn | None = None,
         start_url: str = "",
         lam: float = DEFAULT_LAMBDA,
     ) -> None:
@@ -114,6 +125,7 @@ class Phase2Orchestrator:
         self.start_url = start_url
         self._plan_loader = plan_loader
         self._plan_sig = plan_signature_fn or _default_plan_signature
+        self._reward_fn = reward_fn
         self.outcomes: list[TaskOutcome] = []
 
     # ── per-task ────────────────────────────────────────────────────────
@@ -153,7 +165,10 @@ class Phase2Orchestrator:
 
         run_result = self.run_fn(task, plan, substrate_result)
 
-        record = reward_from_run(
+        # Default resolves the module global at call time so existing tests
+        # that monkeypatch ``orchestrator.reward_from_run`` keep working.
+        reward_fn = self._reward_fn or reward_from_run
+        record = reward_fn(
             env_url=self.env_url,
             admin_token=self.admin_token,
             task_id=task.task_id or task.name,
@@ -240,6 +255,7 @@ __all__ = [
     "RunFn",
     "PlanLoader",
     "PlanSigFn",
+    "RewardFn",
     "TaskOutcome",
     "Phase2Report",
     "Phase2Orchestrator",
