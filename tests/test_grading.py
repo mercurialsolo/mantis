@@ -32,6 +32,7 @@ def _free_port() -> int:
 class _OracleHandler(BaseHTTPRequestHandler):
     response: dict = {"passed": True, "score": 1.0, "reasons": ["ok"], "diff": {}}
     admin_token = "trusted"
+    last_headers: dict = {}
 
     def log_message(self, fmt, *args):  # noqa: ANN001, A002
         return  # silence test log
@@ -42,6 +43,7 @@ class _OracleHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
+        _OracleHandler.last_headers = dict(self.headers)
         if self.headers.get("X-Env-Admin") != self.admin_token:
             self.send_response(401)
             self.send_header("Content-Type", "application/json")
@@ -108,6 +110,27 @@ def test_wrong_admin_token_yields_error_not_raise(oracle_server):
     assert result.passed is False
     assert result.error is not None
     assert "401" in result.error
+
+
+def test_extra_headers_are_sent_with_oracle_call(oracle_server):
+    """Proxy headers (e.g. Daytona skip-warning + preview token) must ride
+    along on the oracle GET so a preview-proxied sim env returns JSON, not its
+    auth-wall HTML. ``X-Env-Admin`` is still set."""
+    url, token = oracle_server
+    result = grade_run(
+        url, token, "T08_proxy",
+        extra_headers={
+            "X-Daytona-Skip-Preview-Warning": "true",
+            "x-daytona-preview-token": "tok-abc",
+        },
+    )
+    assert result.error is None
+    assert result.passed is True
+    sent = _OracleHandler.last_headers
+    # http.server normalises header names to title-case.
+    assert sent.get("X-Daytona-Skip-Preview-Warning") == "true"
+    assert sent.get("X-Daytona-Preview-Token") == "tok-abc"
+    assert sent.get("X-Env-Admin") == token
 
 
 def test_connection_failure_yields_error_not_raise():

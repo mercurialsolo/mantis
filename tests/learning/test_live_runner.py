@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from mantis_agent.learning.reward import cost_channel, proxy_channel
 from mantis_agent.learning.substrates.base import SubstrateResult
 from mantis_agent.plan_decomposer import MicroIntent, MicroPlan
@@ -177,18 +179,45 @@ def test_submit_body_has_no_proxy_and_frozen_flag(tmp_path: Path) -> None:
     assert body["detached"] is True
 
 
-def test_suite_carries_daytona_skip_header_by_default(tmp_path: Path) -> None:
-    # The sim env sits behind the Daytona preview proxy, which blocks the
-    # runner's browser-UA requests with an interstitial unless this header
-    # rides every request. The suite must carry it so modal_cua_server's
-    # setup_env opens the persistent header session.
+def test_suite_carries_daytona_proxy_and_consent_headers_by_default(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    # The sim env sits behind the Daytona preview proxy: every browser request
+    # needs the skip-warning header (suppresses the UA interstitial) AND the
+    # per-sandbox preview token (else a 307 to Auth0). It also pre-seeds the
+    # cookie-consent cookie so the OneTrust banner — which the listings
+    # pre-scan reads as a consent wall → page_blocked — never renders. The
+    # suite must carry all three so modal_cua_server's setup_env opens the
+    # persistent header session with them.
+    monkeypatch.setenv("LA_ENV_PREVIEW_TOKEN", "tok-xyz")
     poster = FakePoster(statuses=["succeeded"], result_envelope={})
     run = _make(tmp_path, poster, FakeDecomposer())
 
     run(_task(seed=42), None, _result("frozen"))
 
     headers = poster.submit_bodies[0]["task_suite"]["_browser_extra_headers"]
-    assert headers == {"X-Daytona-Skip-Preview-Warning": "true"}
+    assert headers == {
+        "X-Daytona-Skip-Preview-Warning": "true",
+        "x-daytona-preview-token": "tok-xyz",
+        "Cookie": "bt_cookie_consent=decline",
+    }
+
+
+def test_suite_omits_preview_token_when_env_unset(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    # No LA_ENV_PREVIEW_TOKEN (e.g. a direct env or an un-exported shell) → the
+    # token header is dropped, but the skip + consent headers still ride.
+    monkeypatch.delenv("LA_ENV_PREVIEW_TOKEN", raising=False)
+    poster = FakePoster(statuses=["succeeded"], result_envelope={})
+    run = _make(tmp_path, poster, FakeDecomposer())
+
+    run(_task(seed=42), None, _result("frozen"))
+
+    headers = poster.submit_bodies[0]["task_suite"]["_browser_extra_headers"]
+    assert "x-daytona-preview-token" not in headers
+    assert headers["X-Daytona-Skip-Preview-Warning"] == "true"
+    assert headers["Cookie"] == "bt_cookie_consent=decline"
 
 
 def test_empty_browser_headers_omits_suite_key(tmp_path: Path) -> None:

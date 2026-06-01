@@ -62,7 +62,15 @@ from typing import Any
 
 import requests
 
+from mantis_agent.gym.grading import grade_run
 from mantis_agent.learning.eval import EvalTask, load_manifest
+from mantis_agent.learning.reward import (
+    DEFAULT_LAMBDA,
+    RewardRecord,
+    compute_reward,
+    cost_channel,
+    proxy_channel,
+)
 from mantis_agent.learning.substrates.base import SubstrateResult
 from mantis_agent.plan_decomposer import MicroPlan, PlanDecomposer
 from mantis_agent.server_utils import (
@@ -127,6 +135,46 @@ def _default_post(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]
         return r.status_code, {"raw": r.text}
 
 
+def _daytona_proxy_headers() -> dict[str, str]:
+    """Proxy headers every request to the Daytona-served sim env needs.
+
+    The sandbox is fronted by ``*.daytonaproxy01.net``, whose preview proxy
+    (a) shows a "Preview - Warning" interstitial to real-browser User-Agents
+    unless ``X-Daytona-Skip-Preview-Warning`` is set, and (b) 307s to an Auth0
+    wall unless the per-sandbox ``x-daytona-preview-token`` is presented. BOTH
+    are required on EVERY request — browser navigations *and* the admin
+    reset/oracle calls alike. The token rotates per sandbox and is read from
+    the env (never hard-coded — this repo is public). Empty token → skip the
+    token header so a direct (non-Daytona) env still works.
+    """
+    hdr = {"X-Daytona-Skip-Preview-Warning": "true"}
+    token = _read_env("LA_ENV_PREVIEW_TOKEN")
+    if token:
+        hdr["x-daytona-preview-token"] = token
+    return hdr
+
+
+def _default_browser_headers() -> dict[str, str]:
+    """Headers applied to every *browser* request on the remote run.
+
+    Two concerns, both sim-env-specific:
+
+    * the Daytona proxy headers (see :func:`_daytona_proxy_headers`) — without
+      the preview token the CUA browser 307s to Auth0 and never reaches the
+      boats page;
+    * a pre-seeded ``bt_cookie_consent`` cookie. The sim env renders a OneTrust
+      cookie-consent banner on first visit (fresh Modal profile → no consent
+      cookie → banner every run). The listings pre-scan
+      (``ClaudeExtractor.find_all_listings``) reads that full-page overlay as a
+      consent/sign-in wall and halts ``page_blocked`` *before* the brain can
+      dismiss it. The server gates the banner on the cookie's mere presence, so
+      seeding it suppresses the banner; ``decline`` is the privacy-preserving
+      choice. Eval-only noise removal — the banner would block FROZEN and S0
+      equally, so it adds nothing but variance to the substrate comparison.
+    """
+    return {**_daytona_proxy_headers(), "Cookie": "bt_cookie_consent=decline"}
+
+
 def _default_reset(env_url: str, admin_token: str) -> None:
     """Reset the sim env to a clean, deterministically-reseeded state.
 
@@ -137,11 +185,15 @@ def _default_reset(env_url: str, admin_token: str) -> None:
     catalog from the fixed ``SEED`` (same boats, so S0's cross-run hints stay
     valid). Best-effort: a reset failure must not crash the run loop, so it is
     swallowed the way ``grade_run`` swallows oracle errors.
+
+    ``/__env__/reset`` is an admin route *behind* the Daytona preview proxy, so
+    it needs the proxy headers in addition to ``X-Env-Admin`` — without them the
+    POST 307s to the proxy auth wall and the reset silently no-ops.
     """
     try:
         requests.post(
             f"{env_url.rstrip('/')}/__env__/reset",
-            headers={"X-Env-Admin": admin_token},
+            headers={"X-Env-Admin": admin_token, **_daytona_proxy_headers()},
             timeout=30,
         )
     except requests.RequestException:
@@ -208,15 +260,13 @@ class LiveRunFn:
     extractor_model: str = "claude-haiku-4-5-20251001"
     env_url: str = ""
     admin_token: str = ""
-    # Request headers applied to every browser request on the remote run.
-    # Default carries the Daytona preview-proxy skip header: the sim env is
-    # served behind ``*.daytonaproxy01.net``, which shows a "Preview -
-    # Warning" interstitial to real-browser User-Agents (which the Modal
-    # runner forces via the stealth UA override). Without this the CUA
-    # browser never reaches the boats page → 0 leads. Set to ``{}`` for a
-    # direct (non-Daytona) env.
+    # Request headers applied to every browser request on the remote run —
+    # Daytona proxy headers (skip-warning + preview token) plus a pre-seeded
+    # cookie-consent choice that suppresses the sim env's OneTrust banner.
+    # See :func:`_default_browser_headers`. Set to ``{}`` for a direct
+    # (non-Daytona) env with no consent banner.
     browser_extra_headers: dict[str, str] = field(
-        default_factory=lambda: {"X-Daytona-Skip-Preview-Warning": "true"}
+        default_factory=_default_browser_headers
     )
     zip_code: str = "33131"
     search_radius: str = "50"
@@ -497,10 +547,33 @@ def main(argv: list[str] | None = None) -> int:
         f"  policies={policies} budget=${args.budget:.2f} tasks={len(tasks)}\n"
         f"  plan={args.plan} max_cost=${args.max_cost:.2f}/run\n",
     )
+    # Proxy-aware oracle grading: the default reward_from_run hits
+    # ``/__env__/oracle`` with only ``X-Env-Admin``, which the Daytona preview
+    # proxy 307s to its auth wall (→ HTML, not JSON → every run graded
+    # oracle-error). This closure is reward_from_run with the proxy headers
+    # threaded onto the oracle GET; the arithmetic is identical.
+    oracle_hdr = _daytona_proxy_headers()
+
+    def _proxied_reward_fn(
+        *, env_url: str, admin_token: str, task_id: str,
+        run_result: dict[str, Any], lam: float = DEFAULT_LAMBDA,
+    ) -> RewardRecord:
+        graded = grade_run(env_url, admin_token, task_id, extra_headers=oracle_hdr)
+        return compute_reward(
+            task_id=task_id,
+            oracle_score=graded.score,
+            oracle_passed=graded.passed,
+            proxy_verdict=proxy_channel(run_result),
+            dollars=cost_channel(run_result),
+            lam=lam,
+            oracle_error=graded.error,
+            extras={"oracle_reasons": graded.reasons, "oracle_diff": graded.diff},
+        )
+
     result = run_experiment(
         tasks=tasks,
         run_fn=live,
-        reward_fn=None,  # live oracle via reward_from_run
+        reward_fn=_proxied_reward_fn,  # live oracle, proxy-header aware
         env_url=env_url,
         admin_token=admin_token,
         budget=args.budget,

@@ -54,6 +54,7 @@ def grade_run(
     task_id: str,
     *,
     timeout_s: float = 30.0,
+    extra_headers: dict[str, str] | None = None,
 ) -> GradingResult:
     """Hit ``GET <env_url>/__env__/oracle?task_id=<task_id>`` with the admin token.
 
@@ -61,6 +62,12 @@ def grade_run(
     failures populate ``error`` so the run record always reflects what
     happened. This is the right shape for benchmarks: a flaky network
     should not lose the rest of the run record.
+
+    ``extra_headers`` are merged onto the request (``X-Env-Admin`` still
+    set first). A sim env served behind a preview proxy (e.g. Daytona's
+    ``*.daytonaproxy01.net``) needs the proxy's skip-warning + preview-token
+    headers on *every* request, including this admin oracle call, or the GET
+    307s to the proxy's auth wall and the body comes back as HTML, not JSON.
     """
     if not env_url:
         return GradingResult(
@@ -75,7 +82,8 @@ def grade_run(
 
     base = env_url.rstrip("/")
     url = f"{base}/__env__/oracle?task_id={quote(task_id)}"
-    req = Request(url, headers={"X-Env-Admin": admin_token})
+    headers = {"X-Env-Admin": admin_token, **(extra_headers or {})}
+    req = Request(url, headers=headers)
     try:
         with urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 — env URL only
             body = resp.read().decode("utf-8")
