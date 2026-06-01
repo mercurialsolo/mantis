@@ -140,6 +140,7 @@ def setup_env(
     profile_dir: str = "",
     save_screenshots_dir: str = "/data/screenshots",
     reuse_session: bool = False,
+    extra_http_headers: dict[str, str] | None = None,
 ) -> tuple[Any, Any, dict[str, Any]]:
     """Set up proxy + computer-plane env.
 
@@ -208,6 +209,8 @@ def setup_env(
         env_kwargs["display"] = display
     if profile_dir:
         env_kwargs["profile_dir"] = profile_dir
+    if extra_http_headers:
+        env_kwargs["extra_http_headers"] = extra_http_headers
 
     env = make_computer_client(ComputerPlaneConfig(), **env_kwargs)
     return env, proxy_proc, proxy_diag
