@@ -139,7 +139,36 @@ def test_gate_failure_with_antibot_keyword_retries_navigate_once(monkeypatch):
     runner._execute_navigate.assert_called_once_with(plan.steps[0], 0)
 
 
-def test_gate_failure_without_antibot_keyword_halts(monkeypatch):
+def test_required_gate_takes_required_path_not_gate_path(monkeypatch):
+    # A step that is BOTH required and gate is handled by the required
+    # branch (retry-budget → halt), never the gate branch. This invariant
+    # is what makes the gate branch's unconditional soft-advance correct.
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    policy = StepRecoveryPolicy(runner)
+
+    outcome = policy.handle_failure(
+        step=MicroIntent(
+            intent="x", type="extract_data", gate=True, verify="ok", required=True
+        ),
+        step_result=_result(data="some other failure mode"),
+        plan=_plan("navigate", "extract_data"),
+        step_index=1,
+        step_retry_counts={},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.halt_reason == "required_retry:extract_data:1"
+
+
+def test_soft_gate_failure_advances_instead_of_halting(monkeypatch):
+    # A non-required gate (the decomposer auto-promotes verification-intent
+    # extract_data steps to gate=True without marking them required, issue
+    # #244). Failing it — e.g. a post-submit confirmation-banner check on a
+    # boat the agent legitimately declined — must advance the loop, not halt
+    # the whole run.
     monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
     runner = _runner_stub()
     policy = StepRecoveryPolicy(runner)
@@ -154,8 +183,9 @@ def test_gate_failure_without_antibot_keyword_halts(monkeypatch):
         max_retries=2,
         listings_on_page=0,
     )
-    assert outcome.halt is True
-    assert outcome.halt_reason == "gate_failed"
+    assert outcome.halt is False
+    assert outcome.step_index == 2
+    assert outcome.halt_reason == "gate_failed_soft"
 
 
 # ── navigate ────────────────────────────────────────────────────────
