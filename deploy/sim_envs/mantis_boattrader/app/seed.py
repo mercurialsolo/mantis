@@ -152,8 +152,32 @@ DEALER_PREFIXES: list[str] = [
 
 HULL_MATERIAL = ["Fiberglass", "Aluminum", "Fiberglass / GRP", "Composite"]
 FUEL_TYPE = ["Gasoline", "Diesel", "Electric"]
-ENGINE_MAKE = ["Mercury", "Yamaha", "Volvo Penta", "Suzuki", "Honda", "Caterpillar", "Cummins"]
+# Engine make is assigned by hull plausibility, not uniformly: Caterpillar
+# and Cummins are big marine diesels found on yachts / trawlers / large
+# cruisers, never on a 16ft bass boat or a PWC. The two pools below keep the
+# Caterpillar target (the BT02 oracle) on realistic hulls while preserving the
+# "must open the detail page" property — within a diesel hull the make is a
+# 3-way mix (Caterpillar / Cummins / Volvo Penta), so boat type narrows the
+# search but does NOT determine the engine. Volvo Penta straddles both pools
+# (gas sterndrives + diesel inboards), which also yields same-make decoys.
+DIESEL_ENGINE_MAKES = ["Caterpillar", "Cummins", "Volvo Penta"]
+GAS_ENGINE_MAKES = ["Mercury", "Yamaha", "Suzuki", "Honda", "Volvo Penta"]
 DRIVE_TYPE = ["Outboard", "Sterndrive", "Inboard", "Jet drive"]
+
+
+def _is_diesel_hull(boat_type: str, length_ft: float) -> bool:
+    """Hulls that realistically carry a big marine diesel (Caterpillar/Cummins).
+
+    Yachts and trawlers always do; cruisers and center consoles only once
+    they're large enough (>= 40ft, the same threshold the fuel-type logic
+    uses to mark a boat Diesel). Sailboats are excluded — they get a small
+    Yanmar auxiliary, not a Caterpillar.
+    """
+    if boat_type in ("Yacht", "Trawler"):
+        return True
+    if boat_type in ("Cruiser", "Center Console") and length_ft >= 40:
+        return True
+    return False
 
 # Each entry is (opener, build_section, features_section, history_section).
 # Renderer joins with double newlines so it produces a multi-paragraph block.
@@ -520,7 +544,12 @@ def _gen_boats(rng: random.Random, dealers: list[Dealer], count: int, now: datet
             monthly = int(price_final / 220)  # rough monthly @ ~5.5%, 20yr
         loc = rng.choice(LOCATIONS)
         dealer = rng.choice(dealers)
-        engine_make = rng.choice(ENGINE_MAKE) if boat_type != "Sailboat" else "Yanmar"
+        if boat_type == "Sailboat":
+            engine_make = "Yanmar"
+        elif _is_diesel_hull(boat_type, length_ft):
+            engine_make = rng.choice(DIESEL_ENGINE_MAKES)
+        else:
+            engine_make = rng.choice(GAS_ENGINE_MAKES)
         engine_count = 1 if length_ft < 28 else (2 if length_ft < 55 else 3)
         engine_hp = int(length_ft * rng.uniform(11, 18))
         hours = 0 if condition == "new" else rng.randint(20, 950)
@@ -549,7 +578,8 @@ def _gen_boats(rng: random.Random, dealers: list[Dealer], count: int, now: datet
             year=year, make=make, model=model, color=hull_color.lower(),
             hull_color=hull_color, hull_material=rng.choice(HULL_MATERIAL),
             engine_make=engine_make, engine_count=engine_count, engine_hp=engine_hp,
-            drive_type=rng.choice(DRIVE_TYPE), fuel_type="Diesel" if length_ft >= 40 else "Gasoline",
+            drive_type=rng.choice(DRIVE_TYPE),
+            fuel_type="Diesel" if (_is_diesel_hull(boat_type, length_ft) or length_ft >= 40) else "Gasoline",
             hours=hours, city=loc[0], state=loc[1],
         )
         description_paragraphs = [
@@ -665,7 +695,7 @@ def _gen_boats(rng: random.Random, dealers: list[Dealer], count: int, now: datet
                 hull_color=hull_color,
                 hull_material=ctx["hull_material"],
                 fuel_type="Electric" if boat_type == "Personal Watercraft" and rng.random() < 0.15
-                else ("Diesel" if length_ft >= 40 else "Gasoline"),
+                else ("Diesel" if (_is_diesel_hull(boat_type, length_ft) or length_ft >= 40) else "Gasoline"),
                 drive_type=("Outboard" if boat_type in {"Center Console", "Bass", "Runabout"}
                             else rng.choice(DRIVE_TYPE)),
                 engine_make=engine_make,

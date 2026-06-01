@@ -4,7 +4,9 @@ Task contract
 -------------
 
 The agent must find a boat whose engine is made by **Caterpillar** and
-submit the dealer contact form on it with a non-empty name + email.
+submit that listing's seller contact form on it with a non-empty name +
+email. Seller type is irrelevant — a dealer listing and a private-seller
+listing both qualify; the grader keys only on the engine make.
 
 This is a *knowledge* task, not a *capability* one: ``engine_make`` is a
 spec-sheet field, **not** a listing-page facet/filter. There is no
@@ -15,9 +17,11 @@ prior run) has learned "boat X is Caterpillar-powered / the engine spec
 lives here", caching that anchor short-circuits the lookup. A fresh agent
 with no memory has to re-discover it every time.
 
-The catalog has 82 Caterpillar-powered boats at seed=42 (76 at seed=7),
-so at least one qualifying target always exists; the grader never depends
-on a hand-counted per-seed id.
+Caterpillar is assigned only to plausible big-diesel hulls (yachts,
+trawlers, large cruisers / center consoles) — roughly 60 boats at seed=42
+(63 at seed=7) — so at least one qualifying target always exists across
+dealer and private sellers; the grader never depends on a hand-counted
+per-seed id (it recomputes the qualifying set from the live store).
 
 Grader
 ------
