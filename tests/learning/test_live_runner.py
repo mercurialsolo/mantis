@@ -14,6 +14,7 @@ pin the behaviours that would silently corrupt a live run or leak spend:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from mantis_agent.learning.reward import cost_channel, proxy_channel
@@ -176,6 +177,32 @@ def test_submit_body_has_no_proxy_and_frozen_flag(tmp_path: Path) -> None:
     assert body["detached"] is True
 
 
+def test_suite_carries_daytona_skip_header_by_default(tmp_path: Path) -> None:
+    # The sim env sits behind the Daytona preview proxy, which blocks the
+    # runner's browser-UA requests with an interstitial unless this header
+    # rides every request. The suite must carry it so modal_cua_server's
+    # setup_env opens the persistent header session.
+    poster = FakePoster(statuses=["succeeded"], result_envelope={})
+    run = _make(tmp_path, poster, FakeDecomposer())
+
+    run(_task(seed=42), None, _result("frozen"))
+
+    headers = poster.submit_bodies[0]["task_suite"]["_browser_extra_headers"]
+    assert headers == {"X-Daytona-Skip-Preview-Warning": "true"}
+
+
+def test_empty_browser_headers_omits_suite_key(tmp_path: Path) -> None:
+    # A direct (non-Daytona) env clears the default → no header key, so the
+    # remote env's header session stays a no-op (production CF runs path).
+    poster = FakePoster(statuses=["succeeded"], result_envelope={})
+    run = _make(tmp_path, poster, FakeDecomposer())
+    run.browser_extra_headers = {}
+
+    run(_task(seed=42), None, _result("frozen"))
+
+    assert "_browser_extra_headers" not in poster.submit_bodies[0]["task_suite"]
+
+
 class FakeReset:
     """Records env resets so ordering against the submit can be asserted."""
 
@@ -290,6 +317,104 @@ def test_plan_decomposed_once_with_substituted_placeholders(
     wf0 = poster.submit_bodies[0]["workflow_id"]
     wf1 = poster.submit_bodies[1]["workflow_id"]
     assert wf0 != wf1
+
+
+# ── .json pre-decomposed plan path (no decompose, no spend) ──────────────
+
+
+def _json_plan_file(tmp_path: Path) -> Path:
+    """A minimal pre-decomposed micro-plan with a vision guard + {{ENV_URL}}."""
+    p = tmp_path / "bt02_spec_lookup.json"
+    p.write_text(json.dumps({
+        "domain": "boattrader_scrape",
+        "shapes": ["listings", "form"],
+        "steps": [
+            {
+                "index": 0, "type": "navigate",
+                "intent": "Navigate to {{ENV_URL}}/boats/",
+                "params": {"url": "{{ENV_URL}}/boats/", "wait_after_load_seconds": 8},
+                "section": "setup", "required": True,
+            },
+            {
+                "index": 1, "type": "detect_visible",
+                "intent": "Is the engine make exactly Caterpillar?",
+                "out_var": "is_caterpillar",
+                "params": {"out_var": "is_caterpillar"},
+                "hints": {"out_var": "is_caterpillar"},
+                "claude_only": True, "section": "extraction", "required": False,
+            },
+            {
+                "index": 2, "type": "submit",
+                "intent": "Click Contact Seller to send the inquiry",
+                "params": {"label": "Contact Seller", "kind": "button"},
+                "guard": "is_caterpillar",
+                "hints": {"guard": "is_caterpillar"},
+                "section": "extraction", "required": False,
+            },
+        ],
+    }))
+    return p
+
+
+def test_json_plan_loads_directly_without_decompose(tmp_path: Path) -> None:
+    decomposer = FakeDecomposer()
+    poster = FakePoster(statuses=["succeeded"], result_envelope={})
+    run = LiveRunFn(
+        plan_path=_json_plan_file(tmp_path),
+        env_url="https://sim.example/env",
+        post_fn=poster,
+        pull_cost_fn=_fake_cost,
+        decompose_fn=decomposer,
+        poll_interval_s=0.0,
+    )
+
+    run(_task(seed=42), None, _result("frozen"))
+
+    # A .json plan is already decomposed — the LLM decomposer never runs
+    # (the deterministic guard must not be re-paraphrased away).
+    assert decomposer.texts == []
+    steps = poster.submit_bodies[0]["task_suite"]["_micro_plan"]
+    # {{ENV_URL}} is substituted with the live sim-env URL on the nav step.
+    assert steps[0]["params"]["url"] == "https://sim.example/env/boats/"
+    assert "{{ENV_URL}}" not in json.dumps(steps)
+    # The conditional guard the decomposer would flatten survives verbatim,
+    # both at top level (read by the suite builder) and in hints (the
+    # runner's triple-fallback resolution).
+    assert steps[1]["type"] == "detect_visible"
+    assert steps[1]["out_var"] == "is_caterpillar"
+    assert steps[2]["guard"] == "is_caterpillar"
+    assert steps[2]["hints"]["guard"] == "is_caterpillar"
+
+
+def test_json_plan_memoised_across_submits(tmp_path: Path) -> None:
+    poster = FakePoster(statuses=["succeeded"], result_envelope={})
+    run = LiveRunFn(
+        plan_path=_json_plan_file(tmp_path),
+        env_url="https://sim.example/env",
+        post_fn=poster,
+        pull_cost_fn=_fake_cost,
+        decompose_fn=FakeDecomposer(),
+        poll_interval_s=0.0,
+    )
+
+    run(_task(seed=42), None, _result("frozen"))
+    run(_task(seed=7), None, _result("S0_retrieval"))
+
+    # One load shared across both submits, each with a fresh workflow_id.
+    wf0 = poster.submit_bodies[0]["workflow_id"]
+    wf1 = poster.submit_bodies[1]["workflow_id"]
+    assert wf0 != wf1
+    assert poster.submit_bodies[0]["task_suite"]["_hint_store_disabled"] is True
+    assert poster.submit_bodies[1]["task_suite"]["_hint_store_dict_name"]
+
+
+def test_tasks_for_plan_matches_json_suffix_by_stem() -> None:
+    """clusters.json names the logical plan (``bt02_spec_lookup``); the on-disk
+    file may be ``bt02_spec_lookup.json``. Both must select the same tasks."""
+    bare = {t.name for t in live_runner.tasks_for_plan("bt02_spec_lookup")}
+    suffixed = {t.name for t in live_runner.tasks_for_plan("plans/bt02_spec_lookup.json")}
+    assert bare == suffixed
+    assert "bt02_spec_lookup_visible" in suffixed
 
 
 def test_credential_not_hardcoded_in_source() -> None:

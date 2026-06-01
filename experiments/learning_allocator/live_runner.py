@@ -11,7 +11,9 @@ module is that adapter.
 plan to the **Modal CUA server** running against the **Daytona boattrader sim
 env** — no proxies (the sandbox URL is reached directly). For each call it:
 
-* decomposes the plan once (memoised across every task and policy),
+* loads the plan once, memoised across every task and policy — a ``.json``
+  plan is a pre-decomposed micro-plan loaded directly (the deterministic,
+  guard-carrying path); any other extension is decomposed via the LLM,
 * builds a micro-suite with a fresh ``workflow_id`` and maps the allocator's
   chosen substrate onto the remote hint-store backend flags (``frozen`` →
   frozen / ``NullHintStore``; ``S0_retrieval`` → a Modal-Dict hint store shared
@@ -68,6 +70,7 @@ from mantis_agent.server_utils import (
     merge_runtime,
     micro_plan_steps_to_dicts,
 )
+from mantis_agent.sim_envs.templating import substitute_env_url
 
 from experiments.learning_allocator.runner import (
     FROZEN,
@@ -205,6 +208,16 @@ class LiveRunFn:
     extractor_model: str = "claude-haiku-4-5-20251001"
     env_url: str = ""
     admin_token: str = ""
+    # Request headers applied to every browser request on the remote run.
+    # Default carries the Daytona preview-proxy skip header: the sim env is
+    # served behind ``*.daytonaproxy01.net``, which shows a "Preview -
+    # Warning" interstitial to real-browser User-Agents (which the Modal
+    # runner forces via the stealth UA override). Without this the CUA
+    # browser never reaches the boats page → 0 leads. Set to ``{}`` for a
+    # direct (non-Daytona) env.
+    browser_extra_headers: dict[str, str] = field(
+        default_factory=lambda: {"X-Daytona-Skip-Preview-Warning": "true"}
+    )
     zip_code: str = "33131"
     search_radius: str = "50"
     poll_interval_s: float = 15.0
@@ -297,6 +310,10 @@ class LiveRunFn:
             extractor_model=self.extractor_model,
             **runtime,
         )
+        if self.browser_extra_headers:
+            # Read by modal_cua_server's setup_env call sites → xdotool_env's
+            # persistent header session (applied to every browser request).
+            suite["_browser_extra_headers"] = dict(self.browser_extra_headers)
         self._apply_substrate(suite, substrate)
         return suite
 
@@ -316,8 +333,27 @@ class LiveRunFn:
 
     def _ensure_plan(self) -> MicroPlan:
         if self._micro_plan is None:
-            self._micro_plan = self.decompose_fn(self._plan_text())
+            if self.plan_path.suffix.lower() == ".json":
+                self._micro_plan = self._load_json_plan()
+            else:
+                self._micro_plan = self.decompose_fn(self._plan_text())
         return self._micro_plan
+
+    def _load_json_plan(self) -> MicroPlan:
+        """Load a pre-decomposed micro-plan JSON directly — no decompose call.
+
+        Mirrors ``cli.py``'s plan-format dispatch (``_looks_like_text_plan``): a
+        ``.json`` plan is an already-decomposed micro-plan, so the LLM
+        decomposer is bypassed entirely (a deterministic, hand-authored plan
+        must not be re-paraphrased — e.g. the conditional ``detect_visible``
+        guard the decomposer flattens). ``{{ENV_URL}}`` is substituted with the
+        live sim-env URL via the repo's standard JSON-plan templating so the nav
+        steps reach the sandbox directly (the text path uses its own
+        ``{env_url}`` token). ``decompose_fn`` is unused on this branch.
+        """
+        payload = json.loads(self.plan_path.read_text())
+        payload = substitute_env_url(payload, self.env_url)
+        return MicroPlan.from_dict(payload)
 
     def _plan_text(self) -> str:
         """Plan text with placeholders filled. ``{env_url}`` points the nav at the
@@ -386,12 +422,14 @@ _LIVE_BANNER = (
 
 
 def tasks_for_plan(plan_name: str) -> list[EvalTask]:
-    """Runnable eval tasks wired to ``plan_name`` (a live submit decomposes that
-    plan). Matching on the basename keeps ``plans/foo`` and a bare ``foo`` equal."""
-    base = Path(plan_name).name
+    """Runnable eval tasks wired to ``plan_name``. Matching on the *stem* keeps
+    ``plans/foo``, a bare ``foo``, and ``foo.json`` equal — clusters.json names
+    the logical plan (``bt02_spec_lookup``) while the on-disk file may carry a
+    ``.json`` suffix (a pre-decomposed micro-plan)."""
+    stem = Path(plan_name).stem
     return [
         t for t in load_manifest().runnable()
-        if t.plan and Path(t.plan).name == base
+        if t.plan and Path(t.plan).stem == stem
     ]
 
 
@@ -427,7 +465,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    plan_name = Path(args.plan).name
+    # Stem (drop any ``.json`` suffix) so the profile slug and task wiring stay
+    # clean for a pre-decomposed plan: ``plans/bt02_spec_lookup.json`` →
+    # ``bt02_spec_lookup`` → slug ``la-bt02-spec-lookup`` and a clusters.json
+    # match. ``plan_path`` below keeps the full suffixed path for reading.
+    plan_name = Path(args.plan).stem
     tasks = tasks_for_plan(plan_name)
     if not tasks:
         print(

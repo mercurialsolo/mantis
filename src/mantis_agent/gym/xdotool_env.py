@@ -97,6 +97,7 @@ class XdotoolGymEnv(GymEnvironment):
         save_screenshots: str = "",
         cdp_port: int = 9222,
         reuse_session: bool = False,
+        extra_http_headers: dict[str, str] | None = None,
     ):
         self._start_url = start_url
         self._viewport = viewport
@@ -121,6 +122,16 @@ class XdotoolGymEnv(GymEnvironment):
         # ``XdotoolGymEnv.shutdown`` exists for the cache to force-close
         # the underlying processes when the container is recycled.
         self._reuse_session = reuse_session
+
+        # Optional request headers applied to EVERY browser request via a
+        # persistent Network-enabled CDP session (see ``_start_browser``).
+        # Default ``None`` = no-op, so production CF runs are unaffected.
+        # The only caller that sets this is the Learning Allocator live
+        # runner, which injects ``X-Daytona-Skip-Preview-Warning: true`` to
+        # get past the Daytona preview proxy's interstitial on the sim env.
+        self._extra_http_headers = extra_http_headers or None
+        self._header_ws = None  # persistent CDP ws holding the header
+        self._header_ws_thread = None
 
         self._xvfb_proc = None
         self._browser_proc = None
@@ -353,6 +364,115 @@ class XdotoolGymEnv(GymEnvironment):
             apply_ua_override(self._cdp_call)
         except Exception as exc:  # noqa: BLE001 — never fatal
             logger.debug("CDP stealth inject/UA-override raised at startup: %s", exc)
+
+        # Persistent request-header session (no-op unless configured).
+        # MUST come after the stealth block: a one-shot CDP header set
+        # reverts the instant its ws detaches (CDP overrides are
+        # session-scoped), so a header that has to survive runner-driven
+        # navigations AND in-page link clicks needs ONE ws that stays
+        # open for the browser's lifetime. See ``_open_header_session``.
+        if self._extra_http_headers:
+            self._open_header_session()
+
+    def _open_header_session(self) -> None:
+        """Hold a persistent Network-enabled CDP session that applies
+        ``self._extra_http_headers`` to every page request.
+
+        Why persistent: ``Network.setExtraHTTPHeaders`` is session-scoped —
+        it reverts the moment the ws detaches. The one-shot ``_cdp_call``
+        pattern therefore can't carry a header across the runner's later
+        ``Page.navigate`` calls, and certainly not across in-page link
+        clicks / ``location.href`` pagination (which no CDP call drives at
+        all). A single ws that enables Network, sets the header, and stays
+        open covers ALL of those request paths until the browser closes.
+
+        ``Network.enable`` is mandatory first — ``setExtraHTTPHeaders``
+        silently no-ops (returns ``{}`` but applies nothing) without it.
+
+        Best-effort: any failure leaves ``self._header_ws`` ``None`` and is
+        logged at WARNING (the header is the only thing past the Daytona
+        preview interstitial, so a silent miss would be hard to diagnose).
+        """
+        try:
+            import json as _json
+            import threading
+            import urllib.request
+            try:
+                import websocket  # websocket-client package
+            except ImportError:
+                logger.warning(
+                    "extra_http_headers set but websocket-client missing — "
+                    "header session not opened"
+                )
+                return
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self._cdp_port}/json/list",
+                timeout=2,
+            ) as resp:
+                tabs = _json.loads(resp.read().decode())
+            # Unlike _cdp_call we DON'T skip about:blank — at startup the
+            # only page target is the launch tab (about:blank), and that
+            # is exactly the session we need to hold.
+            ws_url: str | None = None
+            for tab in tabs:
+                if tab.get("type") == "page" and tab.get("webSocketDebuggerUrl"):
+                    ws_url = tab["webSocketDebuggerUrl"]
+                    break
+            if not ws_url:
+                logger.warning("header session: no page target to attach to")
+                return
+            ws = websocket.create_connection(ws_url, timeout=5)
+            ws.settimeout(5)
+
+            def _send(method: str, params: dict[str, Any]) -> None:
+                req_id = int(time.time() * 1e6) % 1_000_000
+                ws.send(_json.dumps({"id": req_id, "method": method, "params": params}))
+                for _ in range(40):
+                    decoded = _json.loads(ws.recv())
+                    if decoded.get("id") == req_id:
+                        return
+
+            _send("Network.enable", {})
+            _send("Network.setExtraHTTPHeaders", {"headers": self._extra_http_headers})
+            self._header_ws = ws
+            # Daemon drain: Chrome streams Network.* events on this ws once
+            # enabled; if we never read them the socket buffer fills and the
+            # connection wedges. The thread just discards everything and
+            # exits when the ws closes (recv raises).
+            ws.settimeout(None)
+
+            def _drain() -> None:
+                try:
+                    while True:
+                        ws.recv()
+                except Exception:  # noqa: BLE001 — ws closed / shutdown
+                    pass
+
+            t = threading.Thread(target=_drain, daemon=True)
+            t.start()
+            self._header_ws_thread = t
+            # WARNING (not INFO): this seam is load-bearing for the Daytona
+            # sim-env run and Modal suppresses INFO in production logs, so a
+            # visible confirmation is the only way to tell the session opened
+            # vs. silently fell through to the blocked interstitial.
+            logger.warning(
+                "persistent header session open: %s",
+                list(self._extra_http_headers.keys()),
+            )
+        except Exception as exc:  # noqa: BLE001 — never fatal to a run
+            logger.warning("header session setup failed: %s", exc)
+            self._header_ws = None
+
+    def _close_header_session(self) -> None:
+        """Close the persistent header ws (reverts the header). Idempotent."""
+        ws = self._header_ws
+        self._header_ws = None
+        self._header_ws_thread = None
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
 
     # ── Screenshot ──────────────────────────────────────────────────
 
@@ -1068,6 +1188,8 @@ class XdotoolGymEnv(GymEnvironment):
         The container-scoped cache calls this at recycle time so reused
         processes don't leak across container lifetimes.
         """
+        self._close_header_session()
+
         if self._browser_proc:
             self._browser_proc.terminate()
             try:

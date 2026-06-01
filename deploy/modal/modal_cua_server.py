@@ -535,6 +535,7 @@ def _run_executor(
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_country=str(task_suite.get("_proxy_country") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
+        extra_http_headers=task_suite.get("_browser_extra_headers") or None,
         profile_dir=profile_dir,
     )
     viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer, proxy_diag=proxy_diag)
@@ -793,6 +794,7 @@ def _run_holo3_executor(
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_country=str(task_suite.get("_proxy_country") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
+        extra_http_headers=task_suite.get("_browser_extra_headers") or None,
         profile_dir=profile_dir,
     )
     from mantis_agent.extraction import ClaudeExtractor, ExtractionSchema
@@ -1608,6 +1610,7 @@ def _run_gemma4_cua_executor(
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_country=str(task_suite.get("_proxy_country") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
+        extra_http_headers=task_suite.get("_browser_extra_headers") or None,
         profile_dir=profile_dir,
     )
     viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer, proxy_diag=proxy_diag)
@@ -1779,6 +1782,7 @@ def _run_claude_executor(
         proxy_provider=str(task_suite.get("_proxy_provider") or ""),
         proxy_country=str(task_suite.get("_proxy_country") or ""),
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
+        extra_http_headers=task_suite.get("_browser_extra_headers") or None,
         profile_dir=profile_dir,
     )
     viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer, proxy_diag=proxy_diag)
