@@ -428,7 +428,7 @@ class StepRecoveryPolicy:
                 halt_reason=f"required_failed:{step.type}",
             )
 
-        # ── gate: anti-bot one-shot retry then halt ─────────────────────
+        # ── gate: anti-bot one-shot retry, then soft-advance ────────────
         if step.gate:
             gate_data = step_result.data or ""
             gate_retry_key = f"gate_retry_{step_index}"
@@ -450,12 +450,23 @@ class StepRecoveryPolicy:
                 return RecoveryOutcome(
                     halt=False, step_index=step_index, halt_reason="gate_retry",
                 )
-            logger_.error(
-                f"  [{step_index}] GATE FAILED: {step.verify[:60]} — HALTING"
+            # A gate that reaches here is always required=False: a
+            # *required* gate is handled by the required branch above
+            # (retry-budget then halt) and never falls through. So this is
+            # a soft checkpoint, not a setup precondition — e.g. the
+            # decomposer auto-promotes any extract_data step whose intent
+            # reads like verification ("verify"/"confirm" the confirmation
+            # banner) to gate=True without marking it required (issue #244),
+            # so a post-submit banner check on a boat the agent legitimately
+            # declined (no submit → no banner) lands here. Halting the whole
+            # run on that is wrong: advance past the checkpoint so the
+            # surrounding loop can try the next listing.
+            logger_.warning(
+                f"  [{step_index}] soft gate failed (not required) — advancing: {step.verify[:60]}"
             )
-            print(f"  HALT: Gate verification '{step.verify[:50]}' failed. Setup incomplete.")
             return RecoveryOutcome(
-                halt=True, step_index=step_index, halt_reason="gate_failed",
+                halt=False, step_index=step_index + 1,
+                halt_reason="gate_failed_soft",
             )
 
         # ── per-type recovery ───────────────────────────────────────────
