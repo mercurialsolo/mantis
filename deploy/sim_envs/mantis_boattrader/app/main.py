@@ -183,6 +183,48 @@ def _mount_public(app: FastAPI, templates: Jinja2Templates) -> None:
             },
         )
 
+    @app.get("/boats/{filters:path}", response_class=HTMLResponse)
+    async def boats_filtered(
+        request: Request, filters: str, page: int = Query(1, ge=1)
+    ) -> Any:
+        """BoatTrader-style path filters: ``/boats/state-fl/by-owner/``,
+        ``/boats/by-owner/``, ``/boats/zip-33316/by-owner/``.
+
+        We honour the seller (``by-owner`` / ``by-dealer``) and ``state``
+        segments — the ones the by-owner plan drives — and ignore any
+        other or unknown segment (zip, make, …) so a slightly-off path
+        (e.g. ``state-all``) still renders listings instead of 404-ing.
+        Declared after the exact ``/boats`` routes so the no-filter index
+        is unaffected.
+        """
+        params: dict[str, Any] = {}
+        for seg in filters.split("/"):
+            seg = seg.strip().lower()
+            if seg == "by-owner":
+                params["listing_type"] = "owner"
+            elif seg == "by-dealer":
+                params["listing_type"] = "dealer"
+            elif seg.startswith("state-"):
+                code = seg[len("state-"):].upper()
+                if code and code != "ALL":
+                    params["state"] = code
+        # Query-string params (if any) override path-derived ones.
+        for k, v in request.query_params.items():
+            if k != "page":
+                params[k] = v
+        result = db.query_boats(params, page=page, per_page=24)
+        return templates.TemplateResponse(
+            request,
+            "boats.html",
+            {
+                "result": result,
+                "querystring": urlencode(
+                    [(k, v) for k, v in request.query_params.items() if k != "page"]
+                ),
+                "sorts": db.SORTS,
+            },
+        )
+
     @app.get("/boat/{slug}/", response_class=HTMLResponse)
     @app.get("/boat/{slug}", response_class=HTMLResponse)
     async def boat_detail(request: Request, slug: str) -> Any:

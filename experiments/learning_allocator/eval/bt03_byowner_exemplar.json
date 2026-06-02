@@ -1,0 +1,9 @@
+[
+  {
+    "type": "submit",
+    "intent": "reveal the hidden phone number via the Show Phone Number control",
+    "last_action": {"action_type": "click"},
+    "observed_outcome": "the seller's phone number appeared in the Contact Private Seller block",
+    "source_run": "bt03-worked-reveal-seed42"
+  }
+]

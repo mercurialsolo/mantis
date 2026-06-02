@@ -676,7 +676,7 @@ class ClaudeExtractor:
             # separate primary extracts from the other claude_extract
             # bucket consumers (find_content_control / verify_post_click
             # / find_filter_target) that share the default label.
-            time_bucket="extract_listing",
+            _bucket="extract_listing",
         )
 
         if not parsed:
@@ -950,7 +950,7 @@ class ClaudeExtractor:
                 },
                 "required": ["x", "y", "action", "label", "reason"],
             },
-            time_bucket="find_content_control",
+            _bucket="find_content_control",
         )
 
         try:
@@ -1598,7 +1598,7 @@ class ClaudeExtractor:
                 },
                 "required": ["x", "y", "action", "value", "label"],
             },
-            time_bucket="find_filter_target",
+            _bucket="find_filter_target",
         )
 
         try:

@@ -179,3 +179,43 @@ def test_corrupt_trace_is_skipped(tmp_path) -> None:
 def test_observe_is_noop(tmp_path) -> None:
     sub = ExemplarSubstrate(tmp_path)
     assert sub.observe(_ctx(), sub.apply(_ctx()), 1.0) is None
+
+
+# ── plan overlay (the runtime-consumption seam) ─────────────────────────
+
+
+def test_apply_overlays_the_plan_when_present(tmp_path) -> None:
+    """When the live plan rides in context.extras, apply() stamps the
+    worked procedure onto matching steps (mirrors RetrievalSubstrate)."""
+    from types import SimpleNamespace
+
+    _write(tmp_path, _trace(
+        PLAN_SIG, run_id="run1",
+        steps=[_positive(0, intent="apply used filter")],
+    ))
+    sub = ExemplarSubstrate(tmp_path)
+    step = SimpleNamespace(intent="apply used filter", type="click", params={}, hints={})
+    plan = SimpleNamespace(steps=[step])
+
+    res = sub.apply(SubstrateContext(
+        task_id="BT01",
+        extras={"plan_signature": PLAN_SIG, "plan": plan},
+    ))
+
+    assert res.applied is True
+    assert res.delta_artifacts["exemplars_overlaid"] == 1
+    assert "exemplar_replay" in step.hints
+    assert step.hints["exemplar_source_run"] == "run1"
+
+
+def test_apply_without_plan_still_returns_exemplars(tmp_path) -> None:
+    """Cost-probe path (no plan in extras) — exemplars are returned but
+    nothing is overlaid. Backward-compatible with the pre-seam contract."""
+    _write(tmp_path, _trace(PLAN_SIG, run_id="run1", steps=[_positive(0)]))
+    sub = ExemplarSubstrate(tmp_path)
+
+    res = sub.apply(_ctx())
+
+    assert res.applied is True
+    assert res.delta_artifacts["exemplars_overlaid"] == 0
+    assert len(res.delta_artifacts["exemplars"]) == 1

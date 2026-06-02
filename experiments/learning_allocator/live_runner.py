@@ -85,6 +85,7 @@ from mantis_agent.sim_envs.templating import substitute_env_url
 from experiments.learning_allocator.runner import (
     FROZEN,
     S0,
+    S1,
     _OUTCOME_COLS,
     _outcome_row,
     build_table1,
@@ -120,6 +121,27 @@ def _read_env(key: str) -> str:
             if line.startswith(f"{key}="):
                 return line.split("=", 1)[1].strip()
     return ""
+
+
+def _load_exemplars(path: str) -> list[dict[str, Any]]:
+    """Load the S1 worked-step exemplars from a JSON list file.
+
+    The file is a hand-authored stand-in for the positive-labelled steps a
+    distillation run's ``ExemplarSubstrate`` would emit — a JSON array of
+    ``{type, intent, last_action, observed_outcome, source_run}`` dicts. Empty
+    path ⇒ no exemplars (S1 degrades to a no-op, attributable in the logs).
+    Raises on a malformed file: a silent empty list would make S1 look like
+    frozen and quietly void the comparison.
+    """
+    if not path:
+        return []
+    data = json.loads(Path(path).read_text())
+    if not isinstance(data, list) or not all(isinstance(x, dict) for x in data):
+        raise ValueError(
+            f"--exemplars {path}: expected a JSON list of objects, "
+            f"got {type(data).__name__}"
+        )
+    return data
 
 
 def _default_post(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -204,29 +226,58 @@ def _default_reset(env_url: str, admin_token: str) -> None:
         pass
 
 
+# The server flushes claude_cost_by_path.json at run *finalization*, which
+# lands a few seconds AFTER the run's status flips terminal. A single
+# ``volume get`` fired right after the poll races that flush and misses, so we
+# poll up to this deadline (each ``volume get`` itself takes a few seconds).
+_COST_PULL_DEADLINE_S = 45.0
+_COST_PULL_RETRY_S = 3.0
+
+
 def _default_pull_cost(profile_id: str, workflow_id: str) -> tuple[float, str]:
-    """Pull ``claude_cost_by_path.json`` off the Modal volume → (cost, halt)."""
+    """Pull ``claude_cost_by_path.json`` off the Modal volume → (cost, halt).
+
+    Retries on a bounded deadline until the file appears: the cost file is
+    flushed a beat after the run reports terminal, so a one-shot get races it.
+    On ultimate miss, emit a stderr WARNING and return ``0.0`` — a *silent*
+    zero would quietly drop the λ·dollars penalty and inflate reward, which is
+    exactly the bug that recorded $0.00 for real-cost runs.
+    """
+    remote = f"/runs/{profile_id}/{workflow_id}/claude_cost_by_path.json"
     dest = Path(tempfile.mkdtemp(prefix="la-cost-")) / "claude_cost_by_path.json"
-    try:
-        subprocess.run(
-            [
-                "uv", "run", "modal", "volume", "get", "osworld-data",
-                f"/runs/{profile_id}/{workflow_id}/claude_cost_by_path.json",
-                str(dest), "--force",
-            ],
-            check=False, capture_output=True, timeout=120, cwd=REPO_ROOT,
-        )
-    except subprocess.TimeoutExpired:
-        return 0.0, ""
-    if not dest.exists():
-        return 0.0, ""
-    try:
-        d = json.loads(dest.read_text())
-    except (OSError, ValueError):
-        return 0.0, ""
-    cost = float((d.get("totals") or {}).get("cost_usd") or 0.0)
-    halt = str((d.get("outcome") or {}).get("halt_reason") or "")
-    return cost, halt
+    deadline = time.monotonic() + _COST_PULL_DEADLINE_S
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            subprocess.run(
+                [
+                    "uv", "run", "modal", "volume", "get", "osworld-data",
+                    remote, str(dest), "--force",
+                ],
+                check=False, capture_output=True, timeout=120, cwd=REPO_ROOT,
+            )
+        except subprocess.TimeoutExpired:
+            dest.unlink(missing_ok=True)
+        if dest.exists():
+            try:
+                d = json.loads(dest.read_text())
+            except (OSError, ValueError):
+                d = None  # partial mid-flush read — fall through and retry
+            if d is not None:
+                cost = float((d.get("totals") or {}).get("cost_usd") or 0.0)
+                halt = str((d.get("outcome") or {}).get("halt_reason") or "")
+                return cost, halt
+        if time.monotonic() >= deadline:
+            print(
+                f"[pull_cost] WARNING: cost file never appeared after "
+                f"{attempt} attempt(s) (~{_COST_PULL_DEADLINE_S:.0f}s) for "
+                f"{remote} — recording $0.00 (reward penalty understated)",
+                file=sys.stderr, flush=True,
+            )
+            return 0.0, ""
+        dest.unlink(missing_ok=True)
+        time.sleep(_COST_PULL_RETRY_S)
 
 
 def _default_decompose(plan_text: str) -> MicroPlan:
@@ -257,6 +308,11 @@ class LiveRunFn:
     plan_path: Path
     profile_id: str = "la-bt01"
     hint_dict_name: str = "la-bt01-hints"
+    # S1 backing: positive-labelled exemplar steps (ExemplarSubstrate.apply's
+    # delta_artifacts["exemplars"]) pre-extracted for this plan. The S1 branch
+    # of _apply_substrate ships these to the remote run, where
+    # modal_cua_server stamps them onto the micro plan via apply_exemplar_overlay.
+    exemplars: list[dict[str, Any]] = field(default_factory=list)
     cua_model: str = "holo3"
     max_steps: int = 200
     max_cost: float = 1.0
@@ -274,6 +330,12 @@ class LiveRunFn:
     )
     zip_code: str = "33131"
     search_radius: str = "50"
+    # 2-letter state filter for the URL-addressable ``/boats/state-{code}/by-owner/``
+    # path the plan added in its state-wide variant (commit 893d879). Lowercase to
+    # match the plan's ``state-<2-letter-lowercase>`` segment; default ``fl`` keeps
+    # it consistent with the Miami ``zip_code``. Unfilled, the literal token
+    # URL-encodes to ``%7Bstate_code%7D`` → an empty results page.
+    state_code: str = "fl"
     poll_interval_s: float = 15.0
     post_fn: PostFn = _default_post
     pull_cost_fn: PullCostFn = _default_pull_cost
@@ -377,13 +439,20 @@ class LiveRunFn:
         The ladder's remote effect is which hint store the Modal run binds (see
         ``build_hint_store``): ``frozen`` freezes it (``NullHintStore``, no
         cross-run learning); ``S0_retrieval`` points it at a shared Modal Dict so
-        hints accrue across runs. S1+ have no suite flag yet and ride the default
-        disk store.
+        hints accrue across runs. ``S1_exemplar`` ships pre-extracted worked
+        steps that the remote stamps onto the plan as ``exemplar_replay`` hints,
+        with the S0 anchor store frozen so the two rungs stay isolated.
         """
         if substrate == FROZEN:
             suite["_hint_store_disabled"] = True
         elif substrate == S0:
             suite["_hint_store_dict_name"] = self.hint_dict_name
+        elif substrate == S1:
+            # Freeze the S0 anchor mechanism so S1's lift is attributable to
+            # the exemplar replay alone, then ship the worked steps.
+            suite["_hint_store_disabled"] = True
+            if self.exemplars:
+                suite["_exemplars"] = list(self.exemplars)
 
     def _ensure_plan(self) -> MicroPlan:
         if self._micro_plan is None:
@@ -417,6 +486,7 @@ class LiveRunFn:
             raw.replace("{env_url}", self.env_url)
             .replace("{zip_code}", self.zip_code)
             .replace("{search_radius}", self.search_radius)
+            .replace("{state_code}", self.state_code)
         )
 
     # ── poll + verdict ─────────────────────────────────────────────────
@@ -566,6 +636,16 @@ def main(argv: list[str] | None = None) -> int:
             "dict; empty (default) reuses the canonical ``{slug}-hints`` dict."
         ),
     )
+    parser.add_argument(
+        "--exemplars", default="",
+        help=(
+            "path to a JSON list of worked-step exemplar dicts (S1 backing). "
+            "Each item carries ``type`` + ``intent`` (matched to a plan step) "
+            "and a coordinate-free ``last_action``/``observed_outcome`` the "
+            "remote stamps as an ``exemplar_replay`` hint. Read only by the "
+            "S1 branch; frozen/S0 ignore it. Empty (default) ⇒ S1 is a no-op."
+        ),
+    )
     args = parser.parse_args(argv)
 
     env_url = _read_env("LA_ENV_URL")
@@ -596,12 +676,14 @@ def main(argv: list[str] | None = None) -> int:
     policies = tuple(p.strip() for p in args.policies.split(",") if p.strip())
     slug = f"la-{plan_name.replace('_', '-')}"
     hint_dict_name = f"{slug}-hints{args.hint_dict_suffix}"
+    exemplars = _load_exemplars(args.exemplars)
     live = LiveRunFn(
         plan_path=REPO_ROOT / args.plan,
         env_url=env_url,
         admin_token=admin_token,
         profile_id=slug,
         hint_dict_name=hint_dict_name,
+        exemplars=exemplars,
         max_cost=args.max_cost,
         max_time_minutes=args.max_time_minutes,
     )
@@ -611,7 +693,8 @@ def main(argv: list[str] | None = None) -> int:
         f"  env_url={env_url}\n"
         f"  policies={policies} budget=${args.budget:.2f} tasks={len(tasks)}\n"
         f"  plan={args.plan} max_cost=${args.max_cost:.2f}/run\n"
-        f"  rounds={args.rounds} S0_hint_dict={hint_dict_name}\n",
+        f"  rounds={args.rounds} S0_hint_dict={hint_dict_name} "
+        f"S1_exemplars={len(exemplars)}\n",
     )
     # Proxy-aware oracle grading: the default reward_from_run hits
     # ``/__env__/oracle`` with only ``X-Env-Admin``, which the Daytona preview

@@ -124,6 +124,13 @@ def deploy(latency_min_ms: int, latency_max_ms: int, failure_rate: float,
             "PYTHONUNBUFFERED": "1",
             "ENV_ADMIN_TOKEN": admin_token,
             "SEED": os.environ.get("SEED", "42"),
+            # BT03 policy-cluster discriminator (action-omission): when "1",
+            # every by-owner listing shows a masked teaser of the number inline
+            # so the contact reads as already-populated — a frozen agent omits
+            # the reveal, while an S1 worked-reveal exemplar still fires the
+            # de-emphasised "Show full number" control. Default off keeps
+            # BT01/BT02 matrices byte-identical.
+            "BT03_REVEAL_DRIFT": os.environ.get("BT03_REVEAL_DRIFT", "0"),
             "FAKE_NOW": os.environ.get("FAKE_NOW", "2026-01-15T09:00:00Z"),
             "LATENCY_MS_MIN": str(latency_min_ms),
             "LATENCY_MS_MAX": str(latency_max_ms),
@@ -141,6 +148,16 @@ def deploy(latency_min_ms: int, latency_max_ms: int, failure_rate: float,
         on_snapshot_create_logs=lambda line: print(f"  [build] {line}"),
     )
     print(f"  sandbox id: {getattr(sandbox, 'id', '?')}")
+
+    # Daytona auto-stops an idle sandbox after 15 min by default. A live
+    # eval matrix has multi-minute gaps between runs (env reset + plan
+    # decompose + Modal GPU cold-start) during which the env gets no
+    # requests, so the default would stop it mid-matrix. Bump to 180 min.
+    try:
+        sandbox.set_autostop_interval(180)
+        print("  autostop interval: 180 min")
+    except Exception as exc:  # noqa: BLE001 — non-fatal; default still applies
+        print(f"  warning: could not set autostop interval ({exc})")
 
     print("→ starting uvicorn …")
     cmd = (

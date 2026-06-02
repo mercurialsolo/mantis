@@ -91,7 +91,7 @@ def _fake_cost(profile_id: str, workflow_id: str) -> tuple[float, str]:  # noqa:
 def _plan_file(tmp_path: Path) -> Path:
     p = tmp_path / "plan.txt"
     p.write_text(
-        "Navigate to {env_url}/boats/.\n"
+        "Navigate to {env_url}/boats/state-{state_code}/by-owner/.\n"
         "Search boats near {zip_code} within {search_radius} miles.\n",
     )
     return p
@@ -143,6 +143,28 @@ def test_s0_binds_shared_hint_dict(tmp_path: Path) -> None:
     run._apply_substrate(suite, "S0_retrieval")
     assert suite["_hint_store_dict_name"] == "la-bt01-hints"
     assert "_hint_store_disabled" not in suite
+
+
+def test_s1_ships_exemplars_and_freezes_s0(tmp_path: Path) -> None:
+    # S1's lift must be attributable to the exemplar replay alone, so the S0
+    # anchor store is frozen while the worked steps ride along.
+    run = _make(tmp_path, FakePoster(), FakeDecomposer())
+    run.exemplars = [{"intent": "reveal phone", "type": "click"}]
+    suite: dict = {}
+    run._apply_substrate(suite, "S1_exemplar")
+    assert suite["_hint_store_disabled"] is True
+    assert suite["_exemplars"] == [{"intent": "reveal phone", "type": "click"}]
+    assert "_hint_store_dict_name" not in suite
+
+
+def test_s1_without_exemplars_omits_suite_key(tmp_path: Path) -> None:
+    # No pre-extracted exemplars ⇒ no _exemplars key (the remote overlay is a
+    # no-op), but S0 still frozen so the rung stays isolated.
+    run = _make(tmp_path, FakePoster(), FakeDecomposer())
+    suite: dict = {}
+    run._apply_substrate(suite, "S1_exemplar")
+    assert suite["_hint_store_disabled"] is True
+    assert "_exemplars" not in suite
 
 
 # ── end-to-end __call__ (faked I/O) ──────────────────────────────────────
@@ -340,6 +362,8 @@ def test_plan_decomposed_once_with_substituted_placeholders(
     assert len(decomposer.texts) == 1
     text = decomposer.texts[0]
     assert "33131" in text  # {zip_code} filled
+    assert "state-fl/by-owner" in text  # {state_code} filled (was URL-encoded %7B..%7D)
+    assert "{state_code}" not in text
     assert "https://sim.example/env" in text  # {env_url} points the nav at the sim env
     assert "{env_url}" not in text
     # Each submit gets a fresh workflow_id.
@@ -528,6 +552,100 @@ def test_incremental_writer_handles_skipped_outcome(tmp_path: Path) -> None:
     row = path.read_text().splitlines()[2].split("\t")
     assert row[-1] == "budget exhausted"
     assert row[-2] == "True"  # skipped column
+
+
+# ── --exemplars loader (S1 backing) ──────────────────────────────────────
+
+
+def test_load_exemplars_empty_path_returns_empty() -> None:
+    # No --exemplars ⇒ S1 is a no-op (attributable in the logs), not an error.
+    assert live_runner._load_exemplars("") == []
+
+
+def test_load_exemplars_reads_json_list(tmp_path: Path) -> None:
+    p = tmp_path / "ex.json"
+    p.write_text(json.dumps([{"type": "submit", "intent": "reveal phone"}]))
+    assert live_runner._load_exemplars(str(p)) == [
+        {"type": "submit", "intent": "reveal phone"},
+    ]
+
+
+def test_load_exemplars_rejects_non_list(tmp_path: Path) -> None:
+    # A malformed file must fail loudly — a silent [] makes S1 look like frozen
+    # and voids the comparison.
+    p = tmp_path / "ex.json"
+    p.write_text(json.dumps({"type": "submit"}))
+    with pytest.raises(ValueError, match="expected a JSON list"):
+        live_runner._load_exemplars(str(p))
+
+
+def test_committed_bt03_exemplar_matches_reveal_not_lead_submit() -> None:
+    """The shipped BT03 exemplar must out-match the *reveal* submit step over
+    the *lead* submit step, or S1 stamps the wrong sub-goal. Guards the file
+    against an edit that drifts its intent tokens (matching is type + overlap).
+    """
+    from mantis_agent.gym.exemplar_memory import _tokens
+
+    path = (
+        Path(live_runner.__file__).resolve().parent
+        / "eval" / "bt03_byowner_exemplar.json"
+    )
+    exemplars = live_runner._load_exemplars(str(path))
+    assert len(exemplars) == 1
+    ex = exemplars[0]
+    assert ex["type"] == "submit"  # the decomposed reveal step is a `submit`
+    ex_tok = _tokens(ex["intent"])
+    reveal_tok = _tokens(
+        "Click the Show Phone Number button in the Contact Private Seller "
+        "area to reveal the seller phone"
+    )
+    lead_tok = _tokens(
+        "Click the Contact Seller submit button on the Contact Private "
+        "Seller form"
+    )
+    assert len(ex_tok & reveal_tok) > len(ex_tok & lead_tok), (
+        "exemplar must overlap the reveal step more than the lead-submit step"
+    )
+
+
+# ── _default_pull_cost: race-safe volume read ────────────────────────────
+
+
+def test_pull_cost_retries_until_file_appears(monkeypatch) -> None:
+    # The cost file is flushed a beat after the run reports terminal, so the
+    # first `volume get` misses. A one-shot read would record $0.00 (and zero
+    # the λ·dollars penalty); the retry must keep going until it lands.
+    calls = {"n": 0}
+    payload = {"totals": {"cost_usd": 0.24}, "outcome": {"halt_reason": "budget_cap"}}
+
+    def fake_run(argv, **kwargs):  # noqa: ANN001, ANN003
+        calls["n"] += 1
+        if calls["n"] >= 2:  # miss on attempt 1, land on attempt 2
+            Path(argv[7]).write_text(json.dumps(payload))
+
+    monkeypatch.setattr(live_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(live_runner.time, "sleep", lambda *_: None)
+
+    cost, halt = live_runner._default_pull_cost("prof", "wf")
+
+    assert calls["n"] == 2
+    assert cost == 0.24
+    assert halt == "budget_cap"
+
+
+def test_pull_cost_warns_and_returns_zero_on_ultimate_miss(monkeypatch, capsys) -> None:
+    # If the file never appears, the silent path must NOT stay silent — emit a
+    # stderr WARNING so an understated reward is attributable, not invisible.
+    monkeypatch.setattr(live_runner.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(live_runner.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(live_runner, "_COST_PULL_DEADLINE_S", 0.0)
+
+    cost, halt = live_runner._default_pull_cost("prof", "wf")
+
+    assert (cost, halt) == (0.0, "")
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "prof" in err and "wf" in err
 
 
 # ── main() preflight ─────────────────────────────────────────────────────

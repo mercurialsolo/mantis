@@ -32,6 +32,7 @@ import json
 import logging
 from pathlib import Path
 
+from ...gym.exemplar_memory import apply_exemplar_overlay
 from ...gym.trace_labeller import TraceLabeller
 from .base import Durability, SubstrateContext, SubstrateResult
 
@@ -124,6 +125,19 @@ class ExemplarSubstrate:
             )
 
         exemplars = self._ensure_index().get(plan_signature, [])[: self.max_exemplars]
+
+        # Mirror RetrievalSubstrate (S0): when the live plan rides in the
+        # context, stamp the worked procedure onto its matching steps so
+        # the brain actually consumes the exemplar. ``plan`` is absent in a
+        # pure cost-probe (cost_estimate path), present when the allocator
+        # truly applies this rung — same contract S0 uses for ``apply``.
+        overlaid = 0
+        plan = context.extras.get("plan")
+        if plan is not None and exemplars:
+            overlaid = apply_exemplar_overlay(
+                plan, exemplars, plan_signature=plan_signature,
+            )
+
         return SubstrateResult(
             substrate=self.name,
             applied=bool(exemplars),
@@ -131,10 +145,12 @@ class ExemplarSubstrate:
             durability=self.durability,
             delta_artifacts={
                 "exemplars": exemplars,
+                "exemplars_overlaid": overlaid,
                 "plan_signature": plan_signature,
             },
             notes=(
                 f"replaying {len(exemplars)} positive exemplar(s)"
+                f" ({overlaid} stamped onto the plan)"
                 if exemplars
                 else "no positive exemplars for this plan"
             ),

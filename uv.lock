@@ -1478,6 +1478,7 @@ client = [
 ]
 dev = [
     { name = "httpx" },
+    { name = "jinja2" },
     { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1558,6 +1559,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'viewer'", specifier = ">=0.100" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "hud-python", marker = "extra == 'hud'", specifier = ">=0.5.34" },
+    { name = "jinja2", marker = "extra == 'dev'", specifier = ">=3.0" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "mantis-agent", extras = ["orchestrator", "server", "local-cua", "viewer", "gpu", "hud", "observability"], marker = "extra == 'full'" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },

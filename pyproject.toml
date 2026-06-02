@@ -191,6 +191,7 @@ dev = [
     "jsonschema>=4.0",  # tests/test_plan_schema.py validates plans against docs/reference/plan.schema.json
     "python-multipart>=0.0.9",  # FastAPI Form() params — sim_envs/mantis_crm TestClient flows
     "starlette<1.0",  # see note under [project.optional-dependencies].server
+    "jinja2>=3.0",  # fastapi.templating.Jinja2Templates — sim_envs/mantis_boattrader detail-page render tests
 ]
 # MkDocs site builder + plugins.
 docs = [
