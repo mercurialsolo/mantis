@@ -552,6 +552,60 @@ def test_incremental_writer_handles_skipped_outcome(tmp_path: Path) -> None:
     assert row[-2] == "True"  # skipped column
 
 
+# ── --exemplars loader (S1 backing) ──────────────────────────────────────
+
+
+def test_load_exemplars_empty_path_returns_empty() -> None:
+    # No --exemplars ⇒ S1 is a no-op (attributable in the logs), not an error.
+    assert live_runner._load_exemplars("") == []
+
+
+def test_load_exemplars_reads_json_list(tmp_path: Path) -> None:
+    p = tmp_path / "ex.json"
+    p.write_text(json.dumps([{"type": "submit", "intent": "reveal phone"}]))
+    assert live_runner._load_exemplars(str(p)) == [
+        {"type": "submit", "intent": "reveal phone"},
+    ]
+
+
+def test_load_exemplars_rejects_non_list(tmp_path: Path) -> None:
+    # A malformed file must fail loudly — a silent [] makes S1 look like frozen
+    # and voids the comparison.
+    p = tmp_path / "ex.json"
+    p.write_text(json.dumps({"type": "submit"}))
+    with pytest.raises(ValueError, match="expected a JSON list"):
+        live_runner._load_exemplars(str(p))
+
+
+def test_committed_bt03_exemplar_matches_reveal_not_lead_submit() -> None:
+    """The shipped BT03 exemplar must out-match the *reveal* submit step over
+    the *lead* submit step, or S1 stamps the wrong sub-goal. Guards the file
+    against an edit that drifts its intent tokens (matching is type + overlap).
+    """
+    from mantis_agent.gym.exemplar_memory import _tokens
+
+    path = (
+        Path(live_runner.__file__).resolve().parent
+        / "eval" / "bt03_byowner_exemplar.json"
+    )
+    exemplars = live_runner._load_exemplars(str(path))
+    assert len(exemplars) == 1
+    ex = exemplars[0]
+    assert ex["type"] == "submit"  # the decomposed reveal step is a `submit`
+    ex_tok = _tokens(ex["intent"])
+    reveal_tok = _tokens(
+        "Click the Show Phone Number button in the Contact Private Seller "
+        "area to reveal the seller phone"
+    )
+    lead_tok = _tokens(
+        "Click the Contact Seller submit button on the Contact Private "
+        "Seller form"
+    )
+    assert len(ex_tok & reveal_tok) > len(ex_tok & lead_tok), (
+        "exemplar must overlap the reveal step more than the lead-submit step"
+    )
+
+
 # ── main() preflight ─────────────────────────────────────────────────────
 
 

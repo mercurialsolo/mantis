@@ -123,6 +123,27 @@ def _read_env(key: str) -> str:
     return ""
 
 
+def _load_exemplars(path: str) -> list[dict[str, Any]]:
+    """Load the S1 worked-step exemplars from a JSON list file.
+
+    The file is a hand-authored stand-in for the positive-labelled steps a
+    distillation run's ``ExemplarSubstrate`` would emit — a JSON array of
+    ``{type, intent, last_action, observed_outcome, source_run}`` dicts. Empty
+    path ⇒ no exemplars (S1 degrades to a no-op, attributable in the logs).
+    Raises on a malformed file: a silent empty list would make S1 look like
+    frozen and quietly void the comparison.
+    """
+    if not path:
+        return []
+    data = json.loads(Path(path).read_text())
+    if not isinstance(data, list) or not all(isinstance(x, dict) for x in data):
+        raise ValueError(
+            f"--exemplars {path}: expected a JSON list of objects, "
+            f"got {type(data).__name__}"
+        )
+    return data
+
+
 def _default_post(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     """POST to the live Modal CUA server with the tenant token header."""
     r = requests.post(
@@ -579,6 +600,16 @@ def main(argv: list[str] | None = None) -> int:
             "dict; empty (default) reuses the canonical ``{slug}-hints`` dict."
         ),
     )
+    parser.add_argument(
+        "--exemplars", default="",
+        help=(
+            "path to a JSON list of worked-step exemplar dicts (S1 backing). "
+            "Each item carries ``type`` + ``intent`` (matched to a plan step) "
+            "and a coordinate-free ``last_action``/``observed_outcome`` the "
+            "remote stamps as an ``exemplar_replay`` hint. Read only by the "
+            "S1 branch; frozen/S0 ignore it. Empty (default) ⇒ S1 is a no-op."
+        ),
+    )
     args = parser.parse_args(argv)
 
     env_url = _read_env("LA_ENV_URL")
@@ -609,12 +640,14 @@ def main(argv: list[str] | None = None) -> int:
     policies = tuple(p.strip() for p in args.policies.split(",") if p.strip())
     slug = f"la-{plan_name.replace('_', '-')}"
     hint_dict_name = f"{slug}-hints{args.hint_dict_suffix}"
+    exemplars = _load_exemplars(args.exemplars)
     live = LiveRunFn(
         plan_path=REPO_ROOT / args.plan,
         env_url=env_url,
         admin_token=admin_token,
         profile_id=slug,
         hint_dict_name=hint_dict_name,
+        exemplars=exemplars,
         max_cost=args.max_cost,
         max_time_minutes=args.max_time_minutes,
     )
@@ -624,7 +657,8 @@ def main(argv: list[str] | None = None) -> int:
         f"  env_url={env_url}\n"
         f"  policies={policies} budget=${args.budget:.2f} tasks={len(tasks)}\n"
         f"  plan={args.plan} max_cost=${args.max_cost:.2f}/run\n"
-        f"  rounds={args.rounds} S0_hint_dict={hint_dict_name}\n",
+        f"  rounds={args.rounds} S0_hint_dict={hint_dict_name} "
+        f"S1_exemplars={len(exemplars)}\n",
     )
     # Proxy-aware oracle grading: the default reward_from_run hits
     # ``/__env__/oracle`` with only ``X-Env-Admin``, which the Daytona preview
