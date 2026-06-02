@@ -14,8 +14,6 @@ mutates ``views`` / ``badges`` on existing Caterpillar boats.
 
 from __future__ import annotations
 
-import pytest
-
 
 # A frozen agent grinds ~2-3 boats before the budget cap. Anything at a rank
 # below this is "free reach"; the discriminator requires the Caterpillars to
