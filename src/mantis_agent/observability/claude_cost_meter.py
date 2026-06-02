@@ -311,7 +311,27 @@ def finalize_to_disk(
             path, snapshot["totals"]["calls"],
             snapshot["totals"]["cost_usd"],
         )
-        return path
     except Exception as exc:  # noqa: BLE001
         logger.debug("claude_cost_meter finalize failed: %s", exc)
         return ""
+    # Mirror to the run_dir layout the Baseten/Modal artifact server
+    # uses (``<MANTIS_DATA_DIR>/runs/<run_id>/claude_cost_by_path.json``)
+    # so ``persist_run_artifacts`` can expose it via /v1/runs/<id>/
+    # artifacts/<name>. Without this, the only on-disk copy lives under
+    # the tenant-prefixed path (``<root>/<tenant>/<run_id>/``) which the
+    # artifact endpoint doesn't search. Best-effort: failure to mirror
+    # doesn't fail finalization.
+    try:
+        root = os.environ.get("MANTIS_DATA_DIR", os.environ.get("MANTIS_RUN_ARTIFACTS_DIR", "/data"))
+        safe_run = _sanitize(run_id) or "unknown"
+        mirror_dir = os.path.join(root, "runs", safe_run)
+        os.makedirs(mirror_dir, exist_ok=True)
+        mirror_path = os.path.join(mirror_dir, "claude_cost_by_path.json")
+        if os.path.abspath(mirror_path) != os.path.abspath(path):
+            tmp_mirror = f"{mirror_path}.tmp.{os.getpid()}"
+            with open(tmp_mirror, "w") as f:
+                json.dump(snapshot, f, indent=2, sort_keys=True)
+            os.replace(tmp_mirror, mirror_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("claude_cost_meter mirror to run_dir failed: %s", exc)
+    return path

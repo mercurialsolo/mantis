@@ -1074,7 +1074,7 @@ class BasetenCUARuntime:
 
         data_root = _data_root()
         session_name = task_suite.get("session_name", "baseten_cua")
-        return setup_env(
+        env, proxy_proc, _proxy_diag = setup_env(
             base_url=task_suite.get("base_url", ""),
             run_id=run_id,
             session_name=session_name,
@@ -1087,6 +1087,7 @@ class BasetenCUARuntime:
             save_screenshots_dir=str(data_root / "screenshots"),
             reuse_session=reuse_session,
         )
+        return env, proxy_proc
 
     def _maybe_start_live_viewer(
         self, payload: dict[str, Any], run_id: str, env: Any = None,
@@ -1499,7 +1500,17 @@ class BasetenCUARuntime:
                     from mantis_agent.graph.objective import ObjectiveSpec
                     objective = ObjectiveSpec.from_dict(objective_data)
                     schema = ExtractionSchema.from_objective(objective)
-            extractor = ClaudeExtractor(schema=schema)
+            # Honor _extractor_model from the suite (set via
+            # build_micro_suite ← MANTIS_EXTRACTOR_MODEL env var on the
+            # caller). Without this, ClaudeExtractor always uses its
+            # hardcoded default (claude-sonnet-4-6) and the cheaper
+            # Haiku extraction never lands — the suite field is silently
+            # ignored. Empty string keeps the legacy default.
+            _extractor_model = str(task_suite.get("_extractor_model") or "").strip()
+            if _extractor_model:
+                extractor = ClaudeExtractor(model=_extractor_model, schema=schema)
+            else:
+                extractor = ClaudeExtractor(schema=schema)
             resume_state = bool(task_suite.get("_resume_state", False))
             checkpoint_path = task_suite.get("_checkpoint_path")
             if not checkpoint_path:
@@ -1551,6 +1562,16 @@ class BasetenCUARuntime:
                 extraction_cache=cache,
                 routing_policy=routing_policy,
             )
+            # Cost-meter finalize gate: ``micro_runner.run`` calls
+            # ``finalize_to_disk(run_id=self._api_run_id, tenant_id=...)``
+            # only when ``_api_run_id`` is truthy. Without these attrs
+            # the per-source cost JSON never lands on disk and the new
+            # artifact-side instrumentation has nothing to expose.
+            # ``tenant_id`` here is just a path-sanitization scope for
+            # the meter (not auth) — workflow_id is a stable enough
+            # bucket on Baseten where the API token is per-tenant.
+            runner._api_run_id = run_id
+            runner._api_tenant_id = workflow_id or session_name or "default"
             # #344: default ``request_user_input`` host tool. Brains that
             # emit ``Action(TOOL_CALL, name="request_user_input")`` get a
             # paused-run snapshot on the first call, and the staged
@@ -1579,20 +1600,43 @@ class BasetenCUARuntime:
             # the payload. ``runner.resume(...)`` replays the recorded
             # steps and continues from the paused step.
             resume_blob = payload.get("_resume_pause_state")
-            if resume_blob is not None:
-                pause_state_obj = (
-                    PauseState.from_dict(resume_blob)
-                    if isinstance(resume_blob, dict) else resume_blob
-                )
-                runner_result = runner.resume(
-                    pause_state_obj,
-                    user_input=payload.get("_resume_user_input"),
-                    plan=micro_plan,
-                )
-            else:
-                runner_result = runner.run_with_status(
-                    micro_plan, resume=resume_state,
-                )
+            # Bind a fresh per-source ClaudeCostMeter for this run.
+            # ``record_from_response`` (called from brain_claude /
+            # extractor / grounding / agentic_recovery / _anthropic.
+            # client) pulls the active meter via ``current_meter()``,
+            # which reads the ContextVar this binds. Without this
+            # binding every record_from_response is a silent no-op and
+            # the per-source cost JSON never accumulates anything to
+            # write. The ContextVar shape means concurrent runs in the
+            # same process get isolated meters automatically; on
+            # Baseten predict_concurrency=1 anyway.
+            from mantis_agent.observability.claude_cost_meter import (
+                ClaudeCostMeter as _ClaudeCostMeter,
+                set_current_meter as _set_current_meter,
+            )
+            run_cost_meter = _ClaudeCostMeter()
+            _set_current_meter(run_cost_meter)
+            try:
+                if resume_blob is not None:
+                    pause_state_obj = (
+                        PauseState.from_dict(resume_blob)
+                        if isinstance(resume_blob, dict) else resume_blob
+                    )
+                    runner_result = runner.resume(
+                        pause_state_obj,
+                        user_input=payload.get("_resume_user_input"),
+                        plan=micro_plan,
+                    )
+                else:
+                    runner_result = runner.run_with_status(
+                        micro_plan, resume=resume_state,
+                    )
+            finally:
+                # ``micro_runner.run`` itself calls finalize_to_disk via
+                # current_meter() once it returns, so we keep the bind
+                # active across the call AND clear it afterwards to
+                # avoid leaking across runs in the same container.
+                _set_current_meter(None)
             step_results = runner_result.steps
             if cache is not None:
                 try:
