@@ -124,11 +124,12 @@ def deploy(latency_min_ms: int, latency_max_ms: int, failure_rate: float,
             "PYTHONUNBUFFERED": "1",
             "ENV_ADMIN_TOKEN": admin_token,
             "SEED": os.environ.get("SEED", "42"),
-            # BT03 policy-cluster discriminator: when "1", every by-owner
-            # listing renders the de-emphasised "View seller details" reveal
-            # control (no "phone" keyword) instead of the stock "Show Phone
-            # Number" button — the frozen-vs-S1 layout drift. Default off
-            # keeps BT01/BT02 matrices byte-identical.
+            # BT03 policy-cluster discriminator (action-omission): when "1",
+            # every by-owner listing shows a masked teaser of the number inline
+            # so the contact reads as already-populated — a frozen agent omits
+            # the reveal, while an S1 worked-reveal exemplar still fires the
+            # de-emphasised "Show full number" control. Default off keeps
+            # BT01/BT02 matrices byte-identical.
             "BT03_REVEAL_DRIFT": os.environ.get("BT03_REVEAL_DRIFT", "0"),
             "FAKE_NOW": os.environ.get("FAKE_NOW", "2026-01-15T09:00:00Z"),
             "LATENCY_MS_MIN": str(latency_min_ms),
