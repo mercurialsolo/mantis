@@ -2735,6 +2735,21 @@ body.bdp-scrolled-deep .sticky-save {
   font-size: 13px;
   align-self: flex-start;
 }
+/* BT03 layout-drift reveal control (BT03_REVEAL_DRIFT): a muted text link in
+   place of the secondary button, so the prominent Contact Seller form reads as
+   the primary contact path and a frozen agent mis-targets it. POST + testid
+   unchanged — only the visual weight + label drift. */
+.bdp-reveal-link {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--bt-text-dim);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.bdp-reveal-link:hover { color: var(--bt-blue); }
 .phone-svg {
   max-width: 240px;
   width: auto;

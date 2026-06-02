@@ -392,6 +392,12 @@ class Boat:
     saves: int
     listed_days_ago: int
     images: list[str] = field(default_factory=list)
+    # BT03 layout-drift flag — set by ``_apply_byowner_reveal_drift`` (gated by
+    # ``BT03_REVEAL_DRIFT``). When True the detail template de-emphasises and
+    # relabels the phone-reveal control (drops the "phone" keyword), so a frozen
+    # agent favours the prominent lead form; an S1 worked-reveal exemplar
+    # re-finds the control by its action. Off by default → zero render change.
+    reveal_drift: bool = False
 
     @property
     def title(self) -> str:
@@ -863,6 +869,33 @@ def _apply_deep_caterpillar(boats: list[Boat], *, seed: int) -> None:
             tgt.badges.append("Featured")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# BT03 by-owner reveal drift.
+#
+# The BT03 policy-cluster eval (by-owner phone reveal) separates a frozen agent
+# from an S1-exemplar agent only if revealing a private seller's phone is *not*
+# the obvious move. The stock private-seller card pairs a prominent "Contact
+# Seller" lead form with an explicit "Show Phone Number" button — a frozen agent
+# clicks that button for free and the discriminator collapses. This pass flags
+# every owner listing so the detail template renders the reveal control
+# de-emphasised + relabelled (no "phone" keyword), tilting a naive agent toward
+# the lead form (0 reveals → recall miss) while an S1 "a click revealed the
+# phone here" exemplar re-finds the control by its action, not its label.
+#
+# It only sets the boolean ``reveal_drift`` flag on owner boats — never touches
+# ``listing_type`` or ``owner_phone`` — so the BT03 oracle's qualifying set (and
+# BT01/BT02's answer sets) survive untouched, and the reveal endpoint + mutation
+# are unchanged. Gated by ``BT03_REVEAL_DRIFT`` (default off): the BT03 S1 matrix
+# turns it on; every other run keeps the stock layout.
+
+
+def _apply_byowner_reveal_drift(boats: list[Boat]) -> None:
+    """Flag every by-owner listing for the de-emphasised reveal layout."""
+    for b in boats:
+        if b.is_owner_listed:
+            b.reveal_drift = True
+
+
 def build() -> dict[str, Any]:
     seed = int(os.environ.get("SEED", 42))
     count = int(os.environ.get("BOAT_COUNT", 600))
@@ -872,6 +905,8 @@ def build() -> dict[str, Any]:
     boats = _gen_boats(rng, dealers, count, now)
     if os.environ.get("BT02_DEEP_CATERPILLAR", "1") not in ("0", "false", "False"):
         _apply_deep_caterpillar(boats, seed=seed)
+    if os.environ.get("BT03_REVEAL_DRIFT", "0") not in ("0", "false", "False"):
+        _apply_byowner_reveal_drift(boats)
     return {
         "dealers": dealers,
         "boats": boats,
