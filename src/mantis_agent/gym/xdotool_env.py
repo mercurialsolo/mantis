@@ -1073,6 +1073,7 @@ class XdotoolGymEnv(GymEnvironment):
         Chrome exposes; it preserves cookies, session storage,
         history, and back-forward state same as a user-typed URL.
         """
+        self._seed_request_cookies(url)
         logger.info(f"Navigating to {url[:80]} (via CDP Page.navigate)")
         ok, _ = self._cdp_call("Page.navigate", {"url": url})
         if ok:
@@ -1094,6 +1095,36 @@ class XdotoolGymEnv(GymEnvironment):
         time.sleep(0.3)
         self._xdotool("key", "Return")
         time.sleep(self._settle_time + 2)
+
+    def _seed_request_cookies(self, url: str) -> None:
+        """Seed cookies from an extra ``Cookie`` request header into the jar.
+
+        ``_open_header_session`` applies ``self._extra_http_headers`` via
+        ``Network.setExtraHTTPHeaders``, but Chromium's network service drops a
+        manually-set ``Cookie`` header from that path (it composes the request
+        ``Cookie`` from the cookie store, not from extra headers) while honoring
+        the custom ``x-daytona-*`` headers in the same dict. That divergence is
+        why the Daytona preview-warning bypass works yet a sim-env consent
+        cookie (e.g. ``bt_cookie_consent``) never reaches the server, so its
+        cookie-gated banner renders and ``ClaudeExtractor.find_all_listings``
+        reads the full-page overlay as ``page_blocked``. ``Network.setCookie``
+        puts the cookie in the real jar for ``url``'s host, where the network
+        stack *does* send it. No-op unless a ``Cookie`` header is present and
+        ``url`` is http(s) — so non-sim-env runs are unaffected.
+        """
+        headers = getattr(self, "_extra_http_headers", None) or {}
+        cookie_header = next(
+            (v for k, v in headers.items() if k.lower() == "cookie"), ""
+        )
+        if not cookie_header or not url.startswith(("http://", "https://")):
+            return
+        for pair in cookie_header.split(";"):
+            name, _, value = pair.strip().partition("=")
+            if name:
+                self._cdp_call(
+                    "Network.setCookie",
+                    {"url": url, "name": name, "value": value.strip()},
+                )
 
     def _type_into_omnibox(self, url: str) -> None:
         """Type ``url`` into the currently-focused omnibox via xclip

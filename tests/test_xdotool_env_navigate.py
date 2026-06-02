@@ -194,6 +194,68 @@ def test_type_into_omnibox_xdotool_fallback_when_xclip_unavailable(
     assert "https://example.com" in type_calls[0]
 
 
+def test_navigate_seeds_cookie_header_into_jar_before_page_navigate(
+    env_with_cdp_recorder,
+) -> None:
+    """A ``Cookie`` extra-header is seeded via ``Network.setCookie`` *before*
+    ``Page.navigate``.
+
+    ``Network.setExtraHTTPHeaders`` silently drops a manually-set ``Cookie``
+    header, so a sim-env consent cookie never reaches the server and its
+    banner renders (read as ``page_blocked`` by ``find_all_listings``).
+    Putting the cookie in the real jar — scoped to the target URL, and set
+    before the navigation so the first load carries it — fixes that.
+    """
+    env, cdp_calls = env_with_cdp_recorder
+    env._extra_http_headers = {  # type: ignore[attr-defined]
+        "x-daytona-preview-token": "tok",
+        "Cookie": "bt_cookie_consent=decline",
+    }
+
+    env._navigate_running_browser("https://8080-abc.daytonaproxy01.net/boats")
+
+    # setCookie must precede Page.navigate (jar populated before the load).
+    assert cdp_calls[0][0] == "Network.setCookie"
+    assert cdp_calls[0][1] == {
+        "url": "https://8080-abc.daytonaproxy01.net/boats",
+        "name": "bt_cookie_consent",
+        "value": "decline",
+    }
+    assert cdp_calls[1][0] == "Page.navigate"
+
+
+def test_navigate_seeds_every_cookie_in_a_multi_value_header(
+    env_with_cdp_recorder,
+) -> None:
+    """A multi-cookie header yields one ``Network.setCookie`` per pair."""
+    env, cdp_calls = env_with_cdp_recorder
+    env._extra_http_headers = {  # type: ignore[attr-defined]
+        "Cookie": "bt_cookie_consent=decline; session=xyz",
+    }
+
+    env._navigate_running_browser("https://example.com/")
+
+    set_cookies = [p for m, p in cdp_calls if m == "Network.setCookie"]
+    assert {c["name"]: c["value"] for c in set_cookies} == {
+        "bt_cookie_consent": "decline",
+        "session": "xyz",
+    }
+
+
+def test_navigate_without_cookie_header_skips_setcookie(
+    env_with_cdp_recorder,
+) -> None:
+    """No ``Cookie`` header → no ``Network.setCookie`` (non-sim-env runs are
+    unaffected; only ``Page.navigate`` fires)."""
+    env, cdp_calls = env_with_cdp_recorder
+    env._extra_http_headers = {"x-daytona-preview-token": "tok"}  # type: ignore[attr-defined]
+
+    env._navigate_running_browser("https://example.com/page")
+
+    assert all(method != "Network.setCookie" for method, _ in cdp_calls)
+    assert cdp_calls[0][0] == "Page.navigate"
+
+
 def test_navigate_running_browser_empty_url_is_noop(env_with_cdp_recorder) -> None:
     """Defensive: empty URL must not call Page.navigate (would 400)."""
     env, cdp_calls = env_with_cdp_recorder
