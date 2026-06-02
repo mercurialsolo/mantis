@@ -343,7 +343,16 @@ class XdotoolGymEnv(GymEnvironment):
             cmd, env=self._env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        time.sleep(3)
+        # Wait for Chrome to actually bind its CDP debug port before the
+        # stealth-inject + header-session calls below. A fixed ``time.sleep(3)``
+        # raced the cold-container cold-start: on a freshly-scheduled Modal
+        # container Chrome can take >3s to bind ``--remote-debugging-port``, so
+        # ``/json/list`` returned ECONNREFUSED and the persistent header seam
+        # never opened — which drops the Daytona consent cookie, so the sim env
+        # renders its consent overlay (read as a blocked page by the click
+        # handler's find_all pre-scan → page_blocked halt → 0 leads). Poll the
+        # port instead of guessing a settle time.
+        self._wait_for_cdp_ready()
         logger.info(f"Browser started: {self._browser_cmd} → {url}")
 
         # #539: register CDP stealth patches BEFORE any runner-triggered
@@ -373,6 +382,43 @@ class XdotoolGymEnv(GymEnvironment):
         # open for the browser's lifetime. See ``_open_header_session``.
         if self._extra_http_headers:
             self._open_header_session()
+
+    def _wait_for_cdp_ready(self, deadline_s: float = 15.0) -> bool:
+        """Block until Chrome's CDP HTTP endpoint answers, or ``deadline_s``.
+
+        Returns ``True`` once ``http://127.0.0.1:{cdp_port}/json/version``
+        responds 200 (the standard "DevTools is up" probe). Best-effort: on
+        timeout logs a WARNING and returns ``False`` so the caller still
+        proceeds (the stealth + header-session calls are each independently
+        best-effort), but the poll gives a cold-start Chrome the time it needs
+        to bind the debug port rather than racing a fixed sleep. A floor of one
+        short sleep also lets the launch tab map under Xvfb on the warm path.
+        """
+        import urllib.error
+        import urllib.request
+
+        time.sleep(0.5)
+        deadline = time.time() + deadline_s
+        attempt = 0
+        while time.time() < deadline:
+            attempt += 1
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self._cdp_port}/json/version",
+                    timeout=2,
+                ) as resp:
+                    if getattr(resp, "status", 200) == 200:
+                        logger.info("CDP endpoint ready after %d attempt(s)", attempt)
+                        return True
+            except (urllib.error.URLError, OSError):
+                pass
+            time.sleep(0.5)
+        logger.warning(
+            "CDP endpoint not ready after %.0fs (port %s) — stealth + header "
+            "session may fall through to the blocked interstitial",
+            deadline_s, self._cdp_port,
+        )
+        return False
 
     def _open_header_session(self) -> None:
         """Hold a persistent Network-enabled CDP session that applies
