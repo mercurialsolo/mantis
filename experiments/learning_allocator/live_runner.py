@@ -49,6 +49,7 @@ without ``LA_ENV_URL`` / ``LA_ENV_ADMIN_TOKEN`` pointing at a live sim env.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import subprocess
@@ -64,6 +65,7 @@ import requests
 
 from mantis_agent.gym.grading import grade_run
 from mantis_agent.learning.eval import EvalTask, load_manifest
+from mantis_agent.learning.orchestrator import TaskOutcome
 from mantis_agent.learning.reward import (
     DEFAULT_LAMBDA,
     RewardRecord,
@@ -83,6 +85,8 @@ from mantis_agent.sim_envs.templating import substitute_env_url
 from experiments.learning_allocator.runner import (
     FROZEN,
     S0,
+    _OUTCOME_COLS,
+    _outcome_row,
     build_table1,
     format_table1,
     run_experiment,
@@ -483,6 +487,57 @@ def tasks_for_plan(plan_name: str) -> list[EvalTask]:
     ]
 
 
+class _IncrementalResultsWriter:
+    """Append one ``results.tsv`` row per completed run, as it lands.
+
+    A live matrix is slow — each run is a multi-minute CUA job — and the
+    batch :func:`write_results` only writes once everything finishes, so a
+    watcher sees an empty file for the whole run and a crash/time-cap loses
+    every row. This streams instead: the first call truncates and writes the
+    banner + header, every call appends a row and ``flush``es. The final
+    :func:`write_results` overwrites ``results.tsv`` with the identical
+    complete set (and adds table1/fig1, which genuinely need every row), so
+    streamed and final never diverge — same row formatter, same column order.
+    """
+
+    def __init__(self, path: Path, *, banner: str, echo: bool = True) -> None:
+        self.path = Path(path)
+        self.banner = banner
+        self.echo = echo
+        self._started = False
+
+    def __call__(self, policy: str, task: EvalTask, outcome: TaskOutcome) -> None:
+        # split/seed off the live task; equal to ExperimentResult's maps the
+        # batch write sources from (runner stamps them from the same task).
+        row = _outcome_row(policy, outcome, task.split, task.seed)
+        mode = "a" if self._started else "w"
+        with self.path.open(mode, newline="") as fh:
+            w = csv.writer(fh, delimiter="\t")
+            if not self._started:
+                fh.write(self.banner + "\n")
+                w.writerow(_OUTCOME_COLS)
+                self._started = True
+            w.writerow(row)
+            fh.flush()
+        if self.echo:
+            print(_progress_line(policy, task, outcome), flush=True)
+
+
+def _progress_line(policy: str, task: EvalTask, o: TaskOutcome) -> str:
+    """A one-line, crash-safe console echo of a completed run."""
+    if o.skipped:
+        return f"[live] {policy:<10} {task.name:<28} SKIP ({o.note})"
+    rr = o.reward_record
+    score = f"{rr.oracle_score:.2f}" if rr else "  - "
+    passed = rr.oracle_passed if rr else "-"
+    reward = o.reward if o.reward is not None else 0.0
+    return (
+        f"[live] {policy:<10} {task.name:<28} sub={o.substrate or '-':<14} "
+        f"oracle={score} pass={passed!s:<5} ${o.dollars or 0:.2f} "
+        f"reward={reward:+.3f}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Learning Allocator Phase-2 LIVE runner (REAL SPEND).",
@@ -501,6 +556,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--plan", default="plans/boattrader_scrape",
         help="plan file to submit (relative to the repo root)",
+    )
+    parser.add_argument(
+        "--hint-dict-suffix", default="",
+        help=(
+            "appended to the S0 hint-store Modal Dict name "
+            "(``{slug}-hints{suffix}``). Use a fresh suffix (e.g. ``-v4``) to "
+            "isolate a run from anchors a prior run accumulated in the shared "
+            "dict; empty (default) reuses the canonical ``{slug}-hints`` dict."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -531,12 +595,13 @@ def main(argv: list[str] | None = None) -> int:
 
     policies = tuple(p.strip() for p in args.policies.split(",") if p.strip())
     slug = f"la-{plan_name.replace('_', '-')}"
+    hint_dict_name = f"{slug}-hints{args.hint_dict_suffix}"
     live = LiveRunFn(
         plan_path=REPO_ROOT / args.plan,
         env_url=env_url,
         admin_token=admin_token,
         profile_id=slug,
-        hint_dict_name=f"{slug}-hints",
+        hint_dict_name=hint_dict_name,
         max_cost=args.max_cost,
         max_time_minutes=args.max_time_minutes,
     )
@@ -545,7 +610,8 @@ def main(argv: list[str] | None = None) -> int:
         "Learning Allocator — Phase-2 LIVE RUN (REAL SPEND).\n"
         f"  env_url={env_url}\n"
         f"  policies={policies} budget=${args.budget:.2f} tasks={len(tasks)}\n"
-        f"  plan={args.plan} max_cost=${args.max_cost:.2f}/run\n",
+        f"  plan={args.plan} max_cost=${args.max_cost:.2f}/run\n"
+        f"  rounds={args.rounds} S0_hint_dict={hint_dict_name}\n",
     )
     # Proxy-aware oracle grading: the default reward_from_run hits
     # ``/__env__/oracle`` with only ``X-Env-Admin``, which the Daytona preview
@@ -570,6 +636,17 @@ def main(argv: list[str] | None = None) -> int:
             extras={"oracle_reasons": graded.reasons, "oracle_diff": graded.diff},
         )
 
+    # Stream each run's row to results.tsv as it lands — live visibility into
+    # a slow matrix and durability if it crashes or hits the time cap. The
+    # final write_results below overwrites with the identical complete set.
+    streamer: _IncrementalResultsWriter | None = None
+    if args.out:
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        streamer = _IncrementalResultsWriter(
+            out_dir / "results.tsv", banner=_LIVE_BANNER,
+        )
+
     result = run_experiment(
         tasks=tasks,
         run_fn=live,
@@ -581,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
         epsilon=args.epsilon,
         seed=args.seed,
         policies=policies,
+        on_outcome=streamer,
     )
     print(format_table1(build_table1(result)))
     if args.out:

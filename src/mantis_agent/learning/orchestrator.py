@@ -61,6 +61,9 @@ PlanSigFn = Callable[[EvalTask], str]
 # Score a finished run into a RewardRecord. Defaults to reward_from_run (live
 # oracle over HTTP); injectable so the loop can run fully offline.
 RewardFn = Callable[..., RewardRecord]
+# Called the instant an outcome lands (run or skip) — the seam the experiment
+# runner streams result rows from instead of waiting for the whole matrix.
+OnOutcome = Callable[[EvalTask, "TaskOutcome"], None]
 
 
 @dataclass
@@ -114,6 +117,7 @@ class Phase2Orchestrator:
         reward_fn: RewardFn | None = None,
         start_url: str = "",
         lam: float = DEFAULT_LAMBDA,
+        on_outcome: OnOutcome | None = None,
     ) -> None:
         self.allocator = allocator
         self.run_fn = run_fn
@@ -126,6 +130,7 @@ class Phase2Orchestrator:
         self._plan_loader = plan_loader
         self._plan_sig = plan_signature_fn or _default_plan_signature
         self._reward_fn = reward_fn
+        self._on_outcome = on_outcome
         self.outcomes: list[TaskOutcome] = []
 
     # ── per-task ────────────────────────────────────────────────────────
@@ -201,6 +206,7 @@ class Phase2Orchestrator:
             task.name, task.cluster, choice.name, record.reward,
             record.dollars, self.budget_remaining,
         )
+        self._emit(task, outcome)
         return outcome
 
     def _skip(self, task: EvalTask, note: str) -> TaskOutcome:
@@ -212,7 +218,22 @@ class Phase2Orchestrator:
             note=note,
         )
         self.outcomes.append(outcome)
+        self._emit(task, outcome)
         return outcome
+
+    def _emit(self, task: EvalTask, outcome: TaskOutcome) -> None:
+        """Hand the just-appended outcome to the optional streaming callback.
+
+        A failing callback must never abort the run — streaming is best-effort
+        observability layered over the in-memory ``outcomes`` (which the final
+        batch write rebuilds the file from regardless).
+        """
+        if self._on_outcome is None:
+            return
+        try:
+            self._on_outcome(task, outcome)
+        except Exception:  # noqa: BLE001 — observability must not break the loop
+            logger.warning("[phase2] on_outcome callback failed", exc_info=True)
 
     # ── driver ──────────────────────────────────────────────────────────
 

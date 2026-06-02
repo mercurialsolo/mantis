@@ -184,6 +184,128 @@ def test_unsectioned_loop_falls_back_to_default_50() -> None:
     assert state.step_index == 2
 
 
+# ── Loop stop-on-var (LA discriminator) ────────────────────────────────
+
+
+class _StubParent:
+    """Minimal stand-in for MicroPlanRunner — carries the state-var bag the
+    loop's ``stop_var`` check reads (same bag ``execute_step`` uses for
+    ``guard``)."""
+
+    def __init__(self, state_vars: dict) -> None:
+        self._state_vars = state_vars
+
+
+def _exec_with_state_vars(state_vars: dict):
+    """A RunExecutor whose ``self.parent._state_vars`` is ``state_vars``."""
+    from mantis_agent.gym.run_executor import RunExecutor
+
+    class _StubExecutor(RunExecutor):
+        def __init__(self, parent): self.parent = parent
+        def _persist(self, plan, state): pass
+
+    return _StubExecutor(_StubParent(state_vars))
+
+
+def _loop_plan(stop_var: str) -> MicroPlan:
+    plan = MicroPlan(domain="x")
+    plan.steps = [
+        MicroIntent(intent="click", type="click", section="extraction"),
+        MicroIntent(
+            intent="loop", type="loop", section="extraction",
+            loop_target=0, loop_count=30, stop_var=stop_var,
+        ),
+    ]
+    return plan
+
+
+def test_loop_stop_var_truthy_exits_before_count_reached() -> None:
+    """A loop with ``stop_var`` bound truthy exits on the first fire even
+    though only 1 of 30 iterations has run — the lever that turns an
+    exhaustive search into a one-shot jump once the target is found."""
+    plan = _loop_plan("is_caterpillar")
+    state = _state()
+    state.step_index = 1
+
+    exec_ = _exec_with_state_vars({"is_caterpillar": True})
+    exec_._handle_loop_step(plan, plan.steps[1], state)
+
+    # Advanced PAST the loop (step 2 = off the end), not back to target 0.
+    assert state.step_index == 2
+    assert state.loop_counters[1] == 1
+
+
+def test_loop_stop_var_falsy_continues_looping() -> None:
+    """``stop_var`` bound False does not short-circuit — the loop jumps
+    back to its target like an ordinary count-bounded loop."""
+    plan = _loop_plan("is_caterpillar")
+    state = _state()
+    state.step_index = 1
+
+    exec_ = _exec_with_state_vars({"is_caterpillar": False})
+    exec_._handle_loop_step(plan, plan.steps[1], state)
+
+    assert state.step_index == 0  # jumped back to loop_target
+    assert state.loop_counters[1] == 1
+
+
+def test_loop_stop_var_absent_continues_looping() -> None:
+    """A ``stop_var`` naming a variable that no prior step ever bound is
+    treated as falsy (``.get(name, False)``) — the loop keeps iterating
+    rather than exiting on an unbound name."""
+    plan = _loop_plan("never_bound")
+    state = _state()
+    state.step_index = 1
+
+    exec_ = _exec_with_state_vars({})  # var never bound
+    exec_._handle_loop_step(plan, plan.steps[1], state)
+
+    assert state.step_index == 0
+    assert state.loop_counters[1] == 1
+
+
+def test_loop_without_stop_var_ignores_state_vars() -> None:
+    """Back-compat: a loop with no ``stop_var`` never consults the state
+    bag, so a truthy variable with the same shape can't accidentally stop
+    an unrelated loop."""
+    plan = MicroPlan(domain="x")
+    plan.steps = [
+        MicroIntent(intent="click", type="click", section="extraction"),
+        MicroIntent(
+            intent="loop", type="loop", section="extraction",
+            loop_target=0, loop_count=30,  # no stop_var
+        ),
+    ]
+    state = _state()
+    state.step_index = 1
+
+    exec_ = _exec_with_state_vars({"is_caterpillar": True})
+    exec_._handle_loop_step(plan, plan.steps[1], state)
+
+    assert state.step_index == 0  # still looping
+    assert state.loop_counters[1] == 1
+
+
+def test_stop_var_round_trips_through_serialize_and_rebuild() -> None:
+    """``stop_var`` survives the MicroIntent → dict → MicroIntent wire the
+    Modal submit path uses (``micro_plan_steps_to_dicts`` then the
+    ``MicroIntent(**s)`` splat in modal_cua_server). A dropped key here
+    would silently disable the discriminator on the remote run."""
+    from mantis_agent.plan_decomposer import PlanDecomposer
+    from mantis_agent.server_utils import micro_plan_steps_to_dicts
+
+    step = MicroIntent(
+        intent="loop", type="loop", loop_target=0, loop_count=30,
+        stop_var="is_caterpillar",
+    )
+    [as_dict] = micro_plan_steps_to_dicts([step])
+    assert as_dict["stop_var"] == "is_caterpillar"
+
+    # Both rebuild paths: the **splat (Modal) and _build_intent (local JSON).
+    assert MicroIntent(**as_dict).stop_var == "is_caterpillar"
+    assert PlanDecomposer._build_intent(as_dict).stop_var == "is_caterpillar"
+
+
 def test_legacy_max_loop_iterations_still_honoured_when_no_section_caps() -> None:
     """Caller passes a RunState with the section-cap dict cleared — the
     code falls through to the legacy single-value field. Preserves

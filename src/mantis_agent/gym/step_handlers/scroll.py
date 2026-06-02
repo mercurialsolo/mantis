@@ -156,6 +156,19 @@ class MechanicalScrollHandler:
             )
         except (TypeError, ValueError):
             notches_per_count = 3
+        # CDP-only: fraction of a viewport to advance per ``count``.
+        # Default 1.0 (one full ``window.innerHeight``). A plan that needs
+        # to land on a band of content near the fold — e.g. a detail-page
+        # stats strip that sits just below a 3:2 hero gallery — sets a
+        # partial value so a full-viewport scroll doesn't push the target
+        # off the top of the viewport. Clamped to (0, 1]; ignored by the
+        # xdotool path, which has no px control.
+        try:
+            fraction = float(params.get("fraction", 1.0))
+        except (TypeError, ValueError):
+            fraction = 1.0
+        if not (0.0 < fraction <= 1.0):
+            fraction = 1.0
 
         cdp_eval = getattr(env, "cdp_evaluate", None)
 
@@ -183,8 +196,8 @@ class MechanicalScrollHandler:
         pre_y = _read_scroll_y()
         logger.info(
             "  [scroll] mechanical dispatch: count=%d direction=%s "
-            "notches/count=%d backend=%s pre_scrollY=%s",
-            count, direction, notches_per_count,
+            "notches/count=%d fraction=%.2f backend=%s pre_scrollY=%s",
+            count, direction, notches_per_count, fraction,
             "cdp" if use_cdp else "xdotool",
             f"{pre_y:.0f}" if pre_y >= 0 else "n/a",
         )
@@ -201,15 +214,20 @@ class MechanicalScrollHandler:
                 )
                 use_cdp = False
 
-        if use_cdp:
+        sign = "" if direction == "down" else "-"
+        if fraction >= 1.0:
             # Triple-prong CDP scroll dispatch — same payload the
             # recovery layer uses in step_recovery.py:285. Covers
             # <body>-as-scrolling-root pages, <html>-as-scrolling-root
             # pages, and SPA inner scrollers that subscribe to keyboard
             # events. Dispatched ``count`` times for a count-aware
             # scroll budget; each dispatch advances by one
-            # ``window.innerHeight``.
-            sign = "" if direction == "down" else "-"
+            # ``window.innerHeight``. NOTE: on a standards-mode page
+            # ``window.scrollBy`` and ``scrollingElement.scrollBy`` hit
+            # the SAME scroller, so this nets ~2 viewports per count —
+            # fine for "scroll to load/reveal more" where overshoot is
+            # harmless, wrong for landing on a specific band (see the
+            # partial-fraction branch below).
             scroll_js = (
                 "(function(){"
                 "  var h = " + sign + "window.innerHeight;"
@@ -226,6 +244,28 @@ class MechanicalScrollHandler:
                 "  ));"
                 "})()"
             )
+        else:
+            # Partial-viewport precision scroll. Applies ``h`` exactly
+            # ONCE: ``window.scrollBy`` first, and the ``scrollingElement``
+            # fallback only if that didn't move the page (SPA inner
+            # scroller). No double-apply, no synthetic PageDown — a plan
+            # asking for a fraction wants to land on a band near the fold,
+            # not overshoot it.
+            scroll_js = (
+                "(function(){"
+                "  var h = " + sign + "Math.round("
+                + repr(fraction) + " * window.innerHeight);"
+                "  var y0 = window.scrollY || "
+                "document.documentElement.scrollTop || 0;"
+                "  window.scrollBy(0, h);"
+                "  var y1 = window.scrollY || "
+                "document.documentElement.scrollTop || 0;"
+                "  if (Math.abs(y1 - y0) < 2 && document.scrollingElement) "
+                "    document.scrollingElement.scrollBy(0, h);"
+                "})()"
+            )
+
+        if use_cdp:
             for i in range(count):
                 try:
                     cdp_eval(scroll_js)

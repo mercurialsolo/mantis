@@ -238,7 +238,24 @@
   </aside>
 
 {# ─── Top stats strip (8 cells in a 4-col × 2-row grid) ──────── #}
-{% set _engine_model = (boat.engine_make ~ ' ' ~ (['ZR6','V12','V8','MerCruiser','F300','VX1100','XS500'])[boat.year % 7]) %}
+{# Engine stat-card value = make + a plausible SAME-brand series. The series
+   pool is keyed by make so the card never pairs a make with a competing
+   manufacturer's model (the old shared pool rendered cross-brand nonsense like
+   "Caterpillar MerCruiser" / "Caterpillar F300", which made the BT02 engine-make
+   guard false-negative real Caterpillar boats). Display-only — the oracle grades
+   off boat.engine_make, not this string. #}
+{% set _engine_series_by_make = {
+  'Caterpillar': ['C7.1', 'C12.9', 'C18', 'C32', '3508'],
+  'Cummins':     ['QSB 6.7', 'QSC 8.3', 'QSL 9', 'QSM 11', 'X15'],
+  'Volvo Penta': ['D4', 'D6', 'D11', 'D13', 'IPS 650'],
+  'Mercury':     ['Verado 300', '250 FourStroke', 'Pro XS 115', '150 FourStroke', 'Racing 450R'],
+  'Yamaha':      ['F300', 'F250', 'VF250 SHO', 'F150', 'XTO 450'],
+  'Suzuki':      ['DF300B', 'DF250', 'DF200A', 'DF140B', 'DF350A'],
+  'Honda':       ['BF250', 'BF225', 'BF150', 'BF115', 'BF350'],
+  'Yanmar':      ['3JH40', '4JH57', '4LV150', '6LF530', '8LV-370'],
+} %}
+{% set _series_pool = _engine_series_by_make.get(boat.engine_make, ['Marine', 'Inboard', 'Sterndrive', 'Outboard', 'Common Rail']) %}
+{% set _engine_model = boat.engine_make ~ ' ' ~ _series_pool[boat.year % 5] %}
 <section class="bdp-stats-strip" data-testid="bdp-stats-strip">
   <div class="stat-card">
     <div class="stat-icon" aria-hidden="true">

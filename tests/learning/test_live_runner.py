@@ -452,6 +452,84 @@ def test_credential_not_hardcoded_in_source() -> None:
     assert "SelfService" not in src
 
 
+# ── incremental results streaming ────────────────────────────────────────
+
+
+def _outcome(task, substrate: str, score: float, dollars: float):
+    from mantis_agent.learning.orchestrator import TaskOutcome
+    from mantis_agent.learning.reward import RewardRecord
+
+    rr = RewardRecord(
+        task_id=task.task_id or task.name, oracle_score=score,
+        oracle_passed=score >= 0.5, proxy_verdict="pass", proxy_score=0.0,
+        dollars=dollars, reward=score - 0.1 * dollars,
+        false_pass=False, false_fail=False,
+    )
+    return TaskOutcome(
+        task_name=task.name, task_id=task.task_id or task.name,
+        cluster=task.cluster, substrate=substrate, reward=rr.reward,
+        dollars=dollars, reward_record=rr,
+    )
+
+
+def test_incremental_writer_streams_each_row_to_disk(tmp_path: Path) -> None:
+    from experiments.learning_allocator.runner import _OUTCOME_COLS
+
+    path = tmp_path / "results.tsv"
+    writer = live_runner._IncrementalResultsWriter(path, banner="# LIVE", echo=False)
+    t = _task(seed=42)
+
+    writer("frozen", t, _outcome(t, "frozen", 0.0, 0.40))
+    # The row is already durable on disk after the first run — no waiting for
+    # the matrix to finish, and a crash mid-run keeps what ran.
+    lines = path.read_text().splitlines()
+    assert lines[0] == "# LIVE"
+    assert lines[1].split("\t") == _OUTCOME_COLS
+    assert len(lines) == 3  # banner + header + 1 row
+
+    writer("S0_only", t, _outcome(t, "S0_retrieval", 0.9, 0.42))
+    lines = path.read_text().splitlines()
+    assert len(lines) == 4  # header written once; second row appended
+    row1, row2 = lines[2].split("\t"), lines[3].split("\t")
+    assert row1[0] == "frozen" and row1[6] == "frozen"
+    assert row2[0] == "S0_only" and row2[6] == "S0_retrieval"
+    # split/seed come straight off the task.
+    assert row1[4] == t.split and row1[5] == str(t.seed)
+
+
+def test_incremental_writer_truncates_stale_file(tmp_path: Path) -> None:
+    # A re-run into the same --out dir must not append onto a prior matrix's
+    # rows; the first emission truncates.
+    path = tmp_path / "results.tsv"
+    path.write_text("STALE-BANNER\nSTALE-ROW\n")
+    writer = live_runner._IncrementalResultsWriter(path, banner="# LIVE", echo=False)
+    t = _task(seed=7)
+
+    writer("frozen", t, _outcome(t, "frozen", 0.1, 0.4))
+
+    text = path.read_text()
+    assert "STALE" not in text
+    assert text.splitlines()[0] == "# LIVE"
+
+
+def test_incremental_writer_handles_skipped_outcome(tmp_path: Path) -> None:
+    from mantis_agent.learning.orchestrator import TaskOutcome
+
+    path = tmp_path / "results.tsv"
+    writer = live_runner._IncrementalResultsWriter(path, banner="# LIVE", echo=False)
+    t = _task(seed=1)
+    skipped = TaskOutcome(
+        task_name=t.name, task_id=t.task_id, cluster=t.cluster,
+        skipped=True, note="budget exhausted",
+    )
+
+    writer("frozen", t, skipped)  # must not raise on the empty reward_record
+
+    row = path.read_text().splitlines()[2].split("\t")
+    assert row[-1] == "budget exhausted"
+    assert row[-2] == "True"  # skipped column
+
+
 # ── main() preflight ─────────────────────────────────────────────────────
 
 

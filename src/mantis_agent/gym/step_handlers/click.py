@@ -231,6 +231,25 @@ class ClaudeGuidedClickHandler:
                 unknown_cards = [(x, y, t) for x, y, t in cards if t == "unknown"]
                 filtered.extend(unknown_cards)
                 filtered.sort(key=lambda c: c[1])
+                # S0 retrieval: if a retrieved anchor named a card on this
+                # page, surface it first so the listing loop clicks it next
+                # instead of crawling rank-by-rank. No hint → unchanged.
+                preferred_target = str(
+                    (getattr(step, "hints", None) or {}).get(
+                        "preferred_target_description"
+                    ) or ""
+                ).strip()
+                if preferred_target and len(filtered) > 1:
+                    before_head = filtered[0][2]
+                    filtered = _reorder_listings_for_preferred(
+                        filtered, preferred_target,
+                    )
+                    if filtered[0][2] != before_head:
+                        logger.warning(
+                            "  [claude-click] preferred-target hint surfaced "
+                            "%r first (was %r)",
+                            str(filtered[0][2])[:48], str(before_head)[:48],
+                        )
                 dynamic_verifier.record_viewport_scan(
                     page=runner._current_page,
                     viewport_stage=runner._viewport_stage,
@@ -886,6 +905,65 @@ def _looks_like_blank_newtab(url: str) -> bool:
         or lowered.startswith("edge://newtab")
         or lowered.startswith("about:blank")
     )
+
+
+# ── S0 retrieval substrate — preferred-target listing reorder ─────────
+#
+# ``apply_hint_overlay`` (gym/hint_memory.py) stamps
+# ``hints["preferred_target_description"]`` on grounding click steps when
+# the RetrievalSubstrate has a stored anchor from a prior run. The Holo3
+# grounding path surfaces it to the brain as a viewport bias; the
+# listing-NAV path below scans cards and walks them top-to-bottom, and
+# historically never consulted the hint — so a "click the next listing"
+# loop crawled rank-by-rank even when memory already named the target.
+# When the anchor matches a card on the freshly-scanned page, surface
+# that card first so the loop clicks it on the next iteration. No hint
+# (frozen / default substrate) leaves the scan order untouched.
+
+_PREFERRED_TARGET_MATCH_MIN = 0.5
+
+
+def _preferred_target_match_score(title: str, target: str) -> float:
+    """Similarity in [0, 1] between a scanned card title and the
+    retrieved preferred-target description. Exact (after normalise) →
+    1.0; containment either way → 0.9; otherwise token-set Jaccard.
+    ``unknown``-title cards never match."""
+    t = (title or "").strip().lower()
+    g = (target or "").strip().lower()
+    if not t or not g or t == "unknown":
+        return 0.0
+    if t == g:
+        return 1.0
+    if g in t or t in g:
+        return 0.9
+    a, b = set(t.split()), set(g.split())
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _reorder_listings_for_preferred(
+    listings: list[tuple[int, int, str]], preferred: str,
+) -> list[tuple[int, int, str]]:
+    """Move the best preferred-target match to the front of ``listings``.
+
+    Returns ``listings`` unchanged when there is no hint, fewer than two
+    cards, or no card scores above ``_PREFERRED_TARGET_MATCH_MIN`` — the
+    only behavioural change is for a run whose retrieved anchor actually
+    names a card on the page. No card is ever dropped; order is otherwise
+    preserved."""
+    target = (preferred or "").strip()
+    if not target or len(listings) < 2:
+        return listings
+    best_i, best_score = -1, _PREFERRED_TARGET_MATCH_MIN
+    for i, (_x, _y, title) in enumerate(listings):
+        score = _preferred_target_match_score(str(title), target)
+        if score > best_score:
+            best_i, best_score = i, score
+    if best_i <= 0:
+        return listings  # no qualifying match, or already first
+    chosen = listings[best_i]
+    return [chosen, *listings[:best_i], *listings[best_i + 1:]]
 
 
 # ── #181 helpers — independent grounding routing + metric emission ────

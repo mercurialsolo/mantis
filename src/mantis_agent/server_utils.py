@@ -1020,6 +1020,7 @@ def micro_plan_steps_to_dicts(steps: list[Any]) -> list[dict[str, Any]]:
             # MicroIntent gets the field defaults.
             "guard": str(getattr(s, "guard", "") or ""),
             "out_var": str(getattr(s, "out_var", "") or ""),
+            "stop_var": str(getattr(s, "stop_var", "") or ""),
         }
         for s in steps
     ]
