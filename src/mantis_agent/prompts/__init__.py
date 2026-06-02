@@ -52,6 +52,15 @@ _PROMPT_NAMES: tuple[str, ...] = (
     "recovery_analysis",
     "derive_objective",
     "find_form_target",
+    # Extraction-side prompts — externalised so wording tweaks (e.g.
+    # Haiku-tuned few-shot examples) get a SHA bump via
+    # ``prompt_version()`` and an A/B-able override via
+    # ``MANTIS_PROMPTS_DIR``. Previously lived as Python string
+    # constants in ``extraction/extractor.py``.
+    "extract_listing",
+    "extract_listing_scrolled",
+    "extract_listing_multi",
+    "find_listing_content_control",
 )
 
 # Placeholder defaults applied before caller-supplied substitutions. Keeps

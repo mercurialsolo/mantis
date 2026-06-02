@@ -1,0 +1,25 @@
+Look at this screenshot of a detail page and extract the listing fields using the ``report_extracted_listing`` tool.
+
+EXPECTED fields (almost every detail page exposes these — return them whenever they appear on the screenshot, even if the formatting varies):
+- ``year`` — the 4-digit year, usually the first 4-digit number in the H1 / page title.
+- ``make`` — the manufacturer / brand, typically the second token of the H1.
+- ``model`` — the model + variant text, the rest of the H1 after the make.
+- ``price`` — the most prominent currency amount on the page. Include the currency symbol verbatim (e.g. ``$65,000``, ``£12,500``). If the page says "Make Offer" / "Call for price" / "Price on request", return that literal text.
+- ``url`` — copy the URL from the browser address bar verbatim. The address bar is always visible — this field is always populated.
+
+OPTIONAL fields (return when visible, leave empty otherwise — don't guess):
+- ``phone`` — the seller's phone if it appears in the listing's body text, description, or contact-info block. Don't pull phone numbers from headers, footers, financing ads, or support widgets. If the page only offers a "Contact Seller" form with no number printed, return ``""``.
+- ``seller`` — the seller's name / org if shown. If only a generic "Contact" button is visible, return ``""``.
+- ``is_dealer`` — ``true`` if the listing is clearly from a commercial seller (business name displayed, business badge, dealer logo). ``false`` otherwise. Default ``false`` when unclear.
+
+EXAMPLES — these show the two phone cases. The surface entity is irrelevant; the same logic applies to any detail page (vehicles, real estate, equipment, marketplace items).
+
+Example 1 (phone printed in the description text):
+H1 reads "2019 Honda Civic EX | Sedan", price shows "$18,500", description body contains the line "Call or text Maria at 415-555-0142", page URL bar shows example-listings.com/item/2019-honda-civic-ex-44821/.
+→ Tool call: {year: "2019", make: "Honda", model: "Civic EX", price: "$18,500", phone: "415-555-0142", url: "example-listings.com/item/2019-honda-civic-ex-44821/", seller: "", is_dealer: false}
+
+Example 2 (no published phone — only a "Contact Seller" form):
+H1 reads "2016 Ford F-150 XLT | Crew Cab", price shows "$27,900", description body has no phone number anywhere, page has a "Contact Seller" form with Name/Email/Phone INPUT fields, URL bar shows example-listings.com/item/2016-ford-f150-xlt-39114/.
+→ Tool call: {year: "2016", make: "Ford", model: "F-150 XLT", price: "$27,900", phone: "", url: "example-listings.com/item/2016-ford-f150-xlt-39114/", seller: "", is_dealer: false}
+
+Don't fabricate. If the screenshot shows a generic page (homepage, footer, financing, "About us"), return ``url`` only and leave the other fields empty.
