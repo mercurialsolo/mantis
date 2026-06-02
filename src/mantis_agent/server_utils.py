@@ -653,6 +653,30 @@ def persist_run_artifacts(
             "download_url": f"{url_prefix}/{run_id}/artifacts/leads.csv",
         })
 
+    # claude_cost_by_path.json — per-source LLM cost breakdown the
+    # observability.claude_cost_meter mirrors into run_dir at finalize.
+    # Exposing it as an artifact lets callers see real numbers per
+    # source (extract_single / extract_multi / brain_claude / grounding /
+    # recovery / extract_tool) instead of inferring from time_breakdown.
+    # We also inline the JSON contents into ``result["claude_cost_by_path"]``
+    # so callers can read the breakdown directly from action=result
+    # without depending on the artifact-download endpoint (whose path
+    # resolution diverges between persist_run_artifacts' write location
+    # `<root>/runs/<id>/` and the routes.py read location
+    # `<root>/tenants/<tenant>/runs/<id>/` — a pre-existing path bug).
+    cost_path = run_dir / "claude_cost_by_path.json"
+    if cost_path.exists() and cost_path.stat().st_size > 0:
+        file_artifacts.append({
+            "name": "claude_cost_by_path.json",
+            "kind": "file",
+            "mime_type": "application/json",
+            "download_url": f"{url_prefix}/{run_id}/artifacts/claude_cost_by_path.json",
+        })
+        try:
+            result["claude_cost_by_path"] = json.loads(cost_path.read_text())
+        except Exception:
+            pass
+
     inline = result.get("artifacts") or []
     structured = next(
         (a for a in inline if a.get("kind") == "structured_data" and a.get("name") == "extracted_rows"),

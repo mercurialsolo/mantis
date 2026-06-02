@@ -307,6 +307,13 @@ _ARTIFACT_ALLOWLIST: dict[str, str] = {
     "extracted_rows.csv": "text/csv",
     "extracted_rows.json": "application/json",
     "result.json": "application/json",
+    # Per-source Claude cost breakdown — observability.claude_cost_meter
+    # mirrors this to run_dir at finalize so persist_run_artifacts can
+    # expose it. Lets callers see real per-source dollar splits
+    # (extract_single / extract_multi / brain_claude / grounding /
+    # recovery / extract_tool) instead of the single aggregate the
+    # ``costs.claude`` total field gives.
+    "claude_cost_by_path.json": "application/json",
 }
 
 
