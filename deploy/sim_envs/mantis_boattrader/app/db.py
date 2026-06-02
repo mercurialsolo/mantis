@@ -112,6 +112,7 @@ def query_boats(params: dict, page: int = 1, per_page: int = 24) -> dict:
     cond_v = params.get("condition")
     state_v = params.get("state")
     city_v = params.get("city")
+    listing_v = params.get("listing_type")  # "owner" | "dealer"
     q = (params.get("q") or "").strip().lower()
 
     year_min = _maybe_int(params.get("year_min"))
@@ -133,6 +134,14 @@ def query_boats(params: dict, page: int = 1, per_page: int = 24) -> dict:
             return False
         if city_v and b.city.lower() != city_v.lower():
             return False
+        if listing_v:
+            # "by-dealer" covers both ordinary dealer and sponsored stock;
+            # "by-owner" is exactly the private-seller listings (BT03).
+            if listing_v == "dealer":
+                if b.listing_type not in ("dealer", "sponsored"):
+                    return False
+            elif b.listing_type != listing_v:
+                return False
         if year_min is not None and b.year < year_min:
             return False
         if year_max is not None and b.year > year_max:
