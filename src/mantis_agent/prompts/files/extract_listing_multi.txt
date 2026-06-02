@@ -18,14 +18,14 @@ OUTPUT FORMAT — ONLY valid JSON, TOP-LEVEL fields (no nesting):
   "phone": "...", "url": "...", "seller": "...", "is_dealer": false
 }
 
-EXAMPLES — for these two listing pages, correct outputs would be:
+EXAMPLES — these show the two phone cases. The surface entity is irrelevant; the same logic applies to any detail page (vehicles, real estate, equipment, marketplace items).
 
-Example 1 (private seller, phone embedded in description):
-H1 "2021 Yamaha Boats 252SE | 25'", price "$59,999", description contains "Call or text David at 503-770-0756", URL boattrader.com/boat/2021-yamaha-boats-252se-10179306/.
-→ {"year":"2021","make":"Yamaha Boats","model":"252SE","price":"$59,999","phone":"503-770-0756","url":"boattrader.com/boat/2021-yamaha-boats-252se-10179306/","seller":"","is_dealer":false}
+Example 1 (phone embedded in the description text):
+H1 "2019 Honda Civic EX | Sedan", price "$18,500", description contains "Call or text Maria at 415-555-0142", URL example-listings.com/item/2019-honda-civic-ex-44821/.
+→ {"year":"2019","make":"Honda","model":"Civic EX","price":"$18,500","phone":"415-555-0142","url":"example-listings.com/item/2019-honda-civic-ex-44821/","seller":"","is_dealer":false}
 
-Example 2 (private seller, no phone published — only a contact form):
-H1 "1986 Marine Trader Europa | 36'", price "$65,000", description has no phone, page has a Contact Private Seller form with Name/Email/Your-Phone INPUT fields, URL boattrader.com/boat/1986-marine-trader-europa-10167773/.
-→ {"year":"1986","make":"Marine Trader","model":"Europa","price":"$65,000","phone":"","url":"boattrader.com/boat/1986-marine-trader-europa-10167773/","seller":"","is_dealer":false}
+Example 2 (no phone published — only a "Contact Seller" form):
+H1 "2016 Ford F-150 XLT | Crew Cab", price "$27,900", description has no phone, page has a "Contact Seller" form with Name/Email/Phone INPUT fields, URL example-listings.com/item/2016-ford-f150-xlt-39114/.
+→ {"year":"2016","make":"Ford","model":"F-150 XLT","price":"$27,900","phone":"","url":"example-listings.com/item/2016-ford-f150-xlt-39114/","seller":"","is_dealer":false}
 
 If a screenshot shows a generic page (footer, financing, "About us"), return only the ``url`` and leave the other fields empty — don't fabricate.
