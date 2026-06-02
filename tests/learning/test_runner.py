@@ -24,6 +24,8 @@ from experiments.learning_allocator.runner import (
     S0,
     S1,
     NoOpSubstrate,
+    _OUTCOME_COLS,
+    _outcome_row,
     build_policy_allocator,
     build_table1,
     fig1_series,
@@ -240,6 +242,49 @@ def test_fig1_series_cumulative_dollars_monotonic() -> None:
     assert series[-1].cum_dollars == pytest.approx(0.15 * len(_tasks()))
     # constant score → running mean stays at 0.6
     assert series[-1].running_mean_oracle == pytest.approx(0.6)
+
+
+# ── streaming: on_outcome callback ───────────────────────────────────────
+
+
+def test_run_experiment_streams_each_outcome_with_policy() -> None:
+    # run_experiment forwards every outcome to on_outcome as (policy, task,
+    # outcome) the moment it lands — the seam live_runner writes rows from.
+    seen: list[tuple[str, str, str | None]] = []
+    run_experiment(
+        tasks=_tasks(), run_fn=_const_run_fn(0.8, 0.1),
+        reward_fn=offline_reward_fn, budget=100.0, rounds=1, epsilon=0.0,
+        policies=("frozen", "S0_only"),
+        on_outcome=lambda policy, task, o: seen.append((policy, task.name, o.substrate)),
+    )
+    # One emission per (policy, task).
+    assert len(seen) == 2 * len(_tasks())
+    assert {p for p, _, _ in seen} == {"frozen", "S0_only"}
+    # The policy is bound per-iteration, not captured late: frozen's rows must
+    # all read the no-op substrate, never S0's.
+    assert {s for p, _, s in seen if p == "frozen"} == {FROZEN}
+
+
+def test_streamed_rows_match_final_results_tsv(tmp_path: Path) -> None:
+    # The rows streamed during the run must be byte-identical to the rows the
+    # end-of-run batch writer emits — one row formatter, no divergence.
+    streamed: list[list[str]] = []
+
+    def on_outcome(policy, task, o):
+        streamed.append([str(c) for c in _outcome_row(policy, o, task.split, task.seed)])
+
+    result = run_experiment(
+        tasks=_tasks(), run_fn=_const_run_fn(0.8, 0.1),
+        reward_fn=offline_reward_fn, budget=100.0, epsilon=0.0,
+        policies=("frozen", "S0_only"),
+        on_outcome=on_outcome,
+    )
+    paths = write_results(result, tmp_path)
+    with paths["results"].open() as fh:
+        next(fh)  # banner
+        rows = list(csv.reader(fh, delimiter="\t"))
+    assert rows[0] == _OUTCOME_COLS
+    assert streamed == rows[1:]
 
 
 # ── writers ──────────────────────────────────────────────────────────────

@@ -275,6 +275,54 @@ def test_report_counts_false_pass_and_fail(monkeypatch) -> None:
     assert report.false_fails == 0
 
 
+# ── on_outcome streaming callback ────────────────────────────────────────
+
+
+def test_on_outcome_fires_once_per_run(monkeypatch) -> None:
+    # The loop emits each outcome the moment it lands, so a caller can stream
+    # rows to disk instead of waiting for the whole matrix to finish.
+    _stub_reward(monkeypatch)
+    alloc = MyopicAllocator([FakeSub("S0")], epsilon=0.0)
+    seen: list[tuple[str, str | None, bool]] = []
+
+    orch = _orch(
+        alloc, lambda *a: {"reward": 0.5, "costs": {"total": 0.1}},
+        on_outcome=lambda task, o: seen.append((task.name, o.substrate, o.skipped)),
+    )
+    orch.run([_task("t1")], rounds=2)
+
+    # One emission per pass, carrying the live task + the outcome just appended.
+    assert seen == [("t1", "S0", False), ("t1", "S0", False)]
+
+
+def test_on_outcome_fires_on_skip(monkeypatch) -> None:
+    # Skips are outcomes too — they must stream so the file mirrors the report.
+    _stub_reward(monkeypatch)
+    alloc = MyopicAllocator([FakeSub("S0")], epsilon=0.0)
+    seen: list[tuple[str, bool, str]] = []
+
+    orch = _orch(
+        alloc, lambda *a: {"reward": 0.5, "costs": {"total": 0.1}},
+        on_outcome=lambda task, o: seen.append((task.name, o.skipped, o.note)),
+    )
+    orch.run_task(_task("nope", status="needs_oracle", task_id=""))
+
+    assert len(seen) == 1
+    name, skipped, note = seen[0]
+    assert name == "nope" and skipped is True and "not runnable" in note
+
+
+def test_on_outcome_absent_is_a_no_op(monkeypatch) -> None:
+    # The callback is optional; the loop must run unchanged without one.
+    _stub_reward(monkeypatch)
+    alloc = MyopicAllocator([FakeSub("S0")], epsilon=0.0)
+    orch = _orch(alloc, lambda *a: {"reward": 0.5, "costs": {"total": 0.1}})
+
+    report = orch.run([_task()])
+
+    assert report.n_runs == 1
+
+
 def test_run_skips_non_runnable_in_batch(monkeypatch) -> None:
     _stub_reward(monkeypatch)
     alloc = MyopicAllocator([FakeSub("S0")], epsilon=0.0)

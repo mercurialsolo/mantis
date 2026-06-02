@@ -110,6 +110,45 @@ def test_focused_click_no_pending_values_forces_tab(
     assert decision.forced_action.params == {"keys": "Tab"}
 
 
+# ── Rule 1c: submit-shaped focused-click loop → Return ────────────────
+
+
+def test_focused_submit_shaped_click_forces_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A form input is focused and the brain loops on a submit-shaped
+    click it can't land. Press Return so the focused field's form submits
+    via the keyboard, instead of Tabbing focus off the field."""
+    monkeypatch.delenv("MANTIS_LOOP_RECOVERY", raising=False)
+    decision = decide_recovery(**_common(
+        action=_click(reasoning="Click the Contact Seller button to submit the form."),
+        focused_input={"name": "email"},
+        pending_form_values=[],
+        recent_frame_hashes=["aaa", "aaa", "aaa"],
+        task="Submit the seller contact form.",
+    ))
+    assert decision.reason == REASON_PRESS_RETURN_FOR_SUBMIT
+    assert decision.forced_action is not None
+    assert decision.forced_action.action_type == ActionType.KEY_PRESS
+    assert decision.forced_action.params == {"keys": "Return"}
+
+
+def test_focused_submit_shaped_click_changing_frame_falls_through_to_tab(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Submit-shaped focused click but the frame is changing → the click
+    is doing something, so fall through to the milder Tab nudge."""
+    monkeypatch.delenv("MANTIS_LOOP_RECOVERY", raising=False)
+    decision = decide_recovery(**_common(
+        action=_click(reasoning="Click submit."),
+        focused_input={"name": "email"},
+        pending_form_values=[],
+        recent_frame_hashes=["aaa", "bbb", "ccc"],
+        task="Submit the form.",
+    ))
+    assert decision.reason == REASON_TAB_TO_NEXT_FIELD
+
+
 # ── Rule 2: submit-shaped click with frozen frame → Return ────────────
 
 

@@ -295,6 +295,78 @@ def test_looks_like_blank_newtab_predicate():
     assert _looks_like_blank_newtab("") is False
 
 
+# ── S0 preferred-target listing reorder (#43) ─────────────────────────
+
+_CARDS = [
+    (10, 100, "2018 Beneteau Antares 7"),
+    (10, 200, "2023 Tracker Pro Team 175 TXW"),
+    (10, 300, "2026 Viking 68 Convertible"),  # the deep Caterpillar
+]
+
+
+def test_reorder_exact_match_moves_to_front():
+    from mantis_agent.gym.step_handlers.click import _reorder_listings_for_preferred
+    out = _reorder_listings_for_preferred(_CARDS, "2026 Viking 68 Convertible")
+    assert out[0] == (10, 300, "2026 Viking 68 Convertible")
+    # No card dropped; the rest keep their relative order.
+    assert out[1:] == [_CARDS[0], _CARDS[1]]
+    assert set(out) == set(_CARDS)
+
+
+def test_reorder_no_hint_returns_same_object():
+    from mantis_agent.gym.step_handlers.click import _reorder_listings_for_preferred
+    assert _reorder_listings_for_preferred(_CARDS, "") is _CARDS
+    assert _reorder_listings_for_preferred(_CARDS, "   ") is _CARDS
+
+
+def test_reorder_no_match_unchanged():
+    from mantis_agent.gym.step_handlers.click import _reorder_listings_for_preferred
+    # An anchor that names nothing on the page must not perturb order —
+    # frozen-style fallthrough to top-to-bottom crawl.
+    out = _reorder_listings_for_preferred(_CARDS, "Caterpillar Excavator 320")
+    assert out is _CARDS
+
+
+def test_reorder_already_first_unchanged():
+    from mantis_agent.gym.step_handlers.click import _reorder_listings_for_preferred
+    cards = [(10, 100, "2026 Viking 68 Convertible"), (10, 200, "Other Boat")]
+    out = _reorder_listings_for_preferred(cards, "2026 Viking 68 Convertible")
+    assert out is cards  # best match already at index 0
+
+
+def test_reorder_containment_match():
+    from mantis_agent.gym.step_handlers.click import _reorder_listings_for_preferred
+    cards = [
+        (10, 100, "2018 Beneteau Antares 7"),
+        (10, 200, "Used 2026 Viking 68 Convertible — Pilothouse Edition"),
+    ]
+    out = _reorder_listings_for_preferred(cards, "2026 Viking 68 Convertible")
+    assert "Viking 68 Convertible" in out[0][2]
+
+
+def test_reorder_skips_unknown_title_cards():
+    from mantis_agent.gym.step_handlers.click import _reorder_listings_for_preferred
+    cards = [(10, 100, "unknown"), (10, 200, "2026 Viking 68 Convertible")]
+    out = _reorder_listings_for_preferred(cards, "2026 Viking 68 Convertible")
+    assert out[0][2] == "2026 Viking 68 Convertible"
+
+
+def test_reorder_single_card_unchanged():
+    from mantis_agent.gym.step_handlers.click import _reorder_listings_for_preferred
+    cards = [(10, 100, "2026 Viking 68 Convertible")]
+    assert _reorder_listings_for_preferred(cards, "2026 Viking 68 Convertible") is cards
+
+
+def test_preferred_target_match_score_bounds():
+    from mantis_agent.gym.step_handlers.click import _preferred_target_match_score
+    anchor = "2026 Viking 68 Convertible"
+    assert _preferred_target_match_score(anchor, anchor) == 1.0
+    assert _preferred_target_match_score("", anchor) == 0.0
+    assert _preferred_target_match_score("unknown", anchor) == 0.0
+    # Partial token overlap stays strictly inside the open interval.
+    assert 0.0 < _preferred_target_match_score("2026 Viking 70 Sport", anchor) < 1.0
+
+
 def test_handler_filters_already_extracted_titles(monkeypatch):
     """Cards whose titles are in _extracted_titles get filtered out before clicking."""
     monkeypatch.setattr("mantis_agent.gym.step_handlers.click.time.sleep", lambda *_: None)

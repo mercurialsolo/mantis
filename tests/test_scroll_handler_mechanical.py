@@ -392,6 +392,73 @@ def test_no_movement_counter_reset_on_verified_motion():
     assert res.failure_class == "scroll_no_movement"
 
 
+# ── partial-viewport precision scroll (params.fraction, CDP only) ──
+
+
+def test_cdp_default_fraction_keeps_triple_prong_full_viewport():
+    """No ``fraction`` → unchanged triple-prong dispatch: a full
+    ``window.innerHeight`` per count, scrollBy + scrollingElement +
+    synthetic PageDown. Backward-compat guard for existing plans and
+    the step_recovery payload."""
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(side_effect=[0.0, None, 2000.0])
+    h = MechanicalScrollHandler(MagicMock())
+    h.execute(
+        MicroIntent(
+            intent="x", type="scroll",
+            params={"count": 1, "backend": "cdp"},
+        ),
+        _ctx(env),
+    )
+    js = env.cdp_evaluate.call_args_list[1].args[0]
+    assert "window.innerHeight" in js
+    assert "Math.round" not in js          # full viewport, not scaled
+    assert "PageDown" in js                 # triple-prong retained
+
+
+def test_cdp_fraction_half_uses_single_apply_no_pagedown():
+    """``fraction=0.5`` → partial precision scroll: ``h`` is
+    ``Math.round(0.5 * window.innerHeight)`` applied EXACTLY once
+    (guarded scrollingElement fallback), and the synthetic PageDown is
+    dropped so the page lands on the target band instead of overshooting
+    by a full viewport (the BT02 stats-strip-below-the-fold case)."""
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(side_effect=[0.0, None, 320.0])
+    h = MechanicalScrollHandler(MagicMock())
+    res = h.execute(
+        MicroIntent(
+            intent="x", type="scroll",
+            params={"count": 1, "backend": "cdp", "fraction": 0.5},
+        ),
+        _ctx(env),
+    )
+    assert res.success is True
+    js = env.cdp_evaluate.call_args_list[1].args[0]
+    assert "Math.round(0.5 * window.innerHeight)" in js
+    assert "PageDown" not in js              # no full-page key scroll
+    assert "Math.abs" in js                  # single-apply guard
+
+
+def test_cdp_fraction_out_of_range_falls_back_to_full_viewport():
+    """``fraction`` outside (0, 1] (zero, >1, negative, non-numeric)
+    is ignored → full-viewport triple-prong. Keeps a bad plan value
+    from silently producing a no-op or a runaway scroll."""
+    h = MechanicalScrollHandler(MagicMock())
+    for bad in (0.0, 1.5, -0.5, "lots"):
+        env = MagicMock()
+        env.cdp_evaluate = MagicMock(side_effect=[0.0, None, 2000.0])
+        h.execute(
+            MicroIntent(
+                intent="x", type="scroll",
+                params={"count": 1, "backend": "cdp", "fraction": bad},
+            ),
+            _ctx(env),
+        )
+        js = env.cdp_evaluate.call_args_list[1].args[0]
+        assert "Math.round" not in js, f"fraction={bad!r} should be full"
+        assert "PageDown" in js, f"fraction={bad!r} should be triple-prong"
+
+
 def test_cdp_backend_dispatch_error_returned_with_failure_class():
     """When CDP dispatch raises (Chrome devtools disconnected etc.),
     the handler returns ``scroll_dispatch_error`` rather than

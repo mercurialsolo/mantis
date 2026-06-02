@@ -170,6 +170,14 @@ class MicroIntent:
     # screenshot, never a DOM probe. CUA-purity preserved.
     guard: str = ""
     out_var: str = ""
+    # Loop early-exit on a state variable (LA discriminator). On a ``loop``
+    # step, when ``stop_var`` names a ``runner._state_vars`` key that an
+    # earlier ``detect_visible`` (via ``out_var``) bound truthy, the loop
+    # exits immediately instead of running its remaining iterations. Lets a
+    # search loop stop the instant the target is found rather than walking
+    # every item — the lever that makes a learned grounding anchor (S0) skip
+    # the search. Empty (the default) on every non-loop / unconditional step.
+    stop_var: str = ""
 
 
 @dataclass
@@ -1243,6 +1251,7 @@ class PlanDecomposer:
             hints=hints,
             guard=str(s.get("guard", "") or ""),
             out_var=str(s.get("out_var", "") or ""),
+            stop_var=str(s.get("stop_var", "") or ""),
         )
 
     @staticmethod

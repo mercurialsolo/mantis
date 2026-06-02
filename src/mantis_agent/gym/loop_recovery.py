@@ -152,6 +152,34 @@ def decide_recovery(
                         f"val_label={label}"
                     ),
                 )
+        # Submit-shaped click loop while a form input is focused: the
+        # brain is hunting for a submit button it can't land. Pressing
+        # Return submits the focused field's form via the keyboard (HTML
+        # implicit submission) — Tab would only move focus off the very
+        # field we want to submit from. Gated on a frozen frame so we
+        # fire only when the click genuinely isn't working, mirroring
+        # Rule 2's submit path for the unfocused case.
+        if _is_submit_shaped(action, task) and _frame_window_stable(
+            recent_frame_hashes, soft_loop_window
+        ):
+            return LoopRecoveryDecision(
+                forced_action=Action(
+                    ActionType.KEY_PRESS, {"keys": "Return"},
+                    reasoning=(
+                        "loop-recovery: pressing Return — submit-shaped "
+                        "click loop with a form input focused"
+                    ),
+                ),
+                reason=REASON_PRESS_RETURN_FOR_SUBMIT,
+                detail=(
+                    "submit-shaped focused click; focused="
+                    + (
+                        focused_input.get("name")
+                        or focused_input.get("placeholder")
+                        or "unknown"
+                    )
+                ),
+            )
         # No value to type — Tab to the next field. Common pattern:
         # brain re-clicks the same field because it can't find the
         # right action; Tab gives the loop a way out.

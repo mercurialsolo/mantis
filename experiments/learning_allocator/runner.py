@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from random import Random
@@ -222,6 +223,7 @@ def run_experiment(
     hint_store: Any = None,
     trace_dir: Any = None,
     start_url: str = "",
+    on_outcome: Callable[[str, EvalTask, TaskOutcome], None] | None = None,
 ) -> ExperimentResult:
     """Run every policy over ``tasks`` under an identical budget and collect.
 
@@ -245,6 +247,12 @@ def run_experiment(
             policy, hint_store=hint_store, trace_dir=trace_dir,
             epsilon=epsilon, rng=rng,
         )
+        # Bind the policy name now (default-arg capture) so the streamed row
+        # carries this policy, not the loop's last value.
+        per_policy = (
+            (lambda p: lambda task, o: on_outcome(p, task, o))(policy)
+            if on_outcome is not None else None
+        )
         orch = Phase2Orchestrator(
             allocator=allocator,
             run_fn=run_fn,
@@ -253,6 +261,7 @@ def run_experiment(
             budget=budget,
             reward_fn=reward_fn,
             start_url=start_url,
+            on_outcome=per_policy,
         )
         result.reports[policy] = orch.run(tasks, rounds=rounds)
     return result
@@ -426,33 +435,52 @@ def write_results(
     return paths
 
 
-def _write_outcomes_tsv(path: Path, result: ExperimentResult, banner: str) -> None:
-    cols = [
-        "policy", "task_name", "task_id", "cluster", "split", "seed",
-        "substrate", "oracle_score", "oracle_passed", "proxy_verdict",
-        "dollars", "reward", "false_pass", "false_fail", "skipped", "note",
+# The results.tsv schema — shared by the end-of-run batch write and the live
+# per-row streamer so the two can never drift out of column order.
+_OUTCOME_COLS = [
+    "policy", "task_name", "task_id", "cluster", "split", "seed",
+    "substrate", "oracle_score", "oracle_passed", "proxy_verdict",
+    "dollars", "reward", "false_pass", "false_fail", "skipped", "note",
+]
+
+
+def _outcome_row(policy: str, o: TaskOutcome, split: Any, seed: Any) -> list[Any]:
+    """One results.tsv row for ``o`` under ``policy``.
+
+    ``split`` / ``seed`` are passed in (rather than read off the outcome) so
+    both writers can source them from the same place — ``ExperimentResult``'s
+    per-task maps for the batch write, the live ``EvalTask`` for the streamer;
+    they're equal by construction.
+    """
+    rr = o.reward_record
+    return [
+        policy, o.task_name, o.task_id, o.cluster,
+        split if split is not None else "",
+        seed if seed is not None else "",
+        o.substrate or "",
+        rr.oracle_score if rr else "",
+        rr.oracle_passed if rr else "",
+        rr.proxy_verdict if rr else "",
+        o.dollars if o.dollars is not None else "",
+        o.reward if o.reward is not None else "",
+        rr.false_pass if rr else "",
+        rr.false_fail if rr else "",
+        o.skipped, o.note,
     ]
+
+
+def _write_outcomes_tsv(path: Path, result: ExperimentResult, banner: str) -> None:
     with path.open("w", newline="") as fh:
         fh.write(banner + "\n")
         w = csv.writer(fh, delimiter="\t")
-        w.writerow(cols)
+        w.writerow(_OUTCOME_COLS)
         for policy, report in result.reports.items():
             for o in report.outcomes:
-                rr = o.reward_record
-                w.writerow([
-                    policy, o.task_name, o.task_id, o.cluster,
+                w.writerow(_outcome_row(
+                    policy, o,
                     result.split_of.get(o.task_name, ""),
                     result.seed_of.get(o.task_name, ""),
-                    o.substrate or "",
-                    rr.oracle_score if rr else "",
-                    rr.oracle_passed if rr else "",
-                    rr.proxy_verdict if rr else "",
-                    o.dollars if o.dollars is not None else "",
-                    o.reward if o.reward is not None else "",
-                    rr.false_pass if rr else "",
-                    rr.false_fail if rr else "",
-                    o.skipped, o.note,
-                ])
+                ))
 
 
 def _write_table1_tsv(path: Path, rows: list[Table1Row], banner: str) -> None:

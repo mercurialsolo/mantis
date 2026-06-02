@@ -811,6 +811,58 @@ def parse_now(s: str) -> datetime:
         return datetime.fromisoformat(FAKE_NOW_DEFAULT.replace("Z", "+00:00"))
 
 
+# ---------------------------------------------------------------------------
+# BT02 reach-asymmetry reseed.
+#
+# The BT02 knowledge-cluster eval (Caterpillar-engine lead lookup) needs a
+# *reach asymmetry* between a frozen agent and an S0-retrieval agent: an agent
+# walking the recommended order sequentially must run out of budget before
+# reaching any Caterpillar listing, while an S0 agent — primed with a stored
+# click-target hint — can jump straight to one. The stock seed defeats this by
+# placing a Caterpillar at rank 0, which a frozen agent hits for free.
+#
+# This post-pass buries every Caterpillar below the gen view-floor and strips
+# its Featured badge, then re-pins a few targets back onto page 1 at *mid*
+# ranks — past a frozen agent's ~2-3-boat sequential reach, but inside the
+# page-1 DOM an S0 hint can bias toward. It mutates only ``views`` and
+# ``badges`` on existing Caterpillar boats via an INDEPENDENT RNG, so the
+# generator stream is untouched and the other oracles' answer sets (BT01 used
+# Sea Rays, BT03 by-owner phones) plus determinism are preserved. The BT02
+# oracle grades off ``engine_make`` only, which this never touches.
+#
+# Gated by ``BT02_DEEP_CATERPILLAR`` (default on); set to ``0`` to restore the
+# stock order.
+
+_BT02_TARGET_RANKS: tuple[int, ...] = (4, 8)
+
+
+def _apply_deep_caterpillar(boats: list[Boat], *, seed: int) -> None:
+    cats = [b for b in boats if (b.engine_make or "") == "Caterpillar"]
+    if len(cats) <= len(_BT02_TARGET_RANKS):
+        return
+    rng = random.Random(seed * 7919 + 13)  # independent of the gen stream
+    # Bury every Caterpillar: drop Featured, sink views below the gen floor (20).
+    for b in cats:
+        if "Featured" in b.badges:
+            b.badges.remove("Featured")
+        b.views = rng.randint(1, 15)
+    # View distribution of the Featured tier *after* burying Caterpillars.
+    featured_views = sorted(
+        (b.views for b in boats if "Featured" in b.badges), reverse=True
+    )
+    # Re-pin the first N Caterpillars (by id == generation order) onto page 1
+    # at mid ranks: each lands just below the Featured boat at its target rank.
+    targets = sorted(cats, key=lambda b: b.id)[: len(_BT02_TARGET_RANKS)]
+    for tgt, rank in zip(targets, _BT02_TARGET_RANKS):
+        if featured_views:
+            idx = min(rank, len(featured_views) - 1)
+            tgt.views = max(16, featured_views[idx] - 1)
+        else:
+            tgt.views = 16
+        if "Featured" not in tgt.badges:
+            tgt.badges.append("Featured")
+
+
 def build() -> dict[str, Any]:
     seed = int(os.environ.get("SEED", 42))
     count = int(os.environ.get("BOAT_COUNT", 600))
@@ -818,6 +870,8 @@ def build() -> dict[str, Any]:
     rng = _rand(seed)
     dealers = _gen_dealers(rng)
     boats = _gen_boats(rng, dealers, count, now)
+    if os.environ.get("BT02_DEEP_CATERPILLAR", "1") not in ("0", "false", "False"):
+        _apply_deep_caterpillar(boats, seed=seed)
     return {
         "dealers": dealers,
         "boats": boats,

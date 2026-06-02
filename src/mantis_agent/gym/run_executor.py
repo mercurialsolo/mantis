@@ -882,6 +882,7 @@ class RunExecutor:
             # ``has_show_more=False``.
             guard=getattr(step, "guard", "") or "",
             out_var=getattr(step, "out_var", "") or "",
+            stop_var=getattr(step, "stop_var", "") or "",
         )
 
     def _handle_loop_step(
@@ -907,6 +908,25 @@ class RunExecutor:
             )
         if not max_count:
             max_count = state.max_loop_iterations
+        # LA discriminator: stop-on-var. A ``loop`` step may name a state
+        # variable in ``stop_var``; when an earlier ``detect_visible`` bound
+        # it truthy (``runner._state_vars[out_var]``), exit the loop now
+        # instead of walking the remaining iterations. This is what lets a
+        # learned grounding anchor (S0) turn an exhaustive search into a
+        # one-shot jump — the loop quits the instant the target is found.
+        # Reads the same ``_state_vars`` bag that ``execute_step`` consults
+        # for ``guard`` (set by DetectVisibleHandler); empty/absent → no-op.
+        stop_var = getattr(step, "stop_var", "") or ""
+        if stop_var:
+            state_vars = getattr(self.parent, "_state_vars", {}) or {}
+            if bool(state_vars.get(stop_var, False)):
+                logger.info(
+                    "  [loop] stop_var=%s truthy → exit after %d/%d iterations",
+                    stop_var, count, max_count,
+                )
+                state.step_index += 1
+                self._persist(plan, state)
+                return
         if count < max_count:
             target = step.loop_target if step.loop_target >= 0 else state.step_index
             state.step_index = target
