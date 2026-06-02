@@ -129,77 +129,20 @@ def _coerce_coord(value: Any) -> int | None:
 # behaviour (boat listings, job postings, real-estate) MUST come through an
 # explicit ExtractionSchema — the prompts below contain no hardcoded labels,
 # field names, or industry verbs.
+#
+# Prompt bodies live under ``mantis_agent.prompts.files/*.txt`` so wording
+# tweaks (Haiku-tuned few-shot, locale variants) get a SHA bump via
+# :func:`mantis_agent.prompts.prompt_version` and an A/B-able override via
+# the ``MANTIS_PROMPTS_DIR`` env var. These module-level constants are kept
+# for back-compat (``from mantis_agent.extraction import EXTRACT_PROMPT``)
+# and resolve to the same text the loader returns.
 
-EXTRACT_PROMPT = """\
-Look at this screenshot of a detail page.
+from ..prompts import load_prompt as _load_prompt
 
-Extract the canonical fields the page exposes. Read the browser URL bar, the page heading / H1, the most prominent labelled fields, and the seller / contact area.
-
-Return values via the ``report_extracted_listing`` tool with the following fields. **Every field is OPTIONAL \u2014 return only the ones you can clearly read off the screenshot. If a field is not visible, omit it (or pass an empty string). DO NOT fabricate values.** The tool's schema enforces shape; missing fields are normal and expected for many listings (e.g. classified ads often don't expose contact phone publicly).
-
-Field guide:
-- ``year`` \u2014 4-digit listing year, usually in the H1 / title. Extract the FIRST 4-digit year you see in the title.
-- ``make`` \u2014 manufacturer / brand, usually the second token in the H1.
-- ``model`` \u2014 model name + variant, the rest of the H1 after make.
-- ``price`` \u2014 asking price, usually the most prominent currency amount on the page. Include the currency symbol. If "Call for price" / "Make Offer", return that literal text.
-- ``url`` \u2014 copy the URL from the browser address bar verbatim. This is the ONE field you should always be able to return \u2014 the address bar is always visible.
-- ``phone`` \u2014 seller's phone if visible IN the listing's description / contact area. If the page only has a contact form (no published phone), return "". Don't extract phone numbers from headers / footers / ads.
-- ``seller`` \u2014 seller name or org if shown. If only a contact button is visible, return "".
-- ``is_dealer`` \u2014 true if the listing is clearly from a commercial seller (org name displayed, business badge, business contact form). false otherwise. Default false when unclear.
-"""
-
-EXTRACT_SCROLLED_PROMPT = """\
-Look at this screenshot. You have scrolled down on a detail page.
-
-Read any newly-visible labelled fields, free-text description content,
-and contact information. Don't repeat what was clearly visible at the
-top of the page \u2014 focus on what's revealed by the scroll.
-
-Output ONLY valid JSON:
-{"extracted": {"<field-name>": "<value>", ...}, "additional_info": ""}
-"""
-
-EXTRACT_MULTI_SCREENSHOT_PROMPT = """\
-You are looking at multiple screenshots from the SAME detail page, captured at different scroll positions.
-
-Extract the canonical fields from across ALL screenshots — combine the title / H1 / specs / description / contact area into one record.
-
-Output ONLY valid JSON with TOP-LEVEL fields (no nesting). Every field is OPTIONAL — include only the ones you can clearly read. If a field is not visible across any screenshot, omit it or set it to empty string. DO NOT fabricate values. The URL field IS required — copy it verbatim from whichever screenshot shows the browser address bar.
-
-{
-  "year": "<4-digit year from title>",
-  "make": "<manufacturer / brand>",
-  "model": "<model + variant>",
-  "price": "<asking price with currency; or 'Make Offer' / 'Call for price'>",
-  "phone": "<seller phone if visible in description / contact area; empty if behind a contact form>",
-  "url": "<browser address-bar URL, verbatim>",
-  "seller": "<seller name or org if shown; empty if only a contact button is visible>",
-  "is_dealer": <true if listing is from a commercial seller, false otherwise>
-}
-
-Examples of fields that should be EMPTY (not fabricated):
-- Phone behind a "Contact" button (no number on page) → "phone": ""
-- Price shown as "Make Offer" → "price": "Make Offer"
-- Field not visible anywhere across screenshots → omit or empty string
-"""
-
-FIND_LISTING_CONTENT_CONTROL_PROMPT = """\
-Look at this detail-page screenshot.
-
-Find ONE visible control that should be clicked to reveal more
-content the page is hiding behind a collapse/expand toggle. Typical
-targets are "Show more", "Read more", "See more", "Expand", or any
-visible chevron next to a collapsed section.
-
-Avoid controls that submit forms, send messages, navigate away, or
-trigger modals \u2014 only pick a control that expands content in place.
-
-Return the center of the best target. Output ONLY valid JSON:
-{"x": N, "y": N, "action": "expand|none", "label": "visible text", "reason": "brief reason"}
-
-If no expand control is visible, output:
-{"x": 0, "y": 0, "action": "none", "label": "", "reason": "none visible"}
-"""
+EXTRACT_PROMPT = _load_prompt("extract_listing")
+EXTRACT_SCROLLED_PROMPT = _load_prompt("extract_listing_scrolled")
+EXTRACT_MULTI_SCREENSHOT_PROMPT = _load_prompt("extract_listing_multi")
+FIND_LISTING_CONTENT_CONTROL_PROMPT = _load_prompt("find_listing_content_control")
 
 
 class ClaudeExtractor:
@@ -730,6 +673,11 @@ class ClaudeExtractor:
             ),
             input_schema=input_schema,
             max_tokens=1500,
+            # #14-followup: distinct source so the per-source meter can
+            # separate primary extracts from the other claude_extract
+            # bucket consumers (find_content_control / verify_post_click
+            # / find_filter_target) that share the default label.
+            time_bucket="extract_listing",
         )
 
         if not parsed:
@@ -1003,6 +951,7 @@ class ClaudeExtractor:
                 },
                 "required": ["x", "y", "action", "label", "reason"],
             },
+            time_bucket="find_content_control",
         )
 
         try:
@@ -1650,6 +1599,7 @@ class ClaudeExtractor:
                 },
                 "required": ["x", "y", "action", "value", "label"],
             },
+            time_bucket="find_filter_target",
         )
 
         try:

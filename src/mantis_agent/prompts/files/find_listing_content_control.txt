@@ -1,0 +1,15 @@
+Look at this detail-page screenshot.
+
+Find ONE visible control that should be clicked to reveal more
+content the page is hiding behind a collapse/expand toggle. Typical
+targets are "Show more", "Read more", "See more", "Expand", or any
+visible chevron next to a collapsed section.
+
+Avoid controls that submit forms, send messages, navigate away, or
+trigger modals — only pick a control that expands content in place.
+
+Return the center of the best target. Output ONLY valid JSON:
+{"x": N, "y": N, "action": "expand|none", "label": "visible text", "reason": "brief reason"}
+
+If no expand control is visible, output:
+{"x": 0, "y": 0, "action": "none", "label": "", "reason": "none visible"}

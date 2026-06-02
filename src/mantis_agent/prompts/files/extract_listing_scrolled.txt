@@ -1,0 +1,8 @@
+Look at this screenshot. You have scrolled down on a detail page.
+
+Read any newly-visible labelled fields, free-text description content,
+and contact information. Don't repeat what was clearly visible at the
+top of the page — focus on what's revealed by the scroll.
+
+Output ONLY valid JSON:
+{"extracted": {"<field-name>": "<value>", ...}, "additional_info": ""}

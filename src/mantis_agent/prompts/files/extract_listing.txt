@@ -1,0 +1,25 @@
+Look at this screenshot of a detail page and extract the listing fields using the ``report_extracted_listing`` tool.
+
+EXPECTED fields (almost every detail page exposes these — return them whenever they appear on the screenshot, even if the formatting varies):
+- ``year`` — the 4-digit year, usually the first 4-digit number in the H1 / page title.
+- ``make`` — the manufacturer / brand, typically the second token of the H1.
+- ``model`` — the model + variant text, the rest of the H1 after the make.
+- ``price`` — the most prominent currency amount on the page. Include the currency symbol verbatim (e.g. ``$65,000``, ``£12,500``). If the page says "Make Offer" / "Call for price" / "Price on request", return that literal text.
+- ``url`` — copy the URL from the browser address bar verbatim. The address bar is always visible — this field is always populated.
+
+OPTIONAL fields (return when visible, leave empty otherwise — don't guess):
+- ``phone`` — the seller's phone if it appears in the listing's body text, description, or contact-info block. Don't pull phone numbers from headers, footers, financing ads, or support widgets. If the page only offers a "Contact Seller" form with no number printed, return ``""``.
+- ``seller`` — the seller's name / org if shown. If only a generic "Contact" button is visible, return ``""``.
+- ``is_dealer`` — ``true`` if the listing is clearly from a commercial seller (business name displayed, business badge, dealer logo). ``false`` otherwise. Default ``false`` when unclear.
+
+EXAMPLES — for these two screenshots, the correct tool calls would be:
+
+Example 1 (private seller, phone embedded in description):
+H1 reads "2021 Yamaha Boats 252SE | 25'", price shows "$59,999", description body contains the line "Call or text David at 503-770-0756", page URL bar shows boattrader.com/boat/2021-yamaha-boats-252se-10179306/.
+→ Tool call: {year: "2021", make: "Yamaha Boats", model: "252SE", price: "$59,999", phone: "503-770-0756", url: "boattrader.com/boat/2021-yamaha-boats-252se-10179306/", seller: "", is_dealer: false}
+
+Example 2 (private seller, no published phone — only a contact form):
+H1 reads "1986 Marine Trader Europa | 36'", price shows "$65,000", description body has no phone number anywhere, page has a "Contact Private Seller" form with Name/Email/Your-Phone INPUT fields, URL bar shows boattrader.com/boat/1986-marine-trader-europa-10167773/.
+→ Tool call: {year: "1986", make: "Marine Trader", model: "Europa", price: "$65,000", phone: "", url: "boattrader.com/boat/1986-marine-trader-europa-10167773/", seller: "", is_dealer: false}
+
+Don't fabricate. If the screenshot shows a generic page (homepage, footer, financing, "About us"), return ``url`` only and leave the other fields empty.
