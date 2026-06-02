@@ -11,12 +11,14 @@ runs the *action-omission* drift: it shows a masked teaser of the number inline,
 so the contact reads as already-populated. A frozen agent grabs the visible
 number and (per the plan's "reveal the phone if not already") omits the reveal
 click — a recall miss — while an S1 worked-reveal exemplar, primed that a click
-makes the FULL number appear (which the masked teaser does not satisfy), re-finds
-the reveal control by its action and fires it. The reveal target stays findable by
-its phone meaning; only the verbatim "Show Phone Number" label drops. (An earlier
-*relabel* variant — "View seller details" — was a target-identification failure
-that a live matrix showed defeats both arms equally, since the S1 exemplar is
-target-less by design.)
+makes the FULL number appear (which the masked teaser does not satisfy), still
+seeks out the reveal control and fires it. The reveal target keeps the verbatim
+"Show Phone Number" label (matching the plan + exemplar); the *only* drift is the
+inline masked teaser plus de-emphasised (muted-link) styling. The lever is recall,
+not target-identification. (Two earlier *relabel* variants — "View seller details"
+and "Show full number" — each dropped the label and each made a live matrix
+collapse, defeating BOTH arms equally: the S1 exemplar replays an action, not a
+label, so a relabel it can't ground breaks S1 just as it breaks frozen.)
 
 These tests pin the fixture's data shape (the flag lands only on owner boats, the
 gate toggles it, it's deterministic, the reveal target survives) and prove the
@@ -101,9 +103,9 @@ def _an_owner_slug(monkeypatch, *, drift: bool) -> str:
 def test_drifted_owner_page_shows_inline_decoy_keeps_reveal(monkeypatch):
     """Gate-on (action-omission): a masked teaser of the number renders inline so
     the contact reads as already-populated, while the reveal endpoint + testid
-    survive (mechanism + oracle mutation unchanged) behind a muted, non-verbatim
-    control. The inline decoy is the reason a frozen agent omits the reveal; the
-    surviving control is what an S1 exemplar re-finds and fires."""
+    survive (mechanism + oracle mutation unchanged) behind a muted but *verbatim*-
+    labelled control. The inline decoy is the reason a frozen agent omits the
+    reveal; the surviving control is what an S1 exemplar re-finds and fires."""
     slug = _an_owner_slug(monkeypatch, drift=True)
     with _client() as c:
         html = c.get(f"/boat/{slug}/").text
@@ -111,12 +113,15 @@ def test_drifted_owner_page_shows_inline_decoy_keeps_reveal(monkeypatch):
     # The inline masked teaser — deterministic mask infix, no per-seed digits.
     assert 'data-testid="seller-phone-inline"' in html
     assert ") •••-••" in html
-    # The reveal mechanism the oracle grades survives, relabelled + de-emphasised.
+    # The reveal mechanism the oracle grades survives — verbatim label retained,
+    # only the styling is de-emphasised (muted link, not a prominent button), so
+    # grounding is NOT a confound. The lever is purely the teaser + de-emphasis.
     assert 'data-testid="show-phone-btn"' in html
     assert f"/boat/{slug}/show-phone" in html
-    assert "Show full number" in html
-    # Neither the verbatim plan label nor the failed relabel variant is present.
-    assert "Show Phone Number" not in html
+    assert "Show Phone Number" in html
+    assert "bdp-reveal-link" in html
+    # Neither failed relabel variant is present — the label is NOT the lever.
+    assert "Show full number" not in html
     assert "View seller details" not in html
 
 
@@ -130,3 +135,5 @@ def test_stock_owner_page_shows_phone_label(monkeypatch):
     assert "Show Phone Number" in html
     assert "View seller details" not in html
     assert 'data-testid="seller-phone-inline"' not in html
+    # Stock uses the prominent button styling, never the muted drift-link.
+    assert "bdp-reveal-link" not in html
