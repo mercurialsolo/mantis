@@ -44,6 +44,7 @@ from .._anthropic.client import (
     credit_claude_tokens_from_response,
     encode_screenshot_for_claude,
 )
+from ..prompts import load_prompt as _load_prompt
 from .result import ExtractionResult
 from .schema import ExtractionSchema
 from .spam import contains_dealer_text, parse_bool, seller_looks_like_dealer
@@ -136,8 +137,6 @@ def _coerce_coord(value: Any) -> int | None:
 # the ``MANTIS_PROMPTS_DIR`` env var. These module-level constants are kept
 # for back-compat (``from mantis_agent.extraction import EXTRACT_PROMPT``)
 # and resolve to the same text the loader returns.
-
-from ..prompts import load_prompt as _load_prompt
 
 EXTRACT_PROMPT = _load_prompt("extract_listing")
 EXTRACT_SCROLLED_PROMPT = _load_prompt("extract_listing_scrolled")
