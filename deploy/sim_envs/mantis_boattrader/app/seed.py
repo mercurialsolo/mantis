@@ -392,11 +392,13 @@ class Boat:
     saves: int
     listed_days_ago: int
     images: list[str] = field(default_factory=list)
-    # BT03 layout-drift flag — set by ``_apply_byowner_reveal_drift`` (gated by
-    # ``BT03_REVEAL_DRIFT``). When True the detail template de-emphasises and
-    # relabels the phone-reveal control (drops the "phone" keyword), so a frozen
-    # agent favours the prominent lead form; an S1 worked-reveal exemplar
-    # re-finds the control by its action. Off by default → zero render change.
+    # BT03 action-omission drift flag — set by ``_apply_byowner_reveal_drift``
+    # (gated by ``BT03_REVEAL_DRIFT``). When True the detail template shows a
+    # masked teaser of the number inline, so the contact reads as already
+    # populated and a frozen agent omits the reveal click (no phone_revealed
+    # mutation); an S1 worked-reveal exemplar, primed that a click makes the FULL
+    # number appear, still fires the unchanged reveal. Off by default → zero
+    # render change.
     reveal_drift: bool = False
 
     @property
@@ -431,6 +433,17 @@ class Boat:
     @property
     def is_owner_listed(self) -> bool:
         return self.listing_type == "owner"
+
+    @property
+    def owner_phone_masked(self) -> str:
+        """Privacy-teaser of ``owner_phone`` — area code + last two digits, the
+        rest masked (``(305) •••-••47``). Used only by the BT03 action-omission
+        drift to make the contact read as already-populated; the full number
+        still appears only after the real reveal POST."""
+        digits = "".join(ch for ch in (self.owner_phone or "") if ch.isdigit())
+        if len(digits) != 10:
+            return ""
+        return f"({digits[0:3]}) •••-••{digits[8:10]}"
 
     @property
     def is_sponsored(self) -> bool:
@@ -870,17 +883,26 @@ def _apply_deep_caterpillar(boats: list[Boat], *, seed: int) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BT03 by-owner reveal drift.
+# BT03 by-owner reveal drift (action-omission variant).
 #
 # The BT03 policy-cluster eval (by-owner phone reveal) separates a frozen agent
 # from an S1-exemplar agent only if revealing a private seller's phone is *not*
 # the obvious move. The stock private-seller card pairs a prominent "Contact
 # Seller" lead form with an explicit "Show Phone Number" button — a frozen agent
-# clicks that button for free and the discriminator collapses. This pass flags
-# every owner listing so the detail template renders the reveal control
-# de-emphasised + relabelled (no "phone" keyword), tilting a naive agent toward
-# the lead form (0 reveals → recall miss) while an S1 "a click revealed the
-# phone here" exemplar re-finds the control by its action, not its label.
+# clicks that button for free and the discriminator collapses.
+#
+# An earlier variant *relabelled* the control ("View seller details", no "phone"
+# keyword). That was a target-identification failure, and a live frozen-vs-S1
+# matrix showed it defeats BOTH arms equally (0/6 == 0/6): the S1 exemplar is
+# target-LESS by design — it says a click *worked*, not *where* — so a relabel is
+# S0's domain, not S1's. This variant instead makes the reveal an action the
+# agent OMITS: the detail template shows a masked teaser of the number inline, so
+# the contact reads as already-populated. A frozen agent grabs the visible number
+# and, per the plan's "reveal the phone (if not already)", skips the reveal (0
+# reveals → recall miss); an S1 worked-reveal exemplar — primed that a click makes
+# the FULL number appear, which the masked teaser does not satisfy — re-finds the
+# control by its action and fires the reveal. The reveal target stays findable by
+# its phone meaning (only the verbatim label drops), so S1 can engage it.
 #
 # It only sets the boolean ``reveal_drift`` flag on owner boats — never touches
 # ``listing_type`` or ``owner_phone`` — so the BT03 oracle's qualifying set (and

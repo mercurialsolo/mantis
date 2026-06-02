@@ -4,10 +4,19 @@ BT03 (by-owner phone reveal) only separates a frozen agent from an S1-exemplar
 agent if revealing a private seller's phone is *not* the obvious move. The stock
 private-seller card pairs a prominent "Contact Seller" lead form with an explicit
 "Show Phone Number" button — a frozen agent clicks that button for free and the
-discriminator collapses. ``seed._apply_byowner_reveal_drift`` flags every owner
-listing so the detail page renders the reveal control de-emphasised + relabelled
-(no "phone" keyword); a frozen agent then favours the lead form (recall miss)
-while an S1 worked-reveal exemplar re-finds the control by its action.
+discriminator collapses.
+
+``seed._apply_byowner_reveal_drift`` flags every owner listing so the detail page
+runs the *action-omission* drift: it shows a masked teaser of the number inline,
+so the contact reads as already-populated. A frozen agent grabs the visible
+number and (per the plan's "reveal the phone if not already") omits the reveal
+click — a recall miss — while an S1 worked-reveal exemplar, primed that a click
+makes the FULL number appear (which the masked teaser does not satisfy), re-finds
+the reveal control by its action and fires it. The reveal target stays findable by
+its phone meaning; only the verbatim "Show Phone Number" label drops. (An earlier
+*relabel* variant — "View seller details" — was a target-identification failure
+that a live matrix showed defeats both arms equally, since the S1 exemplar is
+target-less by design.)
 
 These tests pin the fixture's data shape (the flag lands only on owner boats, the
 gate toggles it, it's deterministic, the reveal target survives) and prove the
@@ -89,26 +98,35 @@ def _an_owner_slug(monkeypatch, *, drift: bool) -> str:
     return owners[0].slug
 
 
-def test_drifted_owner_page_hides_phone_label(monkeypatch):
-    """Gate-on: the reveal endpoint + testid survive (mechanism + oracle mutation
-    unchanged) but the phone-labelled affordance is replaced by a muted link —
-    that relabel is what makes a frozen agent mis-target the lead form."""
+def test_drifted_owner_page_shows_inline_decoy_keeps_reveal(monkeypatch):
+    """Gate-on (action-omission): a masked teaser of the number renders inline so
+    the contact reads as already-populated, while the reveal endpoint + testid
+    survive (mechanism + oracle mutation unchanged) behind a muted, non-verbatim
+    control. The inline decoy is the reason a frozen agent omits the reveal; the
+    surviving control is what an S1 exemplar re-finds and fires."""
     slug = _an_owner_slug(monkeypatch, drift=True)
     with _client() as c:
         html = c.get(f"/boat/{slug}/").text
     assert 'data-testid="private-seller-card"' in html, "not an owner detail page"
+    # The inline masked teaser — deterministic mask infix, no per-seed digits.
+    assert 'data-testid="seller-phone-inline"' in html
+    assert ") •••-••" in html
+    # The reveal mechanism the oracle grades survives, relabelled + de-emphasised.
     assert 'data-testid="show-phone-btn"' in html
     assert f"/boat/{slug}/show-phone" in html
+    assert "Show full number" in html
+    # Neither the verbatim plan label nor the failed relabel variant is present.
     assert "Show Phone Number" not in html
-    assert "View seller details" in html
+    assert "View seller details" not in html
 
 
 def test_stock_owner_page_shows_phone_label(monkeypatch):
     """Gate-off: the owner detail page renders the explicit "Show Phone Number"
-    button — the easy path a frozen agent takes for free."""
+    button with no inline decoy — the easy path a frozen agent takes for free."""
     slug = _an_owner_slug(monkeypatch, drift=False)
     with _client() as c:
         html = c.get(f"/boat/{slug}/").text
     assert 'data-testid="private-seller-card"' in html
     assert "Show Phone Number" in html
     assert "View seller details" not in html
+    assert 'data-testid="seller-phone-inline"' not in html

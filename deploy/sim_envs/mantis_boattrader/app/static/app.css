@@ -2735,10 +2735,21 @@ body.bdp-scrolled-deep .sticky-save {
   font-size: 13px;
   align-self: flex-start;
 }
-/* BT03 layout-drift reveal control (BT03_REVEAL_DRIFT): a muted text link in
-   place of the secondary button, so the prominent Contact Seller form reads as
-   the primary contact path and a frozen agent mis-targets it. POST + testid
-   unchanged — only the visual weight + label drift. */
+/* BT03 action-omission drift (BT03_REVEAL_DRIFT): an inline masked teaser of the
+   number reads as already-populated, and the real reveal is demoted to a muted
+   text link beneath it — so a frozen agent treats the contact as done and omits
+   the reveal click. POST + testid unchanged — only the visual weight + label drift. */
+.seller-phone-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bt-text);
+  align-self: flex-start;
+}
+.seller-phone-inline .ico-phone { color: var(--bt-text-dim); }
+.seller-phone-text { letter-spacing: 0.3px; }
 .bdp-reveal-link {
   background: transparent;
   border: 0;

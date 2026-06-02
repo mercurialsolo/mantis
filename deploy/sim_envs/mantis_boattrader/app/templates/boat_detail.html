@@ -159,14 +159,24 @@
           {% if show_phone %}
             <img class="phone-svg" src="/assets/phone/{{ boat.slug }}.svg?_t={{ boat.id }}" alt="Phone number" data-testid="phone-svg" />
           {% elif boat.reveal_drift %}
-            {# BT03 layout-drift (BT03_REVEAL_DRIFT): same POST action + testid so
-               the reveal mechanism and the oracle's phone_revealed mutation are
-               unchanged, but the control is a muted text link with no "phone"
-               keyword or icon — a frozen agent favours the prominent Contact
-               Seller form above; an S1 worked-reveal exemplar re-finds this
-               control by its action, not its label. #}
+            {# BT03 action-omission drift (BT03_REVEAL_DRIFT): a masked teaser of
+               the seller's number is shown inline as plain text, so the contact
+               reads as already-populated. A frozen agent treats the visible
+               number as "the phone" and — per the plan's "reveal the phone (if
+               not already)" — omits the reveal click, so no phone_revealed
+               mutation fires. The reveal itself is unchanged behind the same
+               POST action + testid below (a muted link, no verbatim "Show Phone
+               Number"); an S1 worked-reveal exemplar is primed that a click makes
+               the FULL number appear, which the masked teaser does not satisfy,
+               so S1 re-finds this control by its action and fires the gradeable
+               mutation. Only an actual POST emits the mutation — the inline text
+               never does. #}
+            <div class="seller-phone-inline" data-testid="seller-phone-inline">
+              <svg class="ico-phone" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+              <span class="seller-phone-text">{{ boat.owner_phone_masked }}</span>
+            </div>
             <form method="post" action="/boat/{{ boat.slug }}/show-phone">
-              <button type="submit" class="bdp-reveal-link show-phone-btn" data-testid="show-phone-btn">View seller details</button>
+              <button type="submit" class="bdp-reveal-link show-phone-btn" data-testid="show-phone-btn">Show full number</button>
             </form>
           {% else %}
             <form method="post" action="/boat/{{ boat.slug }}/show-phone">
