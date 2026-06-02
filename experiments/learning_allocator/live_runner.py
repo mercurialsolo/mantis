@@ -85,6 +85,7 @@ from mantis_agent.sim_envs.templating import substitute_env_url
 from experiments.learning_allocator.runner import (
     FROZEN,
     S0,
+    S1,
     _OUTCOME_COLS,
     _outcome_row,
     build_table1,
@@ -257,6 +258,11 @@ class LiveRunFn:
     plan_path: Path
     profile_id: str = "la-bt01"
     hint_dict_name: str = "la-bt01-hints"
+    # S1 backing: positive-labelled exemplar steps (ExemplarSubstrate.apply's
+    # delta_artifacts["exemplars"]) pre-extracted for this plan. The S1 branch
+    # of _apply_substrate ships these to the remote run, where
+    # modal_cua_server stamps them onto the micro plan via apply_exemplar_overlay.
+    exemplars: list[dict[str, Any]] = field(default_factory=list)
     cua_model: str = "holo3"
     max_steps: int = 200
     max_cost: float = 1.0
@@ -377,13 +383,20 @@ class LiveRunFn:
         The ladder's remote effect is which hint store the Modal run binds (see
         ``build_hint_store``): ``frozen`` freezes it (``NullHintStore``, no
         cross-run learning); ``S0_retrieval`` points it at a shared Modal Dict so
-        hints accrue across runs. S1+ have no suite flag yet and ride the default
-        disk store.
+        hints accrue across runs. ``S1_exemplar`` ships pre-extracted worked
+        steps that the remote stamps onto the plan as ``exemplar_replay`` hints,
+        with the S0 anchor store frozen so the two rungs stay isolated.
         """
         if substrate == FROZEN:
             suite["_hint_store_disabled"] = True
         elif substrate == S0:
             suite["_hint_store_dict_name"] = self.hint_dict_name
+        elif substrate == S1:
+            # Freeze the S0 anchor mechanism so S1's lift is attributable to
+            # the exemplar replay alone, then ship the worked steps.
+            suite["_hint_store_disabled"] = True
+            if self.exemplars:
+                suite["_exemplars"] = list(self.exemplars)
 
     def _ensure_plan(self) -> MicroPlan:
         if self._micro_plan is None:

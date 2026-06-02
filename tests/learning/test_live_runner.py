@@ -145,6 +145,28 @@ def test_s0_binds_shared_hint_dict(tmp_path: Path) -> None:
     assert "_hint_store_disabled" not in suite
 
 
+def test_s1_ships_exemplars_and_freezes_s0(tmp_path: Path) -> None:
+    # S1's lift must be attributable to the exemplar replay alone, so the S0
+    # anchor store is frozen while the worked steps ride along.
+    run = _make(tmp_path, FakePoster(), FakeDecomposer())
+    run.exemplars = [{"intent": "reveal phone", "type": "click"}]
+    suite: dict = {}
+    run._apply_substrate(suite, "S1_exemplar")
+    assert suite["_hint_store_disabled"] is True
+    assert suite["_exemplars"] == [{"intent": "reveal phone", "type": "click"}]
+    assert "_hint_store_dict_name" not in suite
+
+
+def test_s1_without_exemplars_omits_suite_key(tmp_path: Path) -> None:
+    # No pre-extracted exemplars ⇒ no _exemplars key (the remote overlay is a
+    # no-op), but S0 still frozen so the rung stays isolated.
+    run = _make(tmp_path, FakePoster(), FakeDecomposer())
+    suite: dict = {}
+    run._apply_substrate(suite, "S1_exemplar")
+    assert suite["_hint_store_disabled"] is True
+    assert "_exemplars" not in suite
+
+
 # ── end-to-end __call__ (faked I/O) ──────────────────────────────────────
 
 

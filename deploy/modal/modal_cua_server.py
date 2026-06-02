@@ -1137,6 +1137,30 @@ def _run_holo3_executor(
             from mantis_agent.gym.hint_memory import NullHintStore
             micro_runner._hint_store = NullHintStore()
 
+        # S1 exemplar replay (Learning Allocator). When the S1 rung pre-seeds
+        # worked procedures into the suite (``_exemplars``), stamp them onto
+        # the plan's matching steps so the holo3 brain surfaces a "Worked
+        # example" (consumer: ``_build_scoped_task``). Parallel to the hint
+        # overlay above but a *different* signal — what WORKED (action→
+        # outcome), never a coordinate — which is what lets the allocator
+        # tell S1 (policy cluster) apart from S0 (knowledge cluster). Absent
+        # the flag this is a no-op, so frozen / S0 runs are unchanged.
+        try:
+            exemplars = task_suite.get("_exemplars") or []
+            if exemplars:
+                from mantis_agent.gym.exemplar_memory import apply_exemplar_overlay
+                stamped = apply_exemplar_overlay(
+                    micro_plan, exemplars, plan_signature=plan_signature,
+                )
+                # print (not logger.info): the S1-vs-frozen separation hinges
+                # on whether this fired, and print survives ``modal app logs``.
+                print(
+                    f"  Exemplar-replay: plan_sig={plan_signature[:12]} "
+                    f"exemplars={len(exemplars)} stamped={stamped}"
+                )
+        except Exception as exc:  # noqa: BLE001 — never block the executor
+            print(f"  WARNING: exemplar overlay failed (S1 disabled): {exc}")
+
         # #627: bind a cross-worker shared seen-URL set from the suite
         # metadata. Modal orchestrator sets ``_fanout_seen_dict_name``
         # before spawning; workers re-attach to the same modal.Dict by
