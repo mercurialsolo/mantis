@@ -185,6 +185,24 @@ def _build_scoped_task(step: "MicroIntent", runner: Any, step_index: int) -> str
     if target_lines:
         sections.append("Target hints:\n" + "\n".join(target_lines))
 
+    # S1 exemplar replay (Learning Allocator). When the dispatcher stamped
+    # a worked procedure from a prior successful run of THIS sub-goal
+    # (``exemplar_memory.apply_exemplar_overlay``), surface it as a
+    # positive example. Distinct from ``preferred_target`` (S0, *where* to
+    # click): this says *what worked* — the action→outcome procedure. It
+    # carries NO coordinate by design, so the instruction tells the brain
+    # to re-find the target by sight rather than trust a stale position.
+    exemplar_replay = str(hints.get("exemplar_replay") or "").strip()
+    if exemplar_replay:
+        src = str(hints.get("exemplar_source_run") or "").strip()
+        provenance = f" (run {src})" if src else ""
+        sections.append(
+            "Worked example — a prior successful run of THIS sub-goal"
+            f"{provenance}: {exemplar_replay}. Prefer replaying that "
+            "approach, but re-find the target on the CURRENT screenshot by "
+            "sight; do NOT reuse old coordinates."
+        )
+
     failure_history = (
         runner._step_failure_history.get(step_index, [])
         if hasattr(runner, "_step_failure_history") else []
