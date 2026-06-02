@@ -226,29 +226,58 @@ def _default_reset(env_url: str, admin_token: str) -> None:
         pass
 
 
+# The server flushes claude_cost_by_path.json at run *finalization*, which
+# lands a few seconds AFTER the run's status flips terminal. A single
+# ``volume get`` fired right after the poll races that flush and misses, so we
+# poll up to this deadline (each ``volume get`` itself takes a few seconds).
+_COST_PULL_DEADLINE_S = 45.0
+_COST_PULL_RETRY_S = 3.0
+
+
 def _default_pull_cost(profile_id: str, workflow_id: str) -> tuple[float, str]:
-    """Pull ``claude_cost_by_path.json`` off the Modal volume → (cost, halt)."""
+    """Pull ``claude_cost_by_path.json`` off the Modal volume → (cost, halt).
+
+    Retries on a bounded deadline until the file appears: the cost file is
+    flushed a beat after the run reports terminal, so a one-shot get races it.
+    On ultimate miss, emit a stderr WARNING and return ``0.0`` — a *silent*
+    zero would quietly drop the λ·dollars penalty and inflate reward, which is
+    exactly the bug that recorded $0.00 for real-cost runs.
+    """
+    remote = f"/runs/{profile_id}/{workflow_id}/claude_cost_by_path.json"
     dest = Path(tempfile.mkdtemp(prefix="la-cost-")) / "claude_cost_by_path.json"
-    try:
-        subprocess.run(
-            [
-                "uv", "run", "modal", "volume", "get", "osworld-data",
-                f"/runs/{profile_id}/{workflow_id}/claude_cost_by_path.json",
-                str(dest), "--force",
-            ],
-            check=False, capture_output=True, timeout=120, cwd=REPO_ROOT,
-        )
-    except subprocess.TimeoutExpired:
-        return 0.0, ""
-    if not dest.exists():
-        return 0.0, ""
-    try:
-        d = json.loads(dest.read_text())
-    except (OSError, ValueError):
-        return 0.0, ""
-    cost = float((d.get("totals") or {}).get("cost_usd") or 0.0)
-    halt = str((d.get("outcome") or {}).get("halt_reason") or "")
-    return cost, halt
+    deadline = time.monotonic() + _COST_PULL_DEADLINE_S
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            subprocess.run(
+                [
+                    "uv", "run", "modal", "volume", "get", "osworld-data",
+                    remote, str(dest), "--force",
+                ],
+                check=False, capture_output=True, timeout=120, cwd=REPO_ROOT,
+            )
+        except subprocess.TimeoutExpired:
+            dest.unlink(missing_ok=True)
+        if dest.exists():
+            try:
+                d = json.loads(dest.read_text())
+            except (OSError, ValueError):
+                d = None  # partial mid-flush read — fall through and retry
+            if d is not None:
+                cost = float((d.get("totals") or {}).get("cost_usd") or 0.0)
+                halt = str((d.get("outcome") or {}).get("halt_reason") or "")
+                return cost, halt
+        if time.monotonic() >= deadline:
+            print(
+                f"[pull_cost] WARNING: cost file never appeared after "
+                f"{attempt} attempt(s) (~{_COST_PULL_DEADLINE_S:.0f}s) for "
+                f"{remote} — recording $0.00 (reward penalty understated)",
+                file=sys.stderr, flush=True,
+            )
+            return 0.0, ""
+        dest.unlink(missing_ok=True)
+        time.sleep(_COST_PULL_RETRY_S)
 
 
 def _default_decompose(plan_text: str) -> MicroPlan:
@@ -301,6 +330,12 @@ class LiveRunFn:
     )
     zip_code: str = "33131"
     search_radius: str = "50"
+    # 2-letter state filter for the URL-addressable ``/boats/state-{code}/by-owner/``
+    # path the plan added in its state-wide variant (commit 893d879). Lowercase to
+    # match the plan's ``state-<2-letter-lowercase>`` segment; default ``fl`` keeps
+    # it consistent with the Miami ``zip_code``. Unfilled, the literal token
+    # URL-encodes to ``%7Bstate_code%7D`` → an empty results page.
+    state_code: str = "fl"
     poll_interval_s: float = 15.0
     post_fn: PostFn = _default_post
     pull_cost_fn: PullCostFn = _default_pull_cost
@@ -451,6 +486,7 @@ class LiveRunFn:
             raw.replace("{env_url}", self.env_url)
             .replace("{zip_code}", self.zip_code)
             .replace("{search_radius}", self.search_radius)
+            .replace("{state_code}", self.state_code)
         )
 
     # ── poll + verdict ─────────────────────────────────────────────────

@@ -91,7 +91,7 @@ def _fake_cost(profile_id: str, workflow_id: str) -> tuple[float, str]:  # noqa:
 def _plan_file(tmp_path: Path) -> Path:
     p = tmp_path / "plan.txt"
     p.write_text(
-        "Navigate to {env_url}/boats/.\n"
+        "Navigate to {env_url}/boats/state-{state_code}/by-owner/.\n"
         "Search boats near {zip_code} within {search_radius} miles.\n",
     )
     return p
@@ -362,6 +362,8 @@ def test_plan_decomposed_once_with_substituted_placeholders(
     assert len(decomposer.texts) == 1
     text = decomposer.texts[0]
     assert "33131" in text  # {zip_code} filled
+    assert "state-fl/by-owner" in text  # {state_code} filled (was URL-encoded %7B..%7D)
+    assert "{state_code}" not in text
     assert "https://sim.example/env" in text  # {env_url} points the nav at the sim env
     assert "{env_url}" not in text
     # Each submit gets a fresh workflow_id.
@@ -604,6 +606,46 @@ def test_committed_bt03_exemplar_matches_reveal_not_lead_submit() -> None:
     assert len(ex_tok & reveal_tok) > len(ex_tok & lead_tok), (
         "exemplar must overlap the reveal step more than the lead-submit step"
     )
+
+
+# ── _default_pull_cost: race-safe volume read ────────────────────────────
+
+
+def test_pull_cost_retries_until_file_appears(monkeypatch) -> None:
+    # The cost file is flushed a beat after the run reports terminal, so the
+    # first `volume get` misses. A one-shot read would record $0.00 (and zero
+    # the λ·dollars penalty); the retry must keep going until it lands.
+    calls = {"n": 0}
+    payload = {"totals": {"cost_usd": 0.24}, "outcome": {"halt_reason": "budget_cap"}}
+
+    def fake_run(argv, **kwargs):  # noqa: ANN001, ANN003
+        calls["n"] += 1
+        if calls["n"] >= 2:  # miss on attempt 1, land on attempt 2
+            Path(argv[7]).write_text(json.dumps(payload))
+
+    monkeypatch.setattr(live_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(live_runner.time, "sleep", lambda *_: None)
+
+    cost, halt = live_runner._default_pull_cost("prof", "wf")
+
+    assert calls["n"] == 2
+    assert cost == 0.24
+    assert halt == "budget_cap"
+
+
+def test_pull_cost_warns_and_returns_zero_on_ultimate_miss(monkeypatch, capsys) -> None:
+    # If the file never appears, the silent path must NOT stay silent — emit a
+    # stderr WARNING so an understated reward is attributable, not invisible.
+    monkeypatch.setattr(live_runner.subprocess, "run", lambda *a, **k: None)
+    monkeypatch.setattr(live_runner.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(live_runner, "_COST_PULL_DEADLINE_S", 0.0)
+
+    cost, halt = live_runner._default_pull_cost("prof", "wf")
+
+    assert (cost, halt) == (0.0, "")
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "prof" in err and "wf" in err
 
 
 # ── main() preflight ─────────────────────────────────────────────────────
