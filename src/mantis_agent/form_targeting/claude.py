@@ -214,6 +214,11 @@ class ClaudeFormTargetProvider(FormTargetProvider):
             # ($0.30/M for Sonnet 4 vs $3/M standard). Worth ~10% of
             # Claude input cost on grounding-heavy plans.
             cache_tools=True,
+            # Distinct source for per-op cost attribution — was sharing
+            # the default "claude_extract" bucket with extract() and
+            # masking that form-targeting is ~3/4 of every "extract"
+            # call count on real plans.
+            time_bucket="form_target",
         )
 
         try:
@@ -405,6 +410,7 @@ class ClaudeFormTargetProvider(FormTargetProvider):
             max_tokens=500,
             # #518 — see report_form_target above for the rationale.
             cache_tools=True,
+            time_bucket="form_target_affordance",
         )
         if not parsed:
             logger.warning(
@@ -484,6 +490,7 @@ class ClaudeFormTargetProvider(FormTargetProvider):
             max_tokens=200,
             # #518 — see report_form_target above for the rationale.
             cache_tools=True,
+            time_bucket="dropdown_observe",
         )
         if not parsed:
             return None
