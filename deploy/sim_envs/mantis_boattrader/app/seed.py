@@ -400,6 +400,15 @@ class Boat:
     # number appear, still fires the unchanged reveal. Off by default → zero
     # render change.
     reveal_drift: bool = False
+    # BT03 action-OMISSION gate — set by ``_apply_byowner_reveal_gate`` (gated by
+    # ``BT03_REVEAL_GATE``). When True the seller requires a "start contact
+    # request" step before the number unlocks: ``/show-phone`` only emits the
+    # ``phone_revealed`` mutation once ``bt_contact_start_<id>`` is set. The base
+    # plan omits that prerequisite, so a frozen agent clicks Show Phone Number and
+    # gets nothing (no mutation → recall miss); the S1 injection seam inserts the
+    # missing "start contact request" step ahead of the reveal, so S1 satisfies
+    # the gate and the reveal fires. Off by default → zero behaviour change.
+    reveal_gated: bool = False
 
     @property
     def title(self) -> str:
@@ -918,6 +927,26 @@ def _apply_byowner_reveal_drift(boats: list[Boat]) -> None:
             b.reveal_drift = True
 
 
+# BT03 action-OMISSION gate (BT03_REVEAL_GATE) — the injection-seam discriminator.
+# Unlike ``reveal_drift`` (which de-emphasises an UNCHANGED reveal so a frozen
+# agent omits a click it already has in plan), the gate adds a PREREQUISITE the
+# base plan does not contain at all: the seller requires a "start contact request"
+# before the number unlocks. A frozen agent runs the plan as-authored — navigate,
+# click Show Phone Number — and the server, seeing no ``bt_contact_start`` cookie,
+# emits no ``phone_revealed`` mutation (recall miss). The S1 injection seam inserts
+# the missing prerequisite step ahead of the reveal, so S1 satisfies the gate and
+# the same unchanged reveal fires. It only sets the boolean ``reveal_gated`` flag
+# on owner boats — never ``listing_type`` / ``owner_phone`` — so the BT03 oracle's
+# qualifying set survives untouched. Gated by ``BT03_REVEAL_GATE`` (default off).
+
+
+def _apply_byowner_reveal_gate(boats: list[Boat]) -> None:
+    """Flag every by-owner listing as requiring the contact-start prerequisite."""
+    for b in boats:
+        if b.is_owner_listed:
+            b.reveal_gated = True
+
+
 def build() -> dict[str, Any]:
     seed = int(os.environ.get("SEED", 42))
     count = int(os.environ.get("BOAT_COUNT", 600))
@@ -929,6 +958,8 @@ def build() -> dict[str, Any]:
         _apply_deep_caterpillar(boats, seed=seed)
     if os.environ.get("BT03_REVEAL_DRIFT", "0") not in ("0", "false", "False"):
         _apply_byowner_reveal_drift(boats)
+    if os.environ.get("BT03_REVEAL_GATE", "0") not in ("0", "false", "False"):
+        _apply_byowner_reveal_gate(boats)
     return {
         "dealers": dealers,
         "boats": boats,

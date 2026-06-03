@@ -73,6 +73,18 @@
       "expects_substrate": "S1",
       "status": "ready",
       "notes": "Held-out instance: same by-owner phone-reveal graded against the seed=7 catalog (170 owner listings). The visible-minus-sealed gap is the overfitting check (PLAN §4)."
+    },
+    {
+      "name": "bt03_gated_phone_visible",
+      "task_id": "BT03_byowner_phone_reveal",
+      "env": "mantis_boattrader",
+      "cluster": "policy",
+      "split": "visible",
+      "seed": 42,
+      "plan": "bt03_gated_reveal",
+      "expects_substrate": "S1",
+      "status": "ready",
+      "notes": "Gate variant of the policy discriminator (run with BT03_REVEAL_GATE=1). The minimal plan bt03_gated_reveal.json navigates the by-owner SRP, opens a listing, and clicks 'Show Phone Number' — but OMITS the 'start contact request' prerequisite the gated env demands, so a frozen agent's reveal is a server-side no-op (0 hits). S1 injects the missing prerequisite ahead of the reveal (apply_exemplar_overlay + bt03_gated_inject_exemplar.json) so the same unchanged reveal fires (>=1 hit). Same BT03 oracle (phone_revealed channel), reused unchanged. This is the clean injection discriminator that the layout-drift variant (boattrader_scrape) could not deliver."
     }
   ]
 }
