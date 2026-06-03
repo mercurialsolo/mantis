@@ -532,18 +532,20 @@ def test_required_scroll_brain_loop_second_attempt_cdp_fallback_advances(monkeyp
     assert any("KeyboardEvent" in c for c in cdp_calls)
 
 
-def test_required_scroll_brain_loop_cdp_fires_but_scrollY_unchanged_continues_retry(monkeypatch):
-    """When CDP scrollBy fires but window.scrollY doesn't move (page
-    already at bottom, overflow:hidden, sub-element scroller capturing
-    events), the fallback falls through to the normal retry budget
-    rather than falsely advancing."""
+def test_required_scroll_brain_loop_cdp_fires_but_content_below_fold_continues_retry(monkeypatch):
+    """When CDP scrollBy fires, window.scrollY doesn't move, AND the
+    document still has real content below the fold (overflow:hidden or a
+    sub-element scroller eating the event), the fallback falls through to
+    the normal retry budget rather than falsely advancing."""
     monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
     runner = _runner_stub()
-    # scrollY stays at 0 before and after.
+    # scrollY pinned at 0 before/after; 1500px still below the fold.
     def _cdp(expr):
         if "scrollBy" in expr or "KeyboardEvent" in expr:
             return None
-        return 0.0  # always return 0 for scrollY reads
+        if "scrollHeight" in expr:
+            return 1500.0  # distance-from-bottom: content remains below
+        return 0.0  # scrollY reads
     runner.env.cdp_evaluate.side_effect = _cdp
 
     policy = StepRecoveryPolicy(runner)
@@ -558,9 +560,43 @@ def test_required_scroll_brain_loop_cdp_fires_but_scrollY_unchanged_continues_re
         listings_on_page=0,
     )
     # Fall-through: regular retry path returns required_retry, NOT
-    # scroll_cdp_fallback.
+    # scroll_reached_bottom.
     assert outcome.halt is False
     assert outcome.halt_reason.startswith("required_retry:scroll")
+
+
+def test_required_scroll_brain_loop_already_at_document_bottom_advances(monkeypatch):
+    """When CDP scrollBy can't move because the page is already at the
+    document bottom (scrollY + innerHeight ≈ scrollHeight), the
+    scroll-to-bottom intent is satisfied — advance instead of burning
+    the retry budget down to a HALT one step short of the next step.
+    This is the BoatTrader by-owner detail-page case: a short page the
+    brain keeps trying to scroll past its own bottom."""
+    monkeypatch.setattr("mantis_agent.gym.step_recovery.time.sleep", lambda *_: None)
+    runner = _runner_stub()
+    # scrollY pinned at 3345 before/after (page bottom); 0px remaining.
+    def _cdp(expr):
+        if "scrollBy" in expr or "KeyboardEvent" in expr:
+            return None
+        if "scrollHeight" in expr:
+            return 0.0  # distance-from-bottom: already at the end
+        return 3345.0  # scrollY reads (unchanged → not "moved")
+    runner.env.cdp_evaluate.side_effect = _cdp
+
+    policy = StepRecoveryPolicy(runner)
+    outcome = policy.handle_failure(
+        step=MicroIntent(intent="Scroll to bottom", type="scroll", required=True),
+        step_result=_result(failure_class="brain_loop_exhausted"),
+        plan=_plan("scroll"),
+        step_index=0,
+        step_retry_counts={0: 1},
+        loop_counters={},
+        max_retries=2,
+        listings_on_page=0,
+    )
+    assert outcome.halt is False
+    assert outcome.step_index == 1  # advance to the next step
+    assert outcome.halt_reason == "scroll_reached_bottom"
 
 
 def test_required_scroll_brain_loop_first_attempt_retries_normally(monkeypatch):
