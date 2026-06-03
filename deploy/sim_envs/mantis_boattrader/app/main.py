@@ -367,12 +367,36 @@ def _mount_public(app: FastAPI, templates: Jinja2Templates) -> None:
             headers={"Cache-Control": "no-store"},
         )
 
+    # BT03 action-OMISSION gate (seed flag ``reveal_gated``, env BT03_REVEAL_GATE):
+    # a non-obvious prerequisite the base plan omits. The seller asks the buyer to
+    # "start a contact request" before the number is shown; this sets the gate
+    # cookie that ``show_phone`` requires. No mutation here — it's the prerequisite,
+    # not the reveal. Ungated boats never render the control, so this is inert
+    # unless the discriminator env turns the gate on.
+    @app.post("/boat/{slug}/contact-start")
+    async def contact_start(request: Request, slug: str) -> Any:
+        boat = db.boat_by_slug(slug)
+        if boat is None:
+            raise HTTPException(status_code=404, detail="boat not found")
+        resp = RedirectResponse(url=f"/boat/{slug}/#contact", status_code=303)
+        resp.set_cookie(
+            f"bt_contact_start_{boat.id}", "1", max_age=60 * 60, samesite="lax",
+        )
+        return resp
+
     @app.post("/boat/{slug}/show-phone")
     async def show_phone(request: Request, slug: str) -> Any:
         boat = db.boat_by_slug(slug)
         if boat is None:
             raise HTTPException(status_code=404, detail="boat not found")
         resp = RedirectResponse(url=f"/boat/{slug}/#contact", status_code=303)
+        # Gated owner listings require the contact-start prerequisite first. With
+        # no ``bt_contact_start`` cookie the click is a no-op: the number stays
+        # masked and NO ``phone_revealed`` mutation fires (the frozen recall miss).
+        if getattr(boat, "reveal_gated", False) and (
+            request.cookies.get(f"bt_contact_start_{boat.id}") != "1"
+        ):
+            return resp
         resp.set_cookie(f"bt_show_phone_{boat.id}", "1", max_age=60 * 60, samesite="lax")
         db.emit_mutation(
             operation="phone_revealed",

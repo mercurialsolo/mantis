@@ -45,6 +45,33 @@ def _exemplar(
     }
 
 
+def _inject_exemplar(
+    intent: str,
+    *,
+    inject_before: str,
+    type_: str = "click",
+    outcome: str = "contact reason selected",
+    source_run: str = "inj1",
+    required: bool | None = None,
+    params: dict | None = None,
+    grounding: bool | None = None,
+    hints: dict | None = None,
+) -> dict:
+    # A nudge exemplar plus the ``inject_before`` successor that turns it into
+    # an INJECT exemplar — the worked sub-goal has no matching plan step.
+    ex = _exemplar(intent, type_=type_, outcome=outcome, source_run=source_run)
+    ex["inject_before"] = inject_before
+    if required is not None:
+        ex["required"] = required
+    if params is not None:
+        ex["params"] = params
+    if grounding is not None:
+        ex["grounding"] = grounding
+    if hints is not None:
+        ex["hints"] = hints
+    return ex
+
+
 # ── nothing to do ───────────────────────────────────────────────────────
 
 
@@ -224,3 +251,267 @@ def test_holo3_prompt_omits_section_when_no_exemplar():
     step = _step("reveal phone on owner listing")
     prompt = _build_scoped_task(step, SimpleNamespace(), step_index=0)
     assert "Worked example" not in prompt
+
+
+# ── injection: supply a missing step the base plan omits ────────────────
+
+
+def test_inject_exemplar_inserts_new_step_before_anchor():
+    s1 = _step("apply used filter")
+    s2 = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[s1, s2])
+
+    n = apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "select a contact reason",
+            inject_before="reveal phone on owner listing",
+        ),
+    ])
+
+    assert n == 1
+    assert [s.intent for s in plan.steps] == [
+        "apply used filter",
+        "select a contact reason",
+        "reveal phone on owner listing",
+    ]
+
+
+def test_injected_step_carries_procedural_replay_hint():
+    anchor = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[anchor])
+
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "select a contact reason",
+            inject_before="reveal phone on owner listing",
+            outcome="contact reason selected",
+            source_run="inj42",
+        ),
+    ])
+
+    injected = plan.steps[0]
+    assert injected.intent == "select a contact reason"
+    assert "click" in injected.hints["exemplar_replay"].lower()
+    assert "contact reason selected" in injected.hints["exemplar_replay"]
+    assert injected.hints["exemplar_source_run"] == "inj42"
+
+
+def test_injected_step_never_leaks_coordinates():
+    anchor = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[anchor])
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "select a contact reason",
+            inject_before="reveal phone on owner listing",
+        ),
+    ])
+    replay = plan.steps[0].hints["exemplar_replay"]
+    assert "412" not in replay
+    assert "663" not in replay
+
+
+def test_injected_step_is_required_by_default():
+    anchor = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[anchor])
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "select a contact reason",
+            inject_before="reveal phone on owner listing",
+        ),
+    ])
+    assert plan.steps[0].required is True
+
+
+def test_injected_step_respects_required_override():
+    anchor = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[anchor])
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "select a contact reason",
+            inject_before="reveal phone on owner listing",
+            required=False,
+        ),
+    ])
+    assert plan.steps[0].required is False
+
+
+def test_inject_skipped_when_no_step_matches_successor():
+    plan = SimpleNamespace(steps=[_step("apply used filter")])
+
+    n = apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "select a contact reason",
+            inject_before="reveal phone on owner listing",
+        ),
+    ])
+
+    assert n == 0
+    assert len(plan.steps) == 1
+    assert plan.steps[0].intent == "apply used filter"
+
+
+def test_mixed_nudge_and_inject_both_apply():
+    s1 = _step("apply used filter")
+    s2 = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[s1, s2])
+
+    n = apply_exemplar_overlay(plan, [
+        _exemplar("apply used filter", outcome="filter applied", source_run="nudge"),
+        _inject_exemplar(
+            "select a contact reason",
+            inject_before="reveal phone on owner listing",
+            source_run="inject",
+        ),
+    ])
+
+    assert n == 2
+    assert s1.hints["exemplar_source_run"] == "nudge"  # existing step nudged
+    assert [s.intent for s in plan.steps] == [
+        "apply used filter",
+        "select a contact reason",
+        "reveal phone on owner listing",
+    ]
+    assert plan.steps[1].hints["exemplar_source_run"] == "inject"
+
+
+def test_injected_step_threads_params_and_grounding():
+    """An injection exemplar can specify the executable knobs a fresh step needs
+    (params + grounding) — so the injected click is well-formed for the brain."""
+    anchor = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[anchor])
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "start the contact request",
+            inject_before="reveal phone on owner listing",
+            params={"label": "Start contact request"},
+            grounding=True,
+        ),
+    ])
+    inj = plan.steps[0]
+    assert inj.params == {"label": "Start contact request"}
+    assert inj.grounding is True
+
+
+def test_injected_step_defaults_grounding_true():
+    """A fresh injected action almost always needs vision grounding, so grounding
+    defaults to True when the exemplar doesn't say otherwise."""
+    anchor = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[anchor])
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "start the contact request",
+            inject_before="reveal phone on owner listing",
+        ),
+    ])
+    assert plan.steps[0].grounding is True
+
+
+def test_injected_step_merges_author_hints():
+    """Author-provided hints (e.g. expect_url_contains) survive, and the procedural
+    exemplar_replay is stamped alongside them rather than replacing them."""
+    anchor = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[anchor])
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "start the contact request",
+            inject_before="reveal phone on owner listing",
+            hints={"expect_url_contains": ["/boat/"]},
+        ),
+    ])
+    inj = plan.steps[0]
+    assert inj.hints["expect_url_contains"] == ["/boat/"]
+    assert "exemplar_replay" in inj.hints
+
+
+def test_injected_step_is_brain_ready_via_holo3():
+    from mantis_agent.gym.step_handlers.holo3 import _build_scoped_task
+
+    anchor = _step("reveal phone on owner listing")
+    plan = SimpleNamespace(steps=[anchor])
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "select a contact reason",
+            inject_before="reveal phone on owner listing",
+            outcome="contact reason selected",
+            source_run="inj7",
+        ),
+    ])
+
+    injected = plan.steps[0]
+    prompt = _build_scoped_task(injected, SimpleNamespace(), step_index=0)
+    assert "Worked example" in prompt
+    assert "contact reason selected" in prompt
+    assert "inj7" in prompt
+
+
+# ── loop-target safety: injection must not silently break a loop body ────
+
+
+def _loop(intent: str, *, loop_target: int):
+    return SimpleNamespace(
+        intent=intent, type="loop", params={}, hints={}, loop_target=loop_target,
+    )
+
+
+def test_injection_inside_loop_body_leaves_target_unchanged():
+    """The real BT03 shape: the loop rewinds to OPEN-LISTING (before the reveal),
+    so the injected contact-start lands INSIDE the loop body and re-runs every
+    iteration. loop_target points before the insert → it must NOT move."""
+    s_open = _step("open the next owner listing")
+    s_reveal = _step("reveal the hidden phone number via Show Phone Number")
+    s_loop = _loop("loop back to the next listing", loop_target=0)
+    plan = SimpleNamespace(steps=[s_open, s_reveal, s_loop])
+
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "start the contact request to unlock the phone",
+            inject_before="reveal the hidden phone number via Show Phone Number",
+        ),
+    ])
+
+    assert [s.intent for s in plan.steps] == [
+        "open the next owner listing",
+        "start the contact request to unlock the phone",
+        "reveal the hidden phone number via Show Phone Number",
+        "loop back to the next listing",
+    ]
+    # loop_target=0 (open listing) is before the insert at idx 1 → unchanged,
+    # and the injected step now sits within the loop body (idx 1..2).
+    assert plan.steps[3].loop_target == 0
+
+
+def test_injection_at_loop_target_shifts_it_to_follow_the_step():
+    """Edge case mirroring agentic_recovery.splice_inserted_steps: when the loop
+    rewinds to the very step we inject before, loop_target must shift +1 so it
+    keeps pointing at that same logical step (not at the freshly inserted one)."""
+    s_open = _step("open the next owner listing")
+    s_reveal = _step("reveal the hidden phone number via Show Phone Number")
+    s_loop = _loop("loop back to re-reveal", loop_target=1)
+    plan = SimpleNamespace(steps=[s_open, s_reveal, s_loop])
+
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "start the contact request to unlock the phone",
+            inject_before="reveal the hidden phone number via Show Phone Number",
+        ),
+    ])
+
+    # The reveal step moved from idx 1 → 2; loop_target follows it.
+    assert plan.steps[2].intent.startswith("reveal the hidden phone")
+    assert plan.steps[3].loop_target == 2
+
+
+def test_injection_does_not_touch_non_loop_steps_without_loop_target():
+    """SimpleNamespace stubs (and real non-loop MicroIntents) without a meaningful
+    loop_target must be left alone — the renumber guard keys off ``>= anchor``."""
+    anchor = _step("reveal the hidden phone number via Show Phone Number")
+    plan = SimpleNamespace(steps=[anchor])
+    apply_exemplar_overlay(plan, [
+        _inject_exemplar(
+            "start the contact request",
+            inject_before="reveal the hidden phone number via Show Phone Number",
+        ),
+    ])
+    # Neither the injected step nor the anchor grew a stray loop_target.
+    assert not hasattr(plan.steps[0], "loop_target")
+    assert not hasattr(plan.steps[1], "loop_target")

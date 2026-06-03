@@ -339,6 +339,7 @@ def test_offline_demo_allocator_beats_frozen_on_sealed() -> None:
 
 def test_run_offline_demo_covers_all_runnable_tasks() -> None:
     result = run_offline_demo(rounds=1, budget=500.0)
-    # Six runnable tasks in the shipped manifest (3 clusters × 2 splits).
-    assert result.reports["frozen"].n_runs == 6
+    # Seven runnable tasks: 3 clusters × 2 splits, plus the BT03 gated-reveal
+    # policy variant (visible split only).
+    assert result.reports["frozen"].n_runs == 7
     assert set(result.cluster_of.values()) == {"knowledge", "capability", "policy"}

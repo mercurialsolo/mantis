@@ -156,6 +156,21 @@
         </form>
         <div class="private-seller-phone-row" data-testid="phone-row">
           {% set show_phone = request.cookies.get('bt_show_phone_' ~ boat.id) == '1' %}
+          {% set contact_started = request.cookies.get('bt_contact_start_' ~ boat.id) == '1' %}
+          {% if boat.reveal_gated and not show_phone and not contact_started %}
+            {# BT03 action-OMISSION gate (BT03_REVEAL_GATE): the seller requires a
+               "start contact request" before the number is shown. The base plan
+               omits this prerequisite, so a frozen agent goes straight to Show
+               Phone Number below and the server (no bt_contact_start cookie)
+               reveals nothing — recall miss. The S1 injection seam inserts this
+               step ahead of the reveal, satisfying the gate so the unchanged
+               reveal fires. Only the POST sets the cookie; no number is exposed
+               here. Hidden once started so it never blocks grounding the reveal. #}
+            <form method="post" action="/boat/{{ boat.slug }}/contact-start">
+              <button type="submit" class="bdp-contact-start-link" data-testid="contact-start-btn">Start contact request</button>
+            </form>
+            <p class="bdp-contact-start-note">Private seller — start a contact request to view the phone number.</p>
+          {% endif %}
           {% if show_phone %}
             <img class="phone-svg" src="/assets/phone/{{ boat.slug }}.svg?_t={{ boat.id }}" alt="Phone number" data-testid="phone-svg" />
           {% elif boat.reveal_drift %}
