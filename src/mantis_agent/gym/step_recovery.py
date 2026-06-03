@@ -313,6 +313,31 @@ class StepRecoveryPolicy:
                         except Exception:
                             return -1.0  # sentinel — can't read
 
+                    def _read_dist_from_bottom() -> float:
+                        # px between the current scroll position and the
+                        # document bottom. 0 (≤ tol) ⇒ already at the
+                        # bottom; large ⇒ real content still below the
+                        # fold. Same provenance carve-out as _read_scroll_y:
+                        # this is post-action verification of layout
+                        # metrics to decide whether the plan's
+                        # "scroll to bottom" intent is *already satisfied*,
+                        # not DOM-derived grounding of a click target
+                        # (feedback_cua_no_dom_access.md). -1.0 = can't read.
+                        try:
+                            v = cdp_eval(
+                                "(function(){"
+                                "var se=document.scrollingElement"
+                                "||document.documentElement;"
+                                "var y=window.scrollY||se.scrollTop||0;"
+                                "var ih=window.innerHeight||0;"
+                                "var sh=se.scrollHeight"
+                                "||document.body.scrollHeight||0;"
+                                "return Math.max(0, sh-(y+ih));})()"
+                            )
+                            return float(v) if v is not None else -1.0
+                        except Exception:
+                            return -1.0  # sentinel — can't read
+
                     pre_y = _read_scroll_y()
                     # Multi-prong scroll dispatch — covers three
                     # browser scroll mechanisms in one CDP call so we
@@ -370,11 +395,41 @@ class StepRecoveryPolicy:
                                 halt=False, step_index=step_index + 1,
                                 halt_reason="scroll_cdp_fallback",
                             )
+                        # Δ<50px is ambiguous: either (a) we're already at
+                        # the document bottom — the plan's "scroll to
+                        # bottom" intent is *satisfied*, there's simply
+                        # nowhere further to go, so advancing is correct;
+                        # or (b) an overflow:hidden / sub-element scroller
+                        # ate the event and real content still sits below
+                        # the fold — a genuine failure that should keep
+                        # burning the retry budget. Disambiguate via the
+                        # document's own scroll metrics: scrollY+innerHeight
+                        # within tol of scrollHeight ⇒ case (a). Without
+                        # this, a required scroll-to-bottom step on a page
+                        # shorter than the brain expects (e.g. BoatTrader
+                        # by-owner detail pages) halts the whole run one
+                        # step short of the reveal it was scrolling toward.
+                        AT_BOTTOM_TOL = 96.0
+                        dist = _read_dist_from_bottom()
+                        if 0.0 <= dist <= AT_BOTTOM_TOL:
+                            logger_.warning(
+                                f"  [{step_index}] scroll brain_loop_exhausted "
+                                f"x{attempt} — CDP fallback fired, scrollY "
+                                f"{pre_y:.0f} → {post_y:.0f} (Δ<50px) but "
+                                f"document bottom is {dist:.0f}px away "
+                                f"(≤{AT_BOTTOM_TOL:.0f}px tol); scroll-to-bottom "
+                                f"intent satisfied, advancing"
+                            )
+                            return RecoveryOutcome(
+                                halt=False, step_index=step_index + 1,
+                                halt_reason="scroll_reached_bottom",
+                            )
                         logger_.warning(
                             f"  [{step_index}] scroll brain_loop_exhausted "
                             f"x{attempt} — CDP fallback fired but scrollY "
-                            f"{pre_y:.0f} → {post_y:.0f} (Δ<50px; page bottom "
-                            f"or sub-element scroller); continuing retry budget"
+                            f"{pre_y:.0f} → {post_y:.0f} (Δ<50px) and document "
+                            f"bottom is {dist:.0f}px away (sub-element scroller "
+                            f"or content below fold); continuing retry budget"
                         )
                         # Fall through to the normal retry path below.
 
