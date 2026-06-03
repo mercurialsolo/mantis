@@ -1,0 +1,103 @@
+{
+  "domain": "boattrader_scrape",
+  "shapes": [
+    "listings",
+    "form"
+  ],
+  "source_plan": "BT03 policy cluster (gated variant) — reveal the private seller's phone on a by-owner listing. The 'Show Phone Number' control sits in the 'Contact Private Seller' block, but on the gated env (BT03_REVEAL_GATE=1) the server refuses to emit the phone_revealed mutation until a NON-OBVIOUS prerequisite is met: a 'Start contact request' must be sent first. This base plan deliberately OMITS that prerequisite — it navigates to the by-owner SRP, opens a listing, and clicks 'Show Phone Number'. A frozen agent runs it as-authored and the gated reveal is a no-op (recall miss). The S1 exemplar substrate INJECTS the missing 'start contact request' step ahead of the reveal (apply_exemplar_overlay with an inject_before exemplar), satisfying the gate so the same unchanged reveal fires. This is the policy cluster's clean frozen-vs-S1 discriminator; the loop rewinds to the open-listing step so the injected prerequisite re-runs for each per-boat gate.",
+  "steps": [
+    {
+      "index": 0,
+      "type": "navigate",
+      "intent": "Navigate to {{ENV_URL}}/boats/state-fl/by-owner/",
+      "params": {
+        "url": "{{ENV_URL}}/boats/state-fl/by-owner/",
+        "wait_after_load_seconds": 8
+      },
+      "section": "setup",
+      "required": true,
+      "budget": 3,
+      "reverse": "Navigate back to the previous page"
+    },
+    {
+      "index": 1,
+      "type": "extract_data",
+      "intent": "Verify at least one private-seller (by-owner) boat listing card — a person's name tagged '(Private Seller)' with a 'Contact Owner' button — is visible on the results page",
+      "params": {
+        "claude_only": true
+      },
+      "section": "setup",
+      "required": true,
+      "gate": true,
+      "budget": 0,
+      "hints": {
+        "expect_url_contains": [
+          "/boats"
+        ]
+      },
+      "reverse": "No reverse needed for verification"
+    },
+    {
+      "index": 2,
+      "type": "click",
+      "intent": "Click the next unprocessed private-seller listing title (the year + make + model line) in the search results to open its detail page",
+      "section": "extraction",
+      "grounding": true,
+      "budget": 8,
+      "hints": {
+        "expect_url_contains": [
+          "/boat/"
+        ]
+      },
+      "reverse": "Navigate back to the search results page"
+    },
+    {
+      "index": 3,
+      "type": "click",
+      "intent": "Reveal the hidden phone number via the Show Phone Number control in the Contact Private Seller block",
+      "section": "extraction",
+      "grounding": true,
+      "required": false,
+      "budget": 6,
+      "reverse": "No reverse needed for reveal"
+    },
+    {
+      "index": 4,
+      "type": "detect_visible",
+      "intent": "Is a dialable phone number now visible in the Contact Private Seller / seller-info block (it was hidden until the reveal)? Answer yes ONLY when a real phone number is on screen; answer no if only the 'Show Phone Number' button is still showing and no number appeared.",
+      "params": {
+        "claude_only": true,
+        "out_var": "phone_shown"
+      },
+      "section": "extraction",
+      "required": false,
+      "out_var": "phone_shown",
+      "hints": {
+        "out_var": "phone_shown"
+      },
+      "budget": 0,
+      "reverse": "No reverse needed for verification"
+    },
+    {
+      "index": 5,
+      "type": "navigate_back",
+      "intent": "Return to the by-owner search results page to inspect the next listing",
+      "section": "extraction",
+      "budget": 3,
+      "reverse": "Navigate forward to the listing detail page"
+    },
+    {
+      "index": 6,
+      "type": "loop",
+      "intent": "Loop back to open and reveal the next unprocessed by-owner listing — unless a phone number has already been revealed",
+      "params": {
+        "loop_target": 2,
+        "loop_count": 3
+      },
+      "stop_var": "phone_shown",
+      "section": "extraction",
+      "budget": 0,
+      "reverse": "No reverse needed for loop"
+    }
+  ]
+}

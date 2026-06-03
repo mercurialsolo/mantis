@@ -58,7 +58,14 @@ site/
 # Customer-specific plan / task files — never commit. The generic recipes
 # in docs/integrations/recipes.md are the public surface; customer-specific
 # workflow JSON belongs in private operator storage, not in this repo.
-plans/
+# Ignore plan contents (not the dir itself) so the one tracked exception below
+# can be re-included — a negation cannot resurrect a file under an excluded dir.
+plans/*
+# Exception: this ONE plan is a tracked test fixture for the BT03 gated-reveal
+# discriminator (tests/learning/test_bt03_gated_discriminator.py). It is generic
+# (sim-env {{ENV_URL}} target, no credentials, no customer data) and is the exact
+# file live_runner loads, so the test guards the real shipped artifact, not a copy.
+!plans/bt03_gated_reveal.json
 tasks/
 internal-docs/
 # Test-only plans (often contain throwaway credentials for staging
