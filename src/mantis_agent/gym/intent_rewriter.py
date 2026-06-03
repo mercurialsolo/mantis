@@ -220,6 +220,17 @@ def propose_rewrite(
         logger.warning("intent_rewriter: response body was not valid JSON")
         return None
 
+    # Per-source cost attribution — without this, intent_rewriter's
+    # Opus-rate calls land in costs.claude aggregate but NEVER in the
+    # claude_cost_by_path meter. On failure-heavy runs the rewriter
+    # fires many times per failed step (often the single biggest
+    # uninstrumented spender). Tag as "intent_rewriter".
+    try:
+        from ..observability.claude_cost_meter import record_from_response
+        record_from_response(source="intent_rewriter", model=model, response_json=body)
+    except Exception:  # noqa: BLE001 — telemetry never breaks the rewriter
+        pass
+
     for block in body.get("content", []):
         if block.get("type") == "text":
             text = (block.get("text") or "").strip()

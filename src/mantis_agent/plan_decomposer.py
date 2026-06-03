@@ -995,6 +995,15 @@ class PlanDecomposer:
         if resp.status_code != 200:
             raise RuntimeError(f"Decompose API error: {resp.status_code} {resp.text[:200]}")
 
+        # Per-source cost attribution — decompose fires once per run on
+        # an Opus-rate model. Without this it shows up in costs.claude
+        # but not in claude_cost_by_path. Tag as "decompose".
+        try:
+            from .observability.claude_cost_meter import record_from_response
+            record_from_response(source="decompose", model=self.model, response_json=resp.json())
+        except Exception:  # noqa: BLE001 — telemetry never breaks decomposition
+            pass
+
         # #523 PR B-2 — capture this call as a modelio record when an
         # upstream caller has published a layer context (planner). Silent
         # no-op otherwise (default path until the wrap fires in PR B-2-
