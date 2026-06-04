@@ -511,6 +511,7 @@ class AnthropicToolUseClient:
         max_tokens: int = 500,
         time_bucket: str = "claude_extract",
         cache_tools: bool = False,
+        image_quality: int | None = None,
     ) -> dict | None:
         """Multi-screenshot variant of :meth:`call_with_tool_schema`.
 
@@ -534,7 +535,16 @@ class AnthropicToolUseClient:
         for i, screenshot in enumerate(screenshots, 1):
             label = labels[i - 1] if i - 1 < len(labels) else f"screenshot {i}"
             # #518 — same encoding helper as the single-shot path.
-            b64, media_type = encode_screenshot_for_claude(screenshot)
+            # ``image_quality`` opt-in lets cost-sensitive paths fall
+            # back to the env-resolved default (q=85) while OCR-sensitive
+            # paths (e.g. phone digit reads from body text) bump to
+            # q=95 for cleaner glyphs at a small token-count cost.
+            if image_quality is not None:
+                b64, media_type = encode_screenshot_for_claude(
+                    screenshot, quality=image_quality,
+                )
+            else:
+                b64, media_type = encode_screenshot_for_claude(screenshot)
             content.append({"type": "text", "text": f"Screenshot {i}: {label}"})
             content.append({
                 "type": "image",
