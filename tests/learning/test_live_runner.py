@@ -348,6 +348,145 @@ def test_submit_failure_yields_failed_result_without_spend(tmp_path: Path) -> No
     assert all(b.get("action") != "status" for _, b in poster.calls)
 
 
+def test_poll_survives_transient_status_timeout(tmp_path: Path) -> None:
+    """A transient network error on ONE status poll must not abort the run: the
+    GPU job keeps executing on Modal regardless of whether a single poll
+    round-trips, so ``_poll`` swallows the ``RequestException`` and keeps polling
+    until a terminal status. Regression for a live smoke that crashed the whole
+    matrix mid-arm on a 120s status read-timeout, losing the spend."""
+    import requests as _requests
+
+    class FlakyStatusPoster(FakePoster):
+        def __init__(self) -> None:
+            super().__init__(statuses=["succeeded"])
+            self.timed_out_once = False
+
+        def __call__(self, path: str, body: dict) -> tuple[int, dict]:
+            if body.get("action") == "status" and not self.timed_out_once:
+                self.timed_out_once = True
+                raise _requests.exceptions.ReadTimeout("status read timed out")
+            return super().__call__(path, body)
+
+    poster = FlakyStatusPoster()
+    run = _make(tmp_path, poster, FakeDecomposer())
+
+    terminal, halt = run._poll("run-1")
+
+    assert terminal == "succeeded"  # recovered past the transient timeout
+    assert poster.timed_out_once is True  # the swallow path was exercised
+
+
+def test_poll_returns_timeout_when_status_never_terminal(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A status endpoint that *persistently* raises still ends at the deadline
+    bound (``poll_timeout``) rather than spinning forever — the swallow path must
+    keep re-checking the deadline, not bypass it. A fake clock advances past the
+    deadline right after the first swallow so the bound (not a real 120s wait)
+    terminates the loop."""
+    import requests as _requests
+    import experiments.learning_allocator.live_runner as lr
+
+    class AlwaysTimeoutPoster(FakePoster):
+        def __call__(self, path: str, body: dict) -> tuple[int, dict]:
+            if body.get("action") == "status":
+                raise _requests.exceptions.ConnectTimeout("never answers")
+            return super().__call__(path, body)
+
+    run = _make(tmp_path, AlwaysTimeoutPoster(), FakeDecomposer())
+    # ticks: deadline-calc, first loop-check (enter), post-swallow check (exit).
+    ticks = iter([0.0, 0.0, 1e9])
+    monkeypatch.setattr(lr.time, "time", lambda: next(ticks, 1e9))
+
+    terminal, halt = run._poll("run-1")
+
+    assert terminal == "halted"
+    assert halt == "poll_timeout"
+
+
+def test_submit_retries_connection_error_then_succeeds(tmp_path: Path) -> None:
+    """A submit that fails to even reach Modal (DNS/connect — ``ConnectionError``)
+    is safe to re-POST: the request never left the machine, so the same
+    ``workflow_id`` cannot start a second run. The retry must transparently
+    succeed once connectivity returns rather than crash the matrix."""
+    import requests as _requests
+
+    class FlakyConnectPoster(FakePoster):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_once = False
+
+        def __call__(self, path: str, body: dict) -> tuple[int, dict]:
+            if "task_suite" in body and not self.failed_once:
+                self.failed_once = True
+                raise _requests.exceptions.ConnectionError("dns resolution failed")
+            return super().__call__(path, body)
+
+    poster = FlakyConnectPoster()
+    run = _make(tmp_path, poster, FakeDecomposer())
+
+    status, resp = run._submit({"task_suite": {}}, "wf-1")
+
+    assert status == 200
+    assert resp["run_id"] == "run-1"
+    assert poster.failed_once is True
+
+
+def test_submit_gives_up_after_connection_deadline(tmp_path: Path) -> None:
+    """A persistent connection failure is bounded: once the retry deadline
+    passes, the arm fails SOFT (``status is None`` → recorded as a failed submit)
+    rather than crashing the whole matrix and stranding earlier-arm spend."""
+    import requests as _requests
+
+    class AlwaysConnErrPoster(FakePoster):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        def __call__(self, path: str, body: dict) -> tuple[int, dict]:
+            if "task_suite" in body:
+                self.attempts += 1
+                raise _requests.exceptions.ConnectionError("dns still down")
+            return super().__call__(path, body)
+
+    poster = AlwaysConnErrPoster()
+    run = _make(tmp_path, poster, FakeDecomposer())
+    run.submit_retry_seconds = 0.0  # deadline immediately past → one try, then give up
+
+    status, resp = run._submit({"task_suite": {}}, "wf-1")
+
+    assert status is None
+    assert poster.attempts == 1
+    assert "connection failed" in resp["_submit_error"]
+
+
+def test_submit_failsoft_on_readtimeout_without_retry(tmp_path: Path) -> None:
+    """A ``ReadTimeout`` at submit is AMBIGUOUS — the request may have landed and
+    started a billable run — so it must NOT be retried (double-spend risk). It
+    fails soft after exactly one attempt, surfacing the error for a human."""
+    import requests as _requests
+
+    class ReadTimeoutPoster(FakePoster):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts = 0
+
+        def __call__(self, path: str, body: dict) -> tuple[int, dict]:
+            if "task_suite" in body:
+                self.attempts += 1
+                raise _requests.exceptions.ReadTimeout("response lost — may have landed")
+            return super().__call__(path, body)
+
+    poster = ReadTimeoutPoster()
+    run = _make(tmp_path, poster, FakeDecomposer())
+
+    status, resp = run._submit({"task_suite": {}}, "wf-1")
+
+    assert status is None
+    assert poster.attempts == 1  # NOT retried
+    assert "ReadTimeout" in resp["_submit_error"]
+
+
 def test_plan_decomposed_once_with_substituted_placeholders(
     tmp_path: Path,
 ) -> None:
