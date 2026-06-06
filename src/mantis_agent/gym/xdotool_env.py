@@ -337,7 +337,17 @@ class XdotoolGymEnv(GymEnvironment):
             cmd.append(f"--load-extension={_stealth_ext_dir}")
         if self._proxy_server:
             cmd.append(f"--proxy-server={self._proxy_server}")
-        cmd.append(url)
+        # When extra request headers are configured (canonically a sim-env
+        # consent Cookie like ``bt_cookie_consent``), the first document fetch
+        # must wait until the persistent header session is open AND the cookie
+        # is seeded into the jar. Launching Chrome with the real URL here fetches
+        # it immediately — before ``_open_header_session`` and with an empty jar
+        # — so the cookie-gated consent overlay renders and find_all reads it as
+        # ``page_blocked`` (the SRP never reaches the vision classifier as a real
+        # listings page). Launch to about:blank and defer the real navigation to
+        # after the header/cookie setup below, via the cookie-seeding path.
+        _defer_nav = bool(self._extra_http_headers and url and url != "about:blank")
+        cmd.append("about:blank" if _defer_nav else url)
 
         self._browser_proc = subprocess.Popen(
             cmd, env=self._env,
@@ -382,6 +392,16 @@ class XdotoolGymEnv(GymEnvironment):
         # open for the browser's lifetime. See ``_open_header_session``.
         if self._extra_http_headers:
             self._open_header_session()
+
+        # Deferred cold-start navigation (see ``_defer_nav`` above). The header
+        # session is now live and ``_navigate_running_browser`` seeds the consent
+        # cookie into the jar via ``Network.setCookie`` *before* ``Page.navigate``
+        # — so the first real document (e.g. the by-owner SRP) loads without the
+        # cookie-gated consent overlay, and the stealth patches registered just
+        # above apply to it. Launching to about:blank kept that first fetch from
+        # racing ahead with an empty jar.
+        if _defer_nav:
+            self._navigate_running_browser(url)
 
     def _wait_for_cdp_ready(self, deadline_s: float = 15.0) -> bool:
         """Block until Chrome's CDP HTTP endpoint answers, or ``deadline_s``.

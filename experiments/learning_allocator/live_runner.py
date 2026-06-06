@@ -337,6 +337,10 @@ class LiveRunFn:
     # URL-encodes to ``%7Bstate_code%7D`` → an empty results page.
     state_code: str = "fl"
     poll_interval_s: float = 15.0
+    # Upper bound on how long to keep retrying a submit that fails to even reach
+    # Modal (DNS/connect blip). Only connection-establishment errors retry — see
+    # :meth:`_submit` — so this never risks a double-submit.
+    submit_retry_seconds: float = 90.0
     post_fn: PostFn = _default_post
     pull_cost_fn: PullCostFn = _default_pull_cost
     decompose_fn: DecomposeFn = _default_decompose
@@ -377,7 +381,7 @@ class LiveRunFn:
             "detached": True,
             **runtime,
         }
-        status, resp = self.post_fn("/v1/predict", body)
+        status, resp = self._submit(body, workflow_id)
         if status != 200:
             return self._failed_result(f"submit HTTP {status}: {resp}", workflow_id)
 
@@ -491,15 +495,82 @@ class LiveRunFn:
 
     # ── poll + verdict ─────────────────────────────────────────────────
 
+    def _submit(
+        self, body: dict[str, Any], workflow_id: str,
+    ) -> tuple[int | None, dict[str, Any]]:
+        """POST the detached run, retrying ONLY connection-establishment failures.
+
+        A submit that fails before the request leaves the machine — DNS
+        resolution or TCP connect, surfaced by ``requests`` as
+        ``ConnectionError`` — provably never reached Modal, so re-POSTing the
+        SAME ``workflow_id`` cannot start a second GPU run. These transient
+        local blips (a laptop wifi/DNS hiccup) otherwise propagate out of the
+        orchestrator and crash the WHOLE matrix at the submit boundary, which
+        strands any spend already incurred by earlier arms — exactly the loss
+        the time-bounded retry in :meth:`_poll` was added to prevent, but on
+        the *submit* leg.
+
+        A ``ReadTimeout`` (or any other ``RequestException``) is NOT retried:
+        the request may have landed and started a billable run, so a blind
+        re-POST could double-spend. Those fail soft — the arm is recorded as a
+        failed submit and the matrix moves on, never crashing and never
+        double-submitting.
+        """
+        deadline = time.time() + self.submit_retry_seconds
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self.post_fn("/v1/predict", body)
+            except requests.exceptions.ConnectionError as exc:
+                if time.time() >= deadline:
+                    return None, {
+                        "_submit_error": f"connection failed after {attempt} "
+                        f"attempt(s) over {self.submit_retry_seconds:.0f}s: {exc!r}"
+                    }
+                print(
+                    f"[submit] WARNING: connect failed ({exc!r}); workflow "
+                    f"{workflow_id} never reached Modal (no spend) — retrying "
+                    f"after {self.poll_interval_s:.0f}s",
+                    file=sys.stderr, flush=True,
+                )
+                time.sleep(self.poll_interval_s)
+            except requests.RequestException as exc:
+                # Ambiguous: the request may have reached Modal and started a
+                # run. Do NOT retry (double-spend risk) — fail the arm soft.
+                return None, {
+                    "_submit_error": f"submit raised {type(exc).__name__} "
+                    f"(not retried — may have landed): {exc!r}"
+                }
+
     def _poll(self, run_id: str) -> tuple[str, str]:
-        """Poll ``action=status`` until terminal; return (status, halt_reason)."""
+        """Poll ``action=status`` until terminal; return (status, halt_reason).
+
+        A transient network error on a single status poll (e.g. the 120s read
+        timeout seen when the web fn briefly stalls or cold-starts) must NOT
+        abort an in-flight GPU run: the run keeps executing on Modal regardless
+        of whether one poll round-trips. Swallow ``RequestException`` and keep
+        polling until the deadline — the loop is already time-bounded, so a
+        genuinely stuck status endpoint still terminates at ``poll_timeout``
+        rather than crashing the whole matrix mid-arm and losing the spend.
+        """
         if not run_id:
             return "failed", "no_run_id"
         deadline = time.time() + 60 * self.max_time_minutes + 120
         while time.time() < deadline:
-            _, resp = self.post_fn(
-                "/v1/predict", {"action": "status", "run_id": run_id},
-            )
+            try:
+                _, resp = self.post_fn(
+                    "/v1/predict", {"action": "status", "run_id": run_id},
+                )
+            except requests.RequestException as exc:
+                print(
+                    f"[poll] WARNING: status poll failed ({exc!r}); run "
+                    f"{run_id} continues on Modal — retrying after "
+                    f"{self.poll_interval_s:.0f}s",
+                    file=sys.stderr, flush=True,
+                )
+                time.sleep(self.poll_interval_s)
+                continue
             st = str(resp.get("status") or "")
             if st in _TERMINAL:
                 return st, str(resp.get("halt_reason") or "")

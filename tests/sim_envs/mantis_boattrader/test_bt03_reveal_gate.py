@@ -99,28 +99,40 @@ def test_bt03_qualifying_set_unchanged(monkeypatch):
 # ── rendered layout (TestClient) ─────────────────────────────────────────
 
 
-def test_gated_owner_page_shows_prereq_and_reveal(monkeypatch):
-    """Gate-on: the owner page renders the "start contact request" prerequisite AND
-    the unchanged, verbatim-labelled reveal control — no masked teaser (the gate is
-    not the drift). The prerequisite is the step the base plan omits; the reveal is
-    what fires once the gate is satisfied."""
+def test_gated_owner_page_leads_with_prereq_and_suppresses_lead_form(monkeypatch):
+    """Gate-on: the owner page LEADS with the "start contact request" prerequisite as a
+    prominent primary button and renders the unchanged, verbatim-labelled reveal control
+    — no masked teaser (the gate is not the drift). While the gate is pending the
+    Name/Email/Phone lead form is SUPPRESSED: its prominent "Contact Seller" submit is the
+    attractor that out-competed the injected prerequisite click and collapsed a live 2-arm
+    smoke (S1 filled the form instead of starting the contact request). The prerequisite is
+    the step the base plan omits; the reveal is what fires once the gate is satisfied."""
     boat = _an_owner(monkeypatch, gate=True)
     with _client() as c:
         html = c.get(f"/boat/{boat.slug}/").text
     assert 'data-testid="private-seller-card"' in html, "not an owner detail page"
-    # The omitted prerequisite — present, groundable, POSTs to contact-start.
+    # The omitted prerequisite — present, groundable, POSTs to contact-start…
     assert 'data-testid="contact-start-btn"' in html
     assert f"/boat/{boat.slug}/contact-start" in html
     assert "Start contact request" in html
+    # …and it LEADS as a prominent primary button, not a muted link, so the injected
+    # S1 click has an unambiguous dominant target.
+    assert "btn-primary btn-block contact-start-btn" in html
+    # The competing lead form is suppressed while the gate is pending — removing the
+    # attractor is the whole point of this layout.
+    assert 'data-testid="dealer-lead-form"' not in html, "lead form not suppressed while gate pending"
+    assert 'data-testid="contact-seller-submit"' not in html, "lead-form submit leaked while gate pending"
     # The reveal survives verbatim; gate is orthogonal to the masked-teaser drift.
     assert 'data-testid="show-phone-btn"' in html
     assert "Show Phone Number" in html
     assert 'data-testid="seller-phone-inline"' not in html
 
 
-def test_started_contact_hides_prereq_keeps_reveal(monkeypatch):
+def test_started_contact_hides_prereq_restores_lead_form_keeps_reveal(monkeypatch):
     """Once the contact request is started the prerequisite control disappears so it
-    never blocks grounding the reveal — but the reveal itself stays present."""
+    never blocks grounding the reveal — the reveal itself stays present, and the standard
+    Name/Email/Phone lead form RETURNS (it only hid while the gate was pending, so this
+    layout is invisible to ungated and post-gate states)."""
     boat = _an_owner(monkeypatch, gate=True)
     with _client() as c:
         c.post(f"/boat/{boat.slug}/contact-start", follow_redirects=False)
@@ -128,6 +140,8 @@ def test_started_contact_hides_prereq_keeps_reveal(monkeypatch):
     assert 'data-testid="contact-start-btn"' not in html, "prereq not hidden once started"
     assert 'data-testid="show-phone-btn"' in html, "reveal control vanished"
     assert "Show Phone Number" in html
+    # The lead form returns once the gate clears.
+    assert 'data-testid="dealer-lead-form"' in html, "lead form did not return after contact-start"
 
 
 # ── gate behaviour: the mutation is what the oracle grades ────────────────
@@ -169,6 +183,8 @@ def test_gate_off_show_phone_reveals_directly(monkeypatch):
         c.post(f"/boat/{boat.slug}/show-phone", follow_redirects=False)
         svg = c.get(f"/assets/phone/{boat.slug}.svg")
     assert 'data-testid="contact-start-btn"' not in html, "prereq leaked into gate-off"
+    # No gate pending → the standard lead form renders (the suppression is gate-only).
+    assert 'data-testid="dealer-lead-form"' in html, "lead form missing on an ungated owner page"
     reveals = _reveals()
     assert len(reveals) == 1, f"stock reveal did not fire (got {len(reveals)})"
     assert reveals[0]["target_id"] == boat.id

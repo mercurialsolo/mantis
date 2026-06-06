@@ -1,13 +1,16 @@
 [
   {
     "type": "click",
-    "intent": "Start the contact request to unlock the seller's phone number — click the 'Start contact request' button in the Contact Private Seller block",
+    "intent": "Single-click the prominent primary button labelled 'Start contact request' in the 'Contact Private Seller' block — it sits directly above the gray note 'Private seller — start a contact request to view the phone number'. This is a ONE-CLICK action that starts the contact request and unlocks the hidden phone number. Just click the 'Start contact request' button; do not type anything.",
     "inject_before": "Reveal the hidden phone number via the Show Phone Number control",
     "required": false,
     "grounding": true,
     "params": {},
+    "hints": {
+      "preferred_target_description": "the prominent full-width primary button labelled 'Start contact request' in the Contact Private Seller block, sitting directly above the gray note text 'start a contact request to view the phone number'"
+    },
     "last_action": {"action_type": "click"},
-    "observed_outcome": "the contact request started and the Show Phone Number control unlocked, so clicking it then exposed the seller's phone",
+    "observed_outcome": "clicking the 'Start contact request' button started the contact request and unlocked the Show Phone Number control, so the subsequent reveal exposed the seller's phone number",
     "source_run": "bt03-gated-contact-start-seed42"
   }
 ]
