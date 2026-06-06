@@ -267,3 +267,112 @@ def test_navigate_running_browser_empty_url_is_noop(env_with_cdp_recorder) -> No
     # CDP request and Chrome will no-op. We assert behavior is consistent.
     # If a future refactor adds an empty-string guard, update this test.
     assert len(cdp_calls) <= 1
+
+
+# ── cold-start launch ordering ─────────────────────────────────────────
+#
+# The companion bug to the navigate fix above: on a *fresh* browser start,
+# ``_start_browser`` launched Chrome with the target URL on the command line,
+# so the first document (e.g. the by-owner SRP) was fetched *immediately* —
+# before ``_open_header_session`` opened and with an empty cookie jar. The
+# sim-env consent cookie was never seeded (``Network.setExtraHTTPHeaders``
+# drops a ``Cookie`` header; only ``Network.setCookie`` populates the jar, and
+# that runs inside ``_navigate_running_browser``, which the cold-start path
+# never called). The consent overlay rendered and ``find_all_listings`` read
+# it as ``page_blocked`` on every retry. Fix: when extra headers are present,
+# launch to about:blank and defer the real navigation through the cookie-
+# seeding path once the header session is live.
+
+
+def _make_start_browser_env(tmp_path, *, extra_headers):
+    env = XdotoolGymEnv.__new__(XdotoolGymEnv)
+    env._viewport = (1280, 800)
+    env._proxy_server = None
+    env._settle_time = 0.0
+    env._env = {}
+    env._browser_proc = None
+    env._browser_cmd = "chromium-browser"
+    env._cdp_port = 9222
+    env._profile_dir = str(tmp_path / "profile")
+    env._extra_http_headers = extra_headers
+    return env
+
+
+@pytest.fixture
+def start_browser_recorder(monkeypatch: pytest.MonkeyPatch):
+    """Stub out the real browser launch + CDP so ``_start_browser`` runs in
+    process. Records the Popen argv, deferred-navigation URLs, and the order of
+    header-session vs navigation events."""
+    popen_cmds: list[list[str]] = []
+    nav_urls: list[str] = []
+    events: list[str] = []
+
+    class _FakeProc:
+        def poll(self):
+            return None
+
+    def _fake_popen(cmd, **kwargs):
+        popen_cmds.append(cmd)
+        events.append("popen")
+        return _FakeProc()
+
+    monkeypatch.setattr("mantis_agent.gym.xdotool_env.subprocess.Popen", _fake_popen)
+    monkeypatch.setattr("mantis_agent.gym.xdotool_env.time.sleep", lambda *_: None)
+    monkeypatch.setattr(XdotoolGymEnv, "_wait_for_cdp_ready", lambda self, *a, **k: True)
+    monkeypatch.setattr(XdotoolGymEnv, "_cdp_call", lambda self, *a, **k: (True, {}))
+    monkeypatch.setattr(
+        "mantis_agent.gym.cdp_stealth.inject_stealth_patches", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "mantis_agent.gym.cdp_stealth.apply_ua_override", lambda *a, **k: None
+    )
+
+    def _fake_open_header_session(self):
+        events.append("header_session")
+
+    def _fake_navigate(self, url):
+        events.append("navigate")
+        nav_urls.append(url)
+
+    monkeypatch.setattr(XdotoolGymEnv, "_open_header_session", _fake_open_header_session)
+    monkeypatch.setattr(XdotoolGymEnv, "_navigate_running_browser", _fake_navigate)
+    return popen_cmds, nav_urls, events
+
+
+def test_start_browser_defers_nav_when_extra_headers_present(
+    start_browser_recorder, tmp_path,
+) -> None:
+    """Cold start WITH extra headers (sim-env consent Cookie): launch to
+    about:blank and defer the real navigation until after the header session
+    opens, so the first SRP fetch carries the seeded cookie rather than racing
+    ahead with an empty jar (→ consent banner → page_blocked)."""
+    popen_cmds, nav_urls, events = start_browser_recorder
+    env = _make_start_browser_env(
+        tmp_path, extra_headers={"Cookie": "bt_cookie_consent=decline"}
+    )
+
+    target = "https://8080-abc.daytonaproxy01.net/boats/state-fl/by-owner/"
+    env._start_browser(target)
+
+    # Launched to about:blank, NOT the real URL.
+    assert popen_cmds[0][-1] == "about:blank"
+    assert target not in popen_cmds[0]
+    # Real navigation deferred to the cookie-seeding path.
+    assert nav_urls == [target]
+    # Ordering: header session opened BEFORE the deferred navigation.
+    assert events.index("header_session") < events.index("navigate")
+
+
+def test_start_browser_launches_url_directly_without_extra_headers(
+    start_browser_recorder, tmp_path,
+) -> None:
+    """No extra headers (ordinary runs): unchanged behavior — Chrome launches
+    straight to the URL and no deferred CDP navigation is issued."""
+    popen_cmds, nav_urls, events = start_browser_recorder
+    env = _make_start_browser_env(tmp_path, extra_headers=None)
+
+    target = "https://example.com/page"
+    env._start_browser(target)
+
+    assert popen_cmds[0][-1] == target
+    assert nav_urls == []  # no deferred navigation
