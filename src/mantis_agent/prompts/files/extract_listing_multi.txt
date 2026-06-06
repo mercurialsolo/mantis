@@ -8,7 +8,7 @@ EXPECTED fields (almost every detail page exposes these — return them whenever
 - ``url`` — the browser address bar URL, verbatim, from whichever screenshot shows it.
 
 OPTIONAL fields (return when visible, leave empty otherwise — don't guess):
-- ``phone`` — seller's phone if it appears in the listing's body text or contact-info block. Ignore phones from headers / footers / financing ads / support widgets. If the page only offers a contact form with no number printed, return ``""``.
+- ``phone`` — seller's phone, **searched across the DESCRIPTION body in EVERY screenshot** — phones almost always live in the description text on private-seller listings, often in the last 1-3 sentences after the spec narrative ("Call David at 503-770-0756", "Text/call 555-555-5555", "Owner: 555 555 5555"). Examine each screenshot top to bottom for a complete phone-shaped sequence (US ``###-###-####``, ``(###) ###-####``, ``###.###.####``, ``###########``; or any ``+``-prefixed international form). Combine evidence from ALL screenshots — the phone may appear in screenshot 3 even if screenshots 1-2 don't show it. **Reject** phones from site chrome: financing CTAs (toll-free 800/833/844/855/866/877/888), insurance widgets, support footers. If no description-embedded phone appears in any screenshot, return ``""``.
 - ``seller`` — seller's name / org if shown. Empty otherwise.
 - ``is_dealer`` — ``true`` if listing is from a commercial seller (business name, business badge, dealer logo). ``false`` otherwise.
 

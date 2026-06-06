@@ -210,6 +210,20 @@ class ClaudeExtractor:
             model=_VERIFY_ESCALATION_MODEL,
             log_prefix="ClaudeVerifyOpus",
         )
+        # Phone-only re-extract client (Sonnet). When the primary Haiku
+        # extract returns ``phone=""`` on a listing that otherwise
+        # extracted cleanly (year/make/model populated), this client
+        # runs a focused single-field "find the phone in the description"
+        # pass against the same multi-screenshot bundle. Empirically
+        # Haiku misses phones embedded in description body text at a
+        # ~83% rate (Chrome MCP audit 2026-06-03 on 22 sampled URLs);
+        # Sonnet is much better at reading small body-text characters
+        # in screenshots. See experiments/phone_extract_fix/PLAN.md.
+        self._phone_reextract_client = AnthropicToolUseClient(
+            api_key=self.api_key,
+            model=os.environ.get("MANTIS_PHONE_REEXTRACT_MODEL", _VERIFY_ESCALATION_MODEL),
+            log_prefix="ClaudePhoneReextract",
+        )
 
     # ── Dynamic prompt generation from schema ─────────────────────
 
@@ -810,6 +824,80 @@ class ClaudeExtractor:
 
         return result
 
+    def _locate_description_screenshots(
+        self,
+        screenshots: list[Image.Image],
+        labels: list[str] | None = None,
+    ) -> list[int]:
+        """Identify which screenshots in the multi-shot bundle show the
+        Description block.
+
+        Returns a list of indices (0-based, in the order they appear in
+        ``screenshots``) that contain a recognizable Description heading
+        or its body text. Empty list means "couldn't find — caller
+        should fall back to the full bundle".
+
+        Implementation: a single Haiku tool-use call that scans the
+        whole bundle and returns the indices. Cost ~$0.005/listing.
+        Used by ``extract_multi`` to subset the screenshots passed to
+        the Sonnet phone re-extract.
+        """
+        if not screenshots:
+            return []
+        if not self.api_key:
+            return []
+        prompt = (
+            "These are sequential viewports of one boat-listing detail "
+            "page. The page has a 'Description' block: a heading "
+            "labelled 'Description' followed by 1-N paragraphs of "
+            "seller-written body text (a 'Show More' / 'Show Less' "
+            "expand control may also be visible). Report which "
+            "screenshots show ANY part of the Description block — "
+            "the heading, the body text, or both. Return as a list "
+            "of 1-based screenshot indices (e.g. [2,3]). If NO "
+            "screenshot shows the Description block, return [].\n"
+            "Do not include screenshots that show only photos, "
+            "specs grid, financing widget, footer, or other "
+            "non-description chrome."
+        )
+        try:
+            parsed = self._client.call_with_tool_schema_multi(
+                screenshots,
+                prompt,
+                tool_name="report_description_screenshots",
+                tool_description="Report which screenshots show the Description block.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "indices": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "description": "1-based screenshot indices showing the Description block.",
+                        },
+                    },
+                    "required": ["indices"],
+                },
+                labels=labels,
+                max_tokens=80,
+                time_bucket="description_locator",
+                cache_tools=True,
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        if not isinstance(parsed, dict):
+            return []
+        raw = parsed.get("indices") or []
+        out: list[int] = []
+        for idx in raw:
+            try:
+                # Convert 1-based to 0-based and bounds-check.
+                i = int(idx) - 1
+                if 0 <= i < len(screenshots) and i not in out:
+                    out.append(i)
+            except (TypeError, ValueError):
+                continue
+        return out
+
     def extract_multi(
         self,
         screenshots: list[Image.Image],
@@ -878,6 +966,144 @@ class ClaudeExtractor:
             result.seller[:60], result.is_dealer,
             nested is not None, len(screenshots), len(text),
         )
+
+        # Phone-only Sonnet re-extract when the primary Haiku pass left
+        # the phone field empty on a detail-page extract. Gate fires if
+        # *any* of year / make / model / url is populated — that's a
+        # reliable signal we're on a listing detail page (not a
+        # listings index, chrome-error, or CF challenge). Strict
+        # all-of(year, make, model) gate was too narrow: when the
+        # framework's scroll lands past the title block, Haiku misses
+        # year/make and the gate doesn't fire even though we ARE on
+        # the right page. Empirically Haiku misses description-embedded
+        # phones at ~83% rate; Sonnet does better small-font OCR.
+        # See experiments/phone_extract_fix/PLAN.md (Option A).
+        if (
+            os.environ.get("MANTIS_PHONE_REEXTRACT", "1") not in ("0", "false", "False")
+            and not result.phone
+            and (result.year or result.make or result.model or result.url)
+        ):
+            try:
+                # Option B — focus the Sonnet re-extract on the
+                # description-bearing screenshots only. The full
+                # 6-viewport sweep includes the top photo carousel +
+                # spec grid + financing widget + footer ads; passing
+                # all of those to Sonnet (a) wastes tokens (b) gives
+                # the model competing numeric content (loan amounts,
+                # monthly payments, view counts) that bias digit reads.
+                # A cheap Haiku locator pass returns the indices that
+                # show the Description block; if it finds them, we
+                # subset to those. If the locator fails or returns
+                # empty, fall back to the full bundle.
+                focus_screenshots = screenshots
+                focus_labels = labels
+                focus_indices: list[int] = []
+                try:
+                    focus_indices = self._locate_description_screenshots(
+                        screenshots, labels=labels,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "  [extract_multi] description-locator failed: %s", exc,
+                    )
+                if focus_indices:
+                    focus_screenshots = [screenshots[i] for i in focus_indices]
+                    if labels:
+                        focus_labels = [labels[i] for i in focus_indices if i < len(labels)]
+                    else:
+                        focus_labels = None
+                logger.warning(
+                    "  [extract_multi] description-locator: "
+                    "indices=%s (of %d total screenshots)",
+                    focus_indices, len(screenshots),
+                )
+
+                phone_prompt = (
+                    "These screenshots are viewports of one "
+                    "boat-listing detail page, focused on the "
+                    "Description block. Look for a phone number "
+                    "written by the seller (typically "
+                    "embedded inside the Description body text). "
+                    "Return BOTH:\n"
+                    "  - phone: the digits you read, formatted as "
+                    "###-###-#### or (###) ###-####. Empty string if no "
+                    "phone is visible.\n"
+                    "  - context_quote: the VERBATIM sentence from the "
+                    "listing description that contains the phone — copied "
+                    "exactly as it appears in the screenshot, including "
+                    "the phone digits themselves. Empty if phone is empty.\n"
+                    "Do NOT make up digits. If you can read most of a "
+                    "phone but not all of it, return the empty string "
+                    "rather than guessing the missing digits."
+                )
+                phone_parsed = self._phone_reextract_client.call_with_tool_schema_multi(
+                    focus_screenshots,
+                    phone_prompt,
+                    tool_name="report_seller_phone",
+                    tool_description="Report any phone number visible in the listing screenshots, with grounded context.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {
+                            "phone": {
+                                "type": "string",
+                                "description": "Phone number visible in screenshots, or empty string if none.",
+                            },
+                            "context_quote": {
+                                "type": "string",
+                                "description": "Verbatim sentence from the listing containing the phone, or empty.",
+                            },
+                        },
+                        "required": ["phone", "context_quote"],
+                    },
+                    labels=focus_labels,
+                    max_tokens=300,
+                    time_bucket="phone_reextract_sonnet",
+                    cache_tools=True,
+                    # M3 — bump JPEG quality from the env-resolved
+                    # default (q=85) to q=95 for cleaner digit glyphs;
+                    # token cost rises ~10-15% per image but materially
+                    # reduces digit-position guessing on small body text.
+                    image_quality=95,
+                )
+                call_ok = isinstance(phone_parsed, dict)
+                raw_phone = ""
+                raw_quote = ""
+                if call_ok:
+                    raw_phone = str(phone_parsed.get("phone", "") or "").strip()
+                    raw_quote = str(phone_parsed.get("context_quote", "") or "").strip()
+                # M1 — substring grounding check. Sonnet sometimes returns
+                # a phone with hallucinated middle/tail digits (e.g.
+                # ``713-598-5801`` for a real ``713-503-5091`` on the
+                # same page). Requiring the phone's bare digits to
+                # appear in the verbatim context_quote forces grounding
+                # in actual screenshot text. Empirical 1/1 false-positive
+                # caught by this gate in the 2026-06-03 TX 77304 smoke.
+                accepted = ""
+                reject_reason = ""
+                if raw_phone:
+                    phone_digits = "".join(c for c in raw_phone if c.isdigit())
+                    quote_digits = "".join(c for c in raw_quote if c.isdigit())
+                    if not raw_quote:
+                        reject_reason = "empty_quote"
+                    elif phone_digits and phone_digits in quote_digits:
+                        accepted = raw_phone
+                    else:
+                        reject_reason = "phone_digits_not_in_quote"
+                logger.warning(
+                    "  [extract_multi] phone_reextract_sonnet: call_ok=%s "
+                    "raw_phone=%r raw_quote=%r accepted=%r reject=%r "
+                    "url=%r year=%r make=%r model=%r",
+                    call_ok, raw_phone[:40], raw_quote[:120],
+                    accepted[:40], reject_reason,
+                    result.url[:80], result.year[:40], result.make[:40], result.model[:40],
+                )
+                if accepted:
+                    result.phone = accepted
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "  [extract_multi] phone_reextract_sonnet failed: %s", exc,
+                )
+
         return result
 
     def find_listing_content_control(self, screenshot: Image.Image) -> dict | None:
