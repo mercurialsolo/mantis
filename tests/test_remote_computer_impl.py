@@ -47,6 +47,11 @@ class _FakeServer:
         self.screenshot_image_b64 = screenshot_image_b64 or _png_b64()
         self.session_token = "tok-abc"
         self.dedup_returncode_overrides: dict[str, int] = {}
+        # Proxied-env state — flipped by individual tests as needed.
+        self.current_url = "https://example.com/start"
+        self.page_count = 1
+        self.cdp_click_ok = True
+        self.cdp_result_json = '{"result": {"value": 42}}'
 
     def __call__(
         self,
@@ -101,8 +106,28 @@ class _FakeServer:
                 },
             )
         if path == "/cdp":
-            return _Resp(200, {"result_json": "{}", "returncode": 0})
+            return _Resp(200, {"result_json": self.cdp_result_json, "returncode": 0})
+        if path == "/cdp_click_at_point":
+            return _Resp(200, {"ok": self.cdp_click_ok, "error": None})
         return _Resp(404, {}, text=f"no handler for {path}")
+
+    def get(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> _Resp:
+        """Sibling of `__call__` for GET endpoints (`/current_url`,
+        `/cdp_count_pages`). Recorded with the same `self.calls` shape
+        as POSTs so assertions can grep paths uniformly.
+        """
+        path = "/" + url.split("/", 3)[-1] if url.count("/") >= 3 else url
+        self.calls.append({"path": path, "json": None, "headers": headers or {}})
+        if path == "/current_url":
+            return _Resp(200, {"url": self.current_url})
+        if path == "/cdp_count_pages":
+            return _Resp(200, {"count": self.page_count})
+        return _Resp(404, {}, text=f"no GET handler for {path}")
 
 
 def _png_b64(size: tuple[int, int] = (16, 16)) -> str:
@@ -364,3 +389,197 @@ def test_latency_report_aggregates_screenshot_and_xdotool() -> None:
     assert report["screenshot"]["count"] == 3
     # Each CLICK is 2 xdotool calls → 4 across the two steps.
     assert report["xdotool"]["count"] == 4
+
+
+# ── XdotoolGymEnv-compatibility surface ──────────────────────────────
+
+
+def test_session_init_forwards_start_url_profile_dir_extra_headers() -> None:
+    fake = _FakeServer()
+    env = RemoteComputerImpl(
+        base_url="https://x",
+        start_url="https://target.example/landing",
+        profile_dir="/data/chrome-profile/t__p",
+        extra_http_headers={"X-Daytona-Skip-Preview-Warning": "true"},
+    )
+    with patch("requests.post", side_effect=fake):
+        env.session_init()
+    init_call = next(c for c in fake.calls if c["path"] == "/session/init")
+    assert init_call["json"]["start_url"] == "https://target.example/landing"
+    assert init_call["json"]["profile_dir"] == "/data/chrome-profile/t__p"
+    assert init_call["json"]["extra_http_headers"] == {
+        "X-Daytona-Skip-Preview-Warning": "true",
+    }
+
+
+def test_screenshot_returns_pil_image_with_same_bytes_as_observation() -> None:
+    fake = _FakeServer()
+    env = RemoteComputerImpl(base_url="https://x")
+    with patch("requests.post", side_effect=fake):
+        env.reset(task="t")
+        img_direct = env.screenshot()
+        obs = env._capture()
+    assert img_direct.size == (16, 16)
+    assert obs.screenshot.size == (16, 16)
+
+
+def test_shutdown_calls_session_close() -> None:
+    fake = _FakeServer()
+    env = RemoteComputerImpl(base_url="https://x")
+    with patch("requests.post", side_effect=fake):
+        env.reset(task="t")
+        env.shutdown()
+    assert env._session_token is None
+    assert any(c["path"] == "/session/close" for c in fake.calls)
+
+
+def test_capture_browser_state_is_empty_stub() -> None:
+    env = RemoteComputerImpl(base_url="https://x")
+    assert env.capture_browser_state() == {}
+
+
+def test_current_url_proxies_get_current_url() -> None:
+    fake = _FakeServer()
+    fake.current_url = "https://example.com/leads?owner=true"
+    env = RemoteComputerImpl(base_url="https://x")
+    with patch("requests.post", side_effect=fake), patch(
+        "requests.get", side_effect=fake.get
+    ):
+        env.reset(task="t")
+        url = env.current_url
+    assert url == "https://example.com/leads?owner=true"
+
+
+def test_current_url_swallows_failure_and_returns_empty_string() -> None:
+    def _failing_get(*_a: Any, **_kw: Any) -> _Resp:
+        raise requests.ConnectTimeout("nope")
+
+    env = RemoteComputerImpl(base_url="https://x")
+    env._session_token = "tok"  # skip init
+    with patch("requests.get", side_effect=_failing_get), patch(
+        "mantis_agent.gym.remote_computer_impl.time.sleep", lambda *_: None
+    ):
+        assert env.current_url == ""
+
+
+def test_cdp_evaluate_disabled_raises() -> None:
+    env = RemoteComputerImpl(base_url="https://x")
+    with pytest.raises(RuntimeError, match="enable_cdp=False"):
+        env.cdp_evaluate("window.scrollY")
+
+
+def test_cdp_evaluate_unwraps_runtime_evaluate_result_value() -> None:
+    fake = _FakeServer()
+    fake.cdp_result_json = '{"result": {"type": "number", "value": 1234}}'
+    env = RemoteComputerImpl(base_url="https://x", enable_cdp=True)
+    with patch("requests.post", side_effect=fake):
+        env.reset(task="t")
+        out = env.cdp_evaluate("window.scrollY")
+    assert out == 1234
+
+
+def test_cdp_evaluate_returns_none_on_undefined_result() -> None:
+    fake = _FakeServer()
+    fake.cdp_result_json = "{}"  # mirrors JS `undefined`
+    env = RemoteComputerImpl(base_url="https://x", enable_cdp=True)
+    with patch("requests.post", side_effect=fake):
+        env.reset(task="t")
+        assert env.cdp_evaluate("nothing") is None
+
+
+def test_chrome_offset_px_uses_cdp_evaluate() -> None:
+    fake = _FakeServer()
+    fake.cdp_result_json = '{"result": {"value": 95}}'
+    env = RemoteComputerImpl(base_url="https://x", enable_cdp=True)
+    with patch("requests.post", side_effect=fake):
+        env.reset(task="t")
+        assert env._chrome_offset_px() == 95
+
+
+def test_cdp_click_at_point_proxies_endpoint() -> None:
+    fake = _FakeServer()
+    fake.cdp_click_ok = True
+    env = RemoteComputerImpl(base_url="https://x", enable_cdp=True)
+    with patch("requests.post", side_effect=fake):
+        env.reset(task="t")
+        assert env.cdp_click_at_point(100, 200) is True
+    click_calls = [c for c in fake.calls if c["path"] == "/cdp_click_at_point"]
+    assert len(click_calls) == 1
+    payload = click_calls[0]["json"]
+    assert payload["x"] == 100 and payload["y"] == 200
+    assert payload["via_pointer"] is False
+
+
+def test_cdp_click_via_pointer_sets_via_pointer_flag() -> None:
+    fake = _FakeServer()
+    env = RemoteComputerImpl(base_url="https://x", enable_cdp=True)
+    with patch("requests.post", side_effect=fake):
+        env.reset(task="t")
+        env.cdp_click_via_pointer(300, 400)
+    click_calls = [c for c in fake.calls if c["path"] == "/cdp_click_at_point"]
+    assert click_calls[0]["json"]["via_pointer"] is True
+
+
+def test_cdp_click_requires_enable_cdp() -> None:
+    env = RemoteComputerImpl(base_url="https://x")
+    with pytest.raises(RuntimeError, match="enable_cdp=True"):
+        env.cdp_click_at_point(1, 2)
+
+
+def test_cdp_count_pages_proxies_get_endpoint() -> None:
+    fake = _FakeServer()
+    fake.page_count = 3
+    env = RemoteComputerImpl(base_url="https://x")
+    with patch("requests.post", side_effect=fake), patch(
+        "requests.get", side_effect=fake.get
+    ):
+        env.reset(task="t")
+        assert env.cdp_count_pages() == 3
+
+
+def test_cdp_count_pages_returns_zero_on_failure() -> None:
+    def _bad_get(*_a: Any, **_kw: Any) -> _Resp:
+        raise requests.ConnectionError("nope")
+
+    env = RemoteComputerImpl(base_url="https://x")
+    env._session_token = "tok"
+    with patch("requests.get", side_effect=_bad_get), patch(
+        "mantis_agent.gym.remote_computer_impl.time.sleep", lambda *_: None
+    ):
+        assert env.cdp_count_pages() == 0
+
+
+def test_cdp_history_back_returns_true_on_url_change() -> None:
+    fake = _FakeServer()
+    fake.cdp_result_json = "{}"  # `history.back()` returns undefined
+    urls = iter(["https://example.com/before", "https://example.com/after"])
+
+    def _get(url: str, **_kw: Any) -> _Resp:
+        path = "/" + url.split("/", 3)[-1] if url.count("/") >= 3 else url
+        fake.calls.append({"path": path, "json": None, "headers": {}})
+        if path == "/current_url":
+            return _Resp(200, {"url": next(urls)})
+        return _Resp(404, {})
+
+    env = RemoteComputerImpl(base_url="https://x", enable_cdp=True)
+    with patch("requests.post", side_effect=fake), patch(
+        "requests.get", side_effect=_get
+    ), patch("mantis_agent.gym.remote_computer_impl.time.sleep", lambda *_: None):
+        env.reset(task="t")
+        assert env.cdp_history_back(settle_seconds=0.5) is True
+
+
+def test_cdp_history_back_returns_false_when_url_unchanged() -> None:
+    fake = _FakeServer()
+    env = RemoteComputerImpl(base_url="https://x", enable_cdp=True)
+    with patch("requests.post", side_effect=fake), patch(
+        "requests.get", side_effect=fake.get
+    ), patch("mantis_agent.gym.remote_computer_impl.time.sleep", lambda *_: None):
+        env.reset(task="t")
+        # `fake.current_url` is constant → no change → returns False.
+        assert env.cdp_history_back(settle_seconds=0.3) is False
+
+
+def test_cdp_history_back_returns_false_when_cdp_disabled() -> None:
+    env = RemoteComputerImpl(base_url="https://x")
+    assert env.cdp_history_back() is False

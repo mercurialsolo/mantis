@@ -25,6 +25,15 @@ class SessionInitRequest(BaseModel):
     Idempotent on `run_id`: a second init for the same `run_id` returns the
     existing session token. Different `run_id` against an active session is
     a 409.
+
+    `start_url` and `profile_dir` are forwarded to the remote
+    `XdotoolGymEnv` so the brain plane controls the initial navigation
+    and the on-volume profile path (paths must live under `/data/...`
+    — the brain and computer plane share the same Modal Volume).
+
+    `extra_http_headers` is forwarded to Chrome via CDP for sites that
+    need a persistent header (e.g. Daytona preview-warning bypass, see
+    `feedback_daytona_preview_warning_bypass.md`).
     """
 
     tenant_id: str
@@ -34,6 +43,9 @@ class SessionInitRequest(BaseModel):
     chrome_flags: list[str] = Field(default_factory=list)
     enable_cdp: bool = False
     viewport: tuple[int, int] = (1280, 720)
+    start_url: str = "about:blank"
+    profile_dir: str | None = None
+    extra_http_headers: dict[str, str] | None = None
 
 
 class SessionInitResponse(BaseModel):
@@ -104,3 +116,46 @@ class HealthResponse(BaseModel):
     ok: bool
     last_action_ms: int | None = None
     session_token: str | None = None
+
+
+class CurrentUrlResponse(BaseModel):
+    """Active tab URL — proxies `XdotoolGymEnv.current_url`.
+
+    Step handlers (and `task_loop`'s final-URL bookkeeping) read this
+    directly, so the remote impl must answer the same shape. Empty
+    string when no page has loaded yet.
+    """
+
+    url: str
+
+
+class CdpClickAtPointRequest(BaseModel):
+    """Forward `XdotoolGymEnv.cdp_click_at_point` over the wire.
+
+    `via_pointer=True` discriminates the `cdp_click_via_pointer` variant
+    (DOM `pointerdown`/`pointerup` rather than `mousedown`/`mouseup`)
+    which some sites need to register interaction. Single endpoint to
+    keep the server surface tight.
+    """
+
+    x: int
+    y: int
+    button: Literal["left", "middle", "right"] = "left"
+    click_count: int = 1
+    via_pointer: bool = False
+    step_id: str
+
+
+class CdpClickAtPointResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+
+
+class CdpCountPagesResponse(BaseModel):
+    """Number of open Chrome targets (#582 — defensive count).
+
+    Used by the click handler to detect "click opened a new tab"
+    transitions.
+    """
+
+    count: int

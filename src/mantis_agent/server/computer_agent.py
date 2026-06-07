@@ -38,6 +38,10 @@ from fastapi import FastAPI, Header, HTTPException
 from ..gym.computer_wire import (
     CDPRequest,
     CDPResponse,
+    CdpClickAtPointRequest,
+    CdpClickAtPointResponse,
+    CdpCountPagesResponse,
+    CurrentUrlResponse,
     HealthResponse,
     ScreenshotRequest,
     ScreenshotResponse,
@@ -137,25 +141,52 @@ def _require_session(session_token: str | None) -> _Session:
     return s
 
 
+def _resolve_profile_dir(req: SessionInitRequest) -> str:
+    """Resolve the on-volume profile dir the remote Chrome will use.
+
+    Brain-side `profile_dir` strings reach us as-is. Both planes mount
+    the same `osworld-data` Modal Volume at `/data`, so paths under
+    `/data/...` are shared transparently. Reject anything else loudly
+    rather than silently writing a profile into the container's
+    ephemeral filesystem (which evaporates with the container).
+    """
+    requested = (req.profile_dir or "").strip()
+    if requested:
+        if not requested.startswith("/data/"):
+            raise HTTPException(
+                400,
+                f"profile_dir must live under /data/ (got {requested!r}); "
+                "brain and computer plane share /data via the same Modal Volume",
+            )
+        return requested
+    return f"/data/chrome-profile/{req.tenant_id}__{req.profile_id}"
+
+
 def _new_xdotool_env(req: SessionInitRequest) -> Any:
     """Construct + start the Xvfb / Chrome stack for this session.
 
     Goes through `make_computer_client(ComputerPlaneConfig())` so the
     server-side wiring uses the same factory the brain plane uses — keeps
     the impl honest about being a `ComputerClient`.
+
+    Forwards the brain-supplied `start_url`, `profile_dir`, and
+    `extra_http_headers` so the remote Chrome lands at the right page
+    on the right profile with the right header set (CF preview-warning
+    bypass, etc.).
     """
     from ..gym.computer_client import ComputerPlaneConfig, make_computer_client
 
-    profile_dir = f"/data/chrome-profile/{req.tenant_id}__{req.profile_id}"
+    profile_dir = _resolve_profile_dir(req)
     env = make_computer_client(
         ComputerPlaneConfig(),
-        start_url="about:blank",
+        start_url=req.start_url,
         viewport=req.viewport,
         browser="google-chrome",
         proxy_server=req.proxy_server or "",
         profile_dir=profile_dir,
+        extra_http_headers=req.extra_http_headers or None,
     )
-    env.reset(task="computer_plane_session", start_url="about:blank")
+    env.reset(task="computer_plane_session", start_url=req.start_url)
     return env
 
 
@@ -315,6 +346,86 @@ def build_app() -> FastAPI:
             )
         except Exception as exc:  # noqa: BLE001 — bubble as 5xx
             raise HTTPException(500, f"cdp_evaluate failed: {exc}") from exc
+
+    @app.get("/current_url", response_model=CurrentUrlResponse)
+    def current_url(
+        x_mantis_session: str | None = Header(default=None),
+    ) -> CurrentUrlResponse:
+        """Active Chrome tab URL.
+
+        Step handlers (`claude_step`, `navigate_back`, the runner's
+        final-URL bookkeeping) read this. Empty string when no page has
+        loaded yet — never `None`, so brain-side `.lower()` chains stay
+        safe.
+        """
+        s = _require_session(x_mantis_session)
+        s.touch()
+        try:
+            url = s.env.current_url or ""
+        except Exception as exc:  # noqa: BLE001 — observability only
+            logger.warning("current_url read failed: %s", exc)
+            url = ""
+        return CurrentUrlResponse(url=url)
+
+    @app.post("/cdp_click_at_point", response_model=CdpClickAtPointResponse)
+    def cdp_click_at_point(
+        req: CdpClickAtPointRequest,
+        x_mantis_session: str | None = Header(default=None),
+    ) -> CdpClickAtPointResponse:
+        """SoM-anchored click via CDP — single endpoint covers both
+        `cdp_click_at_point` (`el.click()`) and `cdp_click_via_pointer`
+        (`Input.dispatchMouseEvent`) variants. `via_pointer=True` picks
+        the latter; needed when sites gate on `isTrusted` (#audit batch
+        ok-but-no-state-change).
+
+        Honors the session dedup LRU on `step_id` like `/xdotool` does —
+        retries with the same id no-op rather than double-clicking.
+        """
+        s = _require_session(x_mantis_session)
+        if not s.enable_cdp:
+            raise HTTPException(403, "CDP disabled for this session")
+
+        # Reuse the xdotool dedup table — `step_id` is unique per
+        # logical step regardless of which dispatch path the brain
+        # chose, so cross-path dedup is safe.
+        cached = s.lookup_dedup(req.step_id)
+        if cached is not None:
+            s.touch()
+            return CdpClickAtPointResponse(ok=cached.returncode == 0)
+        try:
+            if req.via_pointer:
+                ok = bool(s.env.cdp_click_via_pointer(req.x, req.y))
+            else:
+                ok = bool(s.env.cdp_click_at_point(req.x, req.y))
+        except Exception as exc:  # noqa: BLE001 — bubble as 5xx
+            raise HTTPException(500, f"cdp_click_at_point failed: {exc}") from exc
+        # Stash a stub XdotoolResponse for the dedup table — only the
+        # returncode field is consulted on cache hit.
+        s.remember_dedup(
+            req.step_id,
+            XdotoolResponse(stdout="", stderr="", returncode=0 if ok else 1),
+        )
+        s.touch()
+        return CdpClickAtPointResponse(ok=ok)
+
+    @app.get("/cdp_count_pages", response_model=CdpCountPagesResponse)
+    def cdp_count_pages(
+        x_mantis_session: str | None = Header(default=None),
+    ) -> CdpCountPagesResponse:
+        """Count of Chrome `type=page` tabs whose URL isn't a system
+        page — used by the click handler to detect new-tab opens.
+
+        Returns `0` on any CDP failure (per `XdotoolGymEnv.cdp_count_pages`'s
+        contract); caller treats `0` as "couldn't check".
+        """
+        s = _require_session(x_mantis_session)
+        s.touch()
+        try:
+            count = int(s.env.cdp_count_pages())
+        except Exception as exc:  # noqa: BLE001 — observability only
+            logger.warning("cdp_count_pages read failed: %s", exc)
+            count = 0
+        return CdpCountPagesResponse(count=count)
 
     return app
 

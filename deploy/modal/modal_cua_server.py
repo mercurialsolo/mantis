@@ -771,7 +771,7 @@ def _run_holo3_executor(
         try:
             from mantis_agent.brain_claude import ClaudeBrain
             claude_fallback_brain = ClaudeBrain(
-                model=str(task_suite.get("_claude_fallback_model") or "claude-sonnet-4-20250514"),
+                model=str(task_suite.get("_claude_fallback_model") or "claude-sonnet-4-6"),
                 thinking_budget=2048,
                 screen_size=(1280, 720),
             )
@@ -1452,7 +1452,7 @@ def _run_holo3_executor(
         ):
             try:
                 from mantis_agent.brain_claude import ClaudeBrain as _CB
-                task_brain = _CB(model="claude-sonnet-4-20250514", thinking_budget=2048, screen_size=(1280, 720))
+                task_brain = _CB(model="claude-sonnet-4-6", thinking_budget=2048, screen_size=(1280, 720))
                 task_brain.load()
                 print("  Using Claude Sonnet for setup (hybrid mode)")
                 runner = GymRunner(brain=task_brain, env=_env, max_steps=task_max_steps,
@@ -1739,13 +1739,55 @@ claude_executor_image = (
 )
 
 
+def _resolve_claude_computer_plane_config():
+    """Build the `ComputerPlaneConfig` for `run_claude_cua`.
+
+    Reads `MANTIS_COMPUTER_PLANE_BACKEND` (default `local`). When set
+    to `modal`, resolves the `computer_plane` Modal function's web URL
+    if `MANTIS_COMPUTER_PLANE_URL` isn't explicitly set in the secret
+    — keeps the rollback story to a single env-var edit.
+
+    Returns `None` on `local` so the call site can rely on `setup_env`'s
+    env-var-driven default path (and tests that monkeypatch `setup_env`
+    don't need to know about this helper).
+    """
+    backend = (os.environ.get("MANTIS_COMPUTER_PLANE_BACKEND") or "local").strip().lower()
+    if backend == "local":
+        return None
+    from mantis_agent.gym.computer_client import ComputerPlaneConfig
+
+    base_url = (os.environ.get("MANTIS_COMPUTER_PLANE_URL") or "").strip()
+    if not base_url and backend == "modal":
+        try:
+            base_url = modal.Function.from_name(APP_NAME, "computer_plane").get_web_url()
+        except Exception as exc:  # noqa: BLE001 — print at WARNING via Modal
+            # Modal suppresses INFO/DEBUG (see
+            # `feedback_warning_level_for_modal_observability.md`); use
+            # print so the diagnostic survives `modal app logs`.
+            print(
+                f"  WARNING: Failed to resolve computer_plane web URL "
+                f"via Modal SDK ({exc}); set MANTIS_COMPUTER_PLANE_URL "
+                f"explicitly in the secret."
+            )
+            base_url = ""
+    enable_cdp = (os.environ.get("MANTIS_COMPUTER_PLANE_ENABLE_CDP") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    return ComputerPlaneConfig(
+        backend=backend,  # type: ignore[arg-type]
+        remote_base_url=base_url or None,
+        remote_auth_token=(os.environ.get("MANTIS_COMPUTER_PLANE_TOKEN") or "").strip() or None,
+        enable_cdp=enable_cdp,
+    )
+
+
 def _run_claude_executor(
     task_file_contents: str,
     plan_inputs: dict[str, str] | None = None,
     max_steps: int = 30,
     max_retries: int = 2,
     frames_per_inference: int = 2,
-    claude_model: str = "claude-sonnet-4-20250514",
+    claude_model: str = "claude-sonnet-4-6",
     thinking_budget: int = 2048,
     viewer: bool = False,
     profile_dir: str = "",
@@ -1755,6 +1797,11 @@ def _run_claude_executor(
 
     No GPU needed — inference is via API. Only needs Chrome + xdotool.
     Trajectories are saved for potential distillation training.
+
+    Phase-1 migration target (#698): set
+    `MANTIS_COMPUTER_PLANE_BACKEND=modal` in the Modal secret to flip
+    this executor onto the remote computer plane. Default `local`
+    keeps the in-process behavior; rollback is a single secret edit.
     """
     from datetime import datetime, timezone
 
@@ -1797,6 +1844,7 @@ def _run_claude_executor(
             f.write(json.dumps(traj_entry) + "\n")
 
     # ── Env + viewer ──
+    computer_plane_config = _resolve_claude_computer_plane_config()
     env, proxy_proc, proxy_diag = setup_env(
         base_url=task_suite.get("base_url", ""),
         run_id=run_id, session_name=session_name,
@@ -1808,6 +1856,8 @@ def _run_claude_executor(
         proxy_disabled=bool(task_suite.get("_proxy_disabled", False)),
         extra_http_headers=task_suite.get("_browser_extra_headers") or None,
         profile_dir=profile_dir,
+        computer_plane_config=computer_plane_config,
+        executor_name="run_claude_cua",
     )
     viewer_ctx, viewer_event_bus, _viewer_url = setup_viewer(viewer, proxy_diag=proxy_diag)
 
@@ -1838,7 +1888,7 @@ def _run_claude_executor(
     memory=8192,
     cpu=4,
 )
-def run_claude_cua(task_file_contents: str, claude_model: str = "claude-sonnet-4-20250514", **kwargs) -> dict:
+def run_claude_cua(task_file_contents: str, claude_model: str = "claude-sonnet-4-6", **kwargs) -> dict:
     """Claude CUA executor (no GPU — API-based inference, Chrome + xdotool only)."""
     kwargs.pop("cua_model", None)
     return _run_claude_executor(task_file_contents, claude_model=claude_model, **kwargs)
@@ -2751,8 +2801,18 @@ computer_plane_image = (
     memory=8192,
     cpu=4.0,
     scaledown_window=600,
+    # The ASGI app holds the active session in process-local state
+    # (`ComputerAgentState._state.session`). With more than one
+    # replica, the brain's second request fans out to a different
+    # container which has no session and 401s — the failure mode the
+    # prior holo3 smoke surfaced. Phase 2 (#699) lifts this via
+    # per-session `.spawn()`; for Phase 1 we hard-pin to a single
+    # container and turn up per-container concurrency so the brain's
+    # parallel screenshot + xdotool calls still don't queue serially.
+    min_containers=1,
+    max_containers=1,
 )
-@modal.concurrent(max_inputs=1)  # one session per container; brain plane fans out
+@modal.concurrent(max_inputs=64)
 @modal.asgi_app()
 def computer_plane():
     """Computer Plane RPC server — Xvfb + Chrome + xdotool over HTTPS.
@@ -2760,21 +2820,25 @@ def computer_plane():
     Exposes the wire contract defined in
     ``mantis_agent.gym.computer_wire``:
 
-      * POST /session/init    — bind tenant/profile/run, launch Xvfb + Chrome
-      * POST /session/close   — SIGTERM Chrome, stop Xvfb
-      * POST /screenshot      — base64 PNG + viewport metadata
-      * POST /xdotool         — argv with step_id (LRU dedup, TTL=30s)
-      * POST /cdp             — opt-in, off by default
-      * GET  /health          — liveness + last-action timestamp
+      * POST /session/init      — bind tenant/profile/run, launch Xvfb + Chrome
+      * POST /session/close     — SIGTERM Chrome, stop Xvfb
+      * POST /screenshot        — base64 PNG + viewport metadata
+      * POST /xdotool           — argv with step_id (LRU dedup, TTL=30s)
+      * POST /cdp               — opt-in, off by default
+      * POST /cdp_click_at_point — SoM-anchored click via CDP (opt-in)
+      * GET  /current_url       — active tab URL
+      * GET  /cdp_count_pages   — open Chrome tabs (page-type)
+      * GET  /health            — liveness + last-action timestamp
 
     Phase 1 rollout (#698): brain executors call this via
     ``RemoteComputerImpl`` once ``ComputerPlaneConfig.backend='modal'``
     is set on the executor (with ``remote_base_url`` pointing at this
     function's web URL — resolve via
     ``modal.Function.from_name('mantis-cua-server', 'computer_plane').get_web_url()``).
-
-    Until then this function is built but unused, so deploys validate
-    that the image builds without affecting the local-in-process path.
+    The Claude executor flip is the first migration target; flip via
+    `modal secret create --from-dotenv` after setting
+    ``MANTIS_COMPUTER_PLANE_BACKEND=modal`` in the dotenv. Rollback by
+    re-pushing with ``local``.
     """
     from mantis_agent.server.computer_agent import build_app
     return build_app()
@@ -3043,7 +3107,7 @@ def main(
     inputs: str = "",
     session_name: str = "",
     max_listings: int = 50,
-    claude_model: str = "claude-sonnet-4-20250514",
+    claude_model: str = "claude-sonnet-4-6",
     thinking_budget: int = 2048,
     workers: int = 1,
     viewer: bool = False,
@@ -3078,7 +3142,7 @@ def main(
 
     Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, holo3, fara, gemma4-cua, claude
     Parallel: --workers 5   (auto fan-out looped tasks across N GPUs)
-    Claude options: --claude-model claude-sonnet-4-20250514 --thinking-budget 2048
+    Claude options: --claude-model claude-sonnet-4-6 --thinking-budget 2048
     Viewer: --viewer   (live web viewer via modal.forward tunnel)
     Learning: --learn --learn-samples 5   (build site playbook from N samples)
     Verification: --verify   (enable step verification during execution)
