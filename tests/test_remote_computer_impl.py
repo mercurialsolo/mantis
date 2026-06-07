@@ -451,8 +451,6 @@ def test_current_url_proxies_get_current_url() -> None:
 
 
 def test_current_url_swallows_failure_and_returns_empty_string() -> None:
-    fake = _FakeServer()
-
     def _failing_get(*_a: Any, **_kw: Any) -> _Resp:
         raise requests.ConnectTimeout("nope")
 

@@ -18,7 +18,6 @@ no code change on the call sites. These tests pin three properties:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 

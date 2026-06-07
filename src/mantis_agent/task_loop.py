@@ -15,9 +15,12 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from .server_utils import build_proxy_config, resolve_proxy_server
+
+if TYPE_CHECKING:
+    from .gym.computer_client import ComputerPlaneConfig
 
 logger = logging.getLogger(__name__)
 
