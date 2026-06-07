@@ -84,6 +84,7 @@ from mantis_agent.sim_envs.templating import substitute_env_url
 
 from experiments.learning_allocator.runner import (
     FROZEN,
+    POLICY_SUBSTRATES,
     S0,
     S1,
     _OUTCOME_COLS,
@@ -111,15 +112,31 @@ ResetFn = Callable[[str, str], None]
 
 
 def _read_env(key: str) -> str:
-    """Read ``key`` from the process env, falling back to the repo ``.env``."""
+    """Read ``key`` from the process env, falling back to the repo ``.env``.
+
+    When running from a git worktree under ``.claude/worktrees/<name>``, the
+    worktree's own root has no ``.env`` — credentials live in the main repo
+    root. Walk up the worktree path looking for a ``.env`` so the same
+    invocation works in both layouts; otherwise the matrix silently submits
+    with an empty ``MANTIS_API_TOKEN``, Modal returns 401, and every arm
+    fast-fails with dollars=0 (the trap that bit this run).
+    """
     val = os.environ.get(key, "")
     if val:
         return val
-    env_path = REPO_ROOT / ".env"
-    if env_path.exists():
+    candidates = [REPO_ROOT / ".env"]
+    # ``.claude/worktrees/<name>`` → main repo root is parents[2] of the
+    # worktree root. Probe a few levels up to be robust to any other layout.
+    for parent in REPO_ROOT.parents:
+        candidates.append(parent / ".env")
+        if len(candidates) >= 5:
+            break
+    for env_path in candidates:
+        if not env_path.exists() or not env_path.is_file():
+            continue
         for line in env_path.read_text().splitlines():
             if line.startswith(f"{key}="):
-                return line.split("=", 1)[1].strip()
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
     return ""
 
 
@@ -717,17 +734,47 @@ def main(argv: list[str] | None = None) -> int:
             "S1 branch; frozen/S0 ignore it. Empty (default) ⇒ S1 is a no-op."
         ),
     )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help=(
+            "Validate everything that's free — policy tokens against "
+            "POLICY_SUBSTRATES, plan file readable + decomposable, exemplars "
+            "file well-formed, clusters.json wires this plan to >=1 task, env "
+            "URL reachable — then exit BEFORE the first submit. Catches the "
+            "lost-spend trap where a valid first arm runs fully before a typo "
+            "in a later arm crashes the matrix."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    env_url = _read_env("LA_ENV_URL")
-    admin_token = _read_env("LA_ENV_ADMIN_TOKEN")
-    if not env_url or not admin_token:
+    # ── pre-flight (free; runs before any env-var check so a bad token can't
+    # strand the spend the env check would have refused).
+
+    # Validate every --policies token against the POLICY_SUBSTRATES registry
+    # BEFORE the first dispatch. Cheap; without this an invalid token like
+    # `S1_exemplar` (a substrate constant, not a policy) crashes the matrix
+    # AFTER a valid earlier arm has already incurred GPU spend.
+    # See feedback_la_policy_vs_substrate_namespace.md.
+    policies = tuple(p.strip() for p in args.policies.split(",") if p.strip())
+    if not policies:
+        print("REFUSING TO RUN: --policies is empty.", file=sys.stderr)
+        return 2
+    unknown = [p for p in policies if p not in POLICY_SUBSTRATES]
+    if unknown:
+        valid = ", ".join(sorted(POLICY_SUBSTRATES))
         print(
-            "REFUSING TO RUN: LA_ENV_URL and LA_ENV_ADMIN_TOKEN must point at a "
-            "live Daytona boattrader sim env (the /__env__/oracle endpoint). "
-            "Boot the env and export both before a live run.",
+            f"REFUSING TO RUN: unknown --policies token(s): {unknown!r}. "
+            f"Valid policy names are: {valid}. Note these are POLICY names "
+            "(frozen/S0_only/S1_only/allocator), not the substrate constants "
+            "(frozen/S0_retrieval/S1_exemplar) — substrate names look similar "
+            "and will silently strand earlier arms' spend if used here.",
             file=sys.stderr,
         )
+        return 2
+
+    plan_path = REPO_ROOT / args.plan
+    if not plan_path.exists():
+        print(f"REFUSING TO RUN: plan {plan_path} does not exist.", file=sys.stderr)
         return 2
 
     # Stem (drop any ``.json`` suffix) so the profile slug and task wiring stay
@@ -744,12 +791,53 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    policies = tuple(p.strip() for p in args.policies.split(",") if p.strip())
+    # _load_exemplars raises on a malformed file (silent empty list would make
+    # S1 silently degrade to frozen). Surface that here, before any spend.
+    try:
+        exemplars = _load_exemplars(args.exemplars)
+    except (OSError, ValueError) as exc:
+        print(f"REFUSING TO RUN: --exemplars {args.exemplars!r}: {exc}",
+              file=sys.stderr)
+        return 2
+
+    if "S1_only" in policies and not exemplars:
+        print(
+            "WARNING: S1_only requested but --exemplars is empty/absent — S1 "
+            "will degrade to a no-op (indistinguishable from frozen). Pass "
+            "--exemplars <path.json> for a meaningful S1 arm.",
+            file=sys.stderr,
+        )
+
+    env_url = _read_env("LA_ENV_URL")
+    admin_token = _read_env("LA_ENV_ADMIN_TOKEN")
+    if not env_url or not admin_token:
+        print(
+            "REFUSING TO RUN: LA_ENV_URL and LA_ENV_ADMIN_TOKEN must point at a "
+            "live Daytona boattrader sim env (the /__env__/oracle endpoint). "
+            "Boot the env and export both before a live run.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # MANTIS_API_TOKEN is what the Modal CUA server authenticates on. Without
+    # it every submit returns 401 → ``_failed_result`` → the whole matrix
+    # completes in 30 seconds with dollars=0 / oracle=0 and no warning. Caught
+    # the hard way on the first BT03 smoke (env was in .env at the main repo
+    # root but not in the worktree root); ``_read_env`` now walks up to find
+    # it, but the explicit refusal here protects the case where it's nowhere.
+    if not _read_env("MANTIS_API_TOKEN"):
+        print(
+            "REFUSING TO RUN: MANTIS_API_TOKEN is unset — Modal CUA server "
+            "submits would return 401 and every arm would silently fast-fail. "
+            "Export it or put it in a .env reachable from the worktree.",
+            file=sys.stderr,
+        )
+        return 2
+
     slug = f"la-{plan_name.replace('_', '-')}"
     hint_dict_name = f"{slug}-hints{args.hint_dict_suffix}"
-    exemplars = _load_exemplars(args.exemplars)
     live = LiveRunFn(
-        plan_path=REPO_ROOT / args.plan,
+        plan_path=plan_path,
         env_url=env_url,
         admin_token=admin_token,
         profile_id=slug,
@@ -767,6 +855,50 @@ def main(argv: list[str] | None = None) -> int:
         f"  rounds={args.rounds} S0_hint_dict={hint_dict_name} "
         f"S1_exemplars={len(exemplars)}\n",
     )
+
+    if args.dry_run:
+        # Decompose the plan once (the LiveRunFn's own seam) — confirms the
+        # plan is structurally valid and the API key is set for a text plan,
+        # without touching the network or queuing a Modal run. For a .json
+        # plan this is just a local parse.
+        try:
+            mp = live._ensure_plan()
+        except Exception as exc:  # noqa: BLE001 — surface ANY failure here
+            print(f"[dry-run] FAILED at plan load/decompose: {exc!r}",
+                  file=sys.stderr)
+            return 2
+        # Cheap env ping — proves the Daytona sandbox is up + the preview
+        # token is correct. No /__env__/reset, no GPU.
+        try:
+            r = requests.get(
+                f"{env_url.rstrip('/')}/__env__/oracle?task_id={tasks[0].task_id}",
+                headers={"X-Env-Admin": admin_token, **_daytona_proxy_headers()},
+                timeout=15,
+            )
+            ok = r.status_code == 200 and r.headers.get(
+                "content-type", "",
+            ).startswith("application/json")
+        except requests.RequestException as exc:
+            print(f"[dry-run] FAILED at env oracle ping: {exc!r}",
+                  file=sys.stderr)
+            return 2
+        if not ok:
+            print(
+                f"[dry-run] FAILED at env oracle ping: status={r.status_code} "
+                f"content-type={r.headers.get('content-type','')!r} — likely a "
+                "Daytona auth-wall redirect (check LA_ENV_PREVIEW_TOKEN).",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            "[dry-run] OK — all pre-flight checks passed.\n"
+            f"  plan: {len(mp.steps)} steps, hash={mp.plan_hash[:12]}\n"
+            f"  tasks: {[t.name for t in tasks]}\n"
+            f"  policies: {list(policies)}\n"
+            "  env oracle: 200 OK JSON\n"
+            "No Modal submit issued. Drop --dry-run to spend.",
+        )
+        return 0
     # Proxy-aware oracle grading: the default reward_from_run hits
     # ``/__env__/oracle`` with only ``X-Env-Admin``, which the Daytona preview
     # proxy 307s to its auth wall (→ HTML, not JSON → every run graded

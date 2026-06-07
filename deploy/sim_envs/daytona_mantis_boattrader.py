@@ -131,6 +131,18 @@ def deploy(latency_min_ms: int, latency_max_ms: int, failure_rate: float,
             # de-emphasised "Show full number" control. Default off keeps
             # BT01/BT02 matrices byte-identical.
             "BT03_REVEAL_DRIFT": os.environ.get("BT03_REVEAL_DRIFT", "0"),
+            # BT03 gated-reveal discriminator (PR #773, the injection-seam
+            # variant that replaced layout-drift). When "1", the server refuses
+            # the ``phone_revealed`` mutation until a non-obvious "Start
+            # contact request" prerequisite is sent (per-boat cookie). Frozen
+            # runs ``plans/bt03_gated_reveal.json`` as-authored → reveal is a
+            # server-side no-op → recall miss. S1 ``apply_exemplar_overlay``
+            # injects the missing prereq before the reveal → gate satisfied →
+            # same unchanged reveal fires. This is the live BT03 discriminator
+            # for the Phase-2 matrix; default off keeps the BT01/BT02 envs
+            # byte-identical. Mutually exclusive with BT03_REVEAL_DRIFT at
+            # seed time (seed._reseed picks DRIFT first, GATE second).
+            "BT03_REVEAL_GATE": os.environ.get("BT03_REVEAL_GATE", "0"),
             "FAKE_NOW": os.environ.get("FAKE_NOW", "2026-01-15T09:00:00Z"),
             "LATENCY_MS_MIN": str(latency_min_ms),
             "LATENCY_MS_MAX": str(latency_max_ms),
