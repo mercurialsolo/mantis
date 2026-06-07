@@ -771,7 +771,7 @@ def _run_holo3_executor(
         try:
             from mantis_agent.brain_claude import ClaudeBrain
             claude_fallback_brain = ClaudeBrain(
-                model=str(task_suite.get("_claude_fallback_model") or "claude-sonnet-4-20250514"),
+                model=str(task_suite.get("_claude_fallback_model") or "claude-sonnet-4-6"),
                 thinking_budget=2048,
                 screen_size=(1280, 720),
             )
@@ -1452,7 +1452,7 @@ def _run_holo3_executor(
         ):
             try:
                 from mantis_agent.brain_claude import ClaudeBrain as _CB
-                task_brain = _CB(model="claude-sonnet-4-20250514", thinking_budget=2048, screen_size=(1280, 720))
+                task_brain = _CB(model="claude-sonnet-4-6", thinking_budget=2048, screen_size=(1280, 720))
                 task_brain.load()
                 print("  Using Claude Sonnet for setup (hybrid mode)")
                 runner = GymRunner(brain=task_brain, env=_env, max_steps=task_max_steps,
@@ -1787,7 +1787,7 @@ def _run_claude_executor(
     max_steps: int = 30,
     max_retries: int = 2,
     frames_per_inference: int = 2,
-    claude_model: str = "claude-sonnet-4-20250514",
+    claude_model: str = "claude-sonnet-4-6",
     thinking_budget: int = 2048,
     viewer: bool = False,
     profile_dir: str = "",
@@ -1888,7 +1888,7 @@ def _run_claude_executor(
     memory=8192,
     cpu=4,
 )
-def run_claude_cua(task_file_contents: str, claude_model: str = "claude-sonnet-4-20250514", **kwargs) -> dict:
+def run_claude_cua(task_file_contents: str, claude_model: str = "claude-sonnet-4-6", **kwargs) -> dict:
     """Claude CUA executor (no GPU — API-based inference, Chrome + xdotool only)."""
     kwargs.pop("cua_model", None)
     return _run_claude_executor(task_file_contents, claude_model=claude_model, **kwargs)
@@ -3107,7 +3107,7 @@ def main(
     inputs: str = "",
     session_name: str = "",
     max_listings: int = 50,
-    claude_model: str = "claude-sonnet-4-20250514",
+    claude_model: str = "claude-sonnet-4-6",
     thinking_budget: int = 2048,
     workers: int = 1,
     viewer: bool = False,
@@ -3142,7 +3142,7 @@ def main(
 
     Models: evocua-8b, evocua-32b, opencua-32b, opencua-72b, holo3, fara, gemma4-cua, claude
     Parallel: --workers 5   (auto fan-out looped tasks across N GPUs)
-    Claude options: --claude-model claude-sonnet-4-20250514 --thinking-budget 2048
+    Claude options: --claude-model claude-sonnet-4-6 --thinking-budget 2048
     Viewer: --viewer   (live web viewer via modal.forward tunnel)
     Learning: --learn --learn-samples 5   (build site playbook from N samples)
     Verification: --verify   (enable step verification during execution)
