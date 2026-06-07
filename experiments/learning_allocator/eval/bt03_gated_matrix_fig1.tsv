@@ -1,0 +1,4 @@
+# SOURCE=live-modal-daytona — REAL agent runs against the boattrader sim env. Spend incurred. Oracle-graded; proxy + cost are from the agent run.
+policy	index	cum_dollars	running_mean_oracle
+frozen	1	0.072	0.0
+S1_only	1	0.1433	0.0

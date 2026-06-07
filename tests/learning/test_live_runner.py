@@ -795,6 +795,169 @@ def test_main_refuses_without_sim_env_url(monkeypatch) -> None:
     assert live_runner.main([]) == 2
 
 
+def test_main_refuses_without_mantis_api_token(monkeypatch, capsys) -> None:
+    # The trap that bit the first BT03 smoke: with no MANTIS_API_TOKEN every
+    # Modal submit returns 401, _failed_result short-circuits the matrix in
+    # ~30s with dollars=0 / oracle=0 and no visible warning. The pre-flight
+    # must catch this before the first submit, not after the matrix burns
+    # the whole budget on silent fast-fails.
+    monkeypatch.setattr(
+        live_runner, "_read_env",
+        lambda key: "https://example.test" if key == "LA_ENV_URL"
+        else "admintok" if key == "LA_ENV_ADMIN_TOKEN" else "",
+        # NB: returns "" for MANTIS_API_TOKEN
+    )
+    rc = live_runner.main([
+        "--plan", "plans/bt03_gated_reveal.json",
+        "--policies", "frozen",
+    ])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "MANTIS_API_TOKEN" in err
+
+
+def test_main_refuses_unknown_policy_token_before_env_check(
+    monkeypatch, capsys,
+) -> None:
+    # An unknown policy token (e.g. the substrate constant ``S1_exemplar``
+    # passed where a policy name is expected) must fail FAST — before any
+    # earlier valid arm has a chance to incur spend. See
+    # feedback_la_policy_vs_substrate_namespace.md (lost ~$0.91 on an
+    # earlier valid arm before a typo crashed the matrix).
+    # We deliberately leave LA_ENV_URL set so the failure isn't masked by the
+    # env-var refusal; the policy refusal must trip first.
+    monkeypatch.setattr(
+        live_runner, "_read_env",
+        lambda key: "https://example.test" if key == "LA_ENV_URL"
+        else "admintok" if key == "LA_ENV_ADMIN_TOKEN"
+        else "mantis_test_token" if key == "MANTIS_API_TOKEN" else "",
+    )
+    rc = live_runner.main(["--policies", "frozen,S1_exemplar"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "unknown --policies" in err
+    assert "S1_exemplar" in err
+    # The error must name the valid policy set so the operator can correct it
+    # without grepping the source.
+    assert "frozen" in err and "S0_only" in err and "S1_only" in err
+
+
+def test_main_refuses_empty_policies(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        live_runner, "_read_env",
+        lambda key: "https://example.test" if key == "LA_ENV_URL"
+        else "admintok" if key == "LA_ENV_ADMIN_TOKEN"
+        else "mantis_test_token" if key == "MANTIS_API_TOKEN" else "",
+    )
+    assert live_runner.main(["--policies", ""]) == 2
+    assert "--policies is empty" in capsys.readouterr().err
+
+
+def test_main_refuses_when_plan_path_missing(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        live_runner, "_read_env",
+        lambda key: "https://example.test" if key == "LA_ENV_URL"
+        else "admintok" if key == "LA_ENV_ADMIN_TOKEN"
+        else "mantis_test_token" if key == "MANTIS_API_TOKEN" else "",
+    )
+    rc = live_runner.main(["--plan", "plans/does_not_exist_xyz"])
+    assert rc == 2
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_main_refuses_malformed_exemplars_before_spend(
+    monkeypatch, tmp_path, capsys,
+) -> None:
+    # A malformed --exemplars file is the silent-S1-degrades-to-frozen trap.
+    # Must fail at preflight, not silently mid-matrix.
+    bad = tmp_path / "ex.json"
+    bad.write_text(json.dumps({"not": "a list"}))
+    monkeypatch.setattr(
+        live_runner, "_read_env",
+        lambda key: "https://example.test" if key == "LA_ENV_URL"
+        else "admintok" if key == "LA_ENV_ADMIN_TOKEN"
+        else "mantis_test_token" if key == "MANTIS_API_TOKEN" else "",
+    )
+    # Use a plan we know is wired so we get past the plan-existence check.
+    rc = live_runner.main([
+        "--plan", "plans/bt03_gated_reveal.json",
+        "--exemplars", str(bad),
+    ])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "REFUSING TO RUN" in err and "exemplars" in err
+
+
+def test_main_warns_when_s1_arm_has_no_exemplars(monkeypatch, capsys) -> None:
+    # S1_only with no exemplars degrades to frozen and silently voids the
+    # comparison; preflight must warn (not refuse — explicit no-op runs are
+    # sometimes intentional for attribution).
+    monkeypatch.setattr(
+        live_runner, "_read_env",
+        lambda key: "https://example.test" if key == "LA_ENV_URL"
+        else "admintok" if key == "LA_ENV_ADMIN_TOKEN"
+        else "mantis_test_token" if key == "MANTIS_API_TOKEN" else "",
+    )
+
+    # Stop after preflight via --dry-run; stub the live env ping + plan load
+    # so we don't actually need network or ANTHROPIC_API_KEY for the warning.
+    def fake_get(url, **kwargs):  # noqa: ANN001
+        class _R:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+        return _R()
+    monkeypatch.setattr(live_runner.requests, "get", fake_get)
+    monkeypatch.setattr(
+        LiveRunFn, "_ensure_plan", lambda self: _stub_plan(),
+    )
+
+    rc = live_runner.main([
+        "--plan", "plans/bt03_gated_reveal.json",
+        "--policies", "frozen,S1_only",
+        "--dry-run",
+    ])
+    err = capsys.readouterr().err
+    assert rc == 0  # warning is non-fatal
+    assert "S1_only" in err and "no-op" in err
+
+
+def test_main_dry_run_passes_without_submit(monkeypatch, capsys) -> None:
+    # Dry-run must complete preflight without queuing any Modal submit.
+    monkeypatch.setattr(
+        live_runner, "_read_env",
+        lambda key: "https://example.test" if key == "LA_ENV_URL"
+        else "admintok" if key == "LA_ENV_ADMIN_TOKEN"
+        else "mantis_test_token" if key == "MANTIS_API_TOKEN" else "",
+    )
+
+    posts: list = []
+
+    def fake_post(path, body):  # noqa: ANN001
+        posts.append((path, body))
+        return 200, {}
+    monkeypatch.setattr(live_runner, "_default_post", fake_post)
+
+    def fake_get(url, **kwargs):  # noqa: ANN001
+        class _R:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+        return _R()
+    monkeypatch.setattr(live_runner.requests, "get", fake_get)
+    monkeypatch.setattr(
+        LiveRunFn, "_ensure_plan", lambda self: _stub_plan(),
+    )
+
+    rc = live_runner.main([
+        "--plan", "plans/bt03_gated_reveal.json",
+        "--policies", "frozen,S0_only",
+        "--dry-run",
+    ])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "[dry-run] OK" in out
+    assert posts == [], "dry-run must not submit anything"
+
+
 # ── helpers ──────────────────────────────────────────────────────────────
 
 

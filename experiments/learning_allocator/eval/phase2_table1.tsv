@@ -1,0 +1,8 @@
+# SOURCE=phase2-consolidator — joins per-cluster matrix TSVs under experiments/learning_allocator/eval/ into the headline Table 1 (PLAN §5). PENDING-LIVE = the cluster's live matrix has not landed; rerun after the smoke completes.
+cluster	expects_substrate	policy	sealed_score	visible_score	visible_minus_sealed	score_per_dollar	total_dollars	n_runs
+knowledge	S0	frozen	0.0000	0.0000	0.0000	0.0000	0.4355	8
+knowledge	S0	S0_only	1.0000	1.0000	0.0000	21.8579	0.3660	8
+knowledge	S0	oracle_allocator	1.0000	1.0000	0.0000	22.4972	0.0889	2
+policy	S1	frozen	0.0000	0.0000	0.0000	0.0000	0.0720	1
+policy	S1	S1_only	0.0000	0.0000	0.0000	0.0000	0.1433	1
+policy	S1	oracle_allocator	0.0000	0.0000	0.0000	0.0000	0.0720	1

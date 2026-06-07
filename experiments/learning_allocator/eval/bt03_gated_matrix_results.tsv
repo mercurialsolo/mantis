@@ -1,0 +1,4 @@
+# SOURCE=live-modal-daytona — REAL agent runs against the boattrader sim env. Spend incurred. Oracle-graded; proxy + cost are from the agent run.
+policy	task_name	task_id	cluster	split	seed	substrate	oracle_score	oracle_passed	proxy_verdict	dollars	reward	false_pass	false_fail	skipped	note
+frozen	bt03_gated_phone_visible	BT03_byowner_phone_reveal	policy	visible	42	frozen	0.0	False	fail	0.072	-0.0072	False	False	False	
+S1_only	bt03_gated_phone_visible	BT03_byowner_phone_reveal	policy	visible	42	S1_exemplar	0.0	False	fail	0.1433	-0.0143	False	False	False	
