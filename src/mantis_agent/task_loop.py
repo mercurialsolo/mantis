@@ -122,6 +122,40 @@ def diagnose_proxy_egress(proxy_server: str, *, timeout: float = 8.0) -> dict[st
         return {"error": f"{type(exc).__name__}: {str(exc)[:120]}"}
 
 
+def _computer_plane_config_from_env(
+    executor_name: str | None = None,
+) -> "ComputerPlaneConfig":
+    """Build a `ComputerPlaneConfig` from `MANTIS_COMPUTER_PLANE_*` env vars.
+
+    Defaults match production today: `backend="local"`. Lets the brain
+    container flip a single executor onto the Phase-1 remote plane via
+    a one-secret edit without touching call sites:
+
+    * `MANTIS_COMPUTER_PLANE_BACKEND` — `local` (default) | `modal`
+    * `MANTIS_COMPUTER_PLANE_URL` — remote base URL (required for
+      `modal`); typically resolved at executor boot via
+      `modal.Function.from_name("mantis-cua-server", "computer_plane").get_web_url()`.
+    * `MANTIS_COMPUTER_PLANE_TOKEN` — `Authorization: Bearer ...`
+    * `MANTIS_COMPUTER_PLANE_ENABLE_CDP` — `1`/`true` to opt in
+      (off by default per the wire-contract CUA-purity constraint).
+    """
+    from .gym.computer_client import ComputerPlaneConfig
+
+    backend_env = (os.environ.get("MANTIS_COMPUTER_PLANE_BACKEND") or "local").strip().lower()
+    if backend_env not in ("local", "modal", "e2b", "daytona"):
+        backend_env = "local"
+    enable_cdp = (os.environ.get("MANTIS_COMPUTER_PLANE_ENABLE_CDP") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    cfg = ComputerPlaneConfig(
+        backend=backend_env,  # type: ignore[arg-type]
+        remote_base_url=(os.environ.get("MANTIS_COMPUTER_PLANE_URL") or "").strip() or None,
+        remote_auth_token=(os.environ.get("MANTIS_COMPUTER_PLANE_TOKEN") or "").strip() or None,
+        enable_cdp=enable_cdp,
+    )
+    return cfg.resolve_for_executor(executor_name)
+
+
 def setup_env(
     *,
     base_url: str,
@@ -141,6 +175,8 @@ def setup_env(
     save_screenshots_dir: str = "/data/screenshots",
     reuse_session: bool = False,
     extra_http_headers: dict[str, str] | None = None,
+    computer_plane_config: "ComputerPlaneConfig | None" = None,
+    executor_name: str | None = None,
 ) -> tuple[Any, Any, dict[str, Any]]:
     """Set up proxy + computer-plane env.
 
@@ -148,20 +184,31 @@ def setup_env(
     in #697 (Computer Plane Phase 0) is the only construction path. The
     returned env is always a ``ComputerClient`` — today that resolves to
     ``LocalXdotoolImpl`` (a ``XdotoolGymEnv`` subclass with latency
-    instrumentation); Phase 1 swaps in ``RemoteComputerImpl`` per
-    ``ComputerPlaneConfig``.
+    instrumentation) by default; Phase 1 swaps in ``RemoteComputerImpl``
+    when the config flips to ``backend="modal"``.
 
     Args:
         proxy_disabled: When True, skip the upstream proxy entirely. Use for
             test/internal sites that don't need bot-detection bypass and
             shouldn't depend on the residential proxy's availability.
+        computer_plane_config: Explicit config. Default reads
+            ``MANTIS_COMPUTER_PLANE_*`` env vars via
+            :func:`_computer_plane_config_from_env`. The ``backend="modal"``
+            path skips the local Xvfb spawn (the remote container owns
+            Xvfb + Chrome).
+        executor_name: When set, the env-derived config is consulted
+            for a per-executor override before resolving the backend
+            (e.g. ``run_claude_cua`` flips to ``modal`` while GPU
+            executors stay ``local``).
 
     Returns ``(env, proxy_proc_or_None, proxy_diag)`` where ``proxy_diag``
     is the ipinfo egress probe (``{"ip", "city", "region", ...}`` on
     success, ``{"disabled": True}`` when proxy is off, ``{"error": ...}``
     when the probe failed).
     """
-    from .gym.computer_client import ComputerPlaneConfig, make_computer_client
+    from .gym.computer_client import make_computer_client
+
+    cfg = computer_plane_config or _computer_plane_config_from_env(executor_name)
 
     if proxy_disabled:
         proxy = None
@@ -186,7 +233,10 @@ def setup_env(
     # uses, so we surface the IP Cloudflare sees.
     proxy_diag = diagnose_proxy_egress(proxy_server)
 
-    if start_xvfb and display:
+    # Local Xvfb only when the env actually runs in-process. The remote
+    # computer plane owns its own Xvfb; spawning a brain-side one would
+    # both waste a CPU and break DISPLAY clobbering on shared executors.
+    if cfg.backend == "local" and start_xvfb and display:
         subprocess.Popen(
             ["Xvfb", display, "-screen", "0", f"{viewport[0]}x{viewport[1]}x24", "-ac", "-nolisten", "tcp"],
             stdout=subprocess.DEVNULL,
@@ -205,14 +255,21 @@ def setup_env(
         "save_screenshots": f"{save_screenshots_dir}/{session_name}_{run_id}",
         "reuse_session": reuse_session,
     }
-    if display:
+    if display and cfg.backend == "local":
         env_kwargs["display"] = display
     if profile_dir:
         env_kwargs["profile_dir"] = profile_dir
     if extra_http_headers:
         env_kwargs["extra_http_headers"] = extra_http_headers
+    if cfg.backend != "local":
+        # `RemoteComputerImpl` binds its session to (tenant, profile,
+        # run); surface the brain-side identifiers so the remote can
+        # honor profile reuse + the per-profile lock in Phase 2.
+        env_kwargs.setdefault("tenant_id", session_name)
+        env_kwargs.setdefault("profile_id", session_name)
+        env_kwargs.setdefault("run_id", run_id)
 
-    env = make_computer_client(ComputerPlaneConfig(), **env_kwargs)
+    env = make_computer_client(cfg, **env_kwargs)
     return env, proxy_proc, proxy_diag
 
 

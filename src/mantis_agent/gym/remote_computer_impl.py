@@ -44,6 +44,10 @@ from .computer_client import ComputerClient
 from .computer_wire import (
     CDPRequest,
     CDPResponse,
+    CdpClickAtPointRequest,
+    CdpClickAtPointResponse,
+    CdpCountPagesResponse,
+    CurrentUrlResponse,
     ScreenshotRequest,
     ScreenshotResponse,
     SessionCloseRequest,
@@ -86,6 +90,11 @@ class RemoteComputerImpl(ComputerClient):
         proxy_server: str = "",
         chrome_flags: list[str] | None = None,
         request_timeout_seconds: float = _DEFAULT_HTTP_TIMEOUT,
+        # Honored — forwarded to the remote `SessionInitRequest` so the
+        # remote Chrome lands at the right page on the right on-volume
+        # profile with the brain-supplied header set.
+        profile_dir: str | None = None,
+        extra_http_headers: dict[str, str] | None = None,
         # The following kwargs are accepted for parity with
         # XdotoolGymEnv.__init__ but unused server-side (computer plane
         # manages its own lifecycle).
@@ -93,7 +102,6 @@ class RemoteComputerImpl(ComputerClient):
         display: str | None = None,  # noqa: ARG002
         settle_time: float = 1.5,  # noqa: ARG002
         human_speed: bool = False,  # noqa: ARG002
-        profile_dir: str = "/data/chrome-profile",  # noqa: ARG002
         save_screenshots: str = "",  # noqa: ARG002
         cdp_port: int = 9222,  # noqa: ARG002
         reuse_session: bool = False,  # noqa: ARG002
@@ -109,6 +117,8 @@ class RemoteComputerImpl(ComputerClient):
         self._proxy_server = proxy_server
         self._chrome_flags = chrome_flags or []
         self._timeout = request_timeout_seconds
+        self._profile_dir = profile_dir
+        self._extra_http_headers = extra_http_headers or None
         self._session_token: str | None = None
 
         self.screenshot_latency = LatencyTracker("screenshot")
@@ -179,6 +189,39 @@ class RemoteComputerImpl(ComputerClient):
         assert last_exc is not None
         raise last_exc
 
+    def _get(self, path: str) -> dict[str, Any]:
+        """GET with bounded retry on transient 5xx — mirrors `_post`.
+
+        Used by the read-only proxies (`/current_url`, `/cdp_count_pages`)
+        where there's nothing to serialize.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                resp = requests.get(
+                    self._url(path),
+                    headers=self._headers(),
+                    timeout=self._timeout,
+                )
+                if resp.status_code < 400:
+                    return resp.json()
+                if 400 <= resp.status_code < 500:
+                    raise RuntimeError(
+                        f"computer-plane {path} returned {resp.status_code}: {resp.text[:200]}"
+                    )
+                last_exc = RuntimeError(
+                    f"computer-plane {path} returned {resp.status_code}: {resp.text[:200]}"
+                )
+            except requests.RequestException as exc:
+                last_exc = exc
+            if attempt < _MAX_RETRIES:
+                backoff = _RETRY_BACKOFF_SECONDS[
+                    min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)
+                ]
+                time.sleep(backoff)
+        assert last_exc is not None
+        raise last_exc
+
     # ── wire contract surface (used by tests + advanced callers) ────
 
     def session_init(self) -> SessionInitResponse:
@@ -190,6 +233,9 @@ class RemoteComputerImpl(ComputerClient):
             chrome_flags=self._chrome_flags,
             enable_cdp=self._enable_cdp,
             viewport=self._viewport,
+            start_url=self._start_url,
+            profile_dir=self._profile_dir,
+            extra_http_headers=self._extra_http_headers,
         )
         payload = self._post(
             "/session/init", req.model_dump(), include_session=False
@@ -278,6 +324,11 @@ class RemoteComputerImpl(ComputerClient):
     def close(self) -> None:
         self.session_close()
 
+    def shutdown(self) -> None:
+        """Alias for `close` — matches `XdotoolGymEnv.shutdown` which the
+        lifecycle code in `run_executor_lifecycle` calls."""
+        self.close()
+
     @property
     def screen_size(self) -> tuple[int, int]:
         return self._viewport
@@ -287,6 +338,175 @@ class RemoteComputerImpl(ComputerClient):
             "screenshot": self.screenshot_latency.summary(),
             "xdotool": self.xdotool_latency.summary(),
         }
+
+    # ── XdotoolGymEnv-compatibility surface ─────────────────────────
+    #
+    # Step handlers and the runner reach past `GymEnvironment` ABC into
+    # concrete `XdotoolGymEnv` methods. The migration's correctness
+    # rests on these proxies returning the same shapes the local impl
+    # does — every divergence becomes a brain-side crash at runtime.
+
+    def screenshot(self) -> Image.Image:
+        """PIL Image matching `XdotoolGymEnv.screenshot()` shape.
+
+        Handlers call `env.screenshot()` (not `env._capture()`) for the
+        ad-hoc post-action verify; same image bytes as
+        `_screenshot_observation()` so callers can mix the two.
+        """
+        return self._screenshot_observation().screenshot  # type: ignore[return-value]
+
+    def _capture(self) -> GymObservation:
+        """Alias for `_screenshot_observation` — some handlers poke at
+        the private name directly (mirrors `XdotoolGymEnv._capture`).
+        """
+        return self._screenshot_observation()
+
+    @property
+    def current_url(self) -> str:
+        """Active Chrome tab URL via `/current_url`. Empty string when
+        no page has loaded yet — never `None`, matching the local impl.
+        """
+        if not self._session_token:
+            self.session_init()
+        try:
+            payload = self._get("/current_url")
+            return CurrentUrlResponse.model_validate(payload).url or ""
+        except Exception as exc:  # noqa: BLE001 — observability, never fatal
+            logger.warning("RemoteComputerImpl.current_url failed: %s", exc)
+            return ""
+
+    def cdp_evaluate(self, expression: str) -> Any:
+        """Run a JS expression via the remote `/cdp` Runtime.evaluate.
+
+        Returns the unwrapped value (any JSON-serializable type) or
+        `None` on failure — matches `XdotoolGymEnv.cdp_evaluate`'s
+        contract. Requires `enable_cdp=True` on this session (raises
+        `RuntimeError` otherwise — caller treats absent CDP as
+        feature-not-available).
+        """
+        if not self._enable_cdp:
+            raise RuntimeError(
+                "RemoteComputerImpl.cdp_evaluate called but enable_cdp=False"
+            )
+        if not self._session_token:
+            self.session_init()
+        sid = f"step-{secrets.token_hex(8)}"
+        req = CDPRequest(expression=expression, await_promise=False, step_id=sid)
+        try:
+            payload = self._post("/cdp", req.model_dump())
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("RemoteComputerImpl.cdp_evaluate raised: %s", exc)
+            return None
+        resp = CDPResponse.model_validate(payload)
+        if resp.returncode != 0:
+            return None
+        import json as _json
+        try:
+            value = _json.loads(resp.result_json or "{}")
+        except _json.JSONDecodeError:
+            return None
+        # `Runtime.evaluate` returns `{result: {type, value}}`; unwrap
+        # to mirror `XdotoolGymEnv.cdp_evaluate`.
+        return (value.get("result") or {}).get("value") if isinstance(value, dict) else None
+
+    def cdp_click_at_point(self, x: int, y: int) -> bool:
+        """SoM-anchored click via remote `/cdp_click_at_point`.
+
+        Returns the server's `ok` flag — `True` iff an element was found
+        at (x, y) and the synthetic click was dispatched.
+        """
+        return self._remote_click(x, y, via_pointer=False)
+
+    def cdp_click_via_pointer(self, x: int, y: int) -> bool:
+        """Real-pointer click via `Input.dispatchMouseEvent`.
+
+        Same endpoint as `cdp_click_at_point` with `via_pointer=True`;
+        needed when sites gate on `isTrusted=true` (#audit batch).
+        """
+        return self._remote_click(x, y, via_pointer=True)
+
+    def _remote_click(self, x: int, y: int, *, via_pointer: bool) -> bool:
+        if not self._enable_cdp:
+            raise RuntimeError(
+                "RemoteComputerImpl click via CDP requires enable_cdp=True"
+            )
+        if not self._session_token:
+            self.session_init()
+        sid = f"step-{secrets.token_hex(8)}"
+        req = CdpClickAtPointRequest(
+            x=int(x), y=int(y), via_pointer=via_pointer, step_id=sid,
+        )
+        try:
+            payload = self._post(
+                "/cdp_click_at_point", req.model_dump(), step_id_for_retry=sid,
+            )
+        except Exception as exc:  # noqa: BLE001 — fall back like the local impl
+            logger.debug("RemoteComputerImpl click failed: %s", exc)
+            return False
+        return bool(CdpClickAtPointResponse.model_validate(payload).ok)
+
+    def _chrome_offset_px(self) -> int:
+        """Chrome chrome-offset (outerHeight - innerHeight) via CDP.
+
+        Used by callers translating screen coords to viewport coords.
+        Returns 0 when CDP is unavailable, matching the local impl.
+        """
+        try:
+            value = self.cdp_evaluate(
+                "Math.max(0, window.outerHeight - window.innerHeight)"
+            )
+        except Exception:  # noqa: BLE001
+            return 0
+        try:
+            return int(value) if value is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def cdp_count_pages(self) -> int:
+        """Number of open Chrome `type=page` tabs whose URL isn't a
+        system page — proxies `/cdp_count_pages`. Returns 0 on failure.
+        """
+        if not self._session_token:
+            self.session_init()
+        try:
+            payload = self._get("/cdp_count_pages")
+            return int(CdpCountPagesResponse.model_validate(payload).count)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("RemoteComputerImpl.cdp_count_pages failed: %s", exc)
+            return 0
+
+    def cdp_history_back(self, *, settle_seconds: float = 1.5) -> bool:
+        """Navigate back via `window.history.back()` over CDP — verifies
+        the URL changed within `settle_seconds`. Mirrors
+        `XdotoolGymEnv.cdp_history_back`.
+        """
+        if not self._enable_cdp:
+            return False
+        url_before = self.current_url or ""
+        try:
+            self.cdp_evaluate("window.history.back()")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("cdp_history_back dispatch failed: %s", exc)
+            return False
+        deadline = time.time() + max(0.1, settle_seconds)
+        while time.time() < deadline:
+            time.sleep(0.1)
+            try:
+                url_after = self.current_url or ""
+            except Exception:  # noqa: BLE001
+                url_after = ""
+            if url_after and url_after != url_before:
+                return True
+        return False
+
+    def capture_browser_state(self) -> dict[str, Any]:
+        """Stub matching `XdotoolGymEnv.capture_browser_state` shape.
+
+        Full browser-state capture is brain-side bookkeeping; the
+        remote doesn't own it. Returning `{}` keeps call sites that
+        spread the result safe.
+        """
+        return {}
 
     # ── helpers ──────────────────────────────────────────────────────
 

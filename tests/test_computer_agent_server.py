@@ -306,3 +306,213 @@ def test_cdp_200_when_enabled(
     body = r.json()
     assert body["returncode"] == 0
     assert '"value": 100' in body["result_json"]
+
+
+# ── session-init forwarding ──────────────────────────────────────────
+
+
+def test_session_init_forwards_start_url_profile_dir_extra_headers(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_env: MagicMock,
+) -> None:
+    """The new fields must reach `_new_xdotool_env` — the brain plane
+    relies on them to land Chrome at the right page on the right
+    profile with the right header set (`extra_http_headers` for
+    Daytona preview-warning bypass etc.).
+    """
+    from mantis_agent.server import computer_agent as ca
+
+    ca._state.session = None
+    captured: dict[str, Any] = {}
+
+    def _capture(req: Any) -> MagicMock:
+        captured["start_url"] = req.start_url
+        captured["profile_dir"] = req.profile_dir
+        captured["extra_http_headers"] = req.extra_http_headers
+        return fake_env
+
+    monkeypatch.setattr(ca, "_new_xdotool_env", _capture)
+    client = TestClient(ca.build_app())
+
+    r = client.post(
+        "/session/init",
+        json={
+            "tenant_id": "acme",
+            "profile_id": "p1",
+            "run_id": "r1",
+            "viewport": [1280, 720],
+            "start_url": "https://target.example/start",
+            "profile_dir": "/data/chrome-profile/acme__p1",
+            "extra_http_headers": {"X-Test": "1"},
+        },
+    )
+    assert r.status_code == 200
+    assert captured["start_url"] == "https://target.example/start"
+    assert captured["profile_dir"] == "/data/chrome-profile/acme__p1"
+    assert captured["extra_http_headers"] == {"X-Test": "1"}
+
+
+def test_resolve_profile_dir_rejects_paths_outside_data_volume() -> None:
+    """Off-volume `profile_dir` would silently write to the container's
+    ephemeral filesystem and evaporate. Fail loud server-side."""
+    from fastapi import HTTPException
+
+    from mantis_agent.server.computer_agent import (
+        _resolve_profile_dir,
+    )
+    from mantis_agent.gym.computer_wire import SessionInitRequest
+
+    req = SessionInitRequest(
+        tenant_id="t",
+        profile_id="p",
+        run_id="r",
+        profile_dir="/tmp/bad",
+    )
+    with pytest.raises(HTTPException) as exc:
+        _resolve_profile_dir(req)
+    assert exc.value.status_code == 400
+
+
+def test_resolve_profile_dir_defaults_when_unset() -> None:
+    from mantis_agent.server.computer_agent import _resolve_profile_dir
+    from mantis_agent.gym.computer_wire import SessionInitRequest
+
+    req = SessionInitRequest(tenant_id="acme", profile_id="p1", run_id="r1")
+    assert _resolve_profile_dir(req) == "/data/chrome-profile/acme__p1"
+
+
+# ── current_url ──────────────────────────────────────────────────────
+
+
+def test_current_url_returns_active_tab_url(
+    client: TestClient,
+    init_payload: dict[str, Any],
+    fake_env: MagicMock,
+) -> None:
+    fake_env.current_url = "https://example.com/leads"
+    tok = client.post("/session/init", json=init_payload).json()["session_token"]
+    r = client.get("/current_url", headers={"X-Mantis-Session": tok})
+    assert r.status_code == 200
+    assert r.json() == {"url": "https://example.com/leads"}
+
+
+def test_current_url_returns_empty_string_on_env_failure(
+    client: TestClient,
+    init_payload: dict[str, Any],
+    fake_env: MagicMock,
+) -> None:
+    type(fake_env).current_url = property(
+        lambda _self: (_ for _ in ()).throw(RuntimeError("CDP off")),
+    )
+    tok = client.post("/session/init", json=init_payload).json()["session_token"]
+    r = client.get("/current_url", headers={"X-Mantis-Session": tok})
+    # Reset to keep other tests sane.
+    del type(fake_env).current_url
+    assert r.status_code == 200
+    assert r.json() == {"url": ""}
+
+
+def test_current_url_requires_session_header(client: TestClient) -> None:
+    r = client.get("/current_url")
+    assert r.status_code == 401
+
+
+# ── cdp_click_at_point ───────────────────────────────────────────────
+
+
+def test_cdp_click_at_point_403_when_disabled(
+    client: TestClient, init_payload: dict[str, Any]
+) -> None:
+    tok = client.post("/session/init", json=init_payload).json()["session_token"]
+    r = client.post(
+        "/cdp_click_at_point",
+        json={"x": 1, "y": 2, "via_pointer": False, "step_id": "s"},
+        headers={"X-Mantis-Session": tok},
+    )
+    assert r.status_code == 403
+
+
+def test_cdp_click_at_point_dispatches_env_method(
+    client: TestClient,
+    init_payload: dict[str, Any],
+    fake_env: MagicMock,
+) -> None:
+    init_payload = dict(init_payload, enable_cdp=True)
+    fake_env.cdp_click_at_point.return_value = True
+    tok = client.post("/session/init", json=init_payload).json()["session_token"]
+    r = client.post(
+        "/cdp_click_at_point",
+        json={"x": 100, "y": 200, "via_pointer": False, "step_id": "s1"},
+        headers={"X-Mantis-Session": tok},
+    )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    fake_env.cdp_click_at_point.assert_called_once_with(100, 200)
+    fake_env.cdp_click_via_pointer.assert_not_called()
+
+
+def test_cdp_click_at_point_via_pointer_picks_pointer_method(
+    client: TestClient,
+    init_payload: dict[str, Any],
+    fake_env: MagicMock,
+) -> None:
+    init_payload = dict(init_payload, enable_cdp=True)
+    fake_env.cdp_click_via_pointer.return_value = True
+    tok = client.post("/session/init", json=init_payload).json()["session_token"]
+    r = client.post(
+        "/cdp_click_at_point",
+        json={"x": 50, "y": 60, "via_pointer": True, "step_id": "s2"},
+        headers={"X-Mantis-Session": tok},
+    )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    fake_env.cdp_click_via_pointer.assert_called_once_with(50, 60)
+    fake_env.cdp_click_at_point.assert_not_called()
+
+
+def test_cdp_click_at_point_dedup_on_repeated_step_id(
+    client: TestClient,
+    init_payload: dict[str, Any],
+    fake_env: MagicMock,
+) -> None:
+    init_payload = dict(init_payload, enable_cdp=True)
+    fake_env.cdp_click_at_point.return_value = True
+    tok = client.post("/session/init", json=init_payload).json()["session_token"]
+    body = {"x": 1, "y": 2, "via_pointer": False, "step_id": "step-dedup"}
+    headers = {"X-Mantis-Session": tok}
+    client.post("/cdp_click_at_point", json=body, headers=headers)
+    client.post("/cdp_click_at_point", json=body, headers=headers)
+    # Second call must not invoke the env method again.
+    assert fake_env.cdp_click_at_point.call_count == 1
+
+
+# ── cdp_count_pages ──────────────────────────────────────────────────
+
+
+def test_cdp_count_pages_returns_int(
+    client: TestClient,
+    init_payload: dict[str, Any],
+    fake_env: MagicMock,
+) -> None:
+    fake_env.cdp_count_pages.return_value = 3
+    tok = client.post("/session/init", json=init_payload).json()["session_token"]
+    r = client.get("/cdp_count_pages", headers={"X-Mantis-Session": tok})
+    assert r.status_code == 200
+    assert r.json() == {"count": 3}
+
+
+def test_cdp_count_pages_returns_zero_on_env_failure(
+    client: TestClient,
+    init_payload: dict[str, Any],
+    fake_env: MagicMock,
+) -> None:
+    fake_env.cdp_count_pages.side_effect = RuntimeError("CDP socket dead")
+    tok = client.post("/session/init", json=init_payload).json()["session_token"]
+    r = client.get("/cdp_count_pages", headers={"X-Mantis-Session": tok})
+    assert r.status_code == 200
+    assert r.json() == {"count": 0}
+
+
+def test_cdp_count_pages_requires_session_header(client: TestClient) -> None:
+    r = client.get("/cdp_count_pages")
+    assert r.status_code == 401
