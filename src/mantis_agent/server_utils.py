@@ -1021,6 +1021,12 @@ def micro_plan_steps_to_dicts(steps: list[Any]) -> list[dict[str, Any]]:
             "guard": str(getattr(s, "guard", "") or ""),
             "out_var": str(getattr(s, "out_var", "") or ""),
             "stop_var": str(getattr(s, "stop_var", "") or ""),
+            # Per-step extraction schema (#785 follow-up). Carries the
+            # plan-author-declared schema dict through the wire so the
+            # claude_step handler can build a transient ExtractionSchema
+            # and override extractor.schema for the duration of the step.
+            # Empty dict on legacy plans → recipe-bound schema is used.
+            "extract": dict(getattr(s, "extract", {}) or {}),
         }
         for s in steps
     ]
