@@ -909,6 +909,9 @@ def execute_step(
             loop_target=step.loop_target,
             loop_count=step.loop_count,
             params=step.params, hints=step.hints,
+            # #785 follow-up: carry the plan-author's inline extraction
+            # schema across the reconstruction so validator enforces it.
+            extract=dict(getattr(step, "extract", {}) or {}),
         )
         # WARNING level so the trace survives Modal's INFO-suppressed
         # log capture. Firing this is the canonical signal that the

@@ -341,6 +341,9 @@ def _clone_step(step: MicroIntent) -> MicroIntent:
         loop_count=step.loop_count,
         params=dict(step.params or {}),
         hints=dict(step.hints or {}),
+        # #785 follow-up: carry plan-author inline extract schema across
+        # fanout step cloning.
+        extract=dict(getattr(step, "extract", {}) or {}),
     )
 
 

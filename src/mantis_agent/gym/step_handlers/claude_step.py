@@ -213,6 +213,14 @@ class ClaudeStepHandler:
         )
         if transient_schema is not None:
             extractor_obj.schema = transient_schema
+            # WARNING-level so it survives Modal's log filter (see
+            # `feedback_warning_level_for_modal_observability.md`).
+            # One line per step that opts in; quiet for legacy plans.
+            logger.warning(
+                "[claude_step] inline-schema swap: required=%s (step.type=%s)",
+                transient_schema.required_fields,
+                step.type,
+            )
 
         try:
             return self._execute(step, ctx)
