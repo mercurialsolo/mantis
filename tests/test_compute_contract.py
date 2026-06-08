@@ -183,8 +183,11 @@ class TestExtensionProtocols:
             def state_clipboard(self) -> str:
                 return ""
 
-            def state_page_load(self) -> str:
-                return "complete"
+            def state_page_load(self) -> dict:
+                return {"ready_state": "complete"}
+
+            def state_safe_back(self, pinned_origin=None) -> dict:
+                return {"popped": False, "new_url": ""}
 
         assert isinstance(FakeClient(), SupportsBrowserState)
 
