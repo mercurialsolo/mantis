@@ -45,7 +45,7 @@ vol = modal.Volume.from_name("osworld-data", create_if_missing=True)
 # bundles the exact Chromium build the SDK version expects.
 browser_use_image = (
     modal.Image.from_registry(
-        "mcr.microsoft.com/playwright-python:v1.49.0-jammy",
+        "mcr.microsoft.com/playwright/python:v1.49.0-jammy",
         add_python=None,  # base image ships Python 3.x
     )
     .run_commands(
@@ -65,6 +65,11 @@ browser_use_image = (
         "pydantic>=2",
         "pillow",
         "httpx",
+        # The mantis_agent gym package transitively imports
+        # BrowserUsePlaneClient which uses `requests`. Even though the
+        # server doesn't need it at runtime, the import path is
+        # evaluated on container start.
+        "requests>=2.28",
     )
     .add_local_python_source("mantis_agent")
 )
@@ -73,7 +78,12 @@ browser_use_image = (
 @app.function(
     image=browser_use_image,
     volumes={"/data": vol},
-    secrets=[modal.Secret.from_name("mantis-cua-server", required_keys=[])],
+    # No secrets at v1 — Browser-Use Plane's base surface doesn't read
+    # tenant credentials. Proxy / auth-header configuration arrives via
+    # /session/init body. Add Secret.from_dotenv() here if a future
+    # version needs env-var access (e.g. PRIVATEPROXY_* shared with the
+    # brain plane).
+    secrets=[],
     timeout=14400,  # 4 hours — match brain executor timeouts
     memory=4096,
     cpu=2.0,
