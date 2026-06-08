@@ -35,6 +35,8 @@ from ..gym.browser_use_wire import (
     DispatchActionRequest,
     DispatchActionResponse,
     FocusedElementSummary,
+    LinksPeekTargetRequest,
+    LinksPeekTargetResponse,
     StateClipboardResponse,
     StateCurrentUrlResponse,
     StateFocusedElementResponse,
@@ -42,6 +44,12 @@ from ..gym.browser_use_wire import (
     StateSafeBackRequest,
     StateSafeBackResponse,
     StateTabsResponse,
+    TabsActivateRequest,
+    TabsActivateResponse,
+    TabsCloseRequest,
+    TabsCloseResponse,
+    TabsOpenInNewRequest,
+    TabsOpenInNewResponse,
     TabSummary,
 )
 from ..gym.compute_contract import Capabilities
@@ -71,6 +79,14 @@ class _Session:
     page: Any = None
     dispatch_cache: dict[str, DispatchActionResponse] = field(default_factory=dict)
     safe_back_cache: dict[str, StateSafeBackResponse] = field(default_factory=dict)
+    # Stable tab ids — incremented on every tab open. Closed tabs leave
+    # holes but ids never shift, so a `tab_id` handed back to the client
+    # remains valid until the client explicitly closes that tab.
+    tab_id_map: dict[str, Any] = field(default_factory=dict)
+    tab_counter: int = 0
+    tabs_open_cache: dict[str, TabsOpenInNewResponse] = field(default_factory=dict)
+    tabs_close_cache: dict[str, TabsCloseResponse] = field(default_factory=dict)
+    tabs_activate_cache: dict[str, TabsActivateResponse] = field(default_factory=dict)
 
 
 _sessions: dict[str, _Session] = {}
@@ -137,7 +153,7 @@ def _start_playwright(req: BrowserUseSessionInitRequest) -> _Session:
     if req.start_url and req.start_url != "about:blank":
         page.goto(req.start_url, wait_until="load")
 
-    return _Session(
+    sess = _Session(
         token=uuid.uuid4().hex,
         tenant_id=req.tenant_id,
         profile_id=req.profile_id,
@@ -149,6 +165,26 @@ def _start_playwright(req: BrowserUseSessionInitRequest) -> _Session:
         page=page,
         last_action_ms=int(time.time() * 1000),
     )
+    # Register the initial page as tab-0 so it's addressable via
+    # tabs.* — keeps the id space consistent whether or not the plan
+    # opens additional tabs.
+    sess.tab_id_map["tab-0"] = page
+    sess.tab_counter = 1
+    return sess
+
+
+def _register_tab(sess: _Session, page: Any) -> str:
+    tab_id = f"tab-{sess.tab_counter}"
+    sess.tab_counter += 1
+    sess.tab_id_map[tab_id] = page
+    return tab_id
+
+
+def _find_tab_id(sess: _Session, page: Any) -> str | None:
+    for tid, p in sess.tab_id_map.items():
+        if p is page:
+            return tid
+    return None
 
 
 def _stop_playwright(sess: _Session) -> None:
@@ -321,7 +357,16 @@ def build_app() -> FastAPI:
         ctx = sess.context
         active_page = sess.page
         if ctx is not None:
-            for idx, page in enumerate(ctx.pages):
+            # Reconcile: any context page not yet in tab_id_map (e.g.
+            # opened by a target=_blank click that bypassed
+            # tabs/open_in_new) gets a fresh id.
+            for page in ctx.pages:
+                if _find_tab_id(sess, page) is None:
+                    _register_tab(sess, page)
+            for tid, page in sess.tab_id_map.items():
+                if page not in ctx.pages:
+                    # Stale entry — leave; tabs/close will reap.
+                    continue
                 try:
                     title = page.title()
                 except Exception:  # noqa: BLE001
@@ -332,7 +377,7 @@ def build_app() -> FastAPI:
                     url = ""
                 tabs.append(
                     TabSummary(
-                        id=f"tab-{idx}",
+                        id=tid,
                         title=title or "",
                         url=url or "",
                         is_active=(page is active_page),
@@ -481,6 +526,196 @@ def build_app() -> FastAPI:
         resp = StateSafeBackResponse(popped=True, new_url=new_url)
         sess.safe_back_cache[req.step_id] = resp
         return resp
+
+    # ── tabs.* extensions (#779) ───────────────────────────────────
+
+    @app.post("/tabs/open_in_new", response_model=TabsOpenInNewResponse)
+    def tabs_open_in_new(
+        req: TabsOpenInNewRequest, request: Request
+    ) -> TabsOpenInNewResponse:
+        sess = _require_session(request)
+        cached = sess.tabs_open_cache.get(req.step_id)
+        if cached is not None:
+            return TabsOpenInNewResponse(
+                tab_id=cached.tab_id,
+                url=cached.url,
+                title=cached.title,
+                deduplicated=True,
+            )
+        ctx = sess.context
+        if ctx is None:
+            raise HTTPException(status_code=500, detail="no browser context")
+
+        new_page: Any
+        if req.via_selector is not None:
+            # Modifier-aware click that yields a popup (target=_blank or
+            # Ctrl/Cmd-click). Playwright surfaces it via
+            # `expect_page` — race the click and the popup.
+            try:
+                with ctx.expect_page(timeout=8000) as popup_info:
+                    sess.page.click(req.via_selector, modifiers=["ControlOrMeta"])
+                new_page = popup_info.value
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=502, detail=f"open_in_new via_selector failed: {exc}"
+                ) from exc
+        else:
+            new_page = ctx.new_page()
+            if req.url:
+                try:
+                    new_page.goto(req.url, wait_until="domcontentloaded")
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(
+                        status_code=502, detail=f"navigation failed: {exc}"
+                    ) from exc
+
+        tab_id = _register_tab(sess, new_page)
+        try:
+            title = new_page.title()
+        except Exception:  # noqa: BLE001
+            title = ""
+        try:
+            url = new_page.url or ""
+        except Exception:  # noqa: BLE001
+            url = ""
+
+        resp = TabsOpenInNewResponse(tab_id=tab_id, url=url, title=title or "")
+        sess.tabs_open_cache[req.step_id] = resp
+        sess.last_action_ms = int(time.time() * 1000)
+        return resp
+
+    @app.post("/tabs/close", response_model=TabsCloseResponse)
+    def tabs_close(req: TabsCloseRequest, request: Request) -> TabsCloseResponse:
+        sess = _require_session(request)
+        cached = sess.tabs_close_cache.get(req.step_id)
+        if cached is not None:
+            return TabsCloseResponse(closed=cached.closed, deduplicated=True)
+        page = sess.tab_id_map.get(req.tab_id)
+        if page is None:
+            resp = TabsCloseResponse(closed=False)
+            sess.tabs_close_cache[req.step_id] = resp
+            return resp
+        try:
+            page.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[browser-use] tabs/close failed: %s", exc)
+        # If we closed the active page, fall back to whichever context
+        # page is still open — the runner expects sess.page to remain
+        # valid for screenshot/dispatch.
+        if page is sess.page:
+            ctx = sess.context
+            remaining = [p for p in (ctx.pages if ctx else []) if p is not page]
+            if remaining:
+                sess.page = remaining[0]
+        sess.tab_id_map.pop(req.tab_id, None)
+        resp = TabsCloseResponse(closed=True)
+        sess.tabs_close_cache[req.step_id] = resp
+        sess.last_action_ms = int(time.time() * 1000)
+        return resp
+
+    @app.post("/tabs/activate", response_model=TabsActivateResponse)
+    def tabs_activate(
+        req: TabsActivateRequest, request: Request
+    ) -> TabsActivateResponse:
+        sess = _require_session(request)
+        cached = sess.tabs_activate_cache.get(req.step_id)
+        if cached is not None:
+            return TabsActivateResponse(
+                activated=cached.activated,
+                url=cached.url,
+                deduplicated=True,
+            )
+        page = sess.tab_id_map.get(req.tab_id)
+        if page is None:
+            resp = TabsActivateResponse(activated=False, url="")
+            sess.tabs_activate_cache[req.step_id] = resp
+            return resp
+        try:
+            page.bring_to_front()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[browser-use] tabs/activate failed: %s", exc)
+            resp = TabsActivateResponse(activated=False, url="")
+            sess.tabs_activate_cache[req.step_id] = resp
+            return resp
+        sess.page = page
+        try:
+            url = page.url or ""
+        except Exception:  # noqa: BLE001
+            url = ""
+        resp = TabsActivateResponse(activated=True, url=url)
+        sess.tabs_activate_cache[req.step_id] = resp
+        sess.last_action_ms = int(time.time() * 1000)
+        return resp
+
+    # ── links.peek_target (#780) ───────────────────────────────────
+
+    @app.post("/links/peek_target", response_model=LinksPeekTargetResponse)
+    def links_peek_target(
+        req: LinksPeekTargetRequest, request: Request
+    ) -> LinksPeekTargetResponse:
+        sess = _require_session(request)
+        if req.selector is None and req.bbox is None:
+            raise HTTPException(
+                status_code=400,
+                detail="links/peek_target requires either selector or bbox",
+            )
+        page = sess.page
+        try:
+            if req.selector is not None:
+                raw = page.evaluate(
+                    """
+                    (sel) => {
+                        const el = document.querySelector(sel);
+                        if (!el) return null;
+                        return {
+                            href: el.getAttribute('href'),
+                            target: el.getAttribute('target'),
+                            tag: (el.tagName || '').toLowerCase(),
+                        };
+                    }
+                    """,
+                    req.selector,
+                )
+            else:
+                assert req.bbox is not None
+                cx = int((req.bbox[0] + req.bbox[2]) / 2)
+                cy = int((req.bbox[1] + req.bbox[3]) / 2)
+                raw = page.evaluate(
+                    """
+                    ([x, y]) => {
+                        const el = document.elementFromPoint(x, y);
+                        if (!el) return null;
+                        // Walk up to the nearest anchor — vision bboxes
+                        // often hit child spans/icons inside <a>.
+                        let anchor = el;
+                        while (anchor && anchor.tagName !== 'A') {
+                            anchor = anchor.parentElement;
+                        }
+                        if (!anchor) {
+                            return {
+                                href: null, target: null,
+                                tag: (el.tagName || '').toLowerCase(),
+                            };
+                        }
+                        return {
+                            href: anchor.getAttribute('href'),
+                            target: anchor.getAttribute('target'),
+                            tag: 'a',
+                        };
+                    }
+                    """,
+                    [cx, cy],
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[browser-use] links/peek_target failed: %s", exc)
+            raw = None
+        if raw is None:
+            return LinksPeekTargetResponse(href=None, target=None, tag="")
+        return LinksPeekTargetResponse(
+            href=raw.get("href"),
+            target=raw.get("target"),
+            tag=str(raw.get("tag") or ""),
+        )
 
     return app
 

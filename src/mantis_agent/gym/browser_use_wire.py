@@ -201,3 +201,81 @@ class StateSafeBackResponse(BaseModel):
     new_url: str
     reason: str | None = None
     deduplicated: bool = False
+
+
+# ── tabs.* extensions (#779) ──────────────────────────────────────────
+
+
+class TabsOpenInNewRequest(BaseModel):
+    """Open a new tab. Three modes:
+
+    - `url` set → navigate to that URL directly (Playwright
+      `context.new_page()` + `page.goto`).
+    - `via_selector` set → open the anchor at that CSS selector in a
+      new tab (modifier-aware click that propagates `target=_blank`
+      semantics even if the page itself doesn't ship them — uses
+      `Promise.race` + `page.context.expect_page`).
+    - Both null → open a blank tab and return its id.
+
+    Idempotency: `step_id` enables retry semantics consistent with the
+    base dispatch surface; the server keeps a TTL'd LRU.
+    """
+
+    url: str | None = None
+    via_selector: str | None = None
+    step_id: str
+
+
+class TabsOpenInNewResponse(BaseModel):
+    tab_id: str
+    url: str
+    title: str
+    deduplicated: bool = False
+
+
+class TabsCloseRequest(BaseModel):
+    tab_id: str
+    step_id: str
+
+
+class TabsCloseResponse(BaseModel):
+    closed: bool
+    deduplicated: bool = False
+
+
+class TabsActivateRequest(BaseModel):
+    tab_id: str
+    step_id: str
+
+
+class TabsActivateResponse(BaseModel):
+    activated: bool
+    url: str
+    deduplicated: bool = False
+
+
+# ── links.peek_target (#780) ──────────────────────────────────────────
+
+
+class LinksPeekTargetRequest(BaseModel):
+    """Read the `href` attribute of an anchor without clicking it.
+
+    Either `selector` (CSS) or `bbox` (`[x1,y1,x2,y2]` from vision
+    grounding) must be set. `bbox` resolves via `document.elementFromPoint`
+    at the centroid — useful for vision-grounded targets that don't
+    have a stable selector.
+    """
+
+    selector: str | None = None
+    bbox: list[int] | None = None  # [x1, y1, x2, y2]
+
+
+class LinksPeekTargetResponse(BaseModel):
+    """`href` is null when the target element is not an anchor or has
+    no `href` attribute. `target` carries the `target` attribute
+    (`_blank` / `_self` / ...) so handlers can decide whether to open
+    in new tab vs current."""
+
+    href: str | None = None
+    target: str | None = None
+    tag: str = ""

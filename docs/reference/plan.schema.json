@@ -120,7 +120,8 @@
             "paginate",
             "filter",
             "done",
-            "tool_call"
+            "tool_call",
+            "capture_link_in_new_tab"
           ]
         },
         "name": {
@@ -195,6 +196,25 @@
         "claude_only": {
           "type": "boolean",
           "description": "If true, skip Holo3 and have Claude read the screenshot directly (used for extract_data / extract_url and verification gates)."
+        },
+        "target_role": {
+          "type": "string",
+          "description": "click / capture_link_in_new_tab steps (Browser-Use Plane only — #781): semantic role of the intended target ('title', 'comment_count', 'author', 'domain_badge', 'vote_button', ...). Resolver consults the site recipe; falls back to vision when no recipe entry matches. Pure-CUA executors ignore this field. Recipes live under `docs/recipes/<site>.md` (see `docs/recipes/news_ycombinator_com.md`)."
+        },
+        "source_selector": {
+          "type": "string",
+          "description": "capture_link_in_new_tab steps: CSS selector (or vision-grounded target) for the source anchor. The handler opens that anchor in a new tab, reads its URL, closes the tab, and returns to the source tab. Requires `runtime.compute_backend: browser_use_plane` (#779)."
+        },
+        "emit": {
+          "type": "string",
+          "enum": ["current_url", "current_url_title"],
+          "description": "capture_link_in_new_tab steps: which fields to emit per opened link. Default: current_url (just the URL)."
+        },
+        "on_no_navigation": {
+          "type": "string",
+          "enum": ["skip", "retry", "halt"],
+          "default": "skip",
+          "description": "capture_link_in_new_tab steps: what to do when the new tab opens but does not navigate (e.g. the anchor was `href=#`). Default: skip."
         },
         "grounding": {
           "type": "boolean",
