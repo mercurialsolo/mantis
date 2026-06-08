@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Employer dashboard | Indeed{% endblock %}
+{% block content %}
+<section class="employer-dashboard">
+  <h1>Employer dashboard</h1>
+  <div class="kpi-strip" data-testid="kpi-strip">
+    <div class="kpi-card"><strong>{{ kpi_active }}</strong><span>Active postings</span></div>
+    <div class="kpi-card"><strong>{{ kpi_new_apps }}</strong><span>New applicants this week</span></div>
+    <div class="kpi-card"><strong>{{ kpi_views }}</strong><span>Total views</span></div>
+  </div>
+  <div class="postings-actions">
+    <a class="btn btn-primary" href="/employers/jobs/new" data-testid="new-posting-cta">+ Post a job</a>
+  </div>
+  <table class="postings-table" data-testid="postings-table">
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Location</th>
+        <th>Applicants</th>
+        <th>Posted</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for j in jobs %}
+      <tr onclick="window.location='/employers/jobs/{{ j.id }}'" data-testid="posting-row-{{ j.id }}">
+        <td><a href="/employers/jobs/{{ j.id }}">{{ j.title }}</a></td>
+        <td>{{ j.location }}</td>
+        <td>
+          <span class="badge badge-new">{{ j.app_counts.new }} new</span>
+          <span class="badge badge-reviewed">{{ j.app_counts.reviewed }} reviewed</span>
+          <span class="badge">{{ j.app_total }} total</span>
+        </td>
+        <td>{{ j.posted_at }}</td>
+        <td><span class="status-badge status-{{ j.status }}">{{ j.status|capitalize }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

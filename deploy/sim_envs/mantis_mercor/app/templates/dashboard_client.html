@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Review queue — Mercor{% endblock %}
+
+{% block content %}
+<section class="dashboard dashboard-client" data-testid="dashboard">
+  <h1>Review queue</h1>
+  <p class="muted">Signed in as <b>{{ user.name or user.email }}</b> · client</p>
+  <div class="dashboard-grid">
+    <div class="dashboard-pane" data-testid="pending-pane">
+      <h2>Pending applications</h2>
+      <table class="data-table" data-testid="pending-table">
+        <thead><tr><th>Candidate</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+          {% for a in pending %}
+          <tr data-app-id="{{ a.id }}" data-testid="pending-row">
+            <td>
+              <span class="role-card-avatar small">{{ a.candidate_name | initials }}</span>
+              {{ a.candidate_name }}
+              <div class="muted small">{{ a.candidate_id }}</div>
+            </td>
+            <td>{{ a.job_title }}</td>
+            <td><span class="status status-{{ a.status }}">{{ a.status }}</span></td>
+            <td>
+              <form method="post" action="/dashboard/shortlist" class="inline-form" data-testid="shortlist-form-{{ a.id }}">
+                <input type="hidden" name="job_id" value="{{ a.job_id }}" />
+                <input type="hidden" name="candidate_id" value="{{ a.candidate_id }}" />
+                <button type="submit" class="btn-secondary small" data-testid="shortlist-btn">Add to shortlist</button>
+              </form>
+              <details class="decline-details">
+                <summary class="btn-quiet small" data-testid="decline-toggle">Decline</summary>
+                <form method="post" action="/dashboard/decline" class="decline-form" data-testid="decline-form-{{ a.id }}">
+                  <input type="hidden" name="application_id" value="{{ a.id }}" />
+                  <input type="text" name="reason" placeholder="Reason (required)" required data-testid="decline-reason-{{ a.id }}" />
+                  <button type="submit" class="btn-primary small" data-testid="decline-submit-{{ a.id }}">Decline</button>
+                </form>
+              </details>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="empty">No pending applications.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="dashboard-pane" data-testid="shortlist-pane">
+      <h2>Recent shortlist</h2>
+      <div class="muted small">{{ shortlist | length }} recent</div>
+      <ul class="shortlist-list">
+        {% for s in shortlist %}
+        <li>
+          <span class="role-card-avatar small">{{ s.candidate_name | initials }}</span>
+          <div>
+            <div>{{ s.candidate_name }}</div>
+            <div class="muted small">{{ s.job_title }} · {{ s.created_at }}</div>
+          </div>
+        </li>
+        {% else %}
+        <li class="empty">No shortlist entries yet.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>
+{% endblock %}

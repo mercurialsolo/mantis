@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in — {{ site_name }}{% endblock %}
+
+{% block main %}
+<div class="auth-wrap">
+  <h1>Sign in to your account</h1>
+  {% if error %}<p class="auth-error">{{ error }}</p>{% endif %}
+  <form action="/login" method="post" class="auth-form">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>
+      Email or username
+      <input type="text" name="login" required>
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" required>
+    </label>
+    <a class="auth-forgot" href="#">Forgot password?</a>
+    <button type="submit" class="btn btn--primary btn--block btn--lg">Continue</button>
+  </form>
+  <p class="auth-divider">— Or —</p>
+  <p class="auth-alt">Don&rsquo;t have an account? <a href="/signup">Join here</a></p>
+</div>
+{% endblock %}
+{% block footer %}{% endblock %}

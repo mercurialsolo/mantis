@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "_gig_card.html" import gig_card %}
+
+{% block title %}{{ category.title }} services — {{ site_name }}{% endblock %}
+
+{% block main %}
+<section class="cat-hero">
+  <div class="cat-hero__inner">
+    <h1 class="cat-hero__title">{{ category.title }}</h1>
+    <p class="cat-hero__sub">Browse top-rated freelancers ready to take on your next project.</p>
+  </div>
+</section>
+
+<div class="page-wrap">
+  {% if subcategories %}
+  <nav class="subcat-rail" aria-label="Subcategories">
+    {% for s in subcategories %}
+    <a class="subcat-chip" href="/categories/{{ s.slug }}">{{ s.title }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  <section class="section">
+    <h2 class="section__title section__title--small">Most popular in {{ category.title }}</h2>
+    <div class="gig-grid gig-grid--3">
+      {% for g in results %}{{ gig_card(g) }}{% endfor %}
+    </div>
+  </section>
+</div>
+{% endblock %}

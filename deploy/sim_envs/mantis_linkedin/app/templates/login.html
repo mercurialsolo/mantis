@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Sign in | LinkedIn (mantis mirror){% endblock %}
+{% block topnav %}{% endblock %}
+{% block content %}
+<div class="auth-shell">
+  <a class="brand-mark brand-mark--standalone" href="/" data-testid="brand">
+    <span class="brand-square">in</span>
+  </a>
+  <section class="card auth-card" data-testid="login-card">
+    <h1>Sign in</h1>
+    <p class="auth-sub">Stay updated on your professional world</p>
+    {% if error %}
+      <div class="auth-error" data-testid="login-error">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/login" data-testid="login-form">
+      <label class="field">
+        <span class="field-label">Email</span>
+        <input type="email" name="email" required autocomplete="username"
+               data-testid="login-email"/>
+      </label>
+      <label class="field">
+        <span class="field-label">Password</span>
+        <input type="password" name="password" required
+               autocomplete="current-password" data-testid="login-password"/>
+      </label>
+      <input type="hidden" name="next" value="{{ next_path }}"/>
+      <a class="auth-forgot" href="#" tabindex="-1">Forgot password?</a>
+      <button class="btn-primary auth-submit" type="submit"
+              data-testid="login-submit">Sign in</button>
+    </form>
+    <div class="auth-divider"><span>or</span></div>
+    <p class="auth-footer">
+      New to LinkedIn? <a href="/signup">Join now</a>
+    </p>
+  </section>
+  <p class="auth-hint">
+    Demo creds: <code>demo@mantis.example</code> /
+    <code>mantis-demo</code>
+  </p>
+</div>
+{% endblock %}

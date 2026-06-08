@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Invitation manager | LinkedIn (mantis mirror){% endblock %}
+{% block content %}
+<div class="invman-shell" data-testid="invman-shell">
+  <section class="card">
+    <header class="invman-tabs">
+      <a class="tab {% if tab == 'received' %}tab-active{% endif %}"
+         href="/mynetwork/invitation-manager/?tab=received"
+         data-testid="tab-received">Received</a>
+      <a class="tab {% if tab == 'sent' %}tab-active{% endif %}"
+         href="/mynetwork/invitation-manager/?tab=sent"
+         data-testid="tab-sent">Sent</a>
+      <a class="tab" href="#" data-testid="tab-idk">I don't know</a>
+    </header>
+    <div class="invman-meta">
+      <span>{{ items|length }} pending {% if tab == 'sent' %}requests{% else %}invitations{% endif %}</span>
+      <select class="invman-sort" data-testid="invman-sort">
+        <option>Newest</option><option>Oldest</option>
+      </select>
+    </div>
+    <ul class="invitation-list">
+      {% for inv in items %}
+        <li class="invitation-row" data-testid="invitation-row"
+            data-invitation-id="{{ inv.id }}">
+          <a class="avatar avatar-md"
+             style="background:{{ inv.user.avatar_color }}"
+             href="/in/{{ inv.user.handle }}/">{{ inv.user.name[:1]|upper }}</a>
+          <div class="invitation-meta">
+            <a class="invitation-name" href="/in/{{ inv.user.handle }}/">{{ inv.user.name }}</a>
+            <div class="invitation-headline">{{ inv.user.headline }}</div>
+            {% if inv.note %}
+              <div class="invitation-note">“{{ inv.note }}”</div>
+            {% endif %}
+          </div>
+          <div class="invitation-actions">
+            {% if tab == 'sent' %}
+              <form method="post" action="/mynetwork/invitations/{{ inv.id }}/withdraw">
+                <button class="btn-secondary" type="submit"
+                        data-testid="action-withdraw">Withdraw</button>
+              </form>
+            {% else %}
+              <form method="post" action="/mynetwork/invitations/{{ inv.id }}/ignore"
+                    style="display:inline">
+                <button class="btn-secondary" type="submit"
+                        data-testid="action-ignore">Ignore</button>
+              </form>
+              <form method="post" action="/mynetwork/invitations/{{ inv.id }}/accept"
+                    style="display:inline">
+                <button class="btn-primary" type="submit"
+                        data-testid="action-accept">Accept</button>
+              </form>
+            {% endif %}
+          </div>
+        </li>
+      {% else %}
+        <p class="muted">Nothing here yet.</p>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+{% endblock %}

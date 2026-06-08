@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Your resumes | Indeed{% endblock %}
+{% block content %}
+<section class="resumes">
+  <h1>Your resumes</h1>
+  <ul class="resume-list" data-testid="resume-list">
+    {% for r in resumes %}
+    <li class="resume-row" data-testid="resume-{{ r.id }}">
+      <div class="resume-title">{{ r.title }}</div>
+      <div class="resume-meta">Updated {{ r.updated_at }} · {{ r.skills_list|length }} skills</div>
+      <div class="resume-actions">
+        <a class="btn btn-outline" href="#" data-testid="resume-edit-{{ r.id }}">Edit</a>
+        <form method="post" action="/resumes/{{ r.id }}/delete" class="inline-form">
+          <button type="submit" class="btn btn-outline" data-testid="resume-delete-{{ r.id }}">Delete</button>
+        </form>
+      </div>
+    </li>
+    {% else %}
+    <li class="empty-state">No resumes yet.</li>
+    {% endfor %}
+  </ul>
+  <details class="add-resume" data-testid="add-resume-disclosure">
+    <summary class="btn btn-primary">+ Add new resume</summary>
+    <form method="post" action="/resumes/new" class="resume-form">
+      <label>Title <input type="text" name="title" required data-testid="resume-title-input"/></label>
+      <label>Summary <textarea name="summary" rows="3" data-testid="resume-summary-input"></textarea></label>
+      <label>Skills (comma separated) <input type="text" name="skills" data-testid="resume-skills-input"/></label>
+      <label>Experience <textarea name="experience" rows="5" data-testid="resume-exp-input"></textarea></label>
+      <button type="submit" class="btn btn-primary" data-testid="resume-save">Save</button>
+    </form>
+  </details>
+</section>
+{% endblock %}

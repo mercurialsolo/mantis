@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}My Network | LinkedIn (mantis mirror){% endblock %}
+{% block content %}
+<div class="network-grid" data-testid="network-grid">
+  <aside class="network-rail">
+    <section class="card">
+      <h2 class="rail-title">Manage my network</h2>
+      <ul class="rail-list">
+        <li><a href="/mynetwork/"><span class="ico-glyph">◉</span> Connections <span class="text-num">{{ counts.connections }}</span></a></li>
+        <li><a href="#"><span class="ico-glyph">☎</span> Contacts</a></li>
+        <li><a href="#"><span class="ico-glyph">⇣</span> Following &amp; followers</a></li>
+        <li><a href="#"><span class="ico-glyph">⌘</span> Groups</a></li>
+        <li><a href="#"><span class="ico-glyph">📅</span> Events</a></li>
+        <li><a href="#"><span class="ico-glyph">📄</span> Pages</a></li>
+      </ul>
+    </section>
+  </aside>
+
+  <section class="network-main">
+
+    <section class="card invitations-card" data-testid="invitations-card">
+      <header class="section-header">
+        <h2>Invitations</h2>
+        <a class="section-action"
+           href="/mynetwork/invitation-manager/" data-testid="invitations-show-all">
+          Show all ({{ counts.received_pending }})
+        </a>
+      </header>
+      {% if received %}
+        <ul class="invitation-list">
+          {% for inv in received %}
+            <li class="invitation-row" data-testid="invitation-row"
+                data-invitation-id="{{ inv.id }}">
+              <a class="avatar avatar-md"
+                 style="background:{{ inv.user.avatar_color }}"
+                 href="/in/{{ inv.user.handle }}/">{{ inv.user.name[:1]|upper }}</a>
+              <div class="invitation-meta">
+                <a class="invitation-name" href="/in/{{ inv.user.handle }}/">{{ inv.user.name }}</a>
+                <div class="invitation-headline">{{ inv.user.headline }}</div>
+                {% if inv.note %}
+                  <div class="invitation-note">“{{ inv.note }}”</div>
+                {% endif %}
+              </div>
+              <div class="invitation-actions">
+                <form method="post" action="/mynetwork/invitations/{{ inv.id }}/ignore"
+                      style="display:inline">
+                  <button class="btn-secondary" type="submit">Ignore</button>
+                </form>
+                <form method="post" action="/mynetwork/invitations/{{ inv.id }}/accept"
+                      style="display:inline">
+                  <button class="btn-primary" type="submit">Accept</button>
+                </form>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">No new invitations right now.</p>
+      {% endif %}
+    </section>
+
+    <section class="card pymk-card" data-testid="pymk-card">
+      <header class="section-header">
+        <h2>People you may know based on your profile</h2>
+      </header>
+      <div class="pymk-grid">
+        {% for s in suggested %}
+          <div class="pymk-card-mini" data-testid="pymk-row">
+            <div class="pymk-banner"
+                 style="background:linear-gradient(135deg,{{ s.avatar_color }} 0%,#1d4477 100%)"></div>
+            <a class="avatar avatar-lg pymk-avatar"
+               style="background:{{ s.avatar_color }}"
+               href="/in/{{ s.handle }}/">{{ s.name[:1]|upper }}</a>
+            <a class="pymk-name" href="/in/{{ s.handle }}/">{{ s.name }}</a>
+            <div class="pymk-headline">{{ s.headline }}</div>
+            <form method="post" action="/in/{{ s.handle }}/connect">
+              <input type="hidden" name="note" value=""/>
+              <button class="btn-secondary btn-pill" type="submit">Connect</button>
+            </form>
+          </div>
+        {% endfor %}
+      </div>
+    </section>
+  </section>
+</div>
+{% endblock %}

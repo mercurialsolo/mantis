@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% from "_role_card.html" import role_card %}
+
+{% block title %}Mercor — Shape the frontier of AI{% endblock %}
+
+{% block content %}
+<section class="hero" data-testid="hero">
+  <div class="hero-inner">
+    <h1 class="hero-h1" data-testid="hero-h1">Shape the frontier of AI</h1>
+    <p class="hero-sub" data-testid="hero-sub">Work with the world's leading AI labs as a domain expert.</p>
+    <div class="hero-ctas">
+      <a class="btn-primary" href="/jobs" data-testid="hero-cta-jobs">Browse roles</a>
+      <a class="btn-secondary" href="/experts" data-testid="hero-cta-experts">How it works</a>
+    </div>
+  </div>
+</section>
+
+<section class="stats-strip" data-testid="stats-strip">
+  <div class="stats-strip-inner">
+    <div class="stat">
+      <div class="stat-value" data-testid="stat-avg-pay">${{ stats.avg_pay }}</div>
+      <div class="stat-label">Average pay $/hr</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" data-testid="stat-roles">{{ stats.roles_created_k }}k</div>
+      <div class="stat-label">Roles created (k)</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" data-testid="stat-payouts">${{ '{:,.0f}'.format(stats.daily_payouts_usd) }}</div>
+      <div class="stat-label">Daily payouts ($)</div>
+    </div>
+  </div>
+</section>
+
+<section class="latest-roles" data-testid="latest-roles">
+  <div class="latest-roles-header">
+    <h2 data-testid="latest-roles-h2">Latest roles</h2>
+    <a class="link-quiet" href="/jobs" data-testid="see-all-jobs">See all →</a>
+  </div>
+  <div class="role-grid">
+    {% for job in latest_jobs %}
+      {{ role_card(job) }}
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

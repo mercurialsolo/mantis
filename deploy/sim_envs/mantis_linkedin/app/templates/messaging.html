@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Messaging | LinkedIn (mantis mirror){% endblock %}
+{% block content %}
+<div class="messaging-shell" data-testid="messaging-shell">
+  <section class="card messaging-card">
+    <aside class="msg-list" data-testid="msg-list">
+      <header class="msg-list-header">
+        <h2>Messaging</h2>
+        <div class="msg-list-tools">
+          <button class="ico-link" data-testid="msg-filter">▾</button>
+          <button class="ico-link" data-testid="msg-compose">✎</button>
+        </div>
+      </header>
+      <div class="msg-search">
+        <input type="text" placeholder="Search messages" data-testid="msg-search-input"/>
+      </div>
+      <div class="msg-tabs">
+        <a class="msg-tab msg-tab-active" data-testid="msg-tab-focused">Focused</a>
+        <a class="msg-tab" data-testid="msg-tab-other">Other</a>
+      </div>
+      <ul class="msg-thread-list">
+        {% for t in threads %}
+          <li class="msg-thread-row {% if active and t.id == active.id %}msg-thread-active{% endif %}"
+              data-testid="msg-thread-row" data-thread-id="{{ t.id }}">
+            <a href="/messaging/?thread={{ t.id }}" class="msg-thread-link">
+              <span class="avatar avatar-md"
+                    style="background:{{ t.peer.avatar_color if t.peer else '#888' }}">
+                {{ (t.peer.name[:1]|upper) if t.peer else '?' }}
+              </span>
+              <div class="msg-thread-meta">
+                <div class="msg-thread-name">{{ t.peer.name if t.peer else 'Unknown' }}</div>
+                <div class="msg-thread-snippet">{{ t.snippet }}</div>
+              </div>
+              <div class="msg-thread-time">{{ t.last_at }}</div>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    </aside>
+
+    <section class="msg-pane" data-testid="msg-pane">
+      {% if active %}
+        <header class="msg-pane-header">
+          <span class="avatar avatar-sm"
+                style="background:{{ active.peer.avatar_color }}">
+            {{ active.peer.name[:1]|upper }}
+          </span>
+          <div>
+            <div class="msg-pane-name">{{ active.peer.name }}</div>
+            <div class="msg-pane-headline">{{ active.peer.headline }}</div>
+          </div>
+          <button class="msg-pane-more" data-testid="msg-pane-more">⋯</button>
+        </header>
+        <ul class="msg-bubbles" data-testid="msg-bubbles">
+          {% for m in messages %}
+            <li class="msg-bubble {% if m.sender_id == me_id %}msg-bubble-self{% else %}msg-bubble-peer{% endif %}"
+                data-testid="msg-bubble">
+              <div class="msg-bubble-body">{{ m.body }}</div>
+              <div class="msg-bubble-time">{{ m.created_at }}</div>
+            </li>
+          {% endfor %}
+        </ul>
+        <form class="msg-composer" method="post"
+              action="/messaging/{{ active.id }}/send" data-testid="msg-composer">
+          <textarea name="body" placeholder="Write a message…" rows="2"
+                    data-testid="msg-composer-input"></textarea>
+          <div class="msg-composer-actions">
+            <div class="msg-composer-tools">
+              <button type="button" class="msg-tool">📎</button>
+              <button type="button" class="msg-tool">😊</button>
+              <button type="button" class="msg-tool">🖼</button>
+            </div>
+            <button class="btn-primary" type="submit"
+                    data-testid="msg-send">Send</button>
+          </div>
+        </form>
+      {% else %}
+        <div class="msg-empty">
+          <p>No conversations yet.</p>
+        </div>
+      {% endif %}
+    </section>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  (function(){
+    var t = document.querySelector('[data-testid="msg-composer-input"]');
+    var btn = document.querySelector('[data-testid="msg-send"]');
+    if (!t || !btn) return;
+    function sync(){ btn.disabled = !t.value.trim(); }
+    t.addEventListener('input', sync); sync();
+  })();
+</script>
+{% endblock %}

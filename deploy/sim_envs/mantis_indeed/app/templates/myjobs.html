@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}My jobs | Indeed{% endblock %}
+{% block content %}
+<section class="myjobs">
+  <h1>My jobs</h1>
+  <nav class="myjobs-tabs" data-testid="myjobs-tabs">
+    <a class="tab {% if tab == 'saved' %}tab-active{% endif %}"
+       href="/myjobs?tab=saved" data-testid="tab-saved">Saved</a>
+    <a class="tab {% if tab == 'applied' %}tab-active{% endif %}"
+       href="/myjobs?tab=applied" data-testid="tab-applied">Applied</a>
+  </nav>
+  <ul class="myjobs-list" data-testid="myjobs-list">
+    {% for j in items %}
+    <li class="result-card" data-jk="{{ j.jk }}" data-testid="myjobs-card">
+      <h2 class="job-title"><a href="/viewjob?jk={{ j.jk }}">{{ j.title }}</a></h2>
+      <div class="company-row">
+        <span class="company-name">{{ j.company_name }}</span>
+      </div>
+      <div class="location-row">{{ j.location }}</div>
+      <div class="salary-row">{{ j.salary_display }}</div>
+      {% if tab == 'applied' %}
+      <div class="status-row">
+        <span class="status-badge status-{{ j.app_status }}">{{ j.app_status|capitalize }}</span>
+        <span class="applied-ago">Applied {{ j.app_applied_at }}</span>
+      </div>
+      {% endif %}
+    </li>
+    {% else %}
+    <li class="empty-state">
+      {% if tab == 'saved' %}
+        You haven't saved any jobs yet. Save jobs from search results to find them here.
+      {% else %}
+        You haven't applied to any jobs yet.
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Your profile — Mercor{% endblock %}
+
+{% block content %}
+<section class="profile-page" data-testid="profile-page">
+  <h1>Your profile</h1>
+  <p class="muted">Signed in as <b>{{ user.name or user.email }}</b></p>
+  <form method="post" action="/profile" class="profile-form" data-testid="profile-form">
+    <label>Headline
+      <input type="text" name="headline" value="{{ profile.headline }}" placeholder="Internal Medicine Physician, 8 years" data-testid="profile-headline" />
+    </label>
+    <label>Skills (comma-separated)
+      <input type="text" name="skills" value="{{ profile.skills | join(', ') }}" data-testid="profile-skills" />
+    </label>
+    <label>Hourly rate ($/hr)
+      <input type="number" step="1" name="hourly_rate" value="{{ profile.hourly_rate | int }}" data-testid="profile-rate" />
+    </label>
+    <label>Availability
+      <select name="availability" data-testid="profile-availability">
+        {% for opt in ['Full-time', 'Part-time', 'Project-based'] %}
+        <option value="{{ opt }}" {% if profile.availability == opt %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn-primary" data-testid="profile-save">Save</button>
+  </form>
+</section>
+{% endblock %}

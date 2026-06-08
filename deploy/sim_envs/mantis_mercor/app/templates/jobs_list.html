@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% from "_role_card.html" import role_card %}
+
+{% block title %}Roles — Mercor{% endblock %}
+
+{% block content %}
+<section class="jobs-layout" data-testid="jobs-layout">
+  <aside class="filter-rail" data-testid="filter-rail">
+    <form method="get" action="/jobs" data-testid="filter-form">
+      <div class="filter-group">
+        <div class="filter-label">Category</div>
+        {% for c in categories %}
+        <label class="chip-radio">
+          <input type="radio" name="category" value="{{ c }}" {% if filter_category == c %}checked{% endif %} />
+          <span class="chip">{{ c }}</span>
+        </label>
+        {% endfor %}
+        <label class="chip-radio">
+          <input type="radio" name="category" value="" {% if not filter_category %}checked{% endif %} />
+          <span class="chip">Any</span>
+        </label>
+      </div>
+      <div class="filter-group">
+        <div class="filter-label">Engagement type</div>
+        {% for e in ['Hourly', 'Project', 'Full-time'] %}
+        <label class="chip-radio">
+          <input type="radio" name="engagement" value="{{ e }}" {% if filter_engagement == e %}checked{% endif %} />
+          <span class="chip">{{ e }}</span>
+        </label>
+        {% endfor %}
+        <label class="chip-radio">
+          <input type="radio" name="engagement" value="" {% if not filter_engagement %}checked{% endif %} />
+          <span class="chip">Any</span>
+        </label>
+      </div>
+      <div class="filter-group">
+        <div class="filter-label">Rate ($/hr)</div>
+        <div class="filter-rate-row">
+          <input type="number" name="rate_min" placeholder="min" value="{{ filter_rate_min or '' }}" data-testid="filter-rate-min" />
+          <input type="number" name="rate_max" placeholder="max" value="{{ filter_rate_max or '' }}" data-testid="filter-rate-max" />
+        </div>
+      </div>
+      <button class="btn-primary" type="submit" data-testid="filter-apply">Apply filters</button>
+    </form>
+  </aside>
+  <section class="results-pane" data-testid="results-pane">
+    <div class="results-pane-header">
+      <h1>Open roles</h1>
+      <div class="sort-by">Sort by: <span class="sort-label">Latest</span></div>
+    </div>
+    <div class="role-grid" data-testid="role-grid">
+      {% for job in jobs %}
+        {{ role_card(job) }}
+      {% endfor %}
+    </div>
+    {% if not jobs %}
+    <div class="empty" data-testid="empty-jobs">No roles match your filters.</div>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} - {{ job.company.name }} | Indeed{% endblock %}
+{% block content %}
+<section class="viewjob-pane" data-testid="viewjob-pane">
+  {% include '_detail_pane.html' %}
+</section>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Apply — {{ job.title }} — Mercor{% endblock %}
+
+{% block content %}
+<section class="apply-flow" data-testid="apply-flow">
+  <div class="apply-header">
+    <div class="apply-crumbs">
+      <a href="/jobs/{{ job.id }}">{{ job.title }}</a> · Apply
+    </div>
+    <div class="apply-progress" data-testid="apply-progress">
+      Step {{ step }} of {{ total_steps }}
+    </div>
+  </div>
+
+  <ol class="apply-steplist">
+    <li class="{% if step == 1 %}active{% endif %}">Profile</li>
+    <li class="{% if step == 2 %}active{% endif %}">Resume</li>
+    <li class="{% if step == 3 %}active{% endif %}">Screening</li>
+    <li class="{% if step == 4 %}active{% endif %}">Review</li>
+    <li class="{% if step == 5 %}active{% endif %}">Submit</li>
+  </ol>
+
+  <form method="post" action="/apply/{{ job.id }}/step/{{ step }}" class="apply-form" data-testid="apply-form">
+    {% if step == 1 %}
+      <h1>Your profile</h1>
+      <label>Headline
+        <input type="text" name="headline" value="{{ draft.headline }}" placeholder="Internal Medicine Physician, 8 years" data-testid="apply-headline" />
+      </label>
+      <label>Skills (comma-separated)
+        <input type="text" name="skills" value="{{ draft.skills }}" placeholder="clinical-reasoning, literature-review" data-testid="apply-skills" />
+      </label>
+      <label>Hourly rate ($/hr)
+        <input type="number" step="1" name="hourly_rate" value="{{ draft.hourly_rate }}" data-testid="apply-rate" />
+      </label>
+    {% elif step == 2 %}
+      <h1>Resume</h1>
+      <p class="muted">Paste your resume text below. (This synthetic mirror does not store uploaded files.)</p>
+      <label>Resume text
+        <textarea name="resume_text" rows="10" data-testid="apply-resume">{{ draft.resume_text }}</textarea>
+      </label>
+    {% elif step == 3 %}
+      <h1>Screening questions</h1>
+      {% for q in screening_qs %}
+      <label>{{ q }}
+        <textarea name="answer_{{ loop.index0 }}" rows="3" data-testid="apply-answer-{{ loop.index0 }}">{% if draft.answers and draft.answers[loop.index0] %}{{ draft.answers[loop.index0] }}{% endif %}</textarea>
+      </label>
+      {% endfor %}
+    {% elif step == 4 %}
+      <h1>Review</h1>
+      <div class="review-grid" data-testid="apply-review-grid">
+        <div><b>Headline</b><div>{{ draft.headline or '—' }}</div></div>
+        <div><b>Skills</b><div>{{ draft.skills or '—' }}</div></div>
+        <div><b>Rate</b><div>${{ draft.hourly_rate or '—' }}/hr</div></div>
+        <div><b>Resume preview</b><div>{{ (draft.resume_text or '')[:200] }}{% if draft.resume_text and draft.resume_text|length > 200 %}…{% endif %}</div></div>
+        <div><b>Screening answers</b>
+          <ol>
+            {% for a in draft.answers %}<li>{{ a }}</li>{% endfor %}
+          </ol>
+        </div>
+      </div>
+    {% elif step == 5 %}
+      <h1>Confirm and submit</h1>
+      <p>Click Submit to send your application to {{ job.company_name }}.</p>
+    {% endif %}
+
+    <div class="apply-actions">
+      {% if step > 1 %}
+        <button class="btn-secondary" type="submit" name="nav" value="back" data-testid="apply-back">Back</button>
+      {% endif %}
+      <button class="btn-primary" type="submit" name="nav" value="next" data-testid="apply-next">
+        {% if step >= 5 %}Continue{% else %}Next{% endif %}
+      </button>
+    </div>
+  </form>
+</section>
+{% endblock %}

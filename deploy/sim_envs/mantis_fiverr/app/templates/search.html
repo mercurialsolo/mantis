@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% from "_gig_card.html" import gig_card %}
+
+{% block title %}{{ query or "All gigs" }} — {{ site_name }} search{% endblock %}
+
+{% block main %}
+<div class="page-wrap">
+  <nav class="breadcrumbs" aria-label="Breadcrumbs">
+    <a href="/">Home</a>
+    <span>/</span>
+    <span>Search results for &ldquo;{{ query }}&rdquo;</span>
+  </nav>
+
+  <header class="search-header">
+    <div>
+      <h1 class="search-header__title">Results for &ldquo;{{ query }}&rdquo;</h1>
+      <p class="search-header__count">{{ total }} services available</p>
+    </div>
+    <form class="search-header__sort" action="/search/gigs" method="get">
+      {% if query %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
+      {% for lf in level_filters %}<input type="hidden" name="level" value="{{ lf }}">{% endfor %}
+      {% if budget %}<input type="hidden" name="budget" value="{{ budget }}">{% endif %}
+      {% if delivery %}<input type="hidden" name="delivery" value="{{ delivery }}">{% endif %}
+      <label for="sort">Sort by:</label>
+      <select id="sort" name="sort" onchange="this.form.submit()">
+        <option value="relevance" {% if sort == 'relevance' %}selected{% endif %}>Relevance</option>
+        <option value="best_selling" {% if sort == 'best_selling' %}selected{% endif %}>Best Selling</option>
+        <option value="newest" {% if sort == 'newest' %}selected{% endif %}>Newest Arrivals</option>
+        <option value="rating" {% if sort == 'rating' %}selected{% endif %}>Average rating</option>
+      </select>
+    </form>
+  </header>
+
+  <div class="search-body">
+    <aside class="search-rail" aria-label="Filters">
+      <form action="/search/gigs" method="get" id="filter-form">
+        {% if query %}<input type="hidden" name="query" value="{{ query }}">{% endif %}
+        <input type="hidden" name="sort" value="{{ sort }}">
+
+        <fieldset class="filter-group">
+          <legend>Seller details</legend>
+          {% for value, label in [
+              ('top_rated', 'Top Rated Seller'),
+              ('level_two', 'Level Two'),
+              ('level_one', 'Level One'),
+              ('new', 'New Seller'),
+          ] %}
+          <label class="filter-row">
+            <input type="checkbox" name="level" value="{{ value }}"
+                   {% if value in level_filters %}checked{% endif %}
+                   onchange="this.form.submit()">
+            <span>{{ label }}</span>
+          </label>
+          {% endfor %}
+        </fieldset>
+
+        <fieldset class="filter-group">
+          <legend>Budget</legend>
+          {% for value, label in [
+              ('value', 'Value · Up to US$50'),
+              ('mid', 'Mid-range · US$50–200'),
+              ('high', 'High-end · US$200+'),
+          ] %}
+          <label class="filter-row">
+            <input type="radio" name="budget" value="{{ value }}"
+                   {% if value == budget %}checked{% endif %}
+                   onchange="this.form.submit()">
+            <span>{{ label }}</span>
+          </label>
+          {% endfor %}
+        </fieldset>
+
+        <fieldset class="filter-group">
+          <legend>Delivery time</legend>
+          {% for value, label in [
+              ('express', 'Express 24H'),
+              ('3d', 'Up to 3 days'),
+              ('7d', 'Up to 7 days'),
+              ('', 'Anytime'),
+          ] %}
+          <label class="filter-row">
+            <input type="radio" name="delivery" value="{{ value }}"
+                   {% if value == delivery %}checked{% endif %}
+                   onchange="this.form.submit()">
+            <span>{{ label }}</span>
+          </label>
+          {% endfor %}
+        </fieldset>
+      </form>
+    </aside>
+
+    <section class="search-results">
+      {% if results %}
+        <div class="gig-grid gig-grid--3">
+          {% for g in results %}{{ gig_card(g) }}{% endfor %}
+        </div>
+        {% if pages > 1 %}
+        <nav class="pagination" aria-label="Pagination">
+          {% for n in range(1, pages + 1) %}
+            {% set qs = "query=" ~ query ~ "&sort=" ~ sort %}
+            {% if n == page %}
+              <span class="pagination__page pagination__page--current">{{ n }}</span>
+            {% else %}
+              <a class="pagination__page" href="?{{ qs }}&page={{ n }}">{{ n }}</a>
+            {% endif %}
+          {% endfor %}
+        </nav>
+        {% endif %}
+      {% else %}
+        <p class="search-empty">No results for that query.</p>
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}

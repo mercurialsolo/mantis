@@ -1,0 +1,38 @@
+{# Renders the right-pane detail. Caller passes `job`. #}
+<div class="detail-pane-inner" data-testid="detail-pane-inner">
+  <h2 class="detail-h2" data-testid="detail-h2">{{ job.title }} - job post</h2>
+  <div class="detail-company-row">
+    <span class="company-name">{{ job.company.name }}</span>
+    <span class="location">{{ job.location }}</span>
+  </div>
+  <div class="detail-chips">
+    {% if job.salary_display %}<span class="detail-chip">{{ job.salary_display }}</span>{% endif %}
+    {% if job.remote_flag %}<span class="detail-chip">Remote</span>{% endif %}
+    <span class="detail-chip">{{ job.job_type }}</span>
+  </div>
+  <div class="detail-actions">
+    <a href="/apply/{{ job.jk }}" class="btn btn-primary" data-testid="detail-apply-cta">Apply now</a>
+    <form method="post" action="/jobs/{{ job.jk }}/save" class="inline-form"
+          onsubmit="event.preventDefault(); indeedToggleSave(event, '{{ job.jk }}', this.querySelector('button'));">
+      <button type="submit" class="btn btn-outline {% if is_saved %}is-saved{% endif %}"
+              data-testid="detail-save-btn">
+        {% if is_saved %}Saved{% else %}Save job{% endif %}
+      </button>
+    </form>
+  </div>
+  <nav class="detail-tabs" data-testid="detail-tabs">
+    <a class="tab tab-active" href="#">Job details</a>
+    <a class="tab" href="#">Company</a>
+    <a class="tab" href="#">Reviews</a>
+  </nav>
+  <div class="detail-body">
+    <div class="detail-salary-strip">
+      {% if job.salary_display %}<strong>{{ job.salary_display }}</strong>{% endif %}
+    </div>
+    <div class="detail-description">
+      {% for para in job.description.split('\n\n') %}
+        {% if para %}<p>{{ para }}</p>{% endif %}
+      {% endfor %}
+    </div>
+  </div>
+</div>

@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Feed | LinkedIn (mantis mirror){% endblock %}
+{% block content %}
+<div class="feed-grid" data-testid="feed-grid">
+
+  {# Left rail #}
+  <aside class="feed-rail-left" data-testid="rail-left">
+    <section class="card profile-card" data-testid="profile-card">
+      <div class="profile-banner"
+           style="background:linear-gradient(135deg,{{ me.avatar_color }} 0%,#1d4477 100%);"></div>
+      <a class="avatar avatar-lg profile-avatar"
+         style="background:{{ me.avatar_color }}"
+         href="/in/{{ me.handle }}/" data-testid="profile-avatar">
+        {{ me.name[:1]|upper }}
+      </a>
+      <a class="profile-name" href="/in/{{ me.handle }}/">{{ me.name }}</a>
+      <div class="profile-headline">{{ me.headline }}</div>
+      <div class="profile-card-divider"></div>
+      <a class="profile-card-row" href="/mynetwork/">
+        <span>Connections</span>
+        <span class="text-num">{{ connection_count }}</span>
+      </a>
+      <div class="profile-card-caption">Grow your network</div>
+    </section>
+
+    <section class="card mini-card" data-testid="my-items-card">
+      <a class="mini-card-row" href="#">
+        <span class="mini-card-icon">🔖</span> My items
+      </a>
+    </section>
+
+    <section class="card mini-card mini-card-links" data-testid="rail-links">
+      <a href="#">Groups</a>
+      <a href="#">Events <span class="link-plus">+</span></a>
+      <a href="#">Followed Hashtags</a>
+      <a href="#">Discover more</a>
+    </section>
+  </aside>
+
+  {# Centre column #}
+  <section class="feed-col" data-testid="feed-col">
+
+    <section class="card start-post-card" data-testid="start-post-card">
+      <div class="start-post-row">
+        <span class="avatar avatar-md" style="background:{{ me.avatar_color }}">
+          {{ me.name[:1]|upper }}
+        </span>
+        <button class="start-post-button" data-testid="start-post-open"
+                onclick="document.getElementById('start-post-modal').showModal()">
+          Start a post
+        </button>
+      </div>
+      <div class="start-post-actions">
+        <button class="start-post-action" data-testid="action-photo">
+          <span class="ico-glyph" style="color:#378fe9">▤</span> Photo
+        </button>
+        <button class="start-post-action" data-testid="action-video">
+          <span class="ico-glyph" style="color:#5f9b41">▶</span> Video
+        </button>
+        <button class="start-post-action" data-testid="action-event">
+          <span class="ico-glyph" style="color:#c37d16">📅</span> Event
+        </button>
+        <button class="start-post-action" data-testid="action-article">
+          <span class="ico-glyph" style="color:#e06847">✎</span> Write article
+        </button>
+      </div>
+    </section>
+
+    <div class="feed-divider"><span class="feed-divider-line"></span>
+      <span class="feed-divider-text">Sort by: <strong>Top ▾</strong></span>
+    </div>
+
+    {% for post in posts %}
+      <article class="card post-card" data-testid="post-card"
+               data-post-id="{{ post.id }}">
+        <header class="post-author-row">
+          <a class="avatar avatar-md" style="background:{{ post.author.avatar_color }}"
+             href="/in/{{ post.author.handle }}/">
+            {{ post.author.name[:1]|upper }}
+          </a>
+          <div class="post-author-meta">
+            <a class="post-author-name" href="/in/{{ post.author.handle }}/">{{ post.author.name }}</a>
+            <div class="post-author-headline">{{ post.author.headline }}</div>
+            <div class="post-author-time">{{ post.created_at }} • 🌐</div>
+          </div>
+          <button class="post-more" aria-label="More" data-testid="post-more">⋯</button>
+        </header>
+
+        <p class="post-body" data-testid="post-body">{{ post.body_short }}</p>
+
+        <div class="post-counters" data-testid="post-counters">
+          <span class="reaction-blob">👍 ❤ 🎉</span>
+          <span class="post-count-label">{{ post.reactions }}</span>
+          <span class="post-count-sep">•</span>
+          <span class="post-count-comments">{{ post.comments }} comments</span>
+        </div>
+
+        <div class="post-actions" data-testid="post-actions">
+          <form method="post" action="/feed/posts/{{ post.id }}/react"
+                style="display:inline">
+            <input type="hidden" name="kind" value="like"/>
+            <button class="post-action" data-testid="action-like" type="submit">
+              <span class="ico-glyph">👍</span> Like
+            </button>
+          </form>
+          <button class="post-action" data-testid="action-comment"
+                  onclick="document.getElementById('comment-form-{{ post.id }}').style.display='block'">
+            <span class="ico-glyph">💬</span> Comment
+          </button>
+          <button class="post-action" data-testid="action-repost">
+            <span class="ico-glyph">↻</span> Repost
+          </button>
+          <button class="post-action" data-testid="action-send">
+            <span class="ico-glyph">➤</span> Send
+          </button>
+        </div>
+
+        <form id="comment-form-{{ post.id }}" method="post"
+              action="/feed/posts/{{ post.id }}/comment"
+              class="comment-form" style="display:none">
+          <input type="text" name="body" placeholder="Add a comment…"
+                 data-testid="comment-input"/>
+          <button class="btn-primary btn-small" type="submit">Post</button>
+        </form>
+      </article>
+    {% endfor %}
+  </section>
+
+  {# Right rail #}
+  <aside class="feed-rail-right" data-testid="rail-right">
+    <section class="card right-card" data-testid="add-to-feed-card">
+      <header class="right-card-header">
+        <h2>Add to your feed</h2>
+        <span class="ico-glyph muted">ⓘ</span>
+      </header>
+      {% for s in suggested %}
+        <div class="suggested-row" data-testid="suggested-row">
+          <a class="avatar avatar-md" style="background:{{ s.avatar_color }}"
+             href="/in/{{ s.handle }}/">{{ s.name[:1]|upper }}</a>
+          <div class="suggested-meta">
+            <a class="suggested-name" href="/in/{{ s.handle }}/">{{ s.name }}</a>
+            <div class="suggested-headline">{{ s.headline }}</div>
+            <button class="btn-secondary btn-pill" data-testid="follow-btn">
+              + Follow
+            </button>
+          </div>
+        </div>
+      {% endfor %}
+      <a class="right-card-footer" href="#">View all recommendations →</a>
+    </section>
+
+    <section class="card right-card" data-testid="news-card">
+      <header class="right-card-header">
+        <h2>LinkedIn News</h2>
+        <span class="ico-glyph muted">ⓘ</span>
+      </header>
+      <ul class="news-list">
+        {% for item in news_items %}
+          <li class="news-item">
+            <div class="news-title">{{ item[0] }}</div>
+            <div class="news-caption">{{ item[1] }}</div>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  </aside>
+
+</div>
+
+{# Start-a-post modal #}
+<dialog id="start-post-modal" class="modal" data-testid="start-post-modal">
+  <form method="post" action="/feed/post" class="modal-card">
+    <header class="modal-header">
+      <span class="avatar avatar-md" style="background:{{ me.avatar_color }}">
+        {{ me.name[:1]|upper }}</span>
+      <div>
+        <div class="modal-author-name">{{ me.name }}</div>
+        <div class="modal-author-headline">Post to Anyone ▾</div>
+      </div>
+      <button type="button" class="modal-close"
+              onclick="document.getElementById('start-post-modal').close()">×</button>
+    </header>
+    <textarea name="body" placeholder="What do you want to talk about?"
+              rows="6" required data-testid="post-textarea"></textarea>
+    <footer class="modal-footer">
+      <div class="modal-toolbar">
+        <button type="button" class="modal-tool">📷</button>
+        <button type="button" class="modal-tool">▶</button>
+        <button type="button" class="modal-tool">📅</button>
+        <button type="button" class="modal-tool">📝</button>
+      </div>
+      <button class="btn-primary" type="submit" data-testid="post-submit">Post</button>
+    </footer>
+  </form>
+</dialog>
+{% endblock %}
+{% block scripts %}
+<script>
+  // Toggle textarea-driven Post button enable/disable
+  (function() {
+    var t = document.querySelector('[data-testid="post-textarea"]');
+    var btn = document.querySelector('[data-testid="post-submit"]');
+    if (!t || !btn) return;
+    function sync() { btn.disabled = !t.value.trim(); }
+    t.addEventListener('input', sync); sync();
+  })();
+</script>
+{% endblock %}

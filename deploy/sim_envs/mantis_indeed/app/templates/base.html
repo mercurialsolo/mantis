@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Indeed{% endblock %}</title>
+  <link rel="stylesheet" href="/static/site.css" />
+</head>
+<body>
+  <header class="top-nav" data-testid="top-nav">
+    <div class="top-nav-inner">
+      <a href="/" class="brand" data-testid="brand">
+        <span class="brand-wordmark">indeed</span>
+      </a>
+      <nav class="top-nav-links">
+        {% set _u = request.state.current_user if request.state and request.state.current_user else None %}
+        {% if _u %}
+          <a href="/myjobs" data-testid="nav-myjobs">My jobs</a>
+          {% if _u.role == 'employer' %}
+            <a href="/employers/dashboard" data-testid="nav-employer">Employer dashboard</a>
+          {% endif %}
+          <span class="user-chip">{{ _u.email }}</span>
+          <form method="post" action="/logout" class="inline-form">
+            <button type="submit" class="link-button" data-testid="nav-signout">Sign out</button>
+          </form>
+        {% else %}
+          <a href="/login" data-testid="nav-signin">Sign in</a>
+          <span class="nav-divider">|</span>
+          <a href="/employers/dashboard" data-testid="nav-employer-cta">Employers / Post Job</a>
+        {% endif %}
+      </nav>
+    </div>
+    <div class="secondary-strip" data-testid="secondary-strip">
+      <a href="/">Home</a>
+      <a href="#">Company reviews</a>
+      <a href="#">Find salaries</a>
+      <a href="/employers/dashboard">Employers</a>
+      <a href="/resumes">Create your resume</a>
+      <span class="country-pill">Change country <span aria-hidden="true">🇺🇸</span> United States</span>
+    </div>
+  </header>
+  <main class="workspace">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

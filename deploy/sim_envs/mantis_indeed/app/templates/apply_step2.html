@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Apply: {{ job.title }} | Indeed{% endblock %}
+{% block content %}
+<section class="apply-card" data-testid="apply-card">
+  {% include '_apply_stepper.html' %}
+  <h1 class="apply-h1">Add your resume</h1>
+  <form method="post" action="/apply/{{ job.jk }}/questions" class="apply-form">
+    <fieldset class="resume-options">
+      <legend>Select an existing resume</legend>
+      {% for r in resumes %}
+      <label class="resume-card">
+        <input type="radio" name="resume_id" value="{{ r.id }}"
+               data-testid="apply-resume-{{ r.id }}"
+               {% if loop.first %}checked{% endif %}/>
+        <span class="resume-card-body">
+          <strong>{{ r.title }}</strong>
+          <small>Updated {{ r.updated_at }}</small>
+        </span>
+      </label>
+      {% else %}
+      <p class="empty-state">No resumes yet. <a href="/resumes">Create one</a>.</p>
+      {% endfor %}
+    </fieldset>
+    <div class="form-actions">
+      <a class="btn btn-outline" href="/apply/{{ job.jk }}">Back</a>
+      <button type="submit" class="btn btn-primary" data-testid="apply-continue">Continue</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

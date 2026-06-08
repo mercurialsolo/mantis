@@ -121,12 +121,20 @@ class ExtractionResult:
         (canonical strict set). ``SEARCH_TILE`` uses
         ``schema.tile_required_fields`` when set — typically just
         ``["url"]`` so the runner keeps the row to drive a follow-up
-        navigate-into-detail. ``UNKNOWN`` (default) preserves legacy
-        behavior: enforces ``required_fields`` regardless of context.
+        navigate-into-detail. ``UNKNOWN`` (default) enforces
+        ``required_fields`` regardless of context.
 
         When the schema doesn't define ``tile_required_fields`` (empty
         list), ``SEARCH_TILE`` falls back to ``required_fields`` —
         recipes that don't opt into the split see no behavior change.
+
+        When ``_schema`` is None (no recipe / no schema configured),
+        returns ``no_schema_configured`` so the failure mode is honest
+        rather than the historical ``missing required field(s): year,
+        make`` lie that fired on every non-marketplace plan. The
+        ``# Legacy`` boattrader fallback the year/make check used to
+        live in was the exact contamination pattern flagged in
+        ``feedback_legacy_fallback_smell.md`` (#785 follow-up).
         """
         if self._schema:
             if (
@@ -141,13 +149,7 @@ class ExtractionResult:
                 if self._is_unknown(self.extracted_fields.get(name))
             ]
             return f"missing required field(s): {', '.join(missing)}" if missing else ""
-        # Legacy
-        missing = []
-        if self._is_unknown(self.year):
-            missing.append("year")
-        if self._is_unknown(self.make):
-            missing.append("make")
-        return f"missing required field(s): {', '.join(missing)}" if missing else ""
+        return "no_schema_configured"
 
     def to_summary(self) -> str:
         """Format as the VIABLE summary string."""
@@ -188,6 +190,14 @@ class ExtractionResult:
         as missing for the required-field check, so a detail-page
         extract that landed on a marketing CTA (every field returned
         as a placeholder) is rejected as non-viable.
+
+        Without an ``ExtractionSchema`` configured, returns ``False``:
+        a result has no schema contract to satisfy, so it can't be
+        certified viable. The historical ``# Legacy`` path silently
+        treated ``year + make + private_seller`` as the universal
+        viability contract — boattrader-shape baggage that leaked
+        into every non-marketplace plan (#785 follow-up;
+        ``feedback_legacy_fallback_smell.md``).
         """
         if self._schema:
             has_required = all(
@@ -195,9 +205,4 @@ class ExtractionResult:
                 for name in self._schema.required_fields
             )
             return has_required and self.is_private_seller()
-        # Legacy
-        return bool(
-            not self._is_unknown(self.year)
-            and not self._is_unknown(self.make)
-            and self.is_private_seller()
-        )
+        return False

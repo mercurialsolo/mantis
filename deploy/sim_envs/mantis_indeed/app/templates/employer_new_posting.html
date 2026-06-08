@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Post a job | Employer | Indeed{% endblock %}
+{% block content %}
+<section class="employer-new-posting">
+  <h1>Post a job</h1>
+  <form method="post" action="/employers/jobs/new" class="employer-form">
+    <label>Job title <input type="text" name="title" required data-testid="posting-title"/></label>
+    <label>Location <input type="text" name="location" required data-testid="posting-location"/></label>
+    <div class="form-row-2">
+      <label>Salary low <input type="number" name="salary_low" min="0" data-testid="posting-sal-low"/></label>
+      <label>Salary high <input type="number" name="salary_high" min="0" data-testid="posting-sal-high"/></label>
+    </div>
+    <label class="checkbox-row">
+      <input type="checkbox" name="remote" data-testid="posting-remote"/> Remote
+    </label>
+    <label>Job type
+      <select name="job_type" data-testid="posting-type">
+        <option>Full-time</option>
+        <option>Part-time</option>
+        <option>Contract</option>
+        <option>Internship</option>
+      </select>
+    </label>
+    <label>Description <textarea name="description" rows="8" required data-testid="posting-desc"></textarea></label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary" data-testid="publish">Publish</button>
+      <button type="submit" name="status" value="draft" class="btn btn-outline">Save as draft</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

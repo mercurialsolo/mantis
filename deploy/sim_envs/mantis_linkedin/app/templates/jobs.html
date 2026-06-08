@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Jobs | LinkedIn (mantis mirror){% endblock %}
+{% block content %}
+<div class="jobs-grid" data-testid="jobs-grid">
+  <aside class="jobs-rail">
+    <section class="card">
+      <h2 class="rail-title">Job collections</h2>
+      <ul class="rail-list">
+        <li><a href="#"><span class="ico-glyph">📋</span> My jobs</a></li>
+        <li><a href="#"><span class="ico-glyph">⚙</span> Preferences</a></li>
+        <li><a href="#"><span class="ico-glyph">＋</span> Post a free job</a></li>
+        <li><a href="#"><span class="ico-glyph">★</span> Interview prep</a></li>
+        <li><a href="#"><span class="ico-glyph">＄</span> Salary explorer</a></li>
+        <li><a href="#"><span class="ico-glyph">★</span> Job seeker guidance</a></li>
+      </ul>
+    </section>
+  </aside>
+
+  <section class="jobs-main">
+    <section class="card jobs-search-card" data-testid="jobs-search-card">
+      <form action="/jobs/search/" method="get" class="jobs-search-form">
+        <input class="jobs-search-keywords" type="text" name="keywords"
+               placeholder="Search by title, skill or company"
+               data-testid="jobs-search-keywords"/>
+        <input class="jobs-search-location" type="text" name="location"
+               placeholder="City, state or zip"
+               data-testid="jobs-search-location"/>
+        <button class="btn-primary" type="submit"
+                data-testid="jobs-search-submit">Search</button>
+      </form>
+    </section>
+
+    <section class="card jobs-card" data-testid="top-picks-card">
+      <header class="section-header"><h2>Top job picks for you</h2></header>
+      <p class="section-caption">Based on your profile and search history</p>
+      <div class="jobs-carousel">
+        {% for j in top_picks %}
+          <a class="job-mini-card" href="/jobs/view/{{ j.id }}/" data-testid="job-mini-card">
+            <div class="job-mini-logo">{{ j.company[:1]|upper }}</div>
+            <div class="job-mini-title">{{ j.title }}</div>
+            <div class="job-mini-company">{{ j.company }}</div>
+            <div class="job-mini-location">{{ j.location }}</div>
+            {% if j.easy_apply %}
+              <span class="tag tag-easy">Easy Apply</span>
+            {% endif %}
+            {% if j.promoted %}
+              <span class="tag tag-promoted">Promoted</span>
+            {% endif %}
+          </a>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="card jobs-card" data-testid="recommended-card">
+      <header class="section-header"><h2>Recommended for you</h2></header>
+      <ul class="job-row-list">
+        {% for j in recommended %}
+          <li class="job-row" data-testid="job-row">
+            <span class="job-row-logo">{{ j.company[:1]|upper }}</span>
+            <div class="job-row-meta">
+              <a class="job-row-title" href="/jobs/view/{{ j.id }}/">{{ j.title }}</a>
+              <div class="job-row-company">{{ j.company }}</div>
+              <div class="job-row-location">{{ j.location }}</div>
+              <div class="job-row-caption">{{ j.applicants }} applicants</div>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  </section>
+</div>
+{% endblock %}
