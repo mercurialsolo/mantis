@@ -13,6 +13,8 @@ Architecture:
 """
 
 from .base import GymEnvironment, GymObservation, GymResult
+from .browser_use_plane_client import BrowserUsePlaneClient
+from .compute_backend_resolver import resolve_compute_backend
 from .compute_contract import (
     Capabilities,
     CapabilityAllowlist,
@@ -22,12 +24,14 @@ from .compute_contract import (
     SupportsLinkPeek,
     SupportsTabs,
 )
+from .compute_factory import default_capabilities_for, make_compute_client
 from .plans import Plan, load_plan, load_text_plan, save_plan, get_missing_inputs, text_to_yaml
 from .playwright_env import PlaywrightGymEnv
 from .runner import GymRunner
 from .workflow_runner import WorkflowRunner, LoopConfig, IterationResult
 
 __all__ = [
+    "BrowserUsePlaneClient",
     "Capabilities",
     "CapabilityAllowlist",
     "CapabilityNotAllowed",
@@ -41,10 +45,13 @@ __all__ = [
     "SupportsBrowserState",
     "SupportsLinkPeek",
     "SupportsTabs",
+    "default_capabilities_for",
     "get_missing_inputs",
     "load_plan",
     "load_text_plan",
     "LoopConfig",
+    "make_compute_client",
+    "resolve_compute_backend",
     "save_plan",
     "text_to_yaml",
     "WorkflowRunner",
