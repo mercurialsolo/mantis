@@ -27,7 +27,6 @@ import concurrent.futures as cf
 import os
 import pathlib
 import secrets
-import sys
 import time
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
