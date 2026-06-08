@@ -45,9 +45,27 @@ Capability-gated behind `dom_aware`. Computer Plane does NOT expose these endpoi
 | `GET` | `/state/page_load` | `document.readyState` (`loading`/`interactive`/`complete`) + `last_resource_ms`. |
 | `POST` | `/state/safe_back` | History pop with overshoot guard against a `pinned_origin` pattern. Idempotent on `step_id`. |
 
-### Remaining extensions (PR 4)
+### `tabs.*` extensions (PR 4, #779) — Browser-Use Plane only
 
-`/tabs/*` (#779), `/links/peek` (#780). Land with PR 4.
+Capability-gated behind `dom_aware`. Each method is idempotent on `step_id`.
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/tabs/open_in_new` | Open new tab via `url` (direct) or `via_selector` (modifier-aware click → popup race). Returns stable `tab_id`. |
+| `POST` | `/tabs/close` | Close by `tab_id`. Reaps the active page; falls back to another open page so `sess.page` stays valid. |
+| `POST` | `/tabs/activate` | `page.bring_to_front()` + set `sess.page`. Returns the activated tab's URL. |
+
+### `links.peek_target` (PR 4, #780) — Browser-Use Plane only
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/links/peek_target` | Read anchor `href` without clicking. Accepts `selector` (CSS) or `bbox` (`[x1,y1,x2,y2]` — vision-grounded). Walks up to nearest `<a>` for bbox hits. Returns `{href, target, tag}`. |
+
+### Semantic click disambiguation (PR 4, #781)
+
+Plan-level `target_role` field maps the intended click target (`title` / `comment_count` / `author` / ...) to a stable CSS selector via a per-site recipe. See `docs/recipes/news_ycombinator_com.md` for the HN reference recipe and the canonical "collect outbound URLs" plan that exercises `capture_link_in_new_tab`.
+
+Vision fallback is intentional when `target_role` resolves to no recipe entry — keeps plan authors' intent observable rather than crashing pure-CUA-only plans.
 
 ### Pydantic wire models
 

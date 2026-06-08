@@ -35,6 +35,8 @@ from .browser_use_wire import (
     BrowserUseSessionInitResponse,
     DispatchActionRequest,
     DispatchActionResponse,
+    LinksPeekTargetRequest,
+    LinksPeekTargetResponse,
     StateClipboardResponse,
     StateCurrentUrlResponse,
     StateFocusedElementResponse,
@@ -42,6 +44,12 @@ from .browser_use_wire import (
     StateSafeBackRequest,
     StateSafeBackResponse,
     StateTabsResponse,
+    TabsActivateRequest,
+    TabsActivateResponse,
+    TabsCloseRequest,
+    TabsCloseResponse,
+    TabsOpenInNewRequest,
+    TabsOpenInNewResponse,
 )
 from .compute_contract import Capabilities
 from .computer_client import ComputerClient
@@ -319,6 +327,124 @@ class BrowserUsePlaneClient(ComputerClient):
         screenshot/dispatch. Mirrors `reset()`'s implicit init path."""
         if self._state.session_token is None:
             self._session_init()
+
+    # ── tabs.* extensions (#779) ─────────────────────────────────
+    # Implements `SupportsTabs`. Capability-gated behind `dom_aware`.
+
+    def tabs_open_in_new(
+        self,
+        url: str | None = None,
+        *,
+        via_selector: str | None = None,
+    ) -> str:
+        """Open a new tab; return its server-side `tab_id`.
+
+        Pass `url` to navigate directly. Pass `via_selector` to open
+        the anchor at that CSS selector in a new tab (modifier-aware
+        click — handles `target=_blank` and `Cmd/Ctrl-click`).
+        """
+        self._ensure_session()
+        step_id = uuid.uuid4().hex
+        req = TabsOpenInNewRequest(
+            url=url, via_selector=via_selector, step_id=step_id
+        )
+        resp = self._http.post(
+            f"{self._base_url}/tabs/open_in_new",
+            json=req.model_dump(),
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        parsed = TabsOpenInNewResponse.model_validate(resp.json())
+        return parsed.tab_id
+
+    def tabs_close(self, tab_id: str) -> None:
+        self._ensure_session()
+        step_id = uuid.uuid4().hex
+        req = TabsCloseRequest(tab_id=tab_id, step_id=step_id)
+        resp = self._http.post(
+            f"{self._base_url}/tabs/close",
+            json=req.model_dump(),
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        TabsCloseResponse.model_validate(resp.json())
+
+    def tabs_activate(self, tab_id: str) -> None:
+        self._ensure_session()
+        step_id = uuid.uuid4().hex
+        req = TabsActivateRequest(tab_id=tab_id, step_id=step_id)
+        resp = self._http.post(
+            f"{self._base_url}/tabs/activate",
+            json=req.model_dump(),
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        parsed = TabsActivateResponse.model_validate(resp.json())
+        if parsed.activated and parsed.url:
+            self._state.last_url = parsed.url
+
+    # ── links.peek_target (#780) ─────────────────────────────────
+    # Implements `SupportsLinkPeek`. Capability-gated behind `dom_aware`.
+
+    def links_peek_target(self, selector_or_bbox: Any) -> str | None:
+        """Read anchor `href` without clicking.
+
+        `selector_or_bbox` is either a CSS selector string or a 4-tuple
+        `(x1, y1, x2, y2)` (vision bbox). The server walks up to the
+        nearest anchor element from a bbox centroid hit.
+        """
+        self._ensure_session()
+        selector: str | None = None
+        bbox: list[int] | None = None
+        if isinstance(selector_or_bbox, str):
+            selector = selector_or_bbox
+        elif isinstance(selector_or_bbox, (list, tuple)) and len(selector_or_bbox) == 4:
+            bbox = [int(v) for v in selector_or_bbox]
+        else:
+            raise TypeError(
+                f"links_peek_target expected str | 4-tuple; got {type(selector_or_bbox)}"
+            )
+        req = LinksPeekTargetRequest(selector=selector, bbox=bbox)
+        resp = self._http.post(
+            f"{self._base_url}/links/peek_target",
+            json=req.model_dump(),
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        parsed = LinksPeekTargetResponse.model_validate(resp.json())
+        return parsed.href
+
+    def links_peek_target_full(
+        self, selector_or_bbox: Any
+    ) -> dict[str, Any]:
+        """Full projection — `{href, target, tag}` — for handlers that
+        need the `target` attribute (`_blank`/`_self`) to decide
+        new-tab vs current-tab semantics.
+        """
+        self._ensure_session()
+        selector: str | None = None
+        bbox: list[int] | None = None
+        if isinstance(selector_or_bbox, str):
+            selector = selector_or_bbox
+        elif isinstance(selector_or_bbox, (list, tuple)) and len(selector_or_bbox) == 4:
+            bbox = [int(v) for v in selector_or_bbox]
+        else:
+            raise TypeError(
+                f"links_peek_target_full expected str | 4-tuple; got {type(selector_or_bbox)}"
+            )
+        req = LinksPeekTargetRequest(selector=selector, bbox=bbox)
+        resp = self._http.post(
+            f"{self._base_url}/links/peek_target",
+            json=req.model_dump(),
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        return LinksPeekTargetResponse.model_validate(resp.json()).model_dump()
 
     # ── Action translation ────────────────────────────────────────
 
