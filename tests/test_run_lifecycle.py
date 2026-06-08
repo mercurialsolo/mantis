@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
 
 from mantis_agent.run_lifecycle import (
     HALT_CANCELLED,
@@ -15,7 +14,6 @@ from mantis_agent.run_lifecycle import (
     RunLifecycleStore,
     RunPhase,
     RunPhaseResponse,
-    RunState,
     build_phase_response,
 )
 
@@ -256,7 +254,7 @@ def test_queue_snapshot_for_empty_tenant():
 
 def test_build_phase_response_carries_polling_hint():
     s = RunLifecycleStore()
-    st = s.register("r1", "t1", timeout_seconds=60)
+    s.register("r1", "t1", timeout_seconds=60)
     s.transition("r1", RunPhase.RUNNING)
     resp = build_phase_response(s.get("r1"), s)  # type: ignore[arg-type]
     assert resp.run_id == "r1"
