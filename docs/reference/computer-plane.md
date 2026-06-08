@@ -4,6 +4,13 @@
 **Owners:** TBD
 **Tracks issue:** TBD (this doc is the canonical spec; the GitHub issue points at it)
 
+> Computer Plane is one of two compute planes under the unified
+> `ComputeClient` contract — see `docs/reference/compute-client.md`
+> (#785). It advertises `Capabilities(dom_aware=False, stealth=True)`
+> at `session_init`. The DOM-aware extensions (`state.*`, `tabs.*`,
+> `links.*`) ship on Browser-Use Plane only; Computer Plane refuses
+> them at the contract level. Pure-CUA — by design.
+
 ## Summary
 
 Today Mantis runs the brain (Holo3 / Claude / OpenCUA / Fara / Gemma4), the task loop, the step handlers, Xvfb, and Chrome **inside one Modal function invocation**. The Chrome profile lives on `modal.Volume("osworld-data")` mounted at `/data`. Brain ↔ environment calls are in-process Python.

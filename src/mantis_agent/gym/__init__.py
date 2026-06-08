@@ -13,18 +13,34 @@ Architecture:
 """
 
 from .base import GymEnvironment, GymObservation, GymResult
+from .compute_contract import (
+    Capabilities,
+    CapabilityAllowlist,
+    CapabilityNotAllowed,
+    ComputeBackend,
+    SupportsBrowserState,
+    SupportsLinkPeek,
+    SupportsTabs,
+)
 from .plans import Plan, load_plan, load_text_plan, save_plan, get_missing_inputs, text_to_yaml
 from .playwright_env import PlaywrightGymEnv
 from .runner import GymRunner
 from .workflow_runner import WorkflowRunner, LoopConfig, IterationResult
 
 __all__ = [
+    "Capabilities",
+    "CapabilityAllowlist",
+    "CapabilityNotAllowed",
+    "ComputeBackend",
     "GymEnvironment",
     "GymObservation",
     "GymResult",
     "GymRunner",
     "Plan",
     "PlaywrightGymEnv",
+    "SupportsBrowserState",
+    "SupportsLinkPeek",
+    "SupportsTabs",
     "get_missing_inputs",
     "load_plan",
     "load_text_plan",
