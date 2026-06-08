@@ -65,6 +65,23 @@
           "enum": ["computer_plane", "browser_use_plane"],
           "default": "computer_plane",
           "description": "Which compute plane runs this plan. Default ``computer_plane`` (Xvfb + Chrome + xdotool, CUA-pure, stealth-capable — #696). Set ``browser_use_plane`` for plans that need DOM-aware reads (current URL, tab management, link-target peek, semantic click roles — #785). Plan-level value overrides submission-time defaults; absent in the plan, the submitter's default is used, then the global default ``computer_plane``. Pure-CUA stays the path for stealth-sensitive sites — Browser-Use Plane does NOT promise CF/Turnstile parity at v1."
+        },
+        "state_repeat_threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Loop-stuck guard (#782): halt when this many consecutive iterations have an identical (url, screenshot, visible-text) fingerprint. 0 disables. Plan-level opt-in — recipes can override per-loop. Halts with class `loop_stuck`."
+        },
+        "pinned_source_url_pattern": {
+          "type": "string",
+          "default": "",
+          "description": "Off-source-drift guard (#782): URL pattern the loop expects to stay inside. Accepts an exact origin (`https://news.ycombinator.com`) or a glob (`https://news.ycombinator.com/*`). Empty disables. Halts with class `off_source_drift` after `off_source_step_budget` consecutive off-pattern steps."
+        },
+        "off_source_step_budget": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Off-source-drift guard companion (#782): how many consecutive off-pattern steps tolerated before halting. 0 disables the guard regardless of pattern."
         }
       }
     },

@@ -181,6 +181,13 @@ class LoopConfig:
     entity_keywords: tuple[str, ...] = ()              # viability-check fallback
     gallery_trap_hint: str = ""                        # parameterized recovery copy
 
+    # Loop guards (#782). All default-off so existing plans behave
+    # identically. Opt in via plan `runtime.*` fields or recipe override.
+    # See `gym/loop_guards.py` for the detection model.
+    state_repeat_threshold: int = 0
+    pinned_source_url_pattern: str = ""
+    off_source_step_budget: int = 0
+
 
 class FailureCategory:
     """Structured failure categories for analysis and learning."""
@@ -194,6 +201,11 @@ class FailureCategory:
     CLOUDFLARE = "cloudflare"           # Bot detection blocked
     DEALER_LISTING = "dealer_listing"   # Clicked dealer listing, not private seller
     PARSE_FAILURE = "parse_failure"     # Model output unparseable
+    # Loop guard halts (#782). These are first-class halt classes —
+    # operators / dashboards group separately from above categories
+    # because they're framework-detected rather than vision-classified.
+    LOOP_STUCK = "loop_stuck"           # Same state fingerprint N consecutive iterations
+    OFF_SOURCE_DRIFT = "off_source_drift"  # Drifted off pinned origin pattern
     UNKNOWN = "unknown"
 
 
