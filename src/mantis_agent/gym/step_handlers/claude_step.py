@@ -184,6 +184,43 @@ class ClaudeStepHandler:
         self.parent = runner
 
     def execute(self, step: "MicroIntent", ctx: StepContext) -> StepResult:
+        # Per-step extraction schema (#785 follow-up). When the plan
+        # author declares ``step.extract.fields`` inline, swap a
+        # transient :class:`ExtractionSchema` onto the extractor for
+        # the duration of this step — so the validator enforces *the
+        # plan's* required_fields instead of the recipe's (or, with
+        # no recipe, ``no_schema_configured``). Restored in
+        # ``finally`` so the swap doesn't leak across steps.
+        extractor_obj = ctx.extractor
+        step_extract = getattr(step, "extract", None) or {}
+        transient_schema = None
+        if extractor_obj is not None and step_extract.get("fields"):
+            from ...extraction import ExtractionSchema
+
+            try:
+                transient_schema = ExtractionSchema.from_dict(step_extract)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[claude_step] step.extract malformed; "
+                    "falling back to recipe schema: %s",
+                    exc,
+                )
+                transient_schema = None
+        original_schema = (
+            getattr(extractor_obj, "schema", None)
+            if extractor_obj is not None
+            else None
+        )
+        if transient_schema is not None:
+            extractor_obj.schema = transient_schema
+
+        try:
+            return self._execute(step, ctx)
+        finally:
+            if transient_schema is not None and extractor_obj is not None:
+                extractor_obj.schema = original_schema
+
+    def _execute(self, step: "MicroIntent", ctx: StepContext) -> StepResult:
         runner = self.parent
         env = ctx.env
         extractor = ctx.extractor

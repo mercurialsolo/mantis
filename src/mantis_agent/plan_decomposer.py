@@ -178,6 +178,17 @@ class MicroIntent:
     # every item — the lever that makes a learned grounding anchor (S0) skip
     # the search. Empty (the default) on every non-loop / unconditional step.
     stop_var: str = ""
+    # Per-step extraction schema (#785 follow-up to the legacy-validator rip).
+    # When set on a ``claude_only`` extract step, the runner builds a
+    # transient :class:`ExtractionSchema` from this dict and swaps it onto
+    # ``extractor.schema`` for the duration of the step. Lets ad-hoc plans
+    # (no recipe required) declare their own extraction contract inline —
+    # the validator then enforces *the plan's* required_fields instead of
+    # falling through to ``no_schema_configured``. Shape mirrors
+    # :meth:`ExtractionSchema.from_dict`: ``{schema_name, fields:
+    # [{name, type, required, ...}], max_items, ...}``. Empty (the default)
+    # falls back to the recipe schema currently bound on the extractor.
+    extract: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
