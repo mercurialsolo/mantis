@@ -18,9 +18,11 @@ Browser-Use Plane is the **second** Mantis compute plane — the DOM-aware compa
 
 Pick `computer_plane` (the default) for stealth-sensitive harvesting; pick `browser_use_plane` when the plan needs DOM-aware reads (tab management, anchor `href` peek, semantic click role disambiguation).
 
-## Wire contract (PR 2 — base surface only)
+## Wire contract
 
 Mirrors `docs/reference/computer-plane.md` in shape; differs in the dispatch verb.
+
+### Base surface (both planes implement)
 
 | Method | Path | Required | Notes |
 |---|---|---|---|
@@ -30,7 +32,22 @@ Mirrors `docs/reference/computer-plane.md` in shape; differs in the dispatch ver
 | `POST` | `/dispatch` | yes | Structured action verb (`click`/`key`/`type`/`scroll`) + `step_id`. Server keeps a TTL-bounded LRU and returns `deduplicated=true` on retry. |
 | `GET` | `/health` | yes | Liveness + last-action timestamp. |
 
-DOM-aware extensions (`/state/*`, `/tabs/*`, `/links/peek`) land in PR 3-4 — they are explicitly NOT in the base surface and NOT supported by Computer Plane.
+### `state.*` extensions (PR 3, #778) — Browser-Use Plane only
+
+Capability-gated behind `dom_aware`. Computer Plane does NOT expose these endpoints.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/state/current_url` | Active tab URL. |
+| `GET` | `/state/tabs` | Tab list with `id`/`title`/`url`/`is_active`. |
+| `GET` | `/state/focused_element` | `tag`/`role`/`aria_label`/`text`/`href` — null when nothing focused. |
+| `GET` | `/state/clipboard` | Best-effort `navigator.clipboard.readText()`; empty string on permission denial. |
+| `GET` | `/state/page_load` | `document.readyState` (`loading`/`interactive`/`complete`) + `last_resource_ms`. |
+| `POST` | `/state/safe_back` | History pop with overshoot guard against a `pinned_origin` pattern. Idempotent on `step_id`. |
+
+### Remaining extensions (PR 4)
+
+`/tabs/*` (#779), `/links/peek` (#780). Land with PR 4.
 
 ### Pydantic wire models
 

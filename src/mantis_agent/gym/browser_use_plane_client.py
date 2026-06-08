@@ -35,6 +35,13 @@ from .browser_use_wire import (
     BrowserUseSessionInitResponse,
     DispatchActionRequest,
     DispatchActionResponse,
+    StateClipboardResponse,
+    StateCurrentUrlResponse,
+    StateFocusedElementResponse,
+    StatePageLoadResponse,
+    StateSafeBackRequest,
+    StateSafeBackResponse,
+    StateTabsResponse,
 )
 from .compute_contract import Capabilities
 from .computer_client import ComputerClient
@@ -226,6 +233,92 @@ class BrowserUsePlaneClient(ComputerClient):
         )
         resp.raise_for_status()
         return BrowserUseHealthResponse.model_validate(resp.json())
+
+    # ── state.* extensions (#778) ─────────────────────────────────
+    # Implements `SupportsBrowserState`. Capability-gated behind
+    # `dom_aware`; handlers MUST enforce the capability allowlist before
+    # calling these. The client itself does not enforce (single
+    # responsibility) — fail-loud lives in the handler layer.
+
+    def state_current_url(self) -> str:
+        self._ensure_session()
+        resp = self._http.get(
+            f"{self._base_url}/state/current_url",
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        parsed = StateCurrentUrlResponse.model_validate(resp.json())
+        self._state.last_url = parsed.url
+        return parsed.url
+
+    def state_tabs(self) -> list[dict[str, Any]]:
+        self._ensure_session()
+        resp = self._http.get(
+            f"{self._base_url}/state/tabs",
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        parsed = StateTabsResponse.model_validate(resp.json())
+        return [t.model_dump() for t in parsed.tabs]
+
+    def state_focused_element(self) -> dict[str, Any] | None:
+        self._ensure_session()
+        resp = self._http.get(
+            f"{self._base_url}/state/focused_element",
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        parsed = StateFocusedElementResponse.model_validate(resp.json())
+        if parsed.element is None:
+            return None
+        return parsed.element.model_dump()
+
+    def state_clipboard(self) -> str:
+        self._ensure_session()
+        resp = self._http.get(
+            f"{self._base_url}/state/clipboard",
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        return StateClipboardResponse.model_validate(resp.json()).text
+
+    def state_page_load(self) -> dict[str, Any]:
+        self._ensure_session()
+        resp = self._http.get(
+            f"{self._base_url}/state/page_load",
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        return StatePageLoadResponse.model_validate(resp.json()).model_dump()
+
+    def state_safe_back(
+        self, pinned_origin: str | None = None
+    ) -> dict[str, Any]:
+        self._ensure_session()
+        step_id = uuid.uuid4().hex
+        req = StateSafeBackRequest(pinned_origin=pinned_origin, step_id=step_id)
+        resp = self._http.post(
+            f"{self._base_url}/state/safe_back",
+            json=req.model_dump(),
+            headers=self._headers(),
+            timeout=self._timeout,
+        )
+        resp.raise_for_status()
+        parsed = StateSafeBackResponse.model_validate(resp.json())
+        if parsed.popped and parsed.new_url:
+            self._state.last_url = parsed.new_url
+        return parsed.model_dump()
+
+    def _ensure_session(self) -> None:
+        """Lazy session init for state.* reads that happen before any
+        screenshot/dispatch. Mirrors `reset()`'s implicit init path."""
+        if self._state.session_token is None:
+            self._session_init()
 
     # ── Action translation ────────────────────────────────────────
 

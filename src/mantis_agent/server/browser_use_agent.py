@@ -34,6 +34,15 @@ from ..gym.browser_use_wire import (
     BrowserUseSessionInitResponse,
     DispatchActionRequest,
     DispatchActionResponse,
+    FocusedElementSummary,
+    StateClipboardResponse,
+    StateCurrentUrlResponse,
+    StateFocusedElementResponse,
+    StatePageLoadResponse,
+    StateSafeBackRequest,
+    StateSafeBackResponse,
+    StateTabsResponse,
+    TabSummary,
 )
 from ..gym.compute_contract import Capabilities
 
@@ -55,14 +64,35 @@ class _Session:
     run_id: str
     capabilities: Capabilities
     last_action_ms: int = 0
+    last_resource_ms: int = 0
     playwright: Any = None  # opaque — Playwright runtime handle
     browser: Any = None
     context: Any = None
     page: Any = None
     dispatch_cache: dict[str, DispatchActionResponse] = field(default_factory=dict)
+    safe_back_cache: dict[str, StateSafeBackResponse] = field(default_factory=dict)
 
 
 _sessions: dict[str, _Session] = {}
+
+
+def _matches_pin(url: str, pinned_origin: str) -> bool:
+    """Does `url` stay inside the pinned origin pattern?
+
+    Patterns:
+      - `https://example.com` — exact origin match.
+      - `https://example.com/*` — origin + any path.
+      - `https://example.com/foo/*` — origin + path prefix.
+    Empty pin → always matches (no pin, no overshoot).
+    """
+    if not pinned_origin:
+        return True
+    if pinned_origin.endswith("/*"):
+        prefix = pinned_origin[:-2]
+        return url.startswith(prefix)
+    return url.startswith(pinned_origin) and (
+        len(url) == len(pinned_origin) or url[len(pinned_origin)] in ("/", "?", "#")
+    )
 
 
 def _require_session(request: Request) -> _Session:
@@ -269,6 +299,188 @@ def build_app() -> FastAPI:
             last_action_ms=sess.last_action_ms if sess else None,
             session_token=sess.token if sess else None,
         )
+
+    # ── state.* extensions (#778) ──────────────────────────────────
+    # These ship on Browser-Use Plane only and require `dom_aware`
+    # capability. Computer Plane does NOT expose equivalent endpoints.
+
+    @app.get("/state/current_url", response_model=StateCurrentUrlResponse)
+    def state_current_url(request: Request) -> StateCurrentUrlResponse:
+        sess = _require_session(request)
+        url = ""
+        try:
+            url = sess.page.url
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[browser-use] state/current_url read failed: %s", exc)
+        return StateCurrentUrlResponse(url=url or "")
+
+    @app.get("/state/tabs", response_model=StateTabsResponse)
+    def state_tabs(request: Request) -> StateTabsResponse:
+        sess = _require_session(request)
+        tabs: list[TabSummary] = []
+        ctx = sess.context
+        active_page = sess.page
+        if ctx is not None:
+            for idx, page in enumerate(ctx.pages):
+                try:
+                    title = page.title()
+                except Exception:  # noqa: BLE001
+                    title = ""
+                try:
+                    url = page.url
+                except Exception:  # noqa: BLE001
+                    url = ""
+                tabs.append(
+                    TabSummary(
+                        id=f"tab-{idx}",
+                        title=title or "",
+                        url=url or "",
+                        is_active=(page is active_page),
+                    )
+                )
+        return StateTabsResponse(tabs=tabs)
+
+    @app.get(
+        "/state/focused_element",
+        response_model=StateFocusedElementResponse,
+    )
+    def state_focused_element(request: Request) -> StateFocusedElementResponse:
+        sess = _require_session(request)
+        # Read document.activeElement in-page; project to the canonical
+        # summary. Returns null if nothing has focus or the page hasn't
+        # mounted yet.
+        try:
+            raw = sess.page.evaluate(
+                """
+                () => {
+                    const el = document.activeElement;
+                    if (!el || el === document.body) return null;
+                    return {
+                        tag: (el.tagName || '').toLowerCase(),
+                        role: el.getAttribute('role'),
+                        aria_label: el.getAttribute('aria-label'),
+                        text: (el.innerText || el.value || '').trim().slice(0, 200),
+                        href: el.getAttribute('href'),
+                    };
+                }
+                """
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[browser-use] state/focused_element failed: %s", exc)
+            raw = None
+        if raw is None:
+            return StateFocusedElementResponse(element=None)
+        return StateFocusedElementResponse(
+            element=FocusedElementSummary(
+                tag=str(raw.get("tag") or ""),
+                role=raw.get("role"),
+                aria_label=raw.get("aria_label"),
+                text=raw.get("text"),
+                href=raw.get("href"),
+            )
+        )
+
+    @app.get("/state/clipboard", response_model=StateClipboardResponse)
+    def state_clipboard(request: Request) -> StateClipboardResponse:
+        sess = _require_session(request)
+        # Clipboard API requires permission grants in real browsers; in
+        # headless Chromium it works against the page's own context
+        # without user gestures when the `clipboard-read` permission is
+        # granted at context init. We try the API and fall back to ""
+        # on permission failure rather than 500.
+        try:
+            text = sess.page.evaluate(
+                "() => navigator.clipboard.readText().catch(() => '')"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[browser-use] state/clipboard read failed: %s", exc)
+            text = ""
+        return StateClipboardResponse(text=str(text or ""))
+
+    @app.get("/state/page_load", response_model=StatePageLoadResponse)
+    def state_page_load(request: Request) -> StatePageLoadResponse:
+        sess = _require_session(request)
+        ready = "complete"
+        try:
+            ready = str(sess.page.evaluate("() => document.readyState") or "complete")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[browser-use] state/page_load read failed: %s", exc)
+        if ready not in ("loading", "interactive", "complete"):
+            ready = "complete"
+        last_resource_ms: int | None = None
+        if sess.last_resource_ms:
+            last_resource_ms = int(time.time() * 1000) - sess.last_resource_ms
+        return StatePageLoadResponse(
+            ready_state=ready,  # type: ignore[arg-type]
+            last_resource_ms=last_resource_ms,
+        )
+
+    @app.post("/state/safe_back", response_model=StateSafeBackResponse)
+    def state_safe_back(
+        req: StateSafeBackRequest, request: Request
+    ) -> StateSafeBackResponse:
+        sess = _require_session(request)
+        cached = sess.safe_back_cache.get(req.step_id)
+        if cached is not None:
+            return StateSafeBackResponse(
+                popped=cached.popped,
+                new_url=cached.new_url,
+                reason=cached.reason,
+                deduplicated=True,
+            )
+        page = sess.page
+        before_url = ""
+        try:
+            before_url = page.url or ""
+        except Exception:  # noqa: BLE001
+            pass
+        # No history to pop → don't try, return cleanly.
+        try:
+            can_go = bool(page.evaluate("() => window.history.length > 1"))
+        except Exception:  # noqa: BLE001
+            can_go = True  # be optimistic; let goto_back fail loudly if not
+        if not can_go:
+            resp = StateSafeBackResponse(
+                popped=False,
+                new_url=before_url,
+                reason="no_history",
+            )
+            sess.safe_back_cache[req.step_id] = resp
+            return resp
+        try:
+            page.go_back(wait_until="domcontentloaded")
+        except Exception as exc:  # noqa: BLE001
+            resp = StateSafeBackResponse(
+                popped=False,
+                new_url=before_url,
+                reason=f"navigation_failed: {exc}",
+            )
+            sess.safe_back_cache[req.step_id] = resp
+            return resp
+        new_url = ""
+        try:
+            new_url = page.url or ""
+        except Exception:  # noqa: BLE001
+            pass
+        # Overshoot guard: if the new URL no longer matches the pinned
+        # origin, the back navigation crossed a boundary the runner
+        # wanted to stay inside. Walk forward to undo the bad pop, then
+        # report `popped=False` with the reason.
+        if req.pinned_origin and not _matches_pin(new_url, req.pinned_origin):
+            try:
+                page.go_forward(wait_until="domcontentloaded")
+            except Exception:  # noqa: BLE001
+                pass
+            resp = StateSafeBackResponse(
+                popped=False,
+                new_url=before_url,
+                reason="overshoot_pinned_origin",
+            )
+            sess.safe_back_cache[req.step_id] = resp
+            return resp
+        resp = StateSafeBackResponse(popped=True, new_url=new_url)
+        sess.safe_back_cache[req.step_id] = resp
+        return resp
 
     return app
 
