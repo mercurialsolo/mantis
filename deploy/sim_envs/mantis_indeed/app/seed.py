@@ -24,7 +24,6 @@ import json
 import random
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Any
 
 FAKE_NOW_DEFAULT = "2026-01-15T09:00:00Z"
 

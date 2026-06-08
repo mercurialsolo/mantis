@@ -6,7 +6,7 @@ deterministic seed-aware palettes.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import Response
 
 router = APIRouter(prefix="/assets")

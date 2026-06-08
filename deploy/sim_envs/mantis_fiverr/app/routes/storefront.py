@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from .. import db, main as app_main
+from .. import db
 
 router = APIRouter()
 

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
-import secrets
 from typing import Any
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import auth, db, main as app_main

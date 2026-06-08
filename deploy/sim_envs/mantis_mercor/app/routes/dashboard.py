@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse

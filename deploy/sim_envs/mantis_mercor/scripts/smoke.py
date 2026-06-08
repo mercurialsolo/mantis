@@ -30,10 +30,10 @@ sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault("ENV_ADMIN_TOKEN", "test")
 
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient  # noqa: E402 -- env vars must be set first
 
-from app import auth as auth_mod
-from app.main import app
+from app import auth as auth_mod  # noqa: E402 -- env vars must be set first
+from app.main import app  # noqa: E402 -- env vars must be set first
 
 
 client = TestClient(app)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 
-from .. import auth, db, main as app_main
+from .. import auth, db
 
 router = APIRouter()
 

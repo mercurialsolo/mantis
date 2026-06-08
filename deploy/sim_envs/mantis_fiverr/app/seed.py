@@ -11,7 +11,6 @@ import json
 import random
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Any
 
 FAKE_NOW_DEFAULT = "2026-06-01T12:00:00Z"
 
@@ -201,9 +200,9 @@ def seed(conn: sqlite3.Connection, *, seed_val: int, fake_now: str) -> None:
                     i % 8,
                     f"Get started with the {title.split()[3] if len(title.split()) > 3 else 'core'} package — perfect for testing the waters.",
                     basic_price, basic_delivery, basic_revs, json.dumps(basic_feats),
-                    f"Most popular — adds extra polish and faster turnaround.",
+                    "Most popular — adds extra polish and faster turnaround.",
                     std_price, max(1, basic_delivery + 1), basic_revs + 1, json.dumps(std_feats),
-                    f"Everything in Standard plus dedicated support and source files.",
+                    "Everything in Standard plus dedicated support and source files.",
                     prem_price, basic_delivery + 3, basic_revs + 2, json.dumps(prem_feats),
                     round(4.4 + rng.random() * 0.6, 1),
                     20 + rng.randrange(0, 200),

@@ -35,7 +35,7 @@ def grade(conn: sqlite3.Connection, *, now: str, seed_val: int) -> dict[str, Any
         except json.JSONDecodeError:
             p = {}
         q = (p.get("q") or "").lower()
-        l = (p.get("l") or "").lower()
+        l = (p.get("l") or "").lower()  # noqa: E741 -- Indeed query-param convention
         remote = (p.get("remote") or "").lower()
         if "software engineer" in q and "austin" in l and remote in {"1", "true", "on"}:
             matching_search = p

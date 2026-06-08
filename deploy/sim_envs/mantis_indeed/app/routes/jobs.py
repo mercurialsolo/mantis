@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -74,11 +73,17 @@ def _relative_posted(now_iso: str, posted_iso: str) -> str:
         return "Posted 1 day ago"
     if days < 30:
         return f"Posted {days} days ago"
-    return f"Posted 30+ days ago"
+    return "Posted 30+ days ago"
 
 
-def _search_jobs(conn, q: str, l: str, remote: bool, date_max_days: int | None,
-                 job_type: str | None) -> list[dict[str, Any]]:
+def _search_jobs(
+    conn,
+    q: str,
+    l: str,  # noqa: E741 -- `l` mirrors Indeed's location query param
+    remote: bool,
+    date_max_days: int | None,
+    job_type: str | None,
+) -> list[dict[str, Any]]:
     """Substring + filter search. Trivial — no fancy ranking."""
     sql = "SELECT * FROM jobs WHERE status = 'active'"
     params: list[Any] = []
@@ -108,7 +113,7 @@ def _search_jobs(conn, q: str, l: str, remote: bool, date_max_days: int | None,
 async def jobs_search(request: Request) -> Response:
     qp = request.query_params
     q = qp.get("q", "")
-    l = qp.get("l", "")
+    l = qp.get("l", "")  # noqa: E741 -- Indeed query-param convention
     vjk = qp.get("vjk", "")
     remote = qp.get("remote", "") in {"1", "true", "on"}
     job_type = qp.get("job_type") or None

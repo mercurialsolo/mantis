@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import sys
 import pathlib
-import re
 
 # Allow ``python scripts/smoke.py`` from inside the env dir.
 _HERE = pathlib.Path(__file__).resolve()
@@ -84,7 +83,7 @@ def main() -> int:
     ).fetchone()
     gig_url = f"/{g1['username']}/{g1['slug']}"
     _ok(client, gig_url)
-    _ok(client, f"/checkout/gig_00001?tier=basic")
+    _ok(client, "/checkout/gig_00001?tier=basic")
 
     print()
     print("== oracle dispatch (registered + unknown) ==")
