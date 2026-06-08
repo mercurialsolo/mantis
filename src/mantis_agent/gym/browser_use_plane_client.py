@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import time
 import uuid
 from dataclasses import dataclass
 from io import BytesIO
@@ -32,7 +31,6 @@ from .browser_use_wire import (
     BrowserUseHealthResponse,
     BrowserUseScreenshotResponse,
     BrowserUseSessionCloseRequest,
-    BrowserUseSessionCloseResponse,
     BrowserUseSessionInitRequest,
     BrowserUseSessionInitResponse,
     DispatchActionRequest,
