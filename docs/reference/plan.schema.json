@@ -60,6 +60,12 @@
           "minimum": 1,
           "description": "Per-run wall-clock ceiling in minutes. The runner halts when exceeded."
         },
+        "compute_backend": {
+          "type": "string",
+          "enum": ["computer_plane", "browser_use_plane"],
+          "default": "computer_plane",
+          "description": "Which compute plane runs this plan. Default ``computer_plane`` (Xvfb + Chrome + xdotool, CUA-pure, stealth-capable — #696). Set ``browser_use_plane`` for plans that need DOM-aware reads (current URL, tab management, link-target peek, semantic click roles — #785). Plan-level value overrides submission-time defaults; absent in the plan, the submitter's default is used, then the global default ``computer_plane``. Pure-CUA stays the path for stealth-sensitive sites — Browser-Use Plane does NOT promise CF/Turnstile parity at v1."
+        },
         "state_repeat_threshold": {
           "type": "integer",
           "minimum": 0,

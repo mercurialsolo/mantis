@@ -10,6 +10,13 @@ The surface is intentionally CUA-pure: `screenshot` + `xdotool(argv)` are
 required; `cdp_evaluate` / `cdp_click_at_point` are opt-in per executor
 (`enable_cdp=false` default). No DOM-aware verbs. See
 `feedback_browser_infra_rpc_surface.md`.
+
+`SessionInitResponse` carries a `capabilities` field (added under #785's
+unified `ComputeClient` contract). Computer Plane advertises a pure-CUA
+posture (`dom_aware=False, stealth=True`). Browser-Use Plane (PR 2)
+advertises `dom_aware=True`. The brain plane gates DOM-aware extension
+verbs on this advertised capability + a per-executor allowlist — see
+`compute_contract.CapabilityAllowlist`.
 """
 
 from __future__ import annotations
@@ -17,6 +24,8 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from .compute_contract import Capabilities, ComputeBackend
 
 
 class SessionInitRequest(BaseModel):
@@ -52,6 +61,31 @@ class SessionInitResponse(BaseModel):
     session_token: str
     chrome_pid: int | None = None
     xvfb_display: str
+    # Added under #785 unified ComputeClient contract. Serialized as a
+    # plain dict (not the dataclass) so pydantic round-trips JSON cleanly
+    # across the wire. Omitted by older backends — consumers treat None
+    # as the legacy Computer-Plane default (`Capabilities.for_computer_plane()`).
+    capabilities: dict[str, object] | None = None
+
+    def resolved_capabilities(self) -> Capabilities:
+        """Return advertised `Capabilities`, defaulting to Computer Plane.
+
+        Older Phase-0/Phase-1 servers don't populate the field; treating
+        `None` as Computer-Plane CUA-pure preserves backwards compat.
+        """
+        if self.capabilities is None:
+            return Capabilities.for_computer_plane()
+        backend_value = self.capabilities.get("backend", ComputeBackend.COMPUTER_PLANE.value)
+        try:
+            backend = ComputeBackend(backend_value)
+        except ValueError:
+            backend = ComputeBackend.COMPUTER_PLANE
+        return Capabilities(
+            dom_aware=bool(self.capabilities.get("dom_aware", False)),
+            stealth=bool(self.capabilities.get("stealth", True)),
+            supports_cdp=bool(self.capabilities.get("supports_cdp", False)),
+            backend=backend,
+        )
 
 
 class SessionCloseRequest(BaseModel):

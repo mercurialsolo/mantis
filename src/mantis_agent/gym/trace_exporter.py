@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .checkpoint import StepResult
+from .step_trace import StepTraceCollector
 
 if TYPE_CHECKING:
     from .micro_runner import MicroPlanRunner
@@ -55,11 +56,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION: int = 2
+SCHEMA_VERSION: int = 3
 """``v1`` was the initial export shape (PR #194). ``v2`` (PR for #155
-step 5) adds the optional top-level ``variant`` field for
-shadow-deploy attribution. ``v1`` consumers can still read ``v2`` —
-they just ignore the new key."""
+step 5) added the optional top-level ``variant`` field for
+shadow-deploy attribution. ``v3`` (PR for #783) adds an optional
+``envelope`` block per step carrying the structured per-step trace
+fields (URLs, grounding, dispatch, verifier, retries, emitted rows).
+Older consumers can still read ``v3`` — they ignore the new key."""
 
 ENV_DIR: str = "MANTIS_TRACE_EXPORT_DIR"
 ENV_INCLUDE_SCREENSHOTS: str = "MANTIS_TRACE_INCLUDE_SCREENSHOTS"
@@ -73,6 +76,27 @@ def _action_to_dict(action: Any) -> dict[str, Any] | None:
         "action_type": getattr(getattr(action, "action_type", None), "value", ""),
         "params": dict(getattr(action, "params", {}) or {}),
     }
+
+
+def _serialize_steps(
+    results: list[StepResult],
+    step_traces: "StepTraceCollector | None",
+) -> list[dict[str, Any]]:
+    """Serialize each step, merging in its `StepTraceEnvelope` if present.
+
+    The envelope rides as a sibling key on the step dict (`envelope`)
+    so v2 consumers that only read the canonical fields still work
+    (additive — #783 schema_version bump = v3).
+    """
+    out: list[dict[str, Any]] = []
+    envelopes = step_traces.envelopes_by_step_index if step_traces else {}
+    for s in results:
+        block = _step_to_dict(s)
+        env = envelopes.get(s.step_index) if envelopes else None
+        if env is not None and not env.is_empty():
+            block["envelope"] = env.as_dict()
+        out.append(block)
+    return out
 
 
 def _step_to_dict(step: StepResult) -> dict[str, Any]:
@@ -127,6 +151,7 @@ class TraceExporter:
         results: list[StepResult],
         *,
         status: str,
+        step_traces: "StepTraceCollector | None" = None,
     ) -> str | None:
         """Write a trace file when the exporter is enabled. No-op otherwise.
 
@@ -137,7 +162,7 @@ class TraceExporter:
         if not self.enabled:
             return None
         try:
-            return self._write(runner, results, status=status)
+            return self._write(runner, results, status=status, step_traces=step_traces)
         except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
             logger.warning("trace export failed: %s", exc)
             return None
@@ -148,6 +173,7 @@ class TraceExporter:
         results: list[StepResult],
         *,
         status: str,
+        step_traces: "StepTraceCollector | None" = None,
     ) -> str:
         tenant_id = (getattr(runner, "tenant_id", "") or "").strip() or "__shared__"
         run_id = (
@@ -188,7 +214,7 @@ class TraceExporter:
                 "total": round(total, 4),
             },
             "step_count": len(results),
-            "steps": [_step_to_dict(s) for s in results],
+            "steps": _serialize_steps(results, step_traces),
         }
 
         out = base / f"{run_id}.json"
