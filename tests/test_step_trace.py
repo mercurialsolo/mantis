@@ -4,13 +4,9 @@ integration (#783, PR 6)."""
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
 
 from mantis_agent.gym.step_trace import (
     DispatchRecord,
@@ -176,7 +172,6 @@ def _make_step_result(step_index: int = 0, intent: str = "x"):
 def test_exporter_merges_envelope_into_step_block():
     from mantis_agent.gym.trace_exporter import (
         SCHEMA_VERSION,
-        TraceExporter,
         _serialize_steps,
     )
 
