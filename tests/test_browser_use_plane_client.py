@@ -163,10 +163,32 @@ def test_step_dispatches_click_action():
     assert dispatch_payload["params"]["y"] == 200
 
 
-def test_unconfigured_url_raises_executor_construction_error():
+def test_unconfigured_url_raises_executor_construction_error(monkeypatch):
+    """When MANTIS_BROWSER_USE_URL is unset AND Modal SDK resolution
+    fails, the executor must raise rather than silently return a
+    client with no base_url.
+
+    The Modal SDK lookup is patched to raise so the test runs
+    deterministically — on a dev machine where ``mantis-browser-use``
+    is deployed, the live ``modal.Function.from_name(...)`` call
+    would succeed and silently mask the no-URL case the test is
+    pinning down.
+    """
+    import mantis_agent.run_browser_use as run_browser_use_mod
     from mantis_agent.run_browser_use import make_browser_use_client
 
-    # No MANTIS_BROWSER_USE_URL and no Modal SDK lookup → must raise.
+    monkeypatch.delenv("MANTIS_BROWSER_USE_URL", raising=False)
+
+    # Force the Modal SDK lookup to fail — production sometimes can't
+    # reach Modal (network blip, missing auth) and the executor must
+    # surface the misconfig clearly in that case.
+    def _fail_resolve() -> str:
+        return ""
+
+    monkeypatch.setattr(
+        run_browser_use_mod, "resolve_browser_use_base_url", _fail_resolve
+    )
+
     with pytest.raises(RuntimeError, match="Browser-Use Plane URL is not configured"):
         make_browser_use_client(base_url=None)
 

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Checkout — {{ gig.title }} — {{ site_name }}{% endblock %}
+
+{% block topnav %}
+<header class="topnav topnav--compact">
+  <div class="topnav__inner">
+    <a class="topnav__brand" href="/" aria-label="Fiverr home">
+      <img src="/assets/logo.svg" alt="Fiverr" width="120" height="32">
+    </a>
+    <span class="topnav__secure">Secure checkout
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+        <path d="M12 1l9 4v6c0 5-3.5 9.74-9 11-5.5-1.26-9-6-9-11V5l9-4z"
+              fill="none" stroke="#74767e" stroke-width="2"/>
+      </svg>
+    </span>
+  </div>
+</header>
+{% endblock %}
+
+{% block main %}
+<div class="checkout-wrap">
+  <div class="checkout-main">
+    <h1>Checkout</h1>
+    <p class="muted">You&rsquo;re ordering:</p>
+
+    <div class="checkout-gig">
+      <div class="checkout-gig__thumb"
+           style="background-image:url('/assets/gig/{{ gig.image_palette }}_0.svg')"></div>
+      <div class="checkout-gig__body">
+        <p class="checkout-gig__title">{{ gig.title }}</p>
+        <p class="muted">by {{ gig.seller_display }}</p>
+        <p class="checkout-gig__tier">Package: <strong>{{ tier_title }}</strong> — Delivery in {{ tier_delivery }} days</p>
+      </div>
+      <span class="checkout-gig__price">US${{ "%g"|format(unit_price) }}</span>
+    </div>
+
+    <form action="/checkout/{{ gig.id }}" method="post" id="checkout-form">
+      <input type="hidden" name="tier" value="{{ tier }}">
+
+      <section class="form-section">
+        <label for="requirements">Order details (optional)</label>
+        <textarea id="requirements" name="requirements" rows="4"
+                  placeholder="Briefly describe your project (optional)"></textarea>
+      </section>
+
+      <section class="form-section">
+        <h2>Payment method</h2>
+        <label class="payment-row">
+          <input type="radio" name="payment_method" value="card" checked>
+          <span>Credit / Debit Card</span>
+        </label>
+        <label class="payment-row">
+          <input type="radio" name="payment_method" value="paypal">
+          <span>PayPal</span>
+        </label>
+        <label class="payment-row">
+          <input type="radio" name="payment_method" value="bank">
+          <span>Bank transfer</span>
+        </label>
+      </section>
+
+      <button type="submit" class="btn btn--primary btn--block btn--lg">
+        Confirm &amp; Pay (US${{ "%g"|format(total) }})
+      </button>
+      <p class="muted small">By clicking Confirm &amp; Pay you agree to our Terms of Service.</p>
+    </form>
+  </div>
+
+  <aside class="checkout-summary">
+    <h3>Summary</h3>
+    <div class="summary-row">
+      <span>{{ tier_title }} package</span>
+      <span>US${{ "%g"|format(unit_price) }}</span>
+    </div>
+    <div class="summary-row">
+      <span>Service fee</span>
+      <span>US${{ "%g"|format(service_fee) }}</span>
+    </div>
+    <hr>
+    <div class="summary-row summary-row--total">
+      <span>Total</span>
+      <span>US${{ "%g"|format(total) }}</span>
+    </div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block footer %}{% endblock %}

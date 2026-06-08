@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Jobs search | LinkedIn (mantis mirror){% endblock %}
+{% block content %}
+<div class="jobs-search-shell" data-testid="jobs-search-shell">
+  <div class="jobs-search-filterbar card" data-testid="jobs-filterbar">
+    <button class="filter-chip">Date posted ▾</button>
+    <button class="filter-chip">Experience level ▾</button>
+    <button class="filter-chip">Company ▾</button>
+    <button class="filter-chip">Job type ▾</button>
+    <button class="filter-chip">Remote ▾</button>
+    <form method="get" action="/jobs/search/" style="display:contents">
+      <input type="hidden" name="keywords" value="{{ keywords }}"/>
+      <input type="hidden" name="location" value="{{ location }}"/>
+      <button class="filter-chip {% if easy_apply %}filter-chip-on{% endif %}"
+              name="easy_apply" value="{{ 0 if easy_apply else 1 }}"
+              type="submit">Easy Apply</button>
+    </form>
+    <button class="filter-chip">All filters</button>
+  </div>
+
+  <div class="jobs-search-grid">
+    <aside class="jobs-results card" data-testid="jobs-results">
+      <header class="section-header" style="padding:12px 16px;">
+        <h2 class="results-title">{{ results|length }} results{% if keywords %} for “{{ keywords }}”{% endif %}</h2>
+        <select class="results-sort" data-testid="results-sort">
+          <option>Most relevant</option><option>Most recent</option>
+        </select>
+      </header>
+      <ul class="job-result-list">
+        {% for j in results %}
+          <li class="job-result-row {% if selected and j.id == selected.id %}job-result-active{% endif %}"
+              data-testid="job-result-row" data-job-id="{{ j.id }}">
+            <a href="/jobs/search/?keywords={{ keywords }}&location={{ location }}&easy_apply={{ easy_apply }}&id={{ j.id }}"
+               class="job-result-link">
+              <span class="job-row-logo">{{ j.company[:1]|upper }}</span>
+              <div class="job-result-meta">
+                <div class="job-result-title">{{ j.title }}</div>
+                <div class="job-result-company">{{ j.company }}</div>
+                <div class="job-result-location">{{ j.location }}</div>
+                <div class="job-result-caption">
+                  {% if j.easy_apply %}
+                    <span class="tag tag-easy">Easy Apply</span>
+                  {% endif %}
+                  {{ j.applicants }} applicants
+                </div>
+              </div>
+            </a>
+          </li>
+        {% else %}
+          <li class="muted" style="padding:16px;">No results.</li>
+        {% endfor %}
+      </ul>
+    </aside>
+
+    {% if selected %}
+      <section class="jobs-detail card" data-testid="jobs-detail">
+        <header class="job-detail-header">
+          <span class="job-row-logo job-row-logo-big">{{ selected.company[:1]|upper }}</span>
+          <div class="job-detail-meta">
+            <h1 class="job-detail-title">{{ selected.title }}</h1>
+            <a class="job-detail-company" href="#">{{ selected.company }}</a>
+            <div class="job-detail-location">{{ selected.location }}</div>
+            <div class="job-detail-caption">{{ selected.applicants }} applicants • posted {{ selected.posted_at }}</div>
+            <div class="job-detail-actions">
+              {% if selected.easy_apply %}
+                <a class="btn-primary" href="/jobs/view/{{ selected.id }}/"
+                   data-testid="apply-btn">Easy Apply</a>
+              {% else %}
+                <a class="btn-secondary" href="/jobs/view/{{ selected.id }}/">Apply</a>
+              {% endif %}
+              <button class="btn-secondary" data-testid="save-btn">Save</button>
+            </div>
+          </div>
+        </header>
+        <div class="job-detail-tabs">
+          <a class="tab tab-active">About the job</a>
+          <a class="tab">Hiring team</a>
+          <a class="tab">Related jobs</a>
+        </div>
+        <article class="job-detail-body">
+          <pre class="md-body">{{ selected.description_md }}</pre>
+        </article>
+      </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

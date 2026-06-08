@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Application submitted — Mercor{% endblock %}
+
+{% block content %}
+<section class="apply-confirm" data-testid="apply-confirm">
+  <div class="banner-success" data-testid="apply-confirm-banner">
+    Application submitted — we'll be in touch.
+  </div>
+  <p>Your application for <b>{{ job.title }}</b> has been received. Reference: <code>{{ application_id }}</code>.</p>
+  <div class="apply-actions">
+    <a class="btn-secondary" href="/jobs">Browse more roles</a>
+    <a class="btn-primary" href="/dashboard" data-testid="apply-confirm-dashboard">Go to dashboard</a>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}LinkedIn (mantis mirror) — Sign in{% endblock %}
+{% block topnav %}
+<header class="topnav home-topnav">
+  <div class="topnav-inner">
+    <a href="/" class="brand-mark"><span class="brand-square">in</span> Linked<em>in</em></a>
+    <nav class="topnav-icons">
+      <a class="ico" href="/jobs/">Jobs</a>
+      <a class="ico" href="/signup">Join now</a>
+      <a class="btn-secondary" href="/login" data-testid="cta-signin">Sign in</a>
+    </nav>
+  </div>
+</header>
+{% endblock %}
+{% block content %}
+<section class="home-hero">
+  <div class="home-copy">
+    <h1>Welcome to your professional community</h1>
+    <p class="home-sub">Search jobs, share updates, and stay connected.</p>
+    <a class="btn-primary home-cta" href="/feed/" data-testid="cta-feed">Go to feed</a>
+    <a class="btn-secondary home-cta" href="/login">Sign in with email</a>
+  </div>
+  <div class="home-tile" aria-hidden="true">
+    <div class="home-blob"></div>
+  </div>
+</section>
+{% endblock %}

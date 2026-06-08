@@ -1,0 +1,18 @@
+{% macro role_card(job) -%}
+<article class="role-card" data-testid="role-card" data-role-id="{{ job.id }}">
+  <div class="role-card-header">
+    <div class="role-card-title">
+      <a href="/jobs/{{ job.id }}" data-testid="role-card-title">{{ job.title }}</a>
+    </div>
+    <div class="role-card-rate" data-testid="role-card-rate">${{ job.rate_min | int }}-${{ job.rate_max | int }}/hr</div>
+  </div>
+  <div class="role-card-meta">
+    <span class="role-card-avatar" data-testid="role-card-avatar">{{ job.title | initials }}</span>
+    <span class="role-card-recent" data-testid="role-card-recent">{{ job.hires_recently }} hired recently</span>
+  </div>
+  <div class="role-card-footer">
+    <span class="role-card-tag">{{ job.category }}</span>
+    <a class="btn-primary" href="/apply/{{ job.id }}" data-testid="role-card-apply">Apply</a>
+  </div>
+</article>
+{%- endmacro %}

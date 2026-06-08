@@ -187,16 +187,32 @@ def test_result_with_schema_to_summary():
 
 
 def test_result_without_schema_backward_compat():
+    """Historical no-schema results are no longer viable.
+
+    Pre-rip the validator silently treated ``year + make`` as the
+    universal viability contract — boattrader-shape baggage leaking
+    into every plan. Post-rip (#785 follow-up), no schema → not
+    viable, with an explicit ``no_schema_configured`` reason. The
+    no-schema ``to_summary`` format is preserved for legacy display
+    (the rip only touched the validation gate, not output rendering).
+    """
     result = ExtractionResult(year="2020", make="Sea Ray", model="240")
-    assert result.is_viable()
+    assert not result.is_viable()
     assert "Year: 2020" in result.to_summary()
-    assert result.missing_required_reason() == ""
+    assert result.missing_required_reason() == "no_schema_configured"
 
 
 def test_result_without_schema_not_viable():
+    """No schema configured → result is not viable and the failure
+    reason is explicit (``no_schema_configured``), not the historical
+    boattrader-shape ``missing required field(s): year, make`` lie
+    that leaked into every non-marketplace plan (#785 follow-up;
+    ``feedback_legacy_fallback_smell.md``).
+    """
     result = ExtractionResult(make="Sea Ray")
     assert not result.is_viable()
-    assert "year" in result.missing_required_reason()
+    reason = result.missing_required_reason()
+    assert reason == "no_schema_configured", reason
 
 
 def test_dealer_reason_recipe_gated_without_schema() -> None:

@@ -1,0 +1,15 @@
+{# Stepper used by all apply pages. Caller passes `step` (1..4). #}
+<ol class="apply-stepper" data-testid="apply-stepper">
+  <li class="step {% if step >= 1 %}step-done{% endif %} {% if step == 1 %}step-active{% endif %}" data-testid="step-contact">
+    <span class="step-num">1</span> Contact
+  </li>
+  <li class="step {% if step >= 2 %}step-done{% endif %} {% if step == 2 %}step-active{% endif %}" data-testid="step-resume">
+    <span class="step-num">2</span> Resume
+  </li>
+  <li class="step {% if step >= 3 %}step-done{% endif %} {% if step == 3 %}step-active{% endif %}" data-testid="step-questions">
+    <span class="step-num">3</span> Questions
+  </li>
+  <li class="step {% if step >= 4 %}step-done{% endif %} {% if step == 4 %}step-active{% endif %}" data-testid="step-review">
+    <span class="step-num">4</span> Review
+  </li>
+</ol>

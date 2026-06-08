@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Orders — {{ site_name }}{% endblock %}
+
+{% block main %}
+<div class="page-wrap">
+  <header class="orders-header">
+    <h1>Manage Orders</h1>
+  </header>
+
+  <nav class="orders-tabs" aria-label="Order status">
+    {% for value, label in [('all', 'All'), ('active', 'Active'), ('delivered', 'Delivered'), ('completed', 'Completed'), ('cancelled', 'Cancelled')] %}
+    <a class="orders-chip {% if status_filter == value %}is-active{% endif %}"
+       href="?status={{ value }}">
+      {{ label }} ({{ counts.get(value, 0) }})
+    </a>
+    {% endfor %}
+  </nav>
+
+  <table class="orders-table">
+    <thead>
+      <tr>
+        <th>Seller</th>
+        <th>Gig</th>
+        <th>Due on</th>
+        <th>Total</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for o in orders %}
+      <tr>
+        <td>{{ o.seller_display }}</td>
+        <td>
+          <a href="/{{ o.seller_username }}/{{ o.gig_slug }}">{{ o.gig_title|truncate(48) }}</a>
+        </td>
+        <td>{{ o.due_at[:10] }}</td>
+        <td>US${{ "%g"|format(o.total) }}</td>
+        <td><span class="status status--{{ o.status }}">{{ o.status.title() }}</span></td>
+        <td><a href="/orders/{{ o.id }}" class="link">View</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6"><p class="empty">No orders match this filter.</p></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,40 @@
+{% macro gig_card(gig) %}
+<a class="gig-card" href="/{{ gig.seller_username }}/{{ gig.slug }}">
+  <div class="gig-card__image"
+       style="background-image:url('/assets/gig/{{ gig.image_palette }}_{{ loop.index0 if loop is defined else 0 }}.svg')">
+    <button class="gig-card__heart" type="button" aria-label="Favorite">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+        <path d="M12 21s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 5.4-7 10-7 10z"
+              fill="none" stroke="white" stroke-width="2"/>
+      </svg>
+    </button>
+  </div>
+  <div class="gig-card__body">
+    <div class="gig-card__seller">
+      <img class="gig-card__avatar"
+           src="/assets/avatar/{{ gig.seller_avatar_palette }}_{{ gig.seller_display[:1] }}.svg"
+           alt="" width="26" height="26">
+      <span class="gig-card__seller-name">{{ gig.seller_display }}</span>
+      <span class="gig-card__seller-level">
+        {% if gig.seller_level == 'top_rated' %}Top Rated Seller
+        {% elif gig.seller_level == 'level_two' %}Level 2 Seller
+        {% elif gig.seller_level == 'level_one' %}Level 1 Seller
+        {% else %}New Seller{% endif %}
+      </span>
+    </div>
+    <p class="gig-card__title">{{ gig.title }}</p>
+    <div class="gig-card__rating">
+      <svg class="gig-card__star" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+        <polygon points="10,2 12,8 18,8 13,12 15,18 10,14 5,18 7,12 2,8 8,8"
+                 fill="#ffb33e"/>
+      </svg>
+      <span class="gig-card__rating-num">{{ "%.1f"|format(gig.avg_rating) }}</span>
+      <span class="gig-card__rating-count">({{ gig.review_count }})</span>
+    </div>
+    <div class="gig-card__footer">
+      <span class="gig-card__from">From</span>
+      <span class="gig-card__price">US${{ "%g"|format(gig.basic_price) }}</span>
+    </div>
+  </div>
+</a>
+{% endmacro %}

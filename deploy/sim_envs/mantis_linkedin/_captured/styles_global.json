@@ -1,0 +1,66 @@
+{
+  "body": {
+    "background": "#f3f2ef",
+    "color": "rgba(0,0,0,0.9)",
+    "font-family": "-apple-system, system-ui, \"Segoe UI\", Roboto, \"Helvetica Neue\", Arial, sans-serif",
+    "font-size": "14px",
+    "line-height": "1.42857"
+  },
+  "topnav": {
+    "height": "52px",
+    "background": "#ffffff",
+    "border-bottom": "1px solid #e0dfdc",
+    "position": "fixed",
+    "content-max-width": "1128px"
+  },
+  "card": {
+    "background": "#ffffff",
+    "border-radius": "8px",
+    "box-shadow": "0 0 0 1px rgba(0,0,0,0.08), 0 2px 3px rgba(0,0,0,0.08)",
+    "padding": "16px"
+  },
+  "button_primary": {
+    "background": "#0a66c2",
+    "color": "#ffffff",
+    "border": "0",
+    "border-radius": "9999px",
+    "padding": "6px 16px",
+    "font-weight": "600",
+    "hover-background": "#004182",
+    "disabled-background": "rgba(0,0,0,0.08)",
+    "disabled-color": "rgba(0,0,0,0.6)"
+  },
+  "button_secondary": {
+    "background": "transparent",
+    "color": "#0a66c2",
+    "border": "1px solid #0a66c2",
+    "border-radius": "9999px",
+    "padding": "5px 16px",
+    "font-weight": "600",
+    "hover-background": "rgba(112,181,249,0.2)"
+  },
+  "input_pill": {
+    "background": "#edf3f8",
+    "border": "0",
+    "border-radius": "4px",
+    "height": "34px",
+    "padding": "0 8px 0 40px",
+    "font-size": "14px"
+  },
+  "link": {
+    "color": "#0a66c2",
+    "font-weight": "600",
+    "text-decoration": "none",
+    "hover-text-decoration": "underline"
+  },
+  "headings": {
+    "h1": {"font-size": "24px", "font-weight": "600"},
+    "h2": {"font-size": "20px", "font-weight": "600"},
+    "h3": {"font-size": "16px", "font-weight": "600"}
+  },
+  "feed_grid": {
+    "columns": "225px 555px 300px",
+    "gap": "24px",
+    "max-width": "1128px"
+  }
+}

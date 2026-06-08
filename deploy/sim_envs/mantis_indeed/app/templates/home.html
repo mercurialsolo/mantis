@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Job Search | Indeed{% endblock %}
+{% block content %}
+<section class="hero" data-testid="hero">
+  <div class="hero-inner">
+    <h1 class="hero-title">Find your next job</h1>
+    <form class="hero-search" action="/jobs" method="get" data-testid="hero-search-form">
+      <div class="hero-search-group">
+        <label class="visually-hidden" for="hero-q">search: Job title, keywords, or company</label>
+        <span class="hero-input-icon" aria-hidden="true">🔍</span>
+        <input
+          id="hero-q"
+          class="hero-input hero-input-q"
+          type="text"
+          name="q"
+          placeholder="Job title, keywords, or company"
+          aria-label="search: Job title, keywords, or company"
+          data-testid="hero-input-q"
+        />
+      </div>
+      <div class="hero-search-separator" aria-hidden="true"></div>
+      <div class="hero-search-group">
+        <label class="visually-hidden" for="hero-l">Edit location</label>
+        <span class="hero-input-icon" aria-hidden="true">📍</span>
+        <input
+          id="hero-l"
+          class="hero-input hero-input-l"
+          type="text"
+          name="l"
+          placeholder='City, state, zip code, or "remote"'
+          aria-label="Edit location"
+          data-testid="hero-input-l"
+        />
+      </div>
+      <button type="submit" class="btn btn-primary hero-cta" data-testid="hero-cta">Search</button>
+    </form>
+    <p class="hero-foot">{{ job_count }} jobs available right now.</p>
+  </div>
+</section>
+<section class="below-hero">
+  <div class="panel" data-testid="trending-panel">
+    <h2>What's trending on Indeed</h2>
+    <ul class="chip-list">
+      {% for t in trending %}
+      <li><a class="chip" href="/jobs?q={{ t|urlencode }}">{{ t }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="panel" data-testid="resources-panel">
+    <h2>Employer Resources</h2>
+    <ul class="link-list">
+      {% for r in resources %}
+      <li><a href="#">{{ r }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endblock %}

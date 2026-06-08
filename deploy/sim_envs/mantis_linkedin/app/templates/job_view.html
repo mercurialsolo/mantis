@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} | {{ job.company }} | LinkedIn (mantis mirror){% endblock %}
+{% block content %}
+<div class="job-view-grid" data-testid="job-view-grid">
+  <section class="job-view-main">
+    <section class="card" data-testid="job-view-header">
+      <header class="job-detail-header">
+        <span class="job-row-logo job-row-logo-big">{{ job.company[:1]|upper }}</span>
+        <div class="job-detail-meta">
+          <h1 class="job-detail-title">{{ job.title }}</h1>
+          <a class="job-detail-company" href="#">{{ job.company }}</a>
+          <div class="job-detail-location">{{ job.location }}</div>
+          <div class="job-detail-caption">{{ job.applicants }} applicants • posted {{ job.posted_at }}</div>
+          <div class="job-detail-actions">
+            {% if applied %}
+              <button class="btn-secondary" disabled data-testid="apply-applied">Applied ✓</button>
+            {% elif job.easy_apply %}
+              <button class="btn-primary" data-testid="easy-apply-open"
+                      onclick="openEasyApply()">Easy Apply</button>
+            {% else %}
+              <a class="btn-secondary" href="#" data-testid="external-apply">Apply</a>
+            {% endif %}
+            <button class="btn-secondary" data-testid="save-btn">Save</button>
+            <a class="link-button" href="#">Share</a>
+          </div>
+        </div>
+      </header>
+    </section>
+
+    <section class="card" data-testid="job-about">
+      <header class="section-header"><h2>About the job</h2></header>
+      <pre class="md-body">{{ job.description_md }}</pre>
+    </section>
+
+    <section class="card" data-testid="job-match">
+      <header class="section-header"><h2>How your profile matches</h2></header>
+      <p class="muted">Skills, experience and education matching this role appear here.</p>
+    </section>
+  </section>
+
+  <aside class="job-view-rail">
+    <section class="card company-card" data-testid="company-card">
+      <div class="company-logo-big">{{ job.company[:1]|upper }}</div>
+      <h2 class="company-name">{{ job.company }}</h2>
+      <div class="company-tagline">Engineering team is hiring</div>
+      <div class="company-followers">12,840 followers</div>
+      <button class="btn-secondary btn-pill" data-testid="follow-company">+ Follow</button>
+    </section>
+  </aside>
+</div>
+
+{% if not applied and job.easy_apply %}
+<dialog id="easy-apply-modal" class="modal" data-testid="easy-apply-modal">
+  <form method="post" action="/jobs/{{ job.id }}/apply" id="easy-apply-form"
+        class="modal-card easy-apply-card">
+    <header class="modal-header">
+      <h3 id="ea-step-title">Contact info</h3>
+      <button type="button" class="modal-close"
+              onclick="document.getElementById('easy-apply-modal').close()">×</button>
+    </header>
+    <div class="ea-progress">
+      <span class="ea-dot ea-dot-active" data-step="1"></span>
+      <span class="ea-dot" data-step="2"></span>
+      <span class="ea-dot" data-step="3"></span>
+      <span class="ea-dot" data-step="4"></span>
+    </div>
+
+    {# Step 1: contact #}
+    <fieldset class="ea-step" data-step="1">
+      <label class="field"><span class="field-label">Email</span>
+        <input type="email" value="demo@mantis.example" readonly/></label>
+      <label class="field"><span class="field-label">Phone country code</span>
+        <select><option>United States (+1)</option></select></label>
+      <label class="field"><span class="field-label">Mobile phone number*</span>
+        <input type="tel" name="phone" required data-testid="ea-phone"/></label>
+    </fieldset>
+
+    {# Step 2: resume #}
+    <fieldset class="ea-step" data-step="2" hidden>
+      <label class="radio-row">
+        <input type="radio" name="resume_label" value="Use my profile" checked/>
+        Use my profile
+      </label>
+      <label class="radio-row">
+        <input type="radio" name="resume_label" value="Upload resume"/>
+        Upload resume
+      </label>
+    </fieldset>
+
+    {# Step 3: screening #}
+    <fieldset class="ea-step" data-step="3" hidden>
+      <label class="field"><span class="field-label">How many years of experience do you have?</span>
+        <input type="text" id="ea-q-years" value="5"/></label>
+      <label class="field"><span class="field-label">Are you authorised to work in the listed location?</span>
+        <select id="ea-q-auth">
+          <option>Yes</option><option>No</option>
+        </select>
+      </label>
+    </fieldset>
+
+    {# Step 4: review #}
+    <fieldset class="ea-step" data-step="4" hidden data-testid="ea-review">
+      <p>Review your information and submit.</p>
+      <dl class="ea-review">
+        <dt>Phone</dt><dd id="ea-review-phone"></dd>
+        <dt>Resume</dt><dd id="ea-review-resume"></dd>
+        <dt>Years</dt><dd id="ea-review-years"></dd>
+      </dl>
+      <input type="hidden" name="answers" id="ea-answers" value="{}"/>
+    </fieldset>
+
+    <footer class="modal-footer">
+      <button type="button" class="btn-secondary" id="ea-back" hidden>Back</button>
+      <button type="button" class="btn-primary" id="ea-next"
+              data-testid="ea-next">Next</button>
+      <button type="submit" class="btn-primary" id="ea-submit" hidden
+              data-testid="ea-submit">Submit application</button>
+    </footer>
+  </form>
+</dialog>
+
+<script>
+  function openEasyApply() {
+    var d = document.getElementById('easy-apply-modal');
+    if (d && typeof d.showModal === 'function') d.showModal();
+  }
+  (function(){
+    var step = 1;
+    var titles = {1:"Contact info", 2:"Resume", 3:"Screening questions", 4:"Review"};
+    var form = document.getElementById('easy-apply-form');
+    if (!form) return;
+    var nextBtn = document.getElementById('ea-next');
+    var backBtn = document.getElementById('ea-back');
+    var submitBtn = document.getElementById('ea-submit');
+    function render(){
+      form.querySelectorAll('.ea-step').forEach(function(f){
+        f.hidden = (parseInt(f.getAttribute('data-step'),10) !== step);
+      });
+      form.querySelectorAll('.ea-dot').forEach(function(d){
+        var idx = parseInt(d.getAttribute('data-step'),10);
+        d.classList.toggle('ea-dot-active', idx <= step);
+      });
+      document.getElementById('ea-step-title').textContent = titles[step];
+      backBtn.hidden = (step === 1);
+      nextBtn.hidden = (step === 4);
+      submitBtn.hidden = (step !== 4);
+      if (step === 4) {
+        document.getElementById('ea-review-phone').textContent =
+          form.querySelector('[name=phone]').value || '(missing)';
+        document.getElementById('ea-review-resume').textContent =
+          (form.querySelector('[name=resume_label]:checked') || {}).value || '';
+        var years = document.getElementById('ea-q-years').value || '';
+        var auth = document.getElementById('ea-q-auth').value || '';
+        document.getElementById('ea-review-years').textContent = years;
+        document.getElementById('ea-answers').value =
+          JSON.stringify({years_experience: years, work_authorized: auth});
+      }
+    }
+    nextBtn.addEventListener('click', function(){
+      if (step === 1) {
+        var p = form.querySelector('[name=phone]');
+        if (!p.value.trim()) { p.focus(); return; }
+      }
+      if (step < 4) { step += 1; render(); }
+    });
+    backBtn.addEventListener('click', function(){
+      if (step > 1) { step -= 1; render(); }
+    });
+    render();
+  })();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,1 @@
+"""mantis-indeed routes package."""

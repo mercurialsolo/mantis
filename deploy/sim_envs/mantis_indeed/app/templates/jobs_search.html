@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}{{ h1 }} | Indeed{% endblock %}
+{% block content %}
+
+<section class="search-bar-strip" data-testid="search-bar-strip">
+  <form class="search-bar" action="/jobs" method="get">
+    <div class="search-bar-group">
+      <span class="search-bar-icon" aria-hidden="true">🔍</span>
+      <input class="search-bar-input" type="text" name="q" value="{{ q }}"
+             placeholder="Job title, keywords, or company"
+             aria-label="search: Job title, keywords, or company"
+             data-testid="search-input-q"/>
+    </div>
+    <div class="search-bar-separator" aria-hidden="true"></div>
+    <div class="search-bar-group">
+      <span class="search-bar-icon" aria-hidden="true">📍</span>
+      <input class="search-bar-input" type="text" name="l" value="{{ l }}"
+             placeholder='City, state, zip code, or "remote"'
+             aria-label="Edit location"
+             data-testid="search-input-l"/>
+    </div>
+    {% if remote %}<input type="hidden" name="remote" value="1"/>{% endif %}
+    <button type="submit" class="btn btn-primary" data-testid="search-cta">Search</button>
+  </form>
+</section>
+
+<section class="results-header">
+  <h1 class="results-h1" data-testid="results-h1">{{ h1 }}</h1>
+  <div class="filter-chips" data-testid="filter-chips" role="tablist">
+    {% for chip in filter_chips %}
+      {% if chip == 'Remote' %}
+        {% set url_remote = ('/jobs?q=' + (q|urlencode) + '&l=' + (l|urlencode)) %}
+        {% if remote %}
+          <a href="{{ url_remote }}" class="chip chip-active" data-testid="chip-remote" role="tab" aria-selected="true">Remote</a>
+        {% else %}
+          <a href="{{ url_remote }}&remote=1" class="chip" data-testid="chip-remote" role="tab" aria-selected="false">Remote</a>
+        {% endif %}
+      {% else %}
+        <span class="chip" data-testid="chip-{{ chip|lower|replace(' ', '-') }}" role="tab" aria-selected="false">{{ chip }}</span>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <div class="results-substrip">
+    <span class="result-count" data-testid="result-count">1-{{ total_count }} of {{ total_count }} jobs</span>
+    <span class="sort-by"><label>Sort by:</label> <span class="sort-current">relevance</span></span>
+  </div>
+</section>
+
+<section class="results-pane" data-testid="results-pane">
+  <ul class="results-list" data-testid="results-list">
+    {% for job in jobs %}
+    <li class="result-card {% if selected and job.jk == selected.jk %}selected{% endif %}"
+        data-jk="{{ job.jk }}"
+        data-testid="result-card"
+        onclick="indeedSelectCard(event, '{{ job.jk }}')">
+      <h2 class="job-title"><a href="/viewjob?jk={{ job.jk }}" data-testid="job-title-link">{{ job.title }}</a></h2>
+      <div class="company-row">
+        <span class="company-name">{{ job.company.name }}</span>
+        <span class="rating-stars">★ {{ '%.1f'|format(job.company.rating) }}</span>
+        <span class="review-count">({{ job.company.review_count }} reviews)</span>
+      </div>
+      <div class="location-row">{{ job.location }}</div>
+      <div class="salary-row" data-testid="salary">{{ job.salary_display }}</div>
+      <p class="snippet">{{ job.snippet_short }}</p>
+      <div class="card-foot">
+        <span class="posted-rel">{{ job.posted_display }}</span>
+        <button class="bookmark-btn {% if job.id in saved_ids %}is-saved{% endif %}"
+                data-jk="{{ job.jk }}"
+                data-testid="bookmark-{{ job.jk }}"
+                onclick="indeedToggleSave(event, '{{ job.jk }}', this)"
+                aria-label="Save job">
+          <span class="bookmark-icon" aria-hidden="true">{% if job.id in saved_ids %}★{% else %}☆{% endif %}</span>
+        </button>
+      </div>
+    </li>
+    {% else %}
+    <li class="empty-results">No jobs match. Try a different query.</li>
+    {% endfor %}
+  </ul>
+
+  <aside class="detail-pane" id="detail-pane" data-testid="detail-pane">
+    {% if selected %}
+      {% with job = selected, is_saved = (selected.id in saved_ids) %}
+        {% include '_detail_pane.html' %}
+      {% endwith %}
+    {% else %}
+      <div class="empty-pane">Select a job to see details.</div>
+    {% endif %}
+  </aside>
+</section>
+
+<script>
+  // Track current selection client-side; update detail pane without nav.
+  function indeedSelectCard(ev, jk) {
+    if (ev.target.tagName === 'A' || ev.target.tagName === 'BUTTON' ||
+        ev.target.closest('a') || ev.target.closest('button')) return;
+    document.querySelectorAll('.result-card').forEach(c => c.classList.remove('selected'));
+    var card = document.querySelector('.result-card[data-jk="' + jk + '"]');
+    if (card) card.classList.add('selected');
+    var url = new URL(window.location.href);
+    url.searchParams.set('vjk', jk);
+    history.replaceState(null, '', url.toString());
+    fetch('/jobs/_detail?jk=' + encodeURIComponent(jk))
+      .then(r => r.text())
+      .then(html => { document.getElementById('detail-pane').innerHTML = html; });
+  }
+  function indeedToggleSave(ev, jk, btn) {
+    ev.stopPropagation();
+    var url = new URL(window.location.href);
+    var qs = '?q=' + encodeURIComponent(url.searchParams.get('q') || '')
+           + '&l=' + encodeURIComponent(url.searchParams.get('l') || '')
+           + '&remote=' + encodeURIComponent(url.searchParams.get('remote') || '');
+    fetch('/jobs/' + encodeURIComponent(jk) + '/save' + qs, {method: 'POST'})
+      .then(r => r.json())
+      .then(j => {
+        if (j.saved) { btn.classList.add('is-saved'); btn.querySelector('.bookmark-icon').textContent = '★'; }
+        else { btn.classList.remove('is-saved'); btn.querySelector('.bookmark-icon').textContent = '☆'; }
+      });
+  }
+  // Audit-log the search on page load so the oracle sees it.
+  (function () {
+    var qp = new URLSearchParams(window.location.search);
+    if (qp.get('q') || qp.get('l')) {
+      fetch('/jobs/_search_audit?' + qp.toString());
+    }
+  })();
+</script>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Review application: {{ job.title }} | Indeed{% endblock %}
+{% block content %}
+<section class="apply-card" data-testid="apply-card">
+  {% include '_apply_stepper.html' %}
+  <h1 class="apply-h1">Review your application</h1>
+  <div class="review-section">
+    <h2>Contact</h2>
+    <p>{{ draft.full_name }} · {{ draft.email }} · {{ draft.phone }}</p>
+    <p>{{ draft.city }}, {{ draft.state }} {{ draft.zip }}</p>
+    <a class="link-button" href="/apply/{{ job.jk }}" data-testid="edit-contact">Edit</a>
+  </div>
+  <div class="review-section">
+    <h2>Resume</h2>
+    <p>{{ draft.resume_id or 'No resume selected' }}</p>
+    <a class="link-button" href="/apply/{{ job.jk }}/resume" data-testid="edit-resume">Edit</a>
+  </div>
+  <div class="review-section">
+    <h2>Screening questions</h2>
+    <ul>
+      {% if draft.answers %}
+      <li>Years of experience: {{ draft.answers.yrs_experience }}</li>
+      <li>Authorized to work: {{ draft.answers.auth_to_work }}</li>
+      <li>Sponsorship: {{ draft.answers.sponsorship }}</li>
+      {% endif %}
+    </ul>
+    <a class="link-button" href="/apply/{{ job.jk }}/questions" data-testid="edit-q">Edit</a>
+  </div>
+  <form method="post" action="/apply/{{ job.jk }}/submit" class="apply-form">
+    <div class="form-actions">
+      <a class="btn btn-outline" href="/apply/{{ job.jk }}/questions">Back</a>
+      <button type="submit" class="btn btn-primary" data-testid="apply-submit">Submit application</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Create your account | Indeed{% endblock %}
+{% block content %}
+<section class="auth-card" data-testid="signup-card">
+  <h1>Create your account</h1>
+  {% if error %}<div class="error-banner" data-testid="signup-error">{{ error }}</div>{% endif %}
+  <form method="post" action="/signup" class="auth-form">
+    <label>Email <input type="email" name="email" required data-testid="signup-email"/></label>
+    <label>Password <input type="password" name="password" required data-testid="signup-password"/></label>
+    <label>Confirm password <input type="password" name="confirm" required data-testid="signup-confirm"/></label>
+    <label>Role
+      <select name="role" data-testid="signup-role">
+        <option value="seeker">Job seeker</option>
+        <option value="employer">Employer</option>
+      </select>
+    </label>
+    <button type="submit" class="btn btn-primary" data-testid="signup-submit">Create account</button>
+  </form>
+</section>
+{% endblock %}

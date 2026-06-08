@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} | Employer | Indeed{% endblock %}
+{% block content %}
+<section class="employer-posting">
+  <h1>{{ job.title }}</h1>
+  <p class="posting-meta">{{ job.location }} · Posted {{ job.posted_at }}</p>
+  <nav class="status-filter-chips" data-testid="status-filter-chips">
+    <a class="chip {% if status_filter == '' %}chip-active{% endif %}" href="/employers/jobs/{{ job.id }}">All</a>
+    <a class="chip {% if status_filter == 'new' %}chip-active{% endif %}" href="/employers/jobs/{{ job.id }}?status=new">New</a>
+    <a class="chip {% if status_filter == 'reviewed' %}chip-active{% endif %}" href="/employers/jobs/{{ job.id }}?status=reviewed">Reviewed</a>
+    <a class="chip {% if status_filter == 'rejected' %}chip-active{% endif %}" href="/employers/jobs/{{ job.id }}?status=rejected">Rejected</a>
+    <a class="chip {% if status_filter == 'hired' %}chip-active{% endif %}" href="/employers/jobs/{{ job.id }}?status=hired">Hired</a>
+  </nav>
+  <table class="applicants-table" data-testid="applicants-table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Resume</th>
+        <th>Status</th>
+        <th>Applied</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in applications %}
+      <tr data-testid="applicant-row-{{ a.id }}">
+        <td>{{ a.user_name }}<br/><small>{{ a.user_email }}</small></td>
+        <td>{{ a.resume_title or 'no resume' }}</td>
+        <td>
+          <form method="post" action="/employers/applications/{{ a.id }}/status" class="inline-form">
+            <select name="status" onchange="this.form.submit()" data-testid="status-select-{{ a.id }}">
+              <option value="new" {% if a.status == 'new' %}selected{% endif %}>New</option>
+              <option value="reviewed" {% if a.status == 'reviewed' %}selected{% endif %}>Reviewed</option>
+              <option value="rejected" {% if a.status == 'rejected' %}selected{% endif %}>Rejected</option>
+              <option value="hired" {% if a.status == 'hired' %}selected{% endif %}>Hired</option>
+            </select>
+          </form>
+        </td>
+        <td>{{ a.applied_at }}</td>
+        <td>
+          <form method="post" action="/employers/applications/{{ a.id }}/status" class="inline-form">
+            <input type="hidden" name="status" value="reviewed"/>
+            {% if a.status == 'new' %}
+            <button type="submit" class="btn btn-outline" data-testid="mark-reviewed-{{ a.id }}">Mark reviewed</button>
+            {% endif %}
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty-state">No applicants in this view.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

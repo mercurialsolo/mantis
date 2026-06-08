@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Apply: {{ job.title }} | Indeed{% endblock %}
+{% block content %}
+<section class="apply-card" data-testid="apply-card">
+  {% include '_apply_stepper.html' %}
+  <h1 class="apply-h1">Answer screening questions</h1>
+  <form method="post" action="/apply/{{ job.jk }}/review" class="apply-form">
+    <label>
+      How many years of professional experience do you have?
+      <input type="text" name="yrs_experience" required value="5"
+             data-testid="apply-q-yrs"/>
+    </label>
+    <label>
+      Are you authorized to work in the United States?
+      <select name="auth_to_work" data-testid="apply-q-auth">
+        <option>Yes</option>
+        <option>No</option>
+      </select>
+    </label>
+    <label>
+      Will you require visa sponsorship now or in the future?
+      <select name="sponsorship" data-testid="apply-q-sponsor">
+        <option>No</option>
+        <option>Yes</option>
+      </select>
+    </label>
+    <div class="form-actions">
+      <a class="btn btn-outline" href="/apply/{{ job.jk }}/resume">Back</a>
+      <button type="submit" class="btn btn-primary" data-testid="apply-continue">Continue</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

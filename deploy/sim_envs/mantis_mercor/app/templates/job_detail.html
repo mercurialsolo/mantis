@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}{{ job.title }} — Mercor{% endblock %}
+
+{% block content %}
+<section class="job-detail" data-testid="job-detail">
+  <div class="job-detail-main">
+    <div class="role-card-meta" style="margin-bottom: 8px;">
+      <span class="role-card-avatar">{{ job.title | initials }}</span>
+      <span class="role-card-recent">{{ job.hires_recently }} hired recently</span>
+    </div>
+    <h1 data-testid="job-detail-title">{{ job.title }}</h1>
+    <div class="job-detail-rate" data-testid="job-detail-rate">${{ job.rate_min | int }}-${{ job.rate_max | int }}/hr · {{ job.engagement }} · {{ job.hours_per_week }} hrs/wk</div>
+    <div class="job-detail-company" data-testid="job-detail-company">{{ job.company_name }}</div>
+
+    <h2>About this role</h2>
+    <div class="job-detail-desc">{{ job.description_md | replace('\n', '<br/>') | safe }}</div>
+
+    <h2>Skills required</h2>
+    <div class="skill-chips" data-testid="skills">
+      {% for s in job.skills %}
+        <span class="chip">{{ s }}</span>
+      {% endfor %}
+    </div>
+
+    <h2>Screening questions</h2>
+    <ol class="screening-list" data-testid="screening-preview">
+      {% for q in job.screening_questions %}
+        <li>{{ q }}</li>
+      {% endfor %}
+    </ol>
+  </div>
+  <aside class="job-detail-rail" data-testid="job-detail-rail">
+    <div class="rail-card">
+      <div class="rail-rate">${{ job.rate_min | int }}-${{ job.rate_max | int }}/hr</div>
+      <dl>
+        <dt>Engagement</dt><dd>{{ job.engagement }}</dd>
+        <dt>Hours / week</dt><dd>{{ job.hours_per_week }}</dd>
+        <dt>Category</dt><dd>{{ job.category }}</dd>
+      </dl>
+      <a class="btn-primary block" href="/apply/{{ job.id }}" data-testid="job-detail-apply">Apply</a>
+    </div>
+  </aside>
+</section>
+{% endblock %}

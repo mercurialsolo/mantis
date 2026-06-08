@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}My applications — Mercor{% endblock %}
+
+{% block content %}
+<section class="dashboard" data-testid="dashboard">
+  <h1>My applications</h1>
+  <p class="muted">Signed in as <b>{{ user.name or user.email }}</b> · candidate</p>
+  <table class="data-table" data-testid="apps-table">
+    <thead>
+      <tr><th>Role</th><th>Company</th><th>Status</th><th>Applied</th><th>Actions</th></tr>
+    </thead>
+    <tbody>
+      {% for a in applications %}
+      <tr data-app-id="{{ a.id }}" data-testid="app-row">
+        <td>{{ a.job_title }}</td>
+        <td>{{ a.company_name }}</td>
+        <td><span class="status status-{{ a.status }}">{{ a.status }}</span></td>
+        <td>{{ a.submitted_at or a.updated_at }}</td>
+        <td><a class="link-quiet" href="/jobs/{{ a.job_id }}">View role</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">No applications yet — <a href="/jobs">browse roles</a>.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

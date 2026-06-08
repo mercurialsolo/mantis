@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+
+{% block title %}{{ gig.title }} — {{ gig.seller_display }} on {{ site_name }}{% endblock %}
+
+{% block main %}
+<div class="page-wrap page-wrap--gig">
+  <nav class="breadcrumbs" aria-label="Breadcrumbs">
+    {% for c in crumbs %}
+      <a href="{{ c.slug if c.slug.startswith('/') else c.slug }}">{{ c.title }}</a>
+      {% if not loop.last %}<span>/</span>{% endif %}
+    {% endfor %}
+    <span>/</span>
+    <span>{{ gig.title|truncate(60) }}</span>
+  </nav>
+
+  <div class="gig-detail">
+    <div class="gig-detail__main">
+      <h1 class="gig-detail__title">{{ gig.title }}</h1>
+
+      <div class="gig-detail__seller-chip">
+        <img src="/assets/avatar/{{ gig.seller_avatar_palette }}_{{ gig.seller_display[:1] }}.svg"
+             alt="" width="40" height="40">
+        <a class="gig-detail__seller-name"
+           href="/inbox/new/{{ gig.seller_id }}">{{ gig.seller_display }}</a>
+        <span class="seller-level seller-level--{{ gig.seller_level }}">
+          {% if gig.seller_level == 'top_rated' %}Top Rated Seller
+          {% elif gig.seller_level == 'level_two' %}Level 2 Seller
+          {% elif gig.seller_level == 'level_one' %}Level 1 Seller
+          {% else %}New Seller{% endif %}
+        </span>
+        <span class="gig-detail__seller-rating">
+          <svg class="gig-card__star" viewBox="0 0 20 20" width="14" height="14"><polygon points="10,2 12,8 18,8 13,12 15,18 10,14 5,18 7,12 2,8 8,8" fill="#ffb33e"/></svg>
+          <strong>{{ "%.1f"|format(gig.avg_rating) }}</strong>
+          ({{ gig.review_count }})
+        </span>
+      </div>
+
+      <section class="gallery">
+        <div class="gallery__main" id="gallery-main"
+             style="background-image:url('/assets/gig/{{ gig.image_palette }}_0.svg')"></div>
+        <div class="gallery__thumbs">
+          {% for i in range(5) %}
+          <button type="button" class="gallery__thumb {% if loop.first %}is-active{% endif %}"
+                  data-thumb-url="/assets/gig/{{ gig.image_palette }}_{{ i }}.svg"
+                  aria-label="View thumbnail {{ i + 1 }}">
+            <img src="/assets/gig/{{ gig.image_palette }}_{{ i }}.svg" alt="" width="110" height="72">
+          </button>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="about-gig">
+        <h2>About this gig</h2>
+        <div class="about-gig__body">
+          {% for para in gig.description_md.split('\n\n') %}
+            <p>{{ para }}</p>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="about-seller">
+        <h2>About the seller</h2>
+        <div class="about-seller__card">
+          <img src="/assets/avatar/{{ gig.seller_avatar_palette }}_{{ gig.seller_display[:1] }}.svg"
+               alt="" width="80" height="80">
+          <div class="about-seller__body">
+            <h3>{{ gig.seller_display }}</h3>
+            <p class="about-seller__meta">From {{ gig.seller_country }} ·
+              Member since {{ gig.seller_member_since[:10] }} ·
+              Response time: {{ gig.seller_response_h }}h</p>
+            <p class="about-seller__langs">Languages:
+              {% for lang in gig.seller_languages %}{{ lang }}{% if not loop.last %}, {% endif %}{% endfor %}
+            </p>
+            <a class="btn btn--outline" href="/inbox/new/{{ gig.seller_id }}">Contact me</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="reviews">
+        <h2>Reviews</h2>
+        <p class="reviews__summary">
+          <svg class="gig-card__star" viewBox="0 0 20 20" width="16" height="16">
+            <polygon points="10,2 12,8 18,8 13,12 15,18 10,14 5,18 7,12 2,8 8,8" fill="#ffb33e"/>
+          </svg>
+          <strong>{{ "%.1f"|format(gig.avg_rating) }}</strong>
+          <span>({{ gig.review_count }} reviews)</span>
+        </p>
+        {% if reviews %}
+        <ul class="review-list">
+          {% for r in reviews %}
+          <li class="review">
+            <img src="/assets/avatar/{{ loop.index0 % 8 }}_{{ r.buyer_display[:1] }}.svg"
+                 alt="" width="40" height="40">
+            <div class="review__body">
+              <div class="review__head">
+                <strong>{{ r.buyer_display }}</strong>
+                <span class="review__stars">
+                  {% for s in range(5) %}
+                    <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true">
+                      <polygon points="10,2 12,8 18,8 13,12 15,18 10,14 5,18 7,12 2,8 8,8"
+                               fill="{{ '#ffb33e' if s < r.stars else '#e4e5e7' }}"/>
+                    </svg>
+                  {% endfor %}
+                </span>
+                <span class="review__date">{{ r.created_at[:10] }}</span>
+              </div>
+              <p>{{ r.body }}</p>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p>No reviews yet.</p>
+        {% endif %}
+      </section>
+    </div>
+
+    <aside class="package-picker" id="package-picker"
+           data-basic-title="{{ gig.pkg_basic_title }}"
+           data-basic-desc="{{ gig.pkg_basic_desc }}"
+           data-basic-price="{{ '%g'|format(gig.pkg_basic_price) }}"
+           data-basic-delivery="{{ gig.pkg_basic_delivery_d }}"
+           data-basic-revs="{{ gig.pkg_basic_revisions }}"
+           data-basic-features='{{ gig.pkg_basic_features|tojson }}'
+           data-standard-title="{{ gig.pkg_standard_title }}"
+           data-standard-desc="{{ gig.pkg_standard_desc }}"
+           data-standard-price="{{ '%g'|format(gig.pkg_standard_price) }}"
+           data-standard-delivery="{{ gig.pkg_standard_delivery_d }}"
+           data-standard-revs="{{ gig.pkg_standard_revisions }}"
+           data-standard-features='{{ gig.pkg_standard_features|tojson }}'
+           data-premium-title="{{ gig.pkg_premium_title }}"
+           data-premium-desc="{{ gig.pkg_premium_desc }}"
+           data-premium-price="{{ '%g'|format(gig.pkg_premium_price) }}"
+           data-premium-delivery="{{ gig.pkg_premium_delivery_d }}"
+           data-premium-revs="{{ gig.pkg_premium_revisions }}"
+           data-premium-features='{{ gig.pkg_premium_features|tojson }}'
+           data-gig-id="{{ gig.id }}">
+      <div class="package-tabs" role="tablist">
+        <button class="package-tab is-active" role="tab" data-tier="basic">Basic</button>
+        <button class="package-tab" role="tab" data-tier="standard">Standard</button>
+        <button class="package-tab" role="tab" data-tier="premium">Premium</button>
+      </div>
+      <div class="package-body">
+        <div class="package-body__head">
+          <span class="package-body__title" id="pkg-title">{{ gig.pkg_basic_title }}</span>
+          <span class="package-body__price">
+            <span class="cur">US$</span><span id="pkg-price">{{ "%g"|format(gig.pkg_basic_price) }}</span>
+          </span>
+        </div>
+        <p class="package-body__desc" id="pkg-desc">{{ gig.pkg_basic_desc }}</p>
+        <ul class="package-features" id="pkg-features">
+          {% for f in gig.pkg_basic_features %}<li>{{ f }}</li>{% endfor %}
+        </ul>
+        <div class="package-stats">
+          <span><strong id="pkg-delivery">{{ gig.pkg_basic_delivery_d }}</strong>-day delivery</span>
+          <span><strong id="pkg-revs">{{ gig.pkg_basic_revisions }}</strong> Revisions</span>
+        </div>
+        <form action="/checkout/{{ gig.id }}" method="get">
+          <input type="hidden" name="tier" id="pkg-tier" value="basic">
+          <button type="submit" class="btn btn--primary btn--block" id="pkg-cta">
+            Continue (US$<span id="pkg-cta-price">{{ "%g"|format(gig.pkg_basic_price) }}</span>)
+          </button>
+        </form>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+// Inline vanilla JS: package picker (no nav) + gallery thumb swap.
+(function() {
+  var picker = document.getElementById('package-picker');
+  if (picker) {
+    var tabs = picker.querySelectorAll('.package-tab');
+    tabs.forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        var tier = tab.dataset.tier;
+        tabs.forEach(function(t) { t.classList.toggle('is-active', t === tab); });
+        var price = picker.dataset[tier + 'Price'];
+        document.getElementById('pkg-title').textContent = picker.dataset[tier + 'Title'];
+        document.getElementById('pkg-desc').textContent = picker.dataset[tier + 'Desc'];
+        document.getElementById('pkg-price').textContent = price;
+        document.getElementById('pkg-delivery').textContent = picker.dataset[tier + 'Delivery'];
+        document.getElementById('pkg-revs').textContent = picker.dataset[tier + 'Revs'];
+        document.getElementById('pkg-tier').value = tier;
+        document.getElementById('pkg-cta-price').textContent = price;
+        var feats = JSON.parse(picker.dataset[tier + 'Features'] || '[]');
+        var ul = document.getElementById('pkg-features');
+        ul.innerHTML = feats.map(function(f) { return '<li>' + f + '</li>'; }).join('');
+      });
+    });
+  }
+  var thumbs = document.querySelectorAll('.gallery__thumb');
+  var main = document.getElementById('gallery-main');
+  thumbs.forEach(function(t) {
+    t.addEventListener('click', function() {
+      thumbs.forEach(function(x) { x.classList.remove('is-active'); });
+      t.classList.add('is-active');
+      if (main) main.style.backgroundImage = "url('" + t.dataset.thumbUrl + "')";
+    });
+  });
+})();
+</script>
+{% endblock %}

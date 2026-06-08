@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Join — {{ site_name }}{% endblock %}
+
+{% block main %}
+<div class="auth-wrap">
+  <h1>Create a new account</h1>
+  {% if error %}<p class="auth-error">{{ error }}</p>{% endif %}
+  <form action="/signup" method="post" class="auth-form">
+    <label>
+      Username
+      <input type="text" name="username" required>
+    </label>
+    <label>
+      Email
+      <input type="email" name="email" required>
+    </label>
+    <label>
+      Display name
+      <input type="text" name="display_name">
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" required>
+    </label>
+    <button type="submit" class="btn btn--primary btn--block btn--lg">Join</button>
+  </form>
+  <p class="auth-divider">— Or —</p>
+  <p class="auth-alt">Already have an account? <a href="/login">Sign in</a></p>
+</div>
+{% endblock %}
+{% block footer %}{% endblock %}

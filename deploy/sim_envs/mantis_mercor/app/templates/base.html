@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Mercor — Shape the frontier of AI{% endblock %}</title>
+  <link rel="stylesheet" href="/static/site.css" />
+</head>
+<body>
+<header class="topbar" data-testid="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/" data-testid="brand">
+      <span class="brand-mark">M</span> mercor
+    </a>
+    <nav class="primary-nav" data-testid="primary-nav">
+      <a href="/jobs?category=Software" data-testid="nav-apex">APEX</a>
+      <a href="/jobs?category=Software" data-testid="nav-apex-agents">APEX-Agents</a>
+      <a href="/jobs?category=Software" data-testid="nav-apex-swe">APEX-SWE</a>
+      <a href="/jobs" data-testid="nav-research">Research</a>
+      <a href="/jobs" data-testid="nav-enterprise">Enterprise</a>
+      <a href="/experts" data-testid="nav-experts">Experts</a>
+    </nav>
+    <div class="topbar-actions" data-testid="topbar-actions">
+      {% set _u = request.state.current_user if request.state and request.state.current_user else None %}
+      {% if _u %}
+        <a class="link-quiet" href="/dashboard" data-testid="topbar-dashboard">Dashboard</a>
+        <span class="topbar-avatar" data-testid="topbar-avatar">{{ _u.name | initials }}</span>
+        <form method="post" action="/logout" style="display:inline">
+          <button type="submit" class="btn-quiet" data-testid="topbar-logout">Sign out</button>
+        </form>
+      {% else %}
+        <a class="link-quiet" href="/login" data-testid="topbar-login">Sign in</a>
+        <a class="btn-primary" href="/signup" data-testid="topbar-signup">Sign up</a>
+      {% endif %}
+    </div>
+  </div>
+</header>
+<main class="page" data-testid="main">
+  {% block content %}{% endblock %}
+</main>
+<footer class="site-footer" data-testid="footer">
+  <div class="footer-inner">
+    <div>&copy; 2026 Mercor — synthetic mirror for agent training.</div>
+    <div class="footer-links">
+      <a href="/jobs">Roles</a>
+      <a href="/experts">Experts</a>
+      <a href="/login">Sign in</a>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

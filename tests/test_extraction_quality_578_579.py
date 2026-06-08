@@ -42,35 +42,27 @@ def _result_schema(year: str = "", make: str = "") -> ExtractionResult:
     return r
 
 
-def test_legacy_all_empty_not_viable() -> None:
-    assert _result_legacy(year="", make="").is_viable() is False
+# Legacy no-schema viability tests deleted (#785 follow-up).
+#
+# Pre-rip the validator silently treated ``year + make + private_seller``
+# as the universal viability contract — boattrader-shape baggage leaking
+# into every plan. Post-rip, no schema → not viable, with an explicit
+# ``no_schema_configured`` reason. The schema-driven test cases below
+# (``test_schema_*``) carry the same coverage on the supported code
+# path. See ``feedback_legacy_fallback_smell.md``.
 
 
-def test_legacy_unknown_placeholder_not_viable() -> None:
-    # The bug from boattrader run 20260521_234022_65ddaaff: model
-    # returned "<UNKNOWN>" for every field, dedup accepted it.
-    r = _result_legacy(year="<UNKNOWN>", make="<UNKNOWN>", seller="private seller")
+def test_no_schema_returns_no_schema_configured_reason() -> None:
+    """The honest replacement for the deleted legacy tests."""
+    r = _result_legacy(year="", make="")
     assert r.is_viable() is False
-    assert "year" in r.missing_required_reason()
-    assert "make" in r.missing_required_reason()
+    assert r.missing_required_reason() == "no_schema_configured"
 
-
-def test_legacy_none_placeholder_not_viable() -> None:
-    r = _result_legacy(year="none", make="N/A", seller="private seller")
-    assert r.is_viable() is False
-
-
-def test_legacy_real_values_viable() -> None:
-    r = _result_legacy(
-        year="2020", make="Sea Ray", seller="John Smith (private)",
-    )
-    assert r.is_viable() is True
-
-
-def test_legacy_year_real_make_unknown_not_viable() -> None:
-    # Partial-UNKNOWN still fails the required check.
-    r = _result_legacy(year="2020", make="<UNKNOWN>", seller="private")
-    assert r.is_viable() is False
+    # Real values without a schema are still not viable — having
+    # year/make populated doesn't certify the contract.
+    r_real = _result_legacy(year="2020", make="Sea Ray", seller="private")
+    assert r_real.is_viable() is False
+    assert r_real.missing_required_reason() == "no_schema_configured"
 
 
 def test_schema_all_unknown_not_viable() -> None:

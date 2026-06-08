@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% from "_role_card.html" import role_card %}
+
+{% block title %}Experts — Mercor{% endblock %}
+
+{% block content %}
+<section class="hero" data-testid="hero">
+  <div class="hero-inner">
+    <h1 class="hero-h1" data-testid="hero-h1">Get paid to work on AI projects</h1>
+    <p class="hero-sub" data-testid="hero-sub">Domain experts shape frontier AI — on your schedule, fully remote.</p>
+  </div>
+</section>
+
+<section class="howitworks" data-testid="howitworks">
+  <div class="howitworks-inner">
+    <div class="howitworks-step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <div class="step-title">Create a profile</div>
+        <div class="step-blurb">Tell us your domain, rate and availability.</div>
+      </div>
+    </div>
+    <div class="howitworks-step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <div class="step-title">Take AI assessments</div>
+        <div class="step-blurb">Calibrate your skills against the role.</div>
+      </div>
+    </div>
+    <div class="howitworks-step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <div class="step-title">Find opportunities</div>
+        <div class="step-blurb">Apply to current listings — get hired fast.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="latest-roles" data-testid="latest-roles">
+  <div class="latest-roles-header">
+    <h2>Latest roles</h2>
+    <a class="link-quiet" href="/jobs">See all →</a>
+  </div>
+  <div class="role-grid">
+    {% for job in latest_jobs %}
+      {{ role_card(job) }}
+    {% endfor %}
+  </div>
+</section>
+
+<section class="faq" data-testid="faq">
+  <h2>FAQ</h2>
+  <details>
+    <summary>What is Mercor?</summary>
+    <p>Mercor is an AI talent marketplace that connects domain experts with frontier AI labs.</p>
+  </details>
+  <details>
+    <summary>What is AI training work?</summary>
+    <p>You'll review AI outputs in your area of expertise, flag errors, and help calibrate models.</p>
+  </details>
+</section>
+{% endblock %}

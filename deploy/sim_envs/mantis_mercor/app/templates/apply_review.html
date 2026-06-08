@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Submit application — Mercor{% endblock %}
+
+{% block content %}
+<section class="apply-flow" data-testid="apply-flow">
+  <div class="apply-header">
+    <div class="apply-crumbs">
+      <a href="/jobs/{{ job.id }}">{{ job.title }}</a> · Review &amp; submit
+    </div>
+    <div class="apply-progress">Final step</div>
+  </div>
+
+  <h1>Review your application</h1>
+  <div class="review-grid" data-testid="apply-review-grid">
+    <div><b>Role</b><div>{{ job.title }}</div></div>
+    <div><b>Headline</b><div>{{ draft.headline or '—' }}</div></div>
+    <div><b>Skills</b><div>{{ draft.skills or '—' }}</div></div>
+    <div><b>Rate</b><div>${{ draft.hourly_rate or '—' }}/hr</div></div>
+    <div><b>Resume preview</b><div>{{ (draft.resume_text or '')[:200] }}{% if draft.resume_text and draft.resume_text|length > 200 %}…{% endif %}</div></div>
+    <div><b>Screening answers</b>
+      <ol>
+        {% for q in screening_qs %}
+          <li><b>{{ q }}</b><br/>{{ draft.answers[loop.index0] if draft.answers and draft.answers|length > loop.index0 else '' }}</li>
+        {% endfor %}
+      </ol>
+    </div>
+  </div>
+  <form method="post" action="/apply/{{ job.id }}/submit" class="apply-form" data-testid="apply-submit-form">
+    <div class="apply-actions">
+      <a class="btn-secondary" href="/apply/{{ job.id }}/step/4" data-testid="apply-back-review">Back</a>
+      <button class="btn-primary" type="submit" data-testid="apply-submit">Submit application</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Application submitted | Indeed{% endblock %}
+{% block content %}
+<section class="apply-card success-card" data-testid="apply-success">
+  <div class="success-icon" aria-hidden="true">✓</div>
+  <h1 class="apply-h1">Application submitted</h1>
+  <p>Your application for <strong>{{ job.title }}</strong> has been sent to the employer.</p>
+  <div class="form-actions">
+    <a class="btn btn-outline" href="/myjobs?tab=applied">View my applications</a>
+    <a class="btn btn-primary" href="/jobs">Find more jobs</a>
+  </div>
+</section>
+{% endblock %}

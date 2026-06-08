@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}LinkedIn (mantis mirror){% endblock %}</title>
+  <link rel="stylesheet" href="/static/site.css" />
+</head>
+<body>
+{% block topnav %}
+<header class="topnav" data-testid="topnav">
+  <div class="topnav-inner">
+    <a href="/feed/" class="brand-mark" data-testid="brand">
+      <span class="brand-square">in</span>
+    </a>
+    <form class="topnav-search" action="/jobs/search/" method="get">
+      <input type="text" name="keywords"
+             value="{{ request.query_params.get('keywords') or '' }}"
+             placeholder="Search" data-testid="topnav-search"/>
+    </form>
+    <nav class="topnav-icons" data-testid="topnav-icons">
+      <a class="ico {% if request.url.path.startswith('/feed') %}active{% endif %}"
+         href="/feed/" data-testid="nav-home">
+        <span class="ico-glyph">⌂</span><span class="ico-label">Home</span>
+      </a>
+      <a class="ico {% if request.url.path.startswith('/mynetwork') %}active{% endif %}"
+         href="/mynetwork/" data-testid="nav-network">
+        <span class="ico-glyph">◉</span><span class="ico-label">My Network</span>
+      </a>
+      <a class="ico {% if request.url.path.startswith('/jobs') %}active{% endif %}"
+         href="/jobs/" data-testid="nav-jobs">
+        <span class="ico-glyph">▤</span><span class="ico-label">Jobs</span>
+      </a>
+      <a class="ico {% if request.url.path.startswith('/messaging') %}active{% endif %}"
+         href="/messaging/" data-testid="nav-messaging">
+        <span class="ico-glyph">✉</span><span class="ico-label">Messaging</span>
+      </a>
+      <a class="ico" href="#" data-testid="nav-notifications">
+        <span class="ico-glyph">🔔</span><span class="ico-label">Notifications</span>
+      </a>
+      {% set _u = request.state.current_user if request.state and request.state.current_user else None %}
+      {% if _u %}
+        <div class="ico me-chip" data-testid="nav-me">
+          <span class="avatar avatar-sm"
+                style="background:{{ _u.avatar_color or '#0a66c2' }}">
+            {{ _u.name[:1]|upper }}</span>
+          <span class="ico-label">Me ▾</span>
+        </div>
+        <form method="post" action="/logout" style="display:inline">
+          <button type="submit" class="ico-link" data-testid="nav-logout">Sign out</button>
+        </form>
+      {% else %}
+        <a class="ico" href="/login" data-testid="nav-login">
+          <span class="ico-glyph">→</span><span class="ico-label">Sign in</span>
+        </a>
+      {% endif %}
+    </nav>
+  </div>
+</header>
+{% endblock %}
+
+<main class="page" data-testid="page">
+  {% block content %}{% endblock %}
+</main>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

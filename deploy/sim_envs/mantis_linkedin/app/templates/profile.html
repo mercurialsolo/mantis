@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}{{ profile.name }} | LinkedIn (mantis mirror){% endblock %}
+{% block content %}
+<div class="profile-grid" data-testid="profile-grid">
+  <section class="profile-main">
+
+    <section class="card hero-card" data-testid="profile-hero">
+      <div class="hero-banner"
+           style="background:linear-gradient(135deg,{{ profile.avatar_color }} 0%,#1d4477 100%)"></div>
+      <div class="hero-body">
+        <div class="hero-avatar avatar"
+             style="background:{{ profile.avatar_color }}">
+          {{ profile.name[:1]|upper }}
+        </div>
+        <h1 class="hero-name" data-testid="profile-name">{{ profile.name }}</h1>
+        <div class="hero-headline" data-testid="profile-headline">{{ profile.headline }}</div>
+        <div class="hero-meta">
+          <span class="hero-location">{{ profile.location }}</span>
+          <span class="hero-meta-sep">•</span>
+          <a class="hero-contact" href="#">Contact info</a>
+        </div>
+        <div class="hero-conn-link">
+          <a href="/mynetwork/">{{ connection_count }} connections</a>
+        </div>
+        <div class="hero-actions">
+          {% if is_self %}
+            <button class="btn-primary" data-testid="action-open-to">Open to ▾</button>
+            <button class="btn-secondary" data-testid="action-add-section">Add profile section</button>
+            <button class="btn-secondary" data-testid="action-enhance">Enhance profile</button>
+            <button class="btn-secondary" data-testid="action-more">More</button>
+          {% else %}
+            {% if conn_state == 'accepted' %}
+              <button class="btn-secondary" disabled data-testid="action-connected">✓ Connected</button>
+            {% elif conn_state == 'pending' %}
+              <button class="btn-secondary" disabled data-testid="action-pending">Pending</button>
+            {% else %}
+              <button class="btn-primary" data-testid="action-connect"
+                      onclick="document.getElementById('connect-modal').showModal()">Connect</button>
+            {% endif %}
+            <a class="btn-secondary" href="/messaging/?to={{ profile.handle }}"
+               data-testid="action-message">Message</a>
+            <button class="btn-secondary" data-testid="action-more">More</button>
+          {% endif %}
+        </div>
+      </div>
+    </section>
+
+    <section class="card section-card" data-testid="about-section">
+      <header class="section-header"><h2>About</h2></header>
+      <p class="about-body">{{ profile.about }}</p>
+    </section>
+
+    <section class="card section-card" data-testid="experience-section">
+      <header class="section-header"><h2>Experience</h2></header>
+      <ul class="role-list">
+        {% for r in experience %}
+          <li class="role-row" data-testid="experience-row">
+            <span class="role-logo" aria-hidden="true">{{ r.company[:1]|upper }}</span>
+            <div class="role-meta">
+              <div class="role-title">{{ r.title }}</div>
+              <div class="role-company">{{ r.company }}</div>
+              <div class="role-dates">
+                {{ r.start_date[:7] }} — {{ r.end_date[:7] if r.end_date else 'Present' }}
+              </div>
+              <div class="role-location">{{ r.location }}</div>
+              <div class="role-desc">{{ r.description }}</div>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="card section-card" data-testid="education-section">
+      <header class="section-header"><h2>Education</h2></header>
+      <ul class="role-list">
+        {% for e in education %}
+          <li class="role-row" data-testid="education-row">
+            <span class="role-logo">{{ e.school[:1]|upper }}</span>
+            <div class="role-meta">
+              <div class="role-title">{{ e.school }}</div>
+              <div class="role-company">{{ e.degree }}, {{ e.field }}</div>
+              <div class="role-dates">{{ e.start_year }} — {{ e.end_year }}</div>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="card section-card" data-testid="skills-section">
+      <header class="section-header"><h2>Skills</h2></header>
+      <ul class="skills-list">
+        {% for s in skills %}
+          <li class="skill-row" data-testid="skill-row">
+            <span class="skill-name">{{ s.name }}</span>
+            <span class="skill-endorse">Endorsed by {{ s.endorsements }} connections</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="card section-card" data-testid="activity-section">
+      <header class="section-header">
+        <h2>Activity</h2>
+        <span class="section-caption">{{ activity|length }} recent posts</span>
+      </header>
+      {% if activity %}
+        <ul class="activity-list">
+          {% for a in activity %}
+            <li class="activity-row">
+              <div class="activity-body">{{ a.body[:240] }}</div>
+              <div class="activity-meta">{{ a.created_at }}</div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">No recent activity.</p>
+      {% endif %}
+    </section>
+  </section>
+</div>
+
+<dialog id="connect-modal" class="modal" data-testid="connect-modal">
+  <form method="post" action="/in/{{ profile.handle }}/connect" class="modal-card connect-modal">
+    <header class="modal-header">
+      <h3>Add a note to your invitation?</h3>
+      <button type="button" class="modal-close"
+              onclick="document.getElementById('connect-modal').close()">×</button>
+    </header>
+    <p class="modal-sub">
+      Including a personal note can help you connect with {{ profile.name.split()[0] }}.
+    </p>
+    <textarea name="note" rows="4" maxlength="300" placeholder="Add a note"
+              data-testid="connect-note"></textarea>
+    <footer class="modal-footer">
+      <button type="button" class="btn-secondary"
+              onclick="document.getElementById('connect-modal').close()">Cancel</button>
+      <button class="btn-primary" type="submit" data-testid="connect-send">Send</button>
+    </footer>
+  </form>
+</dialog>
+{% endblock %}

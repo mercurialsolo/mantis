@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Sign up — Mercor{% endblock %}
+
+{% block content %}
+<section class="auth-page" data-testid="auth-page">
+  <div class="auth-card" data-testid="auth-card">
+    <h1>Join Mercor</h1>
+    {% if error %}<div class="alert alert-error" data-testid="signup-error">{{ error }}</div>{% endif %}
+    <form method="post" action="/signup" data-testid="signup-form">
+      <fieldset class="role-radio">
+        <legend>I'm a</legend>
+        <label><input type="radio" name="role" value="candidate" checked /> Candidate</label>
+        <label><input type="radio" name="role" value="client" /> Client</label>
+      </fieldset>
+      <label>Name<input type="text" name="name" data-testid="signup-name" /></label>
+      <label>Email<input type="email" name="email" required data-testid="signup-email" /></label>
+      <label>Password<input type="password" name="password" required data-testid="signup-password" /></label>
+      <button type="submit" class="btn-primary block" data-testid="signup-submit">Create account</button>
+    </form>
+    <div class="auth-alt">Already have an account? <a href="/login">Sign in</a></div>
+  </div>
+</section>
+{% endblock %}

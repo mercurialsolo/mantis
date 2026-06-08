@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}Order {{ order.number }} — {{ site_name }}{% endblock %}
+
+{% block main %}
+<div class="page-wrap page-wrap--narrow">
+  <div class="order-header-card">
+    <div>
+      <h1>Order {{ order.number }}</h1>
+      <span class="status status--{{ order.status }}">{{ order.status.title() }}</span>
+      <p class="muted">
+        Placed {{ order.placed_at[:10] }} · Due {{ order.due_at[:10] }}
+      </p>
+      <p class="muted">
+        Gig: <a href="/{{ order.seller_username }}/{{ order.gig_slug }}">{{ order.gig_title }}</a>
+        · Seller: {{ order.seller_display }}
+      </p>
+    </div>
+    <div class="order-header-card__total">
+      <span class="muted">Total</span>
+      <strong>US${{ "%g"|format(order.total) }}</strong>
+    </div>
+  </div>
+
+  <div class="order-actions">
+    <a href="/inbox/new/{{ order.seller_id }}" class="btn btn--outline">Message seller</a>
+  </div>
+
+  <section class="deliverables">
+    <h2>Deliverables</h2>
+    {% if order.status == 'active' %}
+      <p class="muted">Awaiting delivery from the seller.</p>
+    {% elif order.status == 'cancelled' %}
+      <p class="muted">Order was cancelled — no deliverables.</p>
+    {% else %}
+      <ul>
+        <li>final_design.zip <span class="muted">— 4.2 MB</span></li>
+        <li>working_files.zip <span class="muted">— 18.1 MB</span></li>
+      </ul>
+    {% endif %}
+  </section>
+
+  <section class="order-items">
+    <h2>Line items</h2>
+    <table>
+      <thead><tr><th>Description</th><th>Qty</th><th>Price</th></tr></thead>
+      <tbody>
+        {% for it in items %}
+        <tr><td>{{ it.description }}</td><td>{{ it.quantity }}</td><td>US${{ "%g"|format(it.unit_price) }}</td></tr>
+        {% endfor %}
+        <tr class="subtotal">
+          <td colspan="2"><strong>Subtotal</strong></td>
+          <td>US${{ "%g"|format(order.subtotal) }}</td>
+        </tr>
+        <tr>
+          <td colspan="2">Service fee</td>
+          <td>US${{ "%g"|format(order.service_fee) }}</td>
+        </tr>
+        <tr class="total">
+          <td colspan="2"><strong>Total</strong></td>
+          <td><strong>US${{ "%g"|format(order.total) }}</strong></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  {% if order.status == 'completed' and review is none %}
+  <section class="review-cta">
+    <h2>Leave a review</h2>
+    <form action="/orders/{{ order.id }}/review" method="post" class="review-form">
+      <div class="stars-input">
+        {% for n in [1,2,3,4,5] %}
+        <label class="star-label">
+          <input type="radio" name="stars" value="{{ n }}" {% if n == 5 %}checked{% endif %}>
+          <svg viewBox="0 0 20 20" width="32" height="32"><polygon points="10,2 12,8 18,8 13,12 15,18 10,14 5,18 7,12 2,8 8,8" fill="#ffb33e"/></svg>
+        </label>
+        {% endfor %}
+      </div>
+      <textarea name="body" rows="4" placeholder="Share more about your experience..."></textarea>
+      <button type="submit" class="btn btn--primary">Publish review</button>
+    </form>
+  </section>
+  {% elif review %}
+  <section class="review-card">
+    <h2>Your review</h2>
+    <p class="review-card__stars">
+      {% for s in range(5) %}
+      <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+        <polygon points="10,2 12,8 18,8 13,12 15,18 10,14 5,18 7,12 2,8 8,8"
+                 fill="{{ '#ffb33e' if s < review.stars else '#e4e5e7' }}"/>
+      </svg>
+      {% endfor %}
+    </p>
+    <p>{{ review.body }}</p>
+    <p class="muted small">Posted {{ review.created_at[:10] }}</p>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

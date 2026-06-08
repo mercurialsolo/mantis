@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in — Mercor{% endblock %}
+
+{% block content %}
+<section class="auth-page" data-testid="auth-page">
+  <div class="auth-card" data-testid="auth-card">
+    <h1>Sign in to Mercor</h1>
+    {% if error %}<div class="alert alert-error" data-testid="login-error">{{ error }}</div>{% endif %}
+    <form method="post" action="/login" data-testid="login-form">
+      <input type="hidden" name="next" value="{{ next }}" />
+      <label>Email
+        <input type="email" name="email" required data-testid="login-email" />
+      </label>
+      <label>Password
+        <input type="password" name="password" required data-testid="login-password" />
+      </label>
+      <button type="submit" class="btn-primary block" data-testid="login-submit">Sign in</button>
+    </form>
+    <div class="auth-alt">Don't have an account? <a href="/signup">Sign up</a></div>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% from "_gig_card.html" import gig_card %}
+
+{% block main %}
+<section class="hero" aria-label="Hero">
+  <div class="hero__content">
+    <h1 class="hero__title">Find the right freelance service, right away</h1>
+    <form class="hero__search" action="/search/gigs" method="get" role="search">
+      <input type="text" name="query"
+             placeholder="Search for any service…" aria-label="Search">
+      <button type="submit">
+        <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+          <circle cx="8" cy="8" r="6" stroke="white" stroke-width="2" fill="none"/>
+          <line x1="13" y1="13" x2="18" y2="18" stroke="white" stroke-width="2"/>
+        </svg>
+        Search
+      </button>
+    </form>
+    <div class="hero__chips" role="list" aria-label="Popular searches">
+      <span class="hero__chips-label">Popular:</span>
+      {% for chip in popular_chips %}
+      <a class="hero__chip" role="listitem"
+         href="/search/gigs?query={{ chip|urlencode }}">{{ chip }}</a>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="trusted-row" aria-label="Trusted by">
+  <span class="trusted-row__label">Trusted by:</span>
+  <span class="trusted-row__brand">Meta</span>
+  <span class="trusted-row__brand">Google</span>
+  <span class="trusted-row__brand">Netflix</span>
+  <span class="trusted-row__brand">P&amp;G</span>
+  <span class="trusted-row__brand">PayPal</span>
+</section>
+
+<section class="section" aria-labelledby="popular-services">
+  <h2 id="popular-services" class="section__title">Popular services</h2>
+  <div class="popular-carousel">
+    {% set names = ["AI Artists", "Logo Design", "WordPress", "Voice Over", "Video Editing", "Social Media"] %}
+    {% set subs = ["Add Promise", "Build your brand", "Customize your site", "Share your message", "Bring your story", "Reach more customers"] %}
+    {% for n in names %}
+    <a class="popular-card popular-card--p{{ loop.index0 }}"
+       href="/search/gigs?query={{ n|urlencode }}">
+      <span class="popular-card__title">{{ n }}</span>
+      <span class="popular-card__sub">{{ subs[loop.index0] }}</span>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section" aria-labelledby="categories">
+  <h2 id="categories" class="section__title">You need it, we&rsquo;ve got it</h2>
+  <div class="categories-grid">
+    {% for cat in categories %}
+    <a class="cat-tile" href="/categories/{{ cat.slug }}">
+      <img class="cat-tile__icon" src="/assets/category/{{ cat.slug }}.svg"
+           alt="" width="48" height="48">
+      <span class="cat-tile__label">{{ cat.title }}</span>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section" aria-labelledby="recommended">
+  <h2 id="recommended" class="section__title">Recommended for you</h2>
+  <div class="gig-grid gig-grid--4">
+    {% for g in featured %}
+      {{ gig_card(g) }}
+    {% endfor %}
+  </div>
+</section>
+
+<section class="business-cta" aria-label="Fiverr Business">
+  <div class="business-cta__inner">
+    <h2 class="business-cta__title">A whole world of freelance talent at your fingertips</h2>
+    <p class="business-cta__sub">The best for every budget — connect with sellers vetted for quality.</p>
+    <a class="business-cta__btn" href="/signup">Get Started</a>
+  </div>
+</section>
+{% endblock %}
