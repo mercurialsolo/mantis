@@ -59,6 +59,23 @@
           "type": "integer",
           "minimum": 1,
           "description": "Per-run wall-clock ceiling in minutes. The runner halts when exceeded."
+        },
+        "state_repeat_threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Loop-stuck guard (#782): halt when this many consecutive iterations have an identical (url, screenshot, visible-text) fingerprint. 0 disables. Plan-level opt-in — recipes can override per-loop. Halts with class `loop_stuck`."
+        },
+        "pinned_source_url_pattern": {
+          "type": "string",
+          "default": "",
+          "description": "Off-source-drift guard (#782): URL pattern the loop expects to stay inside. Accepts an exact origin (`https://news.ycombinator.com`) or a glob (`https://news.ycombinator.com/*`). Empty disables. Halts with class `off_source_drift` after `off_source_step_budget` consecutive off-pattern steps."
+        },
+        "off_source_step_budget": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Off-source-drift guard companion (#782): how many consecutive off-pattern steps tolerated before halting. 0 disables the guard regardless of pattern."
         }
       }
     },
