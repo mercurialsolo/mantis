@@ -5,12 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from mantis_agent.gym.loop_guards import (
     LOOP_STUCK,
     OFF_SOURCE_DRIFT,
-    LoopGuardHalt,
     LoopGuardSuite,
     OffSourceDriftGuard,
     StateRepeatGuard,
