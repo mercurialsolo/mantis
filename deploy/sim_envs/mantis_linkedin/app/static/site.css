@@ -703,6 +703,70 @@ pre.md-body {
 .company-tagline { color: rgba(0,0,0,0.7); font-size: 14px; }
 .company-followers { color: rgba(0,0,0,0.6); font-size: 12px; margin-bottom: 8px; }
 
+/* ────────────────────── post media + sponsored ────────────────────── */
+.post-media {
+  position: relative;
+  margin: 0 -16px 0;
+  padding: 0;
+  background: #d9dde3;
+}
+.post-media svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 460px;
+}
+.post-media-video svg { cursor: pointer; }
+.post-media-duration {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background: rgba(0,0,0,0.72);
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.post-media-caption {
+  margin: 0;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: rgba(0,0,0,0.7);
+  background: #f4f2ee;
+  border-top: 1px solid #ebe9e5;
+}
+.post-card-sponsored {
+  border-color: #e1dfd9;
+  background: #fffefb;
+}
+.post-promoted-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #4f4940;
+  background: #f3efe6;
+  border: 1px solid #e4ddd1;
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin-right: 2px;
+  text-transform: uppercase;
+}
+.post-promoted-cta {
+  display: block;
+  text-align: center;
+  background: #0a66c2;
+  color: #fff;
+  font-weight: 600;
+  padding: 9px 14px;
+  border-radius: 22px;
+  margin: 12px 0 4px;
+  text-decoration: none;
+  font-size: 14px;
+}
+.post-promoted-cta:hover { background: #084c8e; }
+
 /* ────────────────────── responsive guard ────────────────────── */
 @media (max-width: 1240px) {
   .feed-grid { grid-template-columns: 200px 540px 280px; gap: 16px; }

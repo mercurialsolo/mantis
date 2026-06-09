@@ -348,6 +348,30 @@ def seed(conn: sqlite3.Connection, *, seed_val: int, fake_now: str) -> None:
         _add_conn(a, b, status="accepted")
 
     # ── posts: 30 in reverse-chronological time ─────────────────────
+    # ~70% of posts carry a media item (mix of images + videos). The
+    # field stores a JSON spec — feed.html renders a deterministic inline
+    # SVG from (kind, palette) so no static files need to ship.
+    _MEDIA_PALETTES = [
+        "sunset", "ocean", "forest", "midnight", "amber",
+        "violet", "slate", "ember", "mint", "rose",
+    ]
+    _IMAGE_CAPTIONS = [
+        "Architecture diagram of our new pipeline",
+        "Team offsite — Q2 in review",
+        "Conference talk slides — link in comments",
+        "Whiteboard from the design review",
+        "Mapping our roadmap for the next quarter",
+        "Snapshot from the platform migration",
+        "Charts from the latest retrospective",
+        "Annotated dashboard of yesterday's incident",
+    ]
+    _VIDEO_CAPTIONS = [
+        "5 min walkthrough of the new release",
+        "Demo: shipping the feature end-to-end",
+        "Recording from this morning's all-hands",
+        "Quick clip from the customer interview",
+        "Behind the scenes of the rebuild",
+    ]
     post_idx = 0
     for i in range(30):
         post_idx += 1
@@ -360,11 +384,134 @@ def seed(conn: sqlite3.Connection, *, seed_val: int, fake_now: str) -> None:
         tags = extract_hashtags(body)
         # back-dated by i hours
         created_at = f"2026-06-08T0{(8 - (i % 8)):d}:00:00Z"
+        # Attach media: ~50% image, ~20% video, ~30% text-only.
+        roll = rng.random()
+        if roll < 0.5:
+            media = [{
+                "kind": "image",
+                "palette": rng.choice(_MEDIA_PALETTES),
+                "caption": rng.choice(_IMAGE_CAPTIONS),
+                "alt": "Post image",
+            }]
+        elif roll < 0.7:
+            media = [{
+                "kind": "video",
+                "palette": rng.choice(_MEDIA_PALETTES),
+                "caption": rng.choice(_VIDEO_CAPTIONS),
+                "duration": f"{rng.randint(1,9)}:{rng.randint(10,59):02d}",
+                "alt": "Post video",
+            }]
+        else:
+            media = []
         conn.execute(
             "INSERT INTO posts (id, author_id, body, hashtags, visibility, "
-            "created_at) VALUES (?,?,?,?,?,?)",
+            "created_at, media, sponsored, advertiser, cta_label, cta_url) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (_hid("post", post_idx, 5), author["id"], body,
-             db.pack_json(tags), "public", created_at),
+             db.pack_json(tags), "public", created_at,
+             db.pack_json(media), 0, "", "", ""),
+        )
+
+    # ── sponsored posts: 5 promoted entries with explicit media ────
+    _SPONSORED = [
+        {
+            "advertiser": "Vercel",
+            "headline": "Sponsored",
+            "body": ("Ship faster with the platform purpose-built for "
+                     "frontend frameworks. Try Vercel free."),
+            "media_kind": "image",
+            "palette": "midnight",
+            "caption": "Deploy in 30 seconds",
+            "cta_label": "Sign up free",
+            "cta_url": "/promoted/vercel",
+            "avatar_color": "#000000",
+        },
+        {
+            "advertiser": "Stripe",
+            "headline": "Sponsored",
+            "body": ("Launch your subscription billing in days, not "
+                     "quarters. See how teams scale revenue with Stripe."),
+            "media_kind": "video",
+            "palette": "violet",
+            "caption": "2:14 — Walkthrough: invoicing & tax",
+            "duration": "2:14",
+            "cta_label": "Watch the demo",
+            "cta_url": "/promoted/stripe",
+            "avatar_color": "#635bff",
+        },
+        {
+            "advertiser": "Notion",
+            "headline": "Sponsored",
+            "body": ("The connected workspace where better, faster work "
+                     "happens. Free for teams, forever."),
+            "media_kind": "image",
+            "palette": "slate",
+            "caption": "Templates for engineering teams",
+            "cta_label": "Get Notion free",
+            "cta_url": "/promoted/notion",
+            "avatar_color": "#191919",
+        },
+        {
+            "advertiser": "AWS",
+            "headline": "Sponsored",
+            "body": ("Build & scale on the cloud trusted by the most "
+                     "demanding businesses. New free-tier credits live."),
+            "media_kind": "image",
+            "palette": "amber",
+            "caption": "Reference architecture: serverless data lakes",
+            "cta_label": "Learn more",
+            "cta_url": "/promoted/aws",
+            "avatar_color": "#ff9900",
+        },
+        {
+            "advertiser": "Figma",
+            "headline": "Promoted",
+            "body": ("Design, prototype, and collaborate in one place. "
+                     "Now with multiplayer Dev Mode."),
+            "media_kind": "video",
+            "palette": "rose",
+            "caption": "1:42 — What's new in Dev Mode",
+            "duration": "1:42",
+            "cta_label": "Try Figma free",
+            "cta_url": "/promoted/figma",
+            "avatar_color": "#a259ff",
+        },
+    ]
+    # Sponsored authors are 'pseudo-users' with the advertiser handle so
+    # the foreign key holds. We pick the first 5 user slots as proxies
+    # but override the displayed name + avatar via the post columns.
+    for s_idx, s in enumerate(_SPONSORED, start=1):
+        post_idx += 1
+        # back-date sponsored posts so they interleave with organic ones
+        # (post-rendering injects them at fixed indexes; see feed.py)
+        created_at = f"2026-06-08T0{(8 - (s_idx % 8)):d}:30:00Z"
+        media = [{
+            "kind": s["media_kind"],
+            "palette": s["palette"],
+            "caption": s["caption"],
+            "alt": f"{s['advertiser']} {s['media_kind']}",
+            **({"duration": s["duration"]} if "duration" in s else {}),
+        }]
+        # body uses the advertiser as 'author' label; we store a marker
+        # body field that the route layer recognises and replaces the
+        # author row with the advertiser brand.
+        conn.execute(
+            "INSERT INTO posts (id, author_id, body, hashtags, visibility, "
+            "created_at, media, sponsored, advertiser, cta_label, cta_url) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                _hid("post", post_idx, 5),
+                users[0]["id"],          # FK placeholder
+                s["body"],
+                db.pack_json([]),
+                "public",
+                created_at,
+                db.pack_json(media),
+                1,
+                s["advertiser"],
+                s["cta_label"],
+                s["cta_url"],
+            ),
         )
 
     # ── comments + reactions on the first 15 posts ──────────────────

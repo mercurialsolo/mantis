@@ -258,6 +258,114 @@ def test_handler_restores_schema_when_execute_raises():
     assert extractor.schema is original_schema
 
 
+def test_handler_warns_when_extract_data_has_no_schema_anywhere(caplog):
+    """A developer submits an `extract_data` step with no inline
+    `extract` block AND no recipe-bound schema. The validator will
+    eventually reject every row with `no_schema_configured`; we
+    surface the misconfig at step entry so the WARNING is in the
+    trace alongside the offending step, not buried in the result
+    envelope.
+    """
+    import logging
+    from mantis_agent.gym.step_handlers.claude_step import ClaudeStepHandler
+
+    extractor = MagicMock()
+    extractor.schema = None  # no recipe-bound schema either
+
+    def _capture_execute(*_a, **_kw):
+        from mantis_agent.gym.checkpoint import StepResult
+
+        return StepResult(step_index=0, intent="x", success=True)
+
+    runner = MagicMock()
+    handler = ClaudeStepHandler(runner)
+    handler._execute = _capture_execute  # type: ignore[assignment]
+
+    step = MicroIntent(
+        intent="extract everything",
+        type="extract_data",
+        claude_only=True,
+        # no `extract` block
+    )
+    with caplog.at_level(logging.WARNING, logger="mantis_agent.gym.step_handlers.claude_step"):
+        handler.execute(step, _fake_step_context(extractor))
+
+    matched = [
+        r for r in caplog.records
+        if "no extraction schema" in r.getMessage()
+    ]
+    assert matched, "expected a no-schema WARNING; got: " + str(
+        [r.getMessage() for r in caplog.records]
+    )
+
+
+def test_handler_does_not_warn_when_recipe_schema_is_bound(caplog):
+    """No inline `extract`, but a recipe-bound schema exists. The
+    handler should NOT log the no-schema warning — the recipe path
+    is the canonical case for marketplace-shaped plans."""
+    import logging
+    from mantis_agent.gym.step_handlers.claude_step import ClaudeStepHandler
+
+    extractor = MagicMock()
+    extractor.schema = ExtractionSchema(
+        entity_name="boat", fields=[], required_fields=["year", "make"]
+    )
+
+    runner = MagicMock()
+    handler = ClaudeStepHandler(runner)
+    handler._execute = lambda *_a, **_kw: __import__(  # type: ignore[assignment]
+        "mantis_agent.gym.checkpoint", fromlist=["StepResult"]
+    ).StepResult(step_index=0, intent="x", success=True)
+
+    step = MicroIntent(
+        intent="extract", type="extract_data", claude_only=True
+    )
+    with caplog.at_level(logging.WARNING, logger="mantis_agent.gym.step_handlers.claude_step"):
+        handler.execute(step, _fake_step_context(extractor))
+
+    matched = [
+        r for r in caplog.records
+        if "no extraction schema" in r.getMessage()
+    ]
+    assert not matched, (
+        "expected NO no-schema WARNING since the recipe schema is bound"
+    )
+
+
+def test_handler_does_not_warn_when_inline_schema_provided(caplog):
+    """When the step has its own `extract` block, the handler should
+    log the swap line, NOT the no-schema warning."""
+    import logging
+    from mantis_agent.gym.step_handlers.claude_step import ClaudeStepHandler
+
+    extractor = MagicMock()
+    extractor.schema = None
+
+    runner = MagicMock()
+    handler = ClaudeStepHandler(runner)
+    handler._execute = lambda *_a, **_kw: __import__(  # type: ignore[assignment]
+        "mantis_agent.gym.checkpoint", fromlist=["StepResult"]
+    ).StepResult(step_index=0, intent="x", success=True)
+
+    step = MicroIntent(
+        intent="extract",
+        type="extract_data",
+        claude_only=True,
+        extract={
+            "schema_name": "hn",
+            "fields": [{"name": "title", "type": "str", "required": True}],
+        },
+    )
+    with caplog.at_level(logging.WARNING, logger="mantis_agent.gym.step_handlers.claude_step"):
+        handler.execute(step, _fake_step_context(extractor))
+
+    no_schema = [
+        r for r in caplog.records
+        if "no extraction schema" in r.getMessage()
+    ]
+    assert not no_schema, "no-schema warning should not fire when inline schema is set"
+
+
 def test_handler_falls_back_to_recipe_on_malformed_extract():
     """Malformed step.extract (missing fields) should log a warning
     and fall back to the recipe schema — not break the run.
