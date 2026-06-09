@@ -2243,6 +2243,16 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(400, str(exc)) from exc
 
+        # DX-3 (#785 follow-up): dry-run preview. Returns the resolved
+        # task_suite + summary + cost estimate without acquiring the
+        # Chrome lock or spawning the executor. Lets devs iterate on
+        # plan_text → MicroPlan without burning GPU credit.
+        if bool(payload.get("dry_run")):
+            from mantis_agent.server.dry_run import build_dry_run_response
+            return build_dry_run_response(
+                task_file_contents, payload, tenant.tenant_id
+            )
+
         profile_id = payload["profile_id"]
         workflow_id = payload["workflow_id"]
         run_id = _mint_run_id()
