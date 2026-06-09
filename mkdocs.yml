@@ -123,6 +123,7 @@ nav:
       - Idempotency: operations/idempotency.md
       - Webhooks: operations/webhooks.md
       - URL allowlist: operations/allowlist.md
+      - Runtime recipes: operations/runtime-recipes.md
       - Metrics: operations/metrics.md
       - Cost model: operations/cost.md
       - Wall-time aggregation: operations/wall-time-aggregation.md
