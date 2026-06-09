@@ -2720,6 +2720,215 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
             )
         return FileResponse(candidate, media_type=media_type, filename=name)
 
+    # ── SSE event stream (#808) ────────────────────────────────────
+    #
+    # Server-Sent Events wrapper over the file-backed reasoning.jsonl
+    # the executor already writes. Reuses the same per-line JSON shape
+    # as ``action=reasoning_trace`` so consumers can re-use their
+    # existing event parsers. Adds:
+    #
+    # - ``phase`` events on every transition derived from status.json
+    # - ``terminal`` event when the run reaches a terminal phase
+    # - Heartbeat ``: ping\n\n`` every ~25s so reverse proxies don't
+    #   drop the connection (most close idle conns at 30-60s)
+    # - ``Last-Event-ID`` honored if the client supplies one; otherwise
+    #   the ``since`` query param works
+    #
+    # Reads are tail-only (no exclusive lock) so concurrent consumers
+    # don't fight each other or the writer.
+
+    @fastapi_app.get("/v1/runs/{run_id}/events")
+    def stream_run_events(
+        run_id: str,
+        request: Request,
+        sse: bool = False,
+        since: str = "",
+        tenant: TenantConfig = Depends(require_run_scope),
+    ):
+        """Stream run events as SSE (#808).
+
+        With ``?sse=true`` returns ``text/event-stream``. Without it,
+        falls back to the same JSON payload as
+        ``POST /v1/predict {action: reasoning_trace}`` for parity.
+        """
+        from fastapi.responses import StreamingResponse
+
+        try:
+            vol.reload()
+        except Exception:
+            pass
+        status = _read_status(tenant.tenant_id, run_id)
+        if status is None:
+            raise HTTPException(404, f"unknown run_id: {run_id}")
+
+        jsonl_path = _run_dir(tenant.tenant_id, run_id) / "reasoning.jsonl"
+
+        if not sse:
+            # Non-SSE fallback: same shape as action=reasoning_trace.
+            since_ts = since or None
+            events: list[dict] = []
+            if jsonl_path.exists():
+                try:
+                    with jsonl_path.open("r", encoding="utf-8") as f:
+                        for line in f:
+                            stripped = line.strip()
+                            if not stripped:
+                                continue
+                            try:
+                                ev = json.loads(stripped)
+                            except (json.JSONDecodeError, ValueError):
+                                continue
+                            if not isinstance(ev, dict):
+                                continue
+                            if since_ts and ev.get("ts", "") <= since_ts:
+                                continue
+                            events.append(ev)
+                except OSError:
+                    pass
+            return {**status, "events": events, "count": len(events)}
+
+        # SSE path. Honor Last-Event-ID per the SSE spec; fall through
+        # to ``?since`` if the header is absent.
+        last_event_id = request.headers.get("last-event-id", "") or since
+        last_phase_seen = ""
+
+        def _sse_format(event_name: str, payload: dict, event_id: str = "") -> str:
+            parts = []
+            if event_id:
+                parts.append(f"id: {event_id}")
+            parts.append(f"event: {event_name}")
+            parts.append(f"data: {json.dumps(payload, default=str)}")
+            return "\n".join(parts) + "\n\n"
+
+        # Local phase mapping — kept inline so this PR doesn't depend on
+        # the lifecycle-routes branch landing the shared helper. When
+        # both PRs merge, this collapses to a one-line call.
+        _STATUS_TO_PHASE = {
+            "queued": "queued",
+            "running": "running",
+            "paused": "running",
+            "recovering": "recovering",
+            "cancelled": "cancelled",
+            "succeeded": "complete",
+            "completed_with_failures": "complete",
+            "failed": "halted",
+            "halted": "halted",
+            "timeout": "halted",
+        }
+        _TERMINAL_PHASES = {"complete", "halted", "cancelled"}
+
+        def _current_phase(status_blob: dict) -> str:
+            s = str(status_blob.get("status", "") or "").lower()
+            return _STATUS_TO_PHASE.get(s, "running")
+
+        def _terminal_phase(status_blob: dict) -> str | None:
+            p = _current_phase(status_blob)
+            return p if p in _TERMINAL_PHASES else None
+
+        async def event_stream():
+            import asyncio
+
+            nonlocal last_event_id, last_phase_seen
+
+            # Stream guardrails. Bounded so a stuck client doesn't keep
+            # a container input slot forever; clients reconnect with
+            # ``Last-Event-ID`` to resume.
+            max_stream_seconds = 600
+            poll_interval = 1.0
+            heartbeat_interval = 25.0
+            t_start = time.monotonic()
+            t_last_heartbeat = t_start
+
+            # Emit initial phase event so clients have the current
+            # ground state immediately.
+            cur_phase = _current_phase(status)
+            yield _sse_format("phase", {"phase": cur_phase, "run_id": run_id})
+            last_phase_seen = cur_phase
+
+            while True:
+                if await request.is_disconnected():
+                    return
+                # Refresh volume so writes from the executor container
+                # are visible.
+                try:
+                    vol.reload()
+                except Exception:
+                    pass
+
+                # Drain new reasoning events.
+                if jsonl_path.exists():
+                    try:
+                        with jsonl_path.open("r", encoding="utf-8") as f:
+                            for line in f:
+                                stripped = line.strip()
+                                if not stripped:
+                                    continue
+                                try:
+                                    ev = json.loads(stripped)
+                                except (json.JSONDecodeError, ValueError):
+                                    continue
+                                if not isinstance(ev, dict):
+                                    continue
+                                ts = str(ev.get("ts", "") or "")
+                                if last_event_id and ts <= last_event_id:
+                                    continue
+                                # Use the event's own ``kind`` field as
+                                # the SSE event name when present;
+                                # ``message`` is the safe default the
+                                # SSE spec mandates for unspecified events.
+                                event_name = str(ev.get("kind") or ev.get("type") or "message")
+                                yield _sse_format(event_name, ev, event_id=ts)
+                                if ts:
+                                    last_event_id = ts
+                    except OSError:
+                        pass
+
+                # Re-read status for phase transitions + terminal check.
+                cur_status = _read_status(tenant.tenant_id, run_id) or status
+                phase_now = _current_phase(cur_status)
+                if phase_now != last_phase_seen:
+                    yield _sse_format(
+                        "phase",
+                        {"phase": phase_now, "run_id": run_id},
+                    )
+                    last_phase_seen = phase_now
+
+                terminal = _terminal_phase(cur_status)
+                if terminal is not None:
+                    yield _sse_format(
+                        "terminal",
+                        {
+                            "phase": terminal,
+                            "run_id": run_id,
+                            "halt_class": cur_status.get("halt_class")
+                            or cur_status.get("halt_reason"),
+                        },
+                    )
+                    return
+
+                # Heartbeat to keep proxies happy.
+                t_now = time.monotonic()
+                if (t_now - t_last_heartbeat) >= heartbeat_interval:
+                    yield ": ping\n\n"
+                    t_last_heartbeat = t_now
+
+                if (t_now - t_start) >= max_stream_seconds:
+                    # Clean close without a terminal event — client
+                    # reconnects with Last-Event-ID and we pick up.
+                    return
+
+                await asyncio.sleep(poll_interval)
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",  # nginx: don't buffer
+                "Connection": "keep-alive",
+            },
+        )
+
     return fastapi_app
 
 
