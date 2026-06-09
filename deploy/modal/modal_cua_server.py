@@ -2061,21 +2061,73 @@ def _commit_volume() -> None:
         pass
 
 
+# In-memory recent-runs cache. Modal Volume commit + reload has a small
+# eventual-consistency window: an immediate poll right after submit
+# could land on a container whose volume mount hasn't yet seen the
+# status.json we just wrote, returning a misleading 404 / "unknown
+# run_id". This cache backstops that window — when the same container
+# that wrote a status reads it back, the cache is authoritative.
+#
+# Bounded LRU-style: at 1024 entries we drop the oldest. The cache is
+# also cleared lazily when a status flips to a terminal phase (no point
+# caching a finished run that the client will fetch via /result).
+_RECENT_RUNS: dict[str, dict] = {}
+_RECENT_RUNS_MAX = 1024
+_TERMINAL_STATUSES = frozenset({
+    "succeeded", "failed", "cancelled", "completed_with_failures",
+    "timeout", "halted",
+})
+
+
+def _cache_status(tenant_id: str, run_id: str, status: dict) -> None:
+    """Stash ``status`` in the in-memory cache keyed by (tenant, run)."""
+    key = f"{tenant_id}::{run_id}"
+    _RECENT_RUNS[key] = dict(status)
+    if len(_RECENT_RUNS) > _RECENT_RUNS_MAX:
+        # Drop the oldest ~25% so we don't trim on every write.
+        drop = max(1, _RECENT_RUNS_MAX // 4)
+        for k in list(_RECENT_RUNS.keys())[:drop]:
+            _RECENT_RUNS.pop(k, None)
+
+
 def _write_status(tenant_id: str, run_id: str, status: dict) -> None:
     run_dir = _run_dir(tenant_id, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "status.json").write_text(json.dumps(status, indent=2))
+    _cache_status(tenant_id, run_id, status)
     _commit_volume()
 
 
 def _read_status(tenant_id: str, run_id: str) -> dict | None:
+    """Return the run's status dict.
+
+    Reads the in-memory cache first (covers the volume-commit
+    eventual-consistency window), then falls back to the file-backed
+    status.json. When the file read returns a newer status than the
+    cache (executor wrote it from a different container), the cache
+    is refreshed so subsequent calls see the latest.
+    """
+    key = f"{tenant_id}::{run_id}"
+    cached = _RECENT_RUNS.get(key)
     path = _run_dir(tenant_id, run_id) / "status.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except Exception:
-        return None
+    on_disk: dict | None = None
+    if path.exists():
+        try:
+            on_disk = json.loads(path.read_text())
+        except Exception:
+            on_disk = None
+    # Prefer the on-disk view when it exists AND its updated_at is
+    # newer than the cached view — that's the executor having
+    # progressed the run from a different container.
+    if on_disk is not None:
+        if cached is None or str(on_disk.get("updated_at", "")) >= str(cached.get("updated_at", "")):
+            _cache_status(tenant_id, run_id, on_disk)
+            # Evict from cache once terminal — no need to keep
+            # finished runs around.
+            if str(on_disk.get("status", "")).lower() in _TERMINAL_STATUSES:
+                _RECENT_RUNS.pop(key, None)
+            return on_disk
+    return cached
 
 
 def _write_viewer_url(tenant_id: str, run_id: str, viewer_url: str) -> None:

@@ -152,7 +152,18 @@ class ExtractionResult:
         return "no_schema_configured"
 
     def to_summary(self) -> str:
-        """Format as the VIABLE summary string."""
+        """Format as the VIABLE summary string.
+
+        Schema-bound results emit one ``Field: value`` clause per
+        declared field, joined with ``|``.
+
+        Non-marketplace plans with no schema (post-#815 validator rip)
+        previously fell through to a BoatTrader-shape default
+        (``VIABLE | Year: ... | Make: ...``) — that was the original
+        complaint surfaced by user feedback on HN extraction. Now the
+        fall-through emits whatever raw fields the result has, with
+        explicit names — no Year/Make/Model invention.
+        """
         if self._schema and self.extracted_fields:
             parts = []
             for f in self._schema.fields:
@@ -163,25 +174,32 @@ class ExtractionResult:
                 elif name == "phone":
                     parts.append("Phone: none")
             return "VIABLE | " + " | ".join(parts) if parts else ""
-        # Legacy BoatTrader
-        parts = []
-        if self.year:
-            parts.append(f"Year: {self.year}")
-        if self.make:
-            parts.append(f"Make: {self.make}")
-        if self.model:
-            parts.append(f"Model: {self.model}")
-        if self.price:
-            parts.append(f"Price: {self.price}")
-        if self.phone:
-            parts.append(f"Phone: {self.phone}")
-        else:
-            parts.append("Phone: none")
-        if self.url:
-            parts.append(f"URL: {self.url}")
-        if self.seller:
-            parts.append(f"Seller: {self.seller}")
-        return "VIABLE | " + " | ".join(parts) if parts else ""
+
+        # No-schema fall-through. Emit ONLY what's actually populated
+        # — no marketplace-shape invention. Pre-fix this synthesised
+        # ``Year: <empty>`` / ``Make: <empty>`` for any extracted
+        # result regardless of domain, which is how an HN extraction
+        # ended up emitting ``VIABLE | Year | Make | Model | ...``.
+        parts: list[str] = []
+        # Iterate raw fields populated on this result. The list is
+        # restricted to the legacy ExtractionResult dataclass fields so
+        # we don't accidentally emit ``_schema`` etc.
+        for label, val in (
+            ("Year", self.year),
+            ("Make", self.make),
+            ("Model", self.model),
+            ("Price", self.price),
+            ("Phone", self.phone),
+            ("URL", self.url),
+            ("Seller", self.seller),
+        ):
+            if val:
+                parts.append(f"{label}: {val}")
+        if not parts:
+            # No schema AND nothing usable extracted → don't emit a
+            # misleading ``VIABLE | ...`` line at all.
+            return ""
+        return "VIABLE | " + " | ".join(parts)
 
     def is_viable(self) -> bool:
         """Has enough data to be a useful lead (not spam, required fields present).
