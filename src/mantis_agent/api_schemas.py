@@ -124,6 +124,18 @@ class PredictRequest(BaseModel):
     # `.json` `micro` shapes (they never decompose anyway).
     decompose: bool = True
 
+    # DX-3 (#785 follow-up): preview the resolved plan without spawning
+    # the executor. When True:
+    #   - PlanDecomposer still runs for free-text plans (pays ~$0.01-0.02)
+    #   - The task_suite is reconstructed exactly as a real run would see
+    #   - Response carries `dry_run: true`, the resolved task_suite,
+    #     a step summary (counts by type), and a cost estimate keyed by
+    #     the cua_model that would have run
+    #   - No Chrome lock acquired, no executor spawn, no run_id minted
+    # Useful for iterating on prose-to-MicroPlan without burning Modal
+    # GPU credit on a misshapen plan.
+    dry_run: bool = False
+
     # ── Extraction cache (saves Claude tokens on previously-seen URLs) ──
     # When cache_read is true, the runner peeks env.current_url BEFORE the
     # deep-extract Claude call; on hit, the cached lead is emitted and the
