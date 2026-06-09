@@ -416,8 +416,6 @@ def _call_recovery_tool(
     page_context: dict | None = None,
 ) -> dict | None:
     """Tool_use call. Returns the validated input dict or ``None``."""
-    import requests
-
     from .prompts import load_prompt
 
     hints = [h for h in (prior_hints or []) if str(h).strip()]
@@ -483,16 +481,21 @@ def _call_recovery_tool(
             "messages": [{"role": "user", "content": content}],
         }
         t0 = time.monotonic()
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json=request_body,
-            timeout=30,
+        # #836: route through the shared retry client so transient
+        # 5xx / 529 / read-timeout doesn't tank a recovery attempt
+        # (which itself is gated by recovery-budget — losing one to a
+        # network blip burns budget we can't refund).
+        from ._anthropic.client import AnthropicToolUseClient
+        _client = AnthropicToolUseClient(
+            api_key=api_key, model=request_body.get("model", ""),
+            log_prefix="[agentic_recovery]",
         )
+        resp = _client.post_messages_with_retry(
+            request_body, timeout=30, max_attempts=2,
+        )
+        if resp is None:
+            logger.warning("agentic_recovery: Anthropic network exhaustion")
+            return None
         if resp.status_code != 200:
             logger.warning(
                 "agentic_recovery API error %s: %s",

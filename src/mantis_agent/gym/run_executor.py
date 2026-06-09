@@ -369,6 +369,53 @@ class RunExecutor:
                 continue
 
             step_started_at = _utc_iso_now()
+            # #835: pre-dispatch URL-drift gate. When the prior step
+            # was a navigate against a literal URL, the navigate
+            # handler stamped a ``_post_navigate_url_hint`` on the
+            # runner. Before the next step's handler runs, compare
+            # the env's current URL against that hint and short-
+            # circuit with ``failure_class="navigation_drift"`` if it
+            # diverged — so the step recovery layer re-navigates
+            # instead of running vision against the wrong page.
+            # Consume the hint either way (only gates the NEXT step,
+            # not every subsequent one).
+            drift_hint = getattr(self.parent, "_post_navigate_url_hint", "")
+            if drift_hint and step.type != "navigate":
+                from .navigate_gate import check_drift as _check_url_drift
+                current_url = (
+                    getattr(self.parent, "_last_known_url", "") or ""
+                )
+                drift_reason = _check_url_drift(current_url, drift_hint)
+                # Consume the hint regardless of result so it only
+                # fires once.
+                self.parent._post_navigate_url_hint = ""
+                if drift_reason:
+                    logger.warning(
+                        "  [nav_drift] step %d (%s) — %s",
+                        state.step_index, step.type, drift_reason,
+                    )
+                    state.results.append(
+                        StepResult(
+                            step_index=state.step_index,
+                            intent=step.intent,
+                            success=False,
+                            data=f"NAV_DRIFT|{drift_reason}",
+                            failure_class="navigation_drift",
+                            final_url=current_url,
+                        )
+                    )
+                    continued = self._handle_failure(
+                        plan, state, step, state.results[-1],
+                    )
+                    if not continued:
+                        break
+                    continue
+            elif step.type == "navigate":
+                # Consume on a navigate too — chain of navigates is fine,
+                # don't compare a navigate's URL against its predecessor's
+                # hint.
+                self.parent._post_navigate_url_hint = ""
+
             # #518 — snapshot the cost counters BEFORE dispatch so we
             # can emit per-step deltas after the handler returns. The
             # delta covers everything dispatch caused: Claude calls

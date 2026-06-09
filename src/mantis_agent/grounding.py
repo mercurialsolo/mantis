@@ -210,8 +210,6 @@ Screenshot is {width}x{height} pixels. The user wants to click near \
     def _ground_remote(self, screenshot, description, initial_x=None, initial_y=None):
         import re
 
-        import requests
-
         if not description or not self.api_key:
             return GroundingResult(
                 x=initial_x or screenshot.width // 2,
@@ -240,14 +238,16 @@ Screenshot is {width}x{height} pixels. The user wants to click near \
         from ._anthropic.cache import as_cached_system, extract_cache_telemetry
 
         try:
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
+            # #836: route through the shared retry client. Grounding
+            # is on the click hot path so per-call latency matters —
+            # cap retries at 2 (one extra attempt on transient).
+            from ._anthropic.client import AnthropicToolUseClient
+            _g_client = AnthropicToolUseClient(
+                api_key=self.api_key, model=self.model,
+                log_prefix="[grounding]",
+            )
+            resp = _g_client.post_messages_with_retry(
+                {
                     "model": self.model,
                     "max_tokens": 30,
                     "system": as_cached_system(self.SYSTEM_PROMPT),
@@ -259,9 +259,17 @@ Screenshot is {width}x{height} pixels. The user wants to click near \
                         ],
                     }],
                 },
-                timeout=15,
+                timeout=15, max_attempts=2,
             )
 
+            if resp is None:
+                logger.warning("Claude grounding: Anthropic network exhaustion")
+                return GroundingResult(
+                    x=initial_x or screenshot.width // 2,
+                    y=initial_y or screenshot.height // 2,
+                    confidence=0.2,
+                    description="network exhausted",
+                )
             if resp.status_code != 200:
                 logger.warning(f"Claude grounding API error: {resp.status_code}")
                 return GroundingResult(
