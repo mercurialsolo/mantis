@@ -51,7 +51,10 @@ Each step in a micro-plan is a JSON object with a `type` and an `intent`:
 | `extract_data` | Claude reads the screenshot and emits structured fields per the schema |
 | `navigate_back` | Alt+Left + verify URL change |
 | `paginate` | URL-based or grounded click on the Next button |
-| `loop` | Jumps back to step `loop_target` up to `loop_count` times |
+| `loop` | Jumps back to step `loop_target` up to `loop_count` times. Optional `stop_var` reads a runner state variable and exits the loop early when truthy. |
+| `if_else` | Branches on `runner._state_vars[condition_var]` to `then_target` (truthy) or `else_target` (falsy/missing). Composes with `detect_visible`. Missing var / out-of-range target falls through to the next step. ([#820](https://github.com/mercurialsolo/mantis/pull/820)) |
+| `detect_visible` | One Claude/Holo3 yes/no vision call ("is the cookie banner visible?"); writes a bool to `runner._state_vars[out_var]`. Pairs with `if_else` and step-level `guard`. |
+| `extract_rows` | Multi-row extraction in one Claude call (top-N from a list page). Same handler as `extract_data`; `extract_data` also takes the multi-row branch when its schema has `max_items > 1`. ([#820](https://github.com/mercurialsolo/mantis/pull/820)) |
 | `filter` | Claude finds the filter checkbox and clicks it |
 | `fill_field` | Claude finds the labelled input (`params.label`), clears it, types `params.value` |
 | `submit` | Claude finds the labelled button / nav-link / row-link (`params.label` + `params.kind`) and left-clicks it |
@@ -71,6 +74,11 @@ Useful per-step modifiers:
 | `budget` | Max actions Holo3 can take in this step (default 8). |
 | `loop_target` | Step index to jump back to (only on `loop` steps). |
 | `loop_count` | Max loop iterations; clamped to `MANTIS_MAX_LOOP_ITERATIONS`. |
+| `stop_var` | (`loop` only) Name of a runner state variable; when truthy, exit the loop early instead of running remaining iterations. |
+| `condition_var` | (`if_else` only) Name of a state variable read for the branch decision. |
+| `then_target` / `else_target` | (`if_else` only) Absolute step indices to jump to. -1 = fall through to next step. |
+| `out_var` | (`detect_visible` only) Name of the state variable that receives the boolean answer. |
+| `guard` | Name of a state variable; when falsy, the step is skipped entirely (no vision call, no env action). |
 
 ## Tenants and tokens
 
