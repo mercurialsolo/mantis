@@ -30,9 +30,16 @@ theme:
         icon: material/weather-night
         name: Switch to light mode
   features:
-    - navigation.tabs
-    - navigation.tabs.sticky
+    # `navigation.tabs` and `navigation.tabs.sticky` were ON previously,
+    # which pulled top-level sections (Getting started / Hosting / ...)
+    # into a horizontal header bar. Removed so everything lives in the
+    # left sidebar tree — easier to scan the whole doc set at once.
+    # `navigation.sections` keeps top-level groups as collapsible headers
+    # in the sidebar instead of flat links.
+    # `navigation.expand` opens all sections by default; drop if you
+    # prefer collapsed-on-load.
     - navigation.sections
+    - navigation.expand
     - navigation.top
     - navigation.indexes
     - navigation.tracking
