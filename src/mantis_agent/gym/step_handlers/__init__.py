@@ -113,7 +113,10 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
     )
     reg.register_for_types(
         ClaudeStepHandler(runner),
-        ("extract_url", "extract_data"),
+        # ``extract_rows`` (#785 follow-up) is the same handler routed
+        # through its multi-row branch. ``extract_data`` also takes the
+        # multi-row branch when the schema has ``max_items > 1``.
+        ("extract_url", "extract_data", "extract_rows"),
     )
     # ``scroll`` routes through a dispatcher that prefers the
     # MechanicalScrollHandler when the plan supplies ``params.count``

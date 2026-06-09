@@ -178,6 +178,17 @@ class MicroIntent:
     # every item — the lever that makes a learned grounding anchor (S0) skip
     # the search. Empty (the default) on every non-loop / unconditional step.
     stop_var: str = ""
+    # Branching primitive (``if_else`` step type). Reads
+    # ``runner._state_vars[condition_var]`` and jumps to ``then_target``
+    # (when truthy) or ``else_target`` (when falsy/missing). Step
+    # indices are absolute and resolved against ``plan.steps`` — same
+    # semantics as ``loop_target``. Compose with ``detect_visible`` for
+    # the full conditional flow: detect_visible writes the boolean,
+    # the next ``if_else`` step branches on it. Empty/-1 on every
+    # non-branch step (the default).
+    condition_var: str = ""
+    then_target: int = -1
+    else_target: int = -1
     # Per-step extraction schema (#785 follow-up to the legacy-validator rip).
     # When set on a ``claude_only`` extract step, the runner builds a
     # transient :class:`ExtractionSchema` from this dict and swaps it onto

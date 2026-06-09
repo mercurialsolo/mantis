@@ -594,6 +594,64 @@ session with its own budget):
 
 Verify clause types: `url_not_contains`, `url_contains`, `page_contains_text`.
 
+### 3.5a Control-flow primitives — `if_else` + multi-row `extract_data`
+
+**`if_else` step — branching.** Reads a boolean from `runner._state_vars[condition_var]`
+(typically set by a prior `detect_visible` step) and jumps to `then_target`
+(truthy) or `else_target` (falsy/missing). Step indices are absolute against
+`plan.steps` — same shape as `loop_target`.
+
+```jsonc
+{
+  "type": "detect_visible",
+  "intent": "Is the cookie banner visible?",
+  "out_var": "cookie_banner_shown"
+},
+{
+  "type": "if_else",
+  "intent": "Branch on cookie banner",
+  "condition_var": "cookie_banner_shown",
+  "then_target": 3,
+  "else_target": 5
+}
+```
+
+Safety: missing `condition_var`, out-of-range target, or unset (-1)
+targets fall through to `step_index + 1` rather than hang. A synthetic
+`StepResult` records the decision so the run trace carries `var=value→target`.
+
+**Multi-row `extract_data` / `extract_rows` — top-N from a list page.**
+Set `extract.max_items > 1` on an `extract_data` step (or use step type
+`extract_rows`) to extract up to N rows in a single Claude call. Each
+row becomes a separate entry in the `extracted_rows.json` artifact and
+`leads.csv`. One vision call (~$0.04) versus N round-trips for the
+loop-over-detail-pages pattern.
+
+```jsonc
+{
+  "type": "extract_data",
+  "claude_only": true,
+  "intent": "Extract the top 5 HN stories",
+  "extract": {
+    "schema_name": "hn_top5",
+    "entity_name": "hn_story",
+    "fields": [
+      {"name": "rank", "type": "int", "required": true},
+      {"name": "title", "type": "str", "required": true},
+      {"name": "story_url", "type": "str", "required": false},
+      {"name": "points", "type": "int", "required": false},
+      {"name": "author", "type": "str", "required": false}
+    ],
+    "max_items": 5
+  }
+}
+```
+
+When NOT to use: pages where each item needs detail-page enrichment
+(boat listings where the seller phone lives behind a Show button).
+For those, stick with `collect_urls` → `loop` → `navigate` →
+`extract_data` (single-row) → `navigate_back`.
+
 ### 3.6 Runtime recipe registration (#809)
 
 The inline `extract` block (§3.1a) covers per-plan extraction needs.

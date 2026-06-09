@@ -153,11 +153,24 @@ class StepResult:
     # legacy ``leads`` string list.
     extracted_fields: dict[str, str] = field(default_factory=dict)
 
+    # Multi-row passthrough (#785 follow-up: HN top-N pattern). When a
+    # step extracts N items from a single screenshot (list-mode
+    # extraction — e.g. "top 5 stories on HN"), the per-row dicts land
+    # here and the aggregator emits each as an artifact row. Empty on
+    # every single-row step; populated by the multi-row branch of
+    # ``ClaudeStepHandler`` when ``schema.max_items > 1``.
+    # Each dict mirrors ``extracted_fields`` shape (schema field name →
+    # string value). When ``extracted_rows`` is populated,
+    # ``extracted_fields`` is the FIRST row (legacy single-row consumers
+    # still get a sane summary), but ``_collect_extracted_rows`` reads
+    # the full list from this field.
+    extracted_rows: list[dict[str, str]] = field(default_factory=list)
+
     _PERSISTED: ClassVar[tuple[str, ...]] = (
         "step_index", "intent", "success", "data", "steps_used", "duration", "reversed",
         "skip", "skip_reason", "executor_backend",
         "failure_class", "final_url", "page_title", "failure_subclass",
-        "extracted_fields",
+        "extracted_fields", "extracted_rows",
     )
 
     def to_dict(self) -> dict[str, Any]:

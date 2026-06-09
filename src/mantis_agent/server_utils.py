@@ -554,6 +554,21 @@ def _collect_extracted_rows(step_results: list[Any]) -> tuple[list[dict[str, str
     fieldnames: list[str] = []
     seen: set[str] = set()
     for r in step_results:
+        # Multi-row passthrough (#785 follow-up: HN top-N): when a step
+        # extracted N items in one shot, every row in ``extracted_rows``
+        # becomes its own artifact row. Falls back to the single-row
+        # ``extracted_fields`` path for every other step.
+        multi = getattr(r, "extracted_rows", None) or []
+        if multi:
+            for row in multi:
+                if not isinstance(row, dict) or not row:
+                    continue
+                rows.append(dict(row))
+                for k in row:
+                    if k not in seen:
+                        fieldnames.append(k)
+                        seen.add(k)
+            continue
         fields = getattr(r, "extracted_fields", None) or {}
         if not fields:
             continue
