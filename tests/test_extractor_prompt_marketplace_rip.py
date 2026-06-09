@@ -62,14 +62,15 @@ def test_hn_schema_multi_extract_has_no_phone_or_spam_blocks():
 
 
 def test_hn_schema_find_listings_has_no_marketplace_sponsored_line():
-    """The specific marketplace-flavored "SKIP: sponsored, advertisement,
-    {spam_label} inventory" line should NOT appear without spam_indicators.
-    Generic "skip advertisements / nav chrome / footer" guidance is fine
-    — it's not domain-specific."""
+    """The marketplace-specific "{spam_label} inventory" tail should NOT
+    appear without spam_indicators. The generic "skip sponsored content"
+    guidance is fine — sponsored cards are noise on every listing-style
+    page."""
     ext = _extractor_with_schema(_hn_schema())
     prompt = ext._get_find_listings_prompt()
-    # The marketplace boilerplate had this exact phrasing.
-    assert "SKIP: sponsored" not in prompt
+    # No marketplace-flavored tail.
+    assert "inventory" not in prompt.lower()
+    assert "dealer" not in prompt.lower()
     # The dealer-style spam-label injection should be absent.
     assert "spam" not in prompt.lower()
 

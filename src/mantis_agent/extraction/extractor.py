@@ -344,12 +344,19 @@ class ClaudeExtractor:
             f"Find ALL visible {s.entity_name} cards/items on this page.",
             "For each, report the center coordinates and title text.",
         ]
-        # SKIP / spam-style filter gated on spam_indicators (the canonical
-        # signal that the recipe IS marketplace-shaped).
+        # Generic "skip ads" line is universal — sponsored cards are noise
+        # on every listing-style page. The marketplace-specific "{spam_label}
+        # inventory" tail is gated on spam_indicators (the canonical signal
+        # that the recipe IS marketplace-shaped).
         if s.spam_indicators:
             parts.extend([
                 "",
                 f"SKIP: sponsored, advertisement, {s.spam_label} inventory.",
+            ])
+        else:
+            parts.extend([
+                "",
+                "SKIP: sponsored, advertisement.",
             ])
         if s.listing_card_exclusions:
             parts.extend([
