@@ -220,6 +220,101 @@ Key points:
 
 See [API / Pause / resume](../api.md#pause-resume) for the full request/response shapes.
 
+## Lifecycle endpoints (cheap-poll + queue) {#lifecycle}
+
+The action-based `POST /v1/predict {action: status}` returns the full
+detail payload — fine for one-off checks, expensive when polled in a
+loop. The lifecycle endpoints below give a cheap *phase + backoff hint*
+poll surface plus a per-tenant queue snapshot. Use these for active
+polling, then call the action-based status route once a terminal phase
+arrives if you need full detail.
+
+### `GET /v1/runs/{run_id}` — phase + backoff hint
+
+```bash
+curl -fsS "$ENDPOINT/v1/runs/$RUN_ID" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN"
+```
+
+Returns:
+
+```json
+{
+  "run_id": "<run_id>",
+  "phase": "running",
+  "last_event_at": 1722500400.0,
+  "polling_backoff_ms_hint": 1500,
+  "started_at": 1722500390.0,
+  "finished_at": null,
+  "halt_class": null
+}
+```
+
+Phases (`queued` / `running` / `recovering` / `complete` / `halted` /
+`cancelled`) are stable wire constants. `complete` covers both fully
+successful runs and `completed_with_failures`. `polling_backoff_ms_hint`
+is adaptive: terminal phases give a long hint (state won't change),
+fresh transitions give a short hint, idle runs grow progressively
+longer.
+
+Client pattern:
+
+```python
+import requests, time
+
+def watch(run_id: str) -> dict:
+    while True:
+        r = requests.get(
+            f"{ENDPOINT}/v1/runs/{run_id}",
+            headers={"X-Mantis-Token": TOKEN},
+        )
+        r.raise_for_status()
+        body = r.json()
+        if body["phase"] in {"complete", "halted", "cancelled"}:
+            return body
+        time.sleep(body["polling_backoff_ms_hint"] / 1000)
+```
+
+### `GET /v1/queue` — tenant queue snapshot
+
+```bash
+curl -fsS "$ENDPOINT/v1/queue" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN"
+```
+
+Returns:
+
+```json
+{
+  "tenant_id": "<tenant>",
+  "queued": 2,
+  "running": 1,
+  "recovering": 0,
+  "eta_ms": null
+}
+```
+
+Scoped to the calling tenant. Terminal runs are excluded — operators
+wanting historical totals can scan `status.json` files via
+`POST /v1/predict {action: status}`. `eta_ms` is best-effort and may
+be `null` when no recent dispatch samples exist.
+
+### `POST /v1/runs/{run_id}/cancel`
+
+Already documented under [Cancelling](#cancelling) above. The route
+accepts an optional JSON body `{"reason": "<operator-tag>"}` for log
+attribution; the response carries the post-cancel status.
+
+> **Note for self-hosters running multiple API replicas:** the
+> lifecycle data structures shipped in
+> `mantis_agent.run_lifecycle.RunLifecycleStore` are single-process
+> (in-memory) by design. The deployed routes here derive phase from
+> the file-backed `status.json` written by the executor, so they work
+> across replicas without modification. If you build a richer
+> integration on the `RunLifecycleStore` API directly (for example,
+> adding `should_cancel()` polling inside an executor), back the store
+> with Redis or Modal Dict before scaling past one replica.
+
 ## See also
 
 - [Recordings](recordings.md) — fetching the screencast

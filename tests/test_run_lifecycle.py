@@ -333,3 +333,86 @@ def test_queue_status_shape():
 def test_run_phase_response_shape():
     resp = RunPhaseResponse(run_id="r1", phase=RunPhase.RUNNING, polling_backoff_ms_hint=500)
     assert resp.phase is RunPhase.RUNNING
+
+
+# ── File-backed phase derivation (#806) ─────────────────────────
+
+
+def test_phase_from_status_string_known_values():
+    from mantis_agent.run_lifecycle import phase_from_status_string
+
+    assert phase_from_status_string("queued") is RunPhase.QUEUED
+    assert phase_from_status_string("running") is RunPhase.RUNNING
+    assert phase_from_status_string("paused") is RunPhase.RUNNING
+    assert phase_from_status_string("recovering") is RunPhase.RECOVERING
+    assert phase_from_status_string("succeeded") is RunPhase.COMPLETE
+    assert phase_from_status_string("completed_with_failures") is RunPhase.COMPLETE
+    assert phase_from_status_string("cancelled") is RunPhase.CANCELLED
+    assert phase_from_status_string("failed") is RunPhase.HALTED
+    assert phase_from_status_string("halted") is RunPhase.HALTED
+    assert phase_from_status_string("timeout") is RunPhase.HALTED
+
+
+def test_phase_from_status_string_handles_empty():
+    from mantis_agent.run_lifecycle import phase_from_status_string
+
+    assert phase_from_status_string(None) is RunPhase.QUEUED
+    assert phase_from_status_string("") is RunPhase.QUEUED
+
+
+def test_phase_from_status_string_unknown_defaults_running():
+    """An executor that surfaces an unfamiliar status string shouldn't
+    crash the lifecycle endpoint — treat it as RUNNING (caller keeps
+    polling) rather than QUEUED (would falsely imply pre-start)."""
+    from mantis_agent.run_lifecycle import phase_from_status_string
+
+    assert phase_from_status_string("waiting_for_proxy") is RunPhase.RUNNING
+
+
+def test_build_phase_response_from_status_complete_carries_finished_at():
+    from mantis_agent.run_lifecycle import build_phase_response_from_status
+
+    resp = build_phase_response_from_status({
+        "run_id": "r-done",
+        "status": "succeeded",
+        "created_at": "2026-06-08T00:00:00+00:00",
+        "updated_at": "2026-06-08T00:01:00+00:00",
+    })
+    assert resp.phase is RunPhase.COMPLETE
+    assert resp.finished_at is not None
+    assert resp.started_at is not None
+    assert resp.started_at < resp.finished_at
+
+
+def test_build_phase_response_from_status_running_no_finished_at():
+    from mantis_agent.run_lifecycle import build_phase_response_from_status
+
+    resp = build_phase_response_from_status({
+        "run_id": "r-r",
+        "status": "running",
+        "created_at": "2026-06-08T00:00:00+00:00",
+        "updated_at": "2026-06-08T00:00:30+00:00",
+    })
+    assert resp.phase is RunPhase.RUNNING
+    assert resp.finished_at is None
+
+
+def test_build_phase_response_from_status_halt_class_for_timeout():
+    from mantis_agent.run_lifecycle import build_phase_response_from_status
+
+    resp = build_phase_response_from_status({
+        "run_id": "r-t",
+        "status": "timeout",
+        "created_at": "2026-06-08T00:00:00+00:00",
+        "updated_at": "2026-06-08T00:30:00+00:00",
+    })
+    assert resp.phase is RunPhase.HALTED
+    assert resp.halt_class == HALT_TIMEOUT
+
+
+def test_build_phase_response_from_status_tolerates_missing_timestamps():
+    from mantis_agent.run_lifecycle import build_phase_response_from_status
+
+    resp = build_phase_response_from_status({"run_id": "r-bare", "status": "running"})
+    assert resp.phase is RunPhase.RUNNING
+    # No started_at → no finished_at, but the response builds without error.
