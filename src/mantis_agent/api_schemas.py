@@ -45,6 +45,20 @@ MAX_COST_USD = _env_float("MANTIS_MAX_COST_USD", 25.0)
 
 
 # ── Request payloads ────────────────────────────────────────────────────────
+# Executors that read task_suite._micro_plan (vs claude which reads tasks[]).
+# Kept as a frozenset for fast membership check inside the model_validator.
+# Source of truth: deploy/modal/modal_cua_server.py:EXECUTOR_MAP.
+_MICRO_PLAN_EXECUTORS = frozenset({
+    "holo3",
+    "fara",
+    "gemma4-cua",
+    "evocua-8b",
+    "evocua-32b",
+    "opencua-32b",
+    "opencua-72b",
+})
+
+
 class PredictRequest(BaseModel):
     """Top-level /predict request.
 
@@ -203,6 +217,60 @@ class PredictRequest(BaseModel):
                 "request must provide one of: task_suite, task_file_contents, "
                 "task_file, micro, plan_text"
             )
+
+        # cua_model ↔ plan-shape compatibility check (DX-2 #785 follow-up).
+        # Pre-this, submitting a `_micro_plan` shape with `cua_model=claude`
+        # silently produced a 0/0/0 success — the Claude executor reads
+        # `task_suite.tasks[]`, not `_micro_plan`, and saw zero tasks.
+        # Memory: `feedback_cua_model_holo3_vs_claude_shape.md`,
+        # `feedback_task_suite_shape.md`.
+        #
+        # Two known canonical pairings:
+        #   cua_model = "claude"   → task_suite needs non-empty `tasks` array
+        #   cua_model in {"holo3", "fara", "gemma4-cua", "evocua-*",
+        #                 "opencua-*"} → task_suite needs `_micro_plan`
+        #
+        # The check fires only when task_suite is the plan-shape AND
+        # cua_model is one of the known values. plan_text / micro / task_file
+        # paths reconstruct task_suite server-side later — those checks
+        # happen in `prepare_predict_payload`.
+        cua_model = (self.model_extra or {}).get("cua_model")
+        if isinstance(cua_model, str) and self.task_suite is not None:
+            cm = cua_model.strip().lower()
+            suite = self.task_suite or {}
+            tasks_list = suite.get("tasks")
+            micro_plan = suite.get("_micro_plan")
+            has_tasks = isinstance(tasks_list, list) and len(tasks_list) > 0
+            has_micro = isinstance(micro_plan, list) and len(micro_plan) > 0
+
+            if cm == "claude" and not has_tasks and has_micro:
+                raise ValueError(
+                    "cua_model='claude' requires task_suite.tasks (a non-empty list "
+                    "of task dicts), but only task_suite._micro_plan was provided. "
+                    "Either switch to cua_model='holo3' (the executor that reads "
+                    "_micro_plan), or restructure your task_suite to use the "
+                    "tasks-array shape. See docs/llms.txt §3.4 for task_suite shape, "
+                    "or §3.2 for the micro-plan + holo3 pairing."
+                )
+            if (
+                cm in _MICRO_PLAN_EXECUTORS
+                and not has_micro
+                and not has_tasks
+            ):
+                raise ValueError(
+                    f"cua_model={cua_model!r} requires task_suite._micro_plan "
+                    "(a non-empty list of micro-intent steps), but task_suite "
+                    "had neither _micro_plan nor tasks populated. Use "
+                    "build_micro_suite() to construct the canonical shape, "
+                    "or hand-build the _micro_plan list per docs/client/plans.md."
+                )
+            if cm in _MICRO_PLAN_EXECUTORS and has_tasks and not has_micro:
+                raise ValueError(
+                    f"cua_model={cua_model!r} reads task_suite._micro_plan but "
+                    "task_suite.tasks was provided instead. Either switch to "
+                    "cua_model='claude' (the executor that reads tasks[]), or "
+                    "reshape the payload to put steps under _micro_plan."
+                )
         return self
 
 
