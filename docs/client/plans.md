@@ -211,6 +211,76 @@ The fields below live on `ExtractionSchema` but the inline path doesn't expose t
 
 For straight "give me these N fields from each item" extraction — the inline block is enough.
 
+### Multi-row from a single list page — `max_items`
+
+If your target page has N items already visible on a single screen
+(HN top stories, GitHub issue list, search-results-style pages), set
+`extract.max_items > 1` on a single `extract_data` step. One Claude
+call returns all N rows; each lands as a separate entry in
+`extracted_rows.json` / `extracted_rows.csv` / `leads.csv`.
+
+```jsonc
+{
+  "intent": "Extract the top 5 stories from HN",
+  "type": "extract_data",
+  "claude_only": true,
+  "extract": {
+    "schema_name": "hn_top5",
+    "entity_name": "hn_story",
+    "fields": [
+      {"name": "rank", "type": "int", "required": true},
+      {"name": "title", "type": "str", "required": true},
+      {"name": "story_url", "type": "str", "required": false},
+      {"name": "points", "type": "int", "required": false}
+    ],
+    "max_items": 5
+  }
+}
+```
+
+For pages where each item needs detail-page enrichment (seller phone
+behind a "Show" button, full job description on a sub-page), the
+single-row `extract_data` inside a `collect_urls` → `loop` chain is
+still the right pattern.
+
+## Control-flow primitives
+
+For plans that need to vary their behaviour based on what the page
+actually shows, three primitives compose:
+
+| Step type | Effect |
+|---|---|
+| `detect_visible` | One vision call: "is X visible?" Writes a bool to `runner._state_vars[out_var]`. |
+| `if_else` | Reads `condition_var`, jumps to `then_target` (truthy) or `else_target` (falsy). |
+| `loop` | Jumps to `loop_target` up to `loop_count` times. Optional `stop_var` exits early. |
+
+Worked example — skip a cookie-consent dance when the banner isn't shown:
+
+```jsonc
+[
+  {"intent": "Navigate to the dashboard", "type": "navigate",
+   "params": {"url": "https://example.com/dashboard"}},
+  {"intent": "Cookie banner visible?", "type": "detect_visible",
+   "out_var": "cookie_shown"},
+  {"intent": "Branch", "type": "if_else",
+   "condition_var": "cookie_shown",
+   "then_target": 3,        // dismiss
+   "else_target": 5},       // skip dismiss
+  {"intent": "Click Accept", "type": "submit",
+   "params": {"label": "Accept"}},
+  {"intent": "Wait briefly", "type": "scroll", "budget": 1},
+  {"intent": "Extract dashboard data", "type": "extract_data", "claude_only": true,
+   "extract": {"fields": [{"name": "title", "required": true}]}}
+]
+```
+
+Safety: missing `condition_var`, unset target (`-1`), or out-of-range
+index falls through to `step_index + 1` instead of teleporting or
+hanging. The runner records a synthetic `StepResult` for every
+branch so the trace shows `var=value→target`.
+
+Full reference: [Plan formats → control-flow primitives](../getting-started/plan-formats.md#control-flow-primitives-loop-if_else-multi-row-extract_data).
+
 ## Picking a compute plane
 
 Every run executes on one of two compute planes. Default is **Computer Plane** — the production-stealth path. **Browser-Use Plane** is opt-in for plans that need DOM-aware reads (current URL, anchor `href` peek before click, semantic role disambiguation on dense list pages, tab management).

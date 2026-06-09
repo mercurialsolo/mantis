@@ -75,6 +75,109 @@ A flat JSON list of step objects executed by `MicroPlanRunner`. Best reliability
 
 Field reference is on the [Concepts](concepts.md#step-types-micro-plan-shape) page.
 
+### Control-flow primitives — `loop`, `if_else`, multi-row `extract_data`
+
+The `loop` step is the basic iteration primitive — jump back to an
+earlier step up to `loop_count` times. The `if_else` step branches on
+a runtime variable. Both compose with `detect_visible` (which writes
+a bool to `runner._state_vars`).
+
+**`loop` — iterate over the same body N times.**
+
+```jsonc
+[
+  {"intent": "Navigate to results page", "type": "navigate",
+   "params": {"url": "https://example.com/search"}},
+
+  // — loop body starts here (index 1)
+  {"intent": "Click the next result", "type": "click", "section": "extraction"},
+  {"intent": "Extract the detail page", "type": "extract_data",
+   "claude_only": true, "section": "extraction"},
+  {"intent": "Go back to the results", "type": "navigate_back", "section": "extraction"},
+  // — body ends; loop step at index 4 jumps back to index 1 —
+
+  {"intent": "Repeat next-result/extract/back", "type": "loop",
+   "loop_target": 1, "loop_count": 5, "section": "extraction"}
+]
+```
+
+`loop_target` is the **absolute** step index the runner jumps to.
+`loop_count` caps the iterations (server clamps it to
+`MANTIS_MAX_LOOP_ITERATIONS`, default 50). Optional `stop_var` reads
+a runner state variable and exits the loop early when truthy — pair
+it with a `detect_visible` body step to halt as soon as a target is
+found, instead of walking every iteration.
+
+**`if_else` — branch on a state variable.**
+
+Composes with `detect_visible`: the prior step writes a bool to
+`runner._state_vars[<var>]`, then `if_else` reads the same var and
+jumps to `then_target` (truthy) or `else_target` (falsy / missing).
+Step indices are absolute.
+
+```jsonc
+[
+  {"intent": "Navigate to the dashboard", "type": "navigate",
+   "params": {"url": "https://example.com/dashboard"}},
+
+  {"intent": "Is a cookie consent banner visible?", "type": "detect_visible",
+   "out_var": "cookie_banner_shown"},
+
+  {"intent": "Branch on whether the banner is up", "type": "if_else",
+   "condition_var": "cookie_banner_shown",
+   "then_target": 3,   // → step 3: dismiss the banner first
+   "else_target": 5},  // → step 5: skip the dismiss + proceed
+
+  {"intent": "Click Accept on the cookie banner", "type": "submit",
+   "params": {"label": "Accept"}},
+  {"intent": "Wait briefly", "type": "scroll", "budget": 1},
+
+  {"intent": "Extract the dashboard tiles", "type": "extract_data",
+   "claude_only": true,
+   "extract": {"fields": [{"name": "title", "required": true}]}}
+]
+```
+
+Safety: when `condition_var` is empty, `then_target`/`else_target`
+default to `-1`, or the index is out of range, `if_else` falls through
+to `step_index + 1` instead of teleporting / hanging. A synthetic
+`StepResult` records the decision (`var=value→target`) so the run
+trace is grep-able.
+
+**Multi-row `extract_data` / `extract_rows` — top-N from a list page.**
+
+Set `extract.max_items > 1` on an `extract_data` step (or use step type
+`extract_rows`) to extract up to N rows in **one** Claude call instead
+of N navigate→extract→back round trips. Each row lands as a separate
+entry in `extracted_rows.json` / `extracted_rows.csv` / `leads.csv`.
+
+```jsonc
+{
+  "intent": "Extract the top 5 stories from HN",
+  "type": "extract_data",
+  "claude_only": true,
+  "extract": {
+    "schema_name": "hn_top5",
+    "entity_name": "hn_story",
+    "fields": [
+      {"name": "rank", "type": "int", "required": true},
+      {"name": "title", "type": "str", "required": true},
+      {"name": "story_url", "type": "str", "required": false},
+      {"name": "points", "type": "int", "required": false},
+      {"name": "author", "type": "str", "required": false},
+      {"name": "age", "type": "str", "required": false},
+      {"name": "comments_count", "type": "int", "required": false}
+    ],
+    "max_items": 5
+  }
+}
+```
+
+When NOT to use multi-row: pages where each item needs detail-page
+enrichment (e.g. seller phone behind a "Show" button). Stick with
+`collect_urls` → `loop` → `navigate` → single-row `extract_data` →
+`navigate_back`.
+
 ### Declaring runtime defaults inside the plan
 
 A plan can carry a top-level `runtime` block so it's self-describing — no submitter has to remember the right proxy / cost / time flags. The bare-array form above stays valid; the wrapped form adds a sibling next to `steps`:
