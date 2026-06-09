@@ -22,7 +22,8 @@ Once you have an authenticated session, every plan submission lands on `POST /v1
   "video_format":      "mp4",
   "video_fps":         5,
   "live_viewer":       false,                        // surfaces ``viewer_url`` on action=status (holo3 only)
-  "callback_url":      "https://my-webhook"          // overrides tenant default
+  "callback_url":      "https://my-webhook",         // overrides tenant default
+  "compute_backend":   "computer_plane"              // OR "browser_use_plane" — see Picking a compute plane below
 }
 ```
 
@@ -209,6 +210,113 @@ The fields below live on `ExtractionSchema` but the inline path doesn't expose t
 - `rejection_intents` — skip-envelope routing for downstream short-circuits
 
 For straight "give me these N fields from each item" extraction — the inline block is enough.
+
+## Picking a compute plane
+
+Every run executes on one of two compute planes. Default is **Computer Plane** — the production-stealth path. **Browser-Use Plane** is opt-in for plans that need DOM-aware reads (current URL, anchor `href` peek before click, semantic role disambiguation on dense list pages, tab management).
+
+| Plane | Driver | DOM-aware | Stealth (CF/Turnstile) | Pick this when… |
+|---|---|---|---|---|
+| `computer_plane` (default) | Xvfb + Chrome + xdotool | ✗ | ✓ | Production scraping, CF/Turnstile-protected sites, screenshot+click flows |
+| `browser_use_plane` | Playwright + Chromium (headless) | ✓ | ✗ | Dense link lists where vision misclicks (HN, comment threads), tab-management plans, plans needing anchor-href reads |
+
+Select via the `runtime.compute_backend` field in your plan or via the submission-level `compute_backend` field on the request. Precedence: plan `runtime.compute_backend` > submission `compute_backend` > global default (`computer_plane`).
+
+### Computer Plane (default) — marketplace-style extraction
+
+The standard production posture. CUA-pure: screenshot + xdotool only. Holo3 grounds vision; Claude extracts.
+
+```bash
+curl -X POST "$ENDPOINT/v1/predict" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "detached": true,
+    "cua_model": "holo3",
+    "plan_text": "Search the boat marketplace for private-seller listings in Florida above $35,000, then for each listing extract year, make, model, price, seller phone, and listing URL.",
+    "profile_id": "marketplace-prod",
+    "workflow_id": "marketplace-fl-v1",
+    "max_cost": 2,
+    "max_time_minutes": 20
+  }'
+```
+
+Decomposer runs the prose → MicroIntent steps with inline `extract` blocks (since #785), validator enforces the schema, Holo3 + Xvfb-driven Chrome do the actual scraping under stealth.
+
+### Browser-Use Plane (opt-in) — link-list harvest
+
+Use when vision struggles. Browser-Use Plane is the right path for the HN top-N use case the browser-use epic (#785) was filed for: link lists where title/comment/author rows are visually similar and the runtime needs anchor `href` reads to disambiguate.
+
+```bash
+curl -X POST "$ENDPOINT/v1/predict" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "detached": true,
+    "cua_model": "holo3",
+    "compute_backend": "browser_use_plane",
+    "plan_text": "Extract the top 5 stories from Hacker News including rank, title, story URL, points, author, age, and comment count. Do not click titles.",
+    "profile_id": "hn-prod",
+    "workflow_id": "hn-top5-v1",
+    "max_cost": 0.50,
+    "max_time_minutes": 6
+  }'
+```
+
+Equivalently, declare it in the plan so the choice survives across submissions:
+
+```jsonc
+{
+  "runtime": {
+    "compute_backend": "browser_use_plane",
+    "max_cost": 0.50
+  },
+  "steps": [
+    {"type": "navigate", "intent": "Navigate to HN", "params": {"url": "https://news.ycombinator.com/"}},
+    {
+      "type": "extract_data",
+      "intent": "Extract top 5 stories with rank, title, story_url, points, author, age, comments_count",
+      "claude_only": true,
+      "extract": {
+        "schema_name": "hn_top5",
+        "entity_name": "hn_story",
+        "fields": [
+          {"name": "rank",           "type": "int", "required": true},
+          {"name": "title",          "type": "str", "required": true},
+          {"name": "story_url",      "type": "str", "required": false},
+          {"name": "points",         "type": "int", "required": false},
+          {"name": "author",         "type": "str", "required": false},
+          {"name": "age",            "type": "str", "required": false},
+          {"name": "comments_count", "type": "int", "required": false}
+        ],
+        "max_items": 5
+      }
+    }
+  ]
+}
+```
+
+### What Browser-Use Plane gives you that Computer Plane doesn't
+
+Once you opt in, the Browser-Use Plane handlers can consume these DOM-aware verbs (transparent to plan authors — they just work because the plan declares `browser_use_plane`):
+
+- `state.current_url()` / `state.tabs()` / `state.focused_element()` — read-only browser state
+- `tabs.open_in_new(url)` / `tabs.close(tab_id)` / `tabs.activate(tab_id)` — programmatic tab management
+- `links.peek_target(selector)` — read an anchor `href` without clicking it (the HN list disambiguation primitive)
+- `target_role` on `click` / `capture_link_in_new_tab` steps — semantic role lookup via per-site recipe (e.g. on HN: "title" → the story link, "comment_count" → the threads link)
+
+These verbs are **capability-gated** behind `dom_aware`. Pure-CUA executors (Holo3, Claude vision) carry an allowlist that excludes them, so wiring a plan to the wrong plane fails loud at session start instead of silently mis-clicking.
+
+### Non-goals for Browser-Use Plane at v1
+
+- **CF / Turnstile parity** — Browser-Use Plane does NOT promise stealth against bot detectors. Use Computer Plane for stealth-sensitive targets.
+- **Cross-plane profile sharing** — `(tenant_id, profile_id)` is the same identity on both planes but storage is independent. Switching plane mid-workflow re-authenticates. Cross-plane handoff is a deferred follow-up.
+
+Full plane architecture, capability model, and host details live in:
+
+- [Compute Client contract](../reference/compute-client.md) — umbrella spec for both planes
+- [Computer Plane](../reference/computer-plane.md) — Xvfb + xdotool implementation
+- [Browser-Use Plane](../reference/browser-use-plane.md) — Playwright implementation, deploy, wire contract
 
 ## What the server returns
 
