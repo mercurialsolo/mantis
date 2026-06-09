@@ -18,6 +18,16 @@ and the [any-agent integration playbook](integrations/any-agent.md).
 | `GET /v1/health`, `GET /health` | open | Liveness/readiness probe. |
 | `GET /v1/version` | open | Runtime version snapshot — `version`, `model`, `ready`, `git_sha`, `build_time`. Useful for pinning client behavior to a specific build. |
 | `GET /metrics` | open | Prometheus scrape endpoint. Returns 503 if `prometheus_client` not installed. |
+| `GET /v1/runs/{run_id}` | `X-Mantis-Token` | **Cheap-poll lifecycle ([#806](https://github.com/mercurialsolo/mantis/issues/806))** — `phase` + adaptive `polling_backoff_ms_hint`. Use instead of `action=status` for active polling loops. |
+| `GET /v1/runs/{run_id}/status` | `X-Mantis-Token` | Full-detail status (alias for `action=status`). |
+| `GET /v1/runs/{run_id}/result` | `X-Mantis-Token` | Result payload once terminal (alias for `action=result`). |
+| `POST /v1/runs/{run_id}/cancel` | `X-Mantis-Token` | Cancel a run (alias for `action=cancel`). |
+| `GET /v1/runs/{run_id}/events` | `X-Mantis-Token` | **SSE event stream ([#808](https://github.com/mercurialsolo/mantis/issues/808))** with `?sse=true`. JSON parity with `action=reasoning_trace` otherwise. |
+| `GET /v1/queue` | `X-Mantis-Token` | Per-tenant queue snapshot — counts of `queued` / `running` / `recovering` runs. |
+| `POST /v1/recipes` | `X-Mantis-Token` | **Runtime recipe registration ([#809](https://github.com/mercurialsolo/mantis/issues/809))** — `{name, schema: ExtractionSchema}`. Tenant-scoped. |
+| `GET /v1/recipes` | `X-Mantis-Token` | List runtime recipes registered under the caller's tenant. |
+| `GET /v1/recipes/{name}` | `X-Mantis-Token` | Fetch a runtime recipe by name. |
+| `DELETE /v1/recipes/{name}` | `X-Mantis-Token` | Delete a runtime recipe (idempotent). |
 | `GET /v1/runs/{run_id}/video` | `X-Mantis-Token` | Download the screencast captured during a run. Returns 404 if `record_video` was not requested. |
 | `GET /v1/runs/{run_id}/artifacts/{name}` | `X-Mantis-Token` | Download a run artifact ([#508](https://github.com/mercurialsolo/mantis/issues/508)). Allowlisted names: `leads.csv`, `extracted_rows.csv`, `extracted_rows.json`, `result.json`. Returns 404 when the artifact wasn't produced (no leads, no structured rows). |
 | `GET /docs`, `GET /redoc` | open | Interactive Swagger UI / Redoc viewer over `/openapi.json`. Disable on production tenant fleets with `MANTIS_ENABLE_DOCS_UI=0`. |

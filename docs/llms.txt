@@ -191,6 +191,137 @@ results aren't retried.
 `logs` returns the last `tail` events written by the runner (default 200,
 max 10000).
 
+### 2.3 Cheap-poll lifecycle endpoints (#806)
+
+`POST /v1/predict {action: status}` returns the full detail payload —
+fine for one-off checks, **expensive when polled in a loop**. The
+lifecycle endpoints below give a cheap *phase + backoff hint* poll
+surface plus a per-tenant queue snapshot.
+
+| Method | Path | Returns |
+|---|---|---|
+| `GET`  | `/v1/runs/{run_id}`         | `RunPhaseResponse` — `phase` + `polling_backoff_ms_hint` |
+| `GET`  | `/v1/queue`                 | `QueueStatusResponse` — per-tenant active counts |
+| `POST` | `/v1/runs/{run_id}/cancel`  | Cancel — wraps the same logic as `action=cancel` |
+
+```bash
+curl -fsS "$ENDPOINT/v1/runs/$RUN_ID" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN"
+```
+
+```jsonc
+{
+  "run_id": "<run_id>",
+  "phase": "running",          // queued | running | recovering | complete | halted | cancelled
+  "last_event_at": 1722500400.0,
+  "polling_backoff_ms_hint": 1500,   // honor this — terminal phases give long hints
+  "started_at": 1722500390.0,
+  "finished_at": null,
+  "halt_class": null
+}
+```
+
+Six-phase taxonomy is stable wire constants. `complete` covers both
+`succeeded` AND `completed_with_failures`. The executor's wider status
+strings (`paused`, `succeeded`, `failed`, `timeout`, …) all map onto
+the six phases — `paused` reads as `running` from a lifecycle
+perspective because the run is still active.
+
+`polling_backoff_ms_hint` is adaptive: 500ms on fresh transitions,
+1500ms after 2-10s of no change, 5000ms after 10-30s, 10000ms after 30s,
+and **30000ms once terminal** (state won't change — stop polling).
+
+Recommended poll loop:
+
+```python
+while True:
+    body = requests.get(
+        f"{ENDPOINT}/v1/runs/{run_id}",
+        headers={"X-Mantis-Token": TOKEN},
+    ).json()
+    if body["phase"] in {"complete", "halted", "cancelled"}:
+        break
+    time.sleep(body["polling_backoff_ms_hint"] / 1000)
+```
+
+For full detail (per-step results, artifacts), call
+`POST /v1/predict {action: result, run_id}` once the cheap-poll
+returns a terminal phase.
+
+### 2.4 Streaming events via SSE (#808)
+
+For interactive UIs the polling lag (1-2s minimum) is too long. Use
+the SSE endpoint to receive each reasoning event the moment it's
+written:
+
+```
+GET /v1/runs/{run_id}/events?sse=true
+```
+
+Headers: `X-Mantis-Token` + (optional) `Last-Event-ID` for resume.
+
+```
+event: phase
+data: {"phase": "running", "run_id": "..."}
+
+event: step
+id: 2026-06-08T00:00:01
+data: {"ts": "...", "kind": "step", "step_index": 4, ...}
+
+event: extract
+id: 2026-06-08T00:00:05
+data: {"ts": "...", "kind": "extract", "step_index": 7, "row": {...}}
+
+event: terminal
+data: {"phase": "complete", "run_id": "...", "halt_class": null}
+```
+
+Stream closes on `terminal` or after a ~600s soft timeout — clients
+reconnect with the last `id` as `Last-Event-ID`. Heartbeat `: ping`
+arrives every ~25s. The SDK helper wraps the SSE parsing:
+
+```python
+for event in client.stream_events(run_id):
+    if event["event"] == "terminal":
+        break
+    print(event["event"], event["data"])
+```
+
+Without `?sse=true` the same path returns a JSON payload matching
+`action=reasoning_trace` — parity for batched consumers.
+
+### 2.5 `dry_run` — preview a plan without spawning the executor (#813)
+
+Set `"dry_run": true` on a `/v1/predict` body to validate the request
++ resolve the task suite **without** locking a profile or starting a
+container. Returns the resolved plan + a cheap cost estimate so you
+can sanity-check expensive runs before paying for GPU time.
+
+```bash
+curl -fsS -X POST "$ENDPOINT/v1/predict" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"plan_text": "Open https://example.com/, read the heading.", "dry_run": true}'
+```
+
+```jsonc
+{
+  "dry_run": true,
+  "resolved": {
+    "cua_model": "holo3",
+    "max_steps": 30,
+    "profile_id": "default__alice",
+    "task_suite": { /* decomposed micro-plan */ }
+  },
+  "plan_summary": { "step_count": 4, "extract_steps": 1, "has_inline_extract": true },
+  "cost_estimate": { "min_usd": 0.04, "max_usd": 0.18 }
+}
+```
+
+No `run_id` is minted; the profile lock is not acquired. Use this
+in CI / pre-flight checks. Also useful for catching the cua_model ↔
+plan_shape mismatch (next pitfall) at submit time.
+
 ---
 
 ## 3. Plan shapes — pick by use case
@@ -463,6 +594,49 @@ session with its own budget):
 
 Verify clause types: `url_not_contains`, `url_contains`, `page_contains_text`.
 
+### 3.6 Runtime recipe registration (#809)
+
+The inline `extract` block (§3.1a) covers per-plan extraction needs.
+**Runtime recipes** are for the long tail of integrators who need
+domain-specific `spam_indicators`, `forbidden_controls`, or
+`rejection_intents` reused across many plans for the same tenant —
+without forking + redeploying.
+
+```bash
+curl -fsS -X POST "$ENDPOINT/v1/recipes" \
+  -H "X-Mantis-Token: $MANTIS_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my_marketplace",
+    "schema": {
+      "entity_name": "property",
+      "fields": [
+        {"name": "address", "type": "str", "required": true},
+        {"name": "price",   "type": "str", "required": true},
+        {"name": "url",     "type": "str", "required": true}
+      ],
+      "required_fields": ["address", "price", "url"],
+      "spam_indicators": ["sponsored", "featured"],
+      "forbidden_controls": ["Contact Agent"],
+      "rejection_intents": {"sponsored": "skip"}
+    }
+  }'
+```
+
+Plans then reference it by name (`_recipe: "my_marketplace"` in the
+task suite envelope). Resolution precedence:
+
+1. **Runtime recipe** under the caller's tenant (this surface)
+2. **Code-shipped recipe** at `src/mantis_agent/recipes/<name>/`
+
+So a tenant can override a shipped recipe (e.g. `marketplace_listings`)
+by registering a runtime recipe with the same name — the override is
+per-tenant.
+
+Name rules: `[A-Za-z0-9_-]{1,64}`, no leading hyphen. Validation runs
+at write time (`400` at registration, not at extract time). See
+`docs/operations/runtime-recipes.md` for the full reference.
+
 ---
 
 ## 4. End-to-end pattern (curl)
@@ -484,21 +658,28 @@ RESP=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
   }')
 RUN_ID=$(echo "$RESP" | jq -r .run_id)
 
-# 2. Poll until terminal
+# 2. Poll cheap-poll (§2.3 #806) — honors the backoff hint
 while true; do
-  STATUS=$(curl -fsS -X POST "$ENDPOINT/v1/predict" \
-    -H "X-Mantis-Token: $TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{\"action\":\"status\",\"run_id\":\"$RUN_ID\"}" | jq -r .status)
-  case "$STATUS" in succeeded|failed|cancelled) break ;; esac
-  sleep 15
+  BODY=$(curl -fsS "$ENDPOINT/v1/runs/$RUN_ID" \
+    -H "X-Mantis-Token: $TOKEN")
+  PHASE=$(echo "$BODY" | jq -r .phase)
+  BACKOFF_MS=$(echo "$BODY" | jq -r .polling_backoff_ms_hint)
+  case "$PHASE" in complete|halted|cancelled) break ;; esac
+  sleep "$(echo "$BACKOFF_MS / 1000" | bc -l)"
 done
 
-# 3. Fetch result
+# 3. Fetch full result
 curl -fsS -X POST "$ENDPOINT/v1/predict" \
   -H "X-Mantis-Token: $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"action\":\"result\",\"run_id\":\"$RUN_ID\"}"
+```
+
+For interactive UIs, replace step 2 with the SSE stream (§2.4):
+
+```bash
+curl -N -H "X-Mantis-Token: $TOKEN" \
+  "$ENDPOINT/v1/runs/$RUN_ID/events?sse=true"
 ```
 
 ---
@@ -732,6 +913,20 @@ override.
 7. **Cold-start on Modal/Baseten is ~50–90s.** First request after idle
    pays Chrome + Xvfb + llama-server boot. Subsequent calls within the
    scaledown window are ~instant.
+8. **`cua_model` ↔ plan shape mismatch returns silent 0/0/0 success**
+   (fixed at submit-time by #812). The Modal Claude executor reads
+   `tasks[]`; the Holo3 executor reads `_micro_plan`. Sending one
+   shape against the wrong model used to land a `succeeded` with
+   `steps_executed=0, viable=0`. Since #812 the API rejects the
+   mismatch at submit with a 400 + descriptive message. For micro-
+   plans on Modal HTTP use `cua_model: "holo3"`; reserve
+   `cua_model: "claude"` for `tasks[]`-shaped suites.
+9. **Hammering `action=status` instead of using cheap-poll (#806).**
+   `action=status` returns the full status payload (artifacts,
+   summary, etc.) — fine for one-off checks, wasteful at 1Hz. Use
+   `GET /v1/runs/{id}` (§2.3) plus its `polling_backoff_ms_hint` for
+   active polling, then fetch `action=result` once a terminal phase
+   arrives.
 
 ---
 
@@ -777,14 +972,25 @@ the allowlist for that tenant. Always include both `example.com` and
 
 ## 9. Other endpoints
 
-| Path                          | Auth                  | Purpose                                                                      |
-|-------------------------------|-----------------------|------------------------------------------------------------------------------|
-| `POST /v1/cua`                | `X-Mantis-Token`      | **Pure CUA pass-through.** Mantis as a thin Holo3 driver — no decomposition, no Claude. See §9a. |
-| `POST /v1/chat/completions`   | `X-Mantis-Token`      | OpenAI-compat reverse proxy to in-pod Holo3. Raw inference, no orchestration.|
-| `GET /v1/models`              | open                  | Returns `{ "data": [{"id": "holo3", ...}] }`                                 |
-| `GET /v1/health`, `GET /health` | open                | Liveness probe. Returns `{ "ok": true, "model": "holo3" }`                   |
-| `GET /metrics`                | open                  | Prometheus text format. 503 if `prometheus_client` not installed.            |
-| `GET /v1/runs/{run_id}/video` | `X-Mantis-Token`      | Download screencast. 404 if `record_video` was not requested.                |
+| Path                              | Auth                  | Purpose                                                                      |
+|-----------------------------------|-----------------------|------------------------------------------------------------------------------|
+| `POST /v1/cua`                    | `X-Mantis-Token`      | **Pure CUA pass-through.** Mantis as a thin Holo3 driver — no decomposition, no Claude. See §9a. |
+| `POST /v1/chat/completions`       | `X-Mantis-Token`      | OpenAI-compat reverse proxy to in-pod Holo3. Raw inference, no orchestration.|
+| `GET /v1/models`                  | open                  | Returns `{ "data": [{"id": "holo3", ...}] }`                                 |
+| `GET /v1/health`, `GET /health`   | open                  | Liveness probe. Returns `{ "ok": true, "model": "holo3" }`                   |
+| `GET /metrics`                    | open                  | Prometheus text format. 503 if `prometheus_client` not installed.            |
+| `GET /v1/runs/{run_id}`           | `X-Mantis-Token`      | **Cheap-poll lifecycle (§2.3, #806)** — phase + adaptive backoff hint.       |
+| `GET /v1/runs/{run_id}/status`    | `X-Mantis-Token`      | Detail-heavy status (alias for `action=status`).                             |
+| `GET /v1/runs/{run_id}/result`    | `X-Mantis-Token`      | Result payload once terminal (alias for `action=result`).                    |
+| `POST /v1/runs/{run_id}/cancel`   | `X-Mantis-Token`      | Cancel a run (alias for `action=cancel`).                                    |
+| `GET /v1/runs/{run_id}/events`    | `X-Mantis-Token`      | **Event stream (§2.4, #808)** — JSON by default, SSE with `?sse=true`.       |
+| `GET /v1/queue`                   | `X-Mantis-Token`      | Per-tenant queue snapshot (§2.3, #806).                                      |
+| `POST /v1/recipes`                | `X-Mantis-Token`      | **Runtime recipe registration (#809)** — `{name, schema: ExtractionSchema}`. |
+| `GET /v1/recipes`                 | `X-Mantis-Token`      | List runtime recipes for the caller's tenant.                                |
+| `GET /v1/recipes/{name}`          | `X-Mantis-Token`      | Fetch a runtime recipe by name. 404 if absent.                               |
+| `DELETE /v1/recipes/{name}`       | `X-Mantis-Token`      | Delete a runtime recipe. Idempotent (`deleted: false` if absent).            |
+| `GET /v1/runs/{run_id}/video`     | `X-Mantis-Token`      | Download screencast. 404 if `record_video` was not requested.                |
+| `GET /v1/runs/{run_id}/artifacts/{name}` | `X-Mantis-Token` | Download a named artifact (`leads.csv`, `extracted_rows.json`, …).          |
 
 For raw Holo3 inference (no plan orchestration), `POST /v1/chat/completions`
 is OpenAI-compatible — useful for clients that want to run their own
@@ -901,6 +1107,9 @@ response. `--detached` queues and returns immediately.
 - [docs/operations/allowlist.md](operations/allowlist.md) — `allowed_domains` enforcement detail
 - [docs/client/auth.md](client/auth.md) — caller-side auth setup
 - [docs/client/pure-cua.md](client/pure-cua.md) — Pure CUA mode / Holo3 pass-through deep-dive (§9a)
+- [docs/client/runs-and-polling.md](client/runs-and-polling.md) — lifecycle endpoints (§2.3, #806) + webhook pattern
+- [docs/client/streaming-events.md](client/streaming-events.md) — SSE stream + Python iterator (§2.4, #808)
+- [docs/operations/runtime-recipes.md](operations/runtime-recipes.md) — runtime recipe CRUD (§3.6, #809)
 - [docs/integrations/embedding-microplanrunner.md](integrations/embedding-microplanrunner.md) — library-shaped integration (driving `MicroPlanRunner` in your own process)
 - [docs/architecture.md](architecture.md) — internals and data flow
 - [src/mantis_agent/api_schemas.py](../src/mantis_agent/api_schemas.py) — authoritative pydantic schemas for the request body
