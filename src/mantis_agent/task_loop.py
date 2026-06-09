@@ -236,6 +236,39 @@ def setup_env(
     # uses, so we surface the IP Cloudflare sees.
     proxy_diag = diagnose_proxy_egress(proxy_server)
 
+    # #825 — Timezone + locale consistency with proxy exit geo.
+    # The Modal CUA image bakes ``TZ=America/New_York``, but a US
+    # residential proxy can land in any state. Mismatch between
+    # ``navigator.language`` / ``Intl.DateTimeFormat().resolvedOptions().timeZone``
+    # and the IP geo is a detectable signal for CF / DataDome scoring.
+    #
+    # Resolve the proxy's geo → (tz, lang), then update ``TZ`` and
+    # ``LANG`` in the process env BEFORE Chrome starts so Chrome
+    # inherits them. The xdotool env's ``_env`` dict is built from
+    # ``os.environ`` at constructor time, so this write lands before
+    # the browser process is forked. CDP-level
+    # ``Emulation.setTimezoneOverride`` / ``setLocaleOverride`` calls
+    # happen post-launch (out of scope here — wired in cdp_stealth).
+    #
+    # Opt-out: set ``MANTIS_GEO_CONSISTENCY=0`` to preserve the baked-
+    # in image defaults (useful for CI / replay).
+    if os.environ.get("MANTIS_GEO_CONSISTENCY", "").strip().lower() not in {"0", "false", "no", "off"}:
+        from .gym.geo_consistency import resolve_tz_and_lang
+        resolved_tz, resolved_lang = resolve_tz_and_lang(proxy_diag)
+        if resolved_tz:
+            os.environ["TZ"] = resolved_tz
+            os.environ["MANTIS_RESOLVED_TZ"] = resolved_tz
+        if resolved_lang:
+            os.environ["LANG"] = f"{resolved_lang.replace('-', '_')}.UTF-8"
+            os.environ["MANTIS_RESOLVED_LANG"] = resolved_lang
+        try:
+            print(
+                f"  Geo consistency: tz={resolved_tz} lang={resolved_lang} "
+                f"(proxy={proxy_diag.get('country', '?')}/{proxy_diag.get('region', '?')})"
+            )
+        except Exception:
+            pass
+
     # Local Xvfb only when the env actually runs in-process. The remote
     # computer plane owns its own Xvfb; spawning a brain-side one would
     # both waste a CPU and break DISPLAY clobbering on shared executors.

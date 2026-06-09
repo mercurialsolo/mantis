@@ -3093,6 +3093,148 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
             _commit_volume()
         return {"name": name, "deleted": deleted}
 
+    # ── Fingerprint diagnostic (#827) ──────────────────────────────
+    #
+    # Synthesizes + submits a fingerprint-test plan against a public
+    # bot-detection diagnostic page (``bot.sannysoft.com`` by default;
+    # configurable via the request body). The plan navigates to the
+    # test page, waits for the JS to populate the results table, then
+    # ``extract_data`` reads each row's pass/fail signal. Returns
+    # ``{run_id, target_url, poll_via}`` immediately — the operator
+    # polls the run via the lifecycle endpoints to read the scorecard.
+    #
+    # Use this to verify the stealth posture before/after a config
+    # change: flip ``MANTIS_STEALTH_HONEST=1`` or
+    # ``MANTIS_BEHAVIORAL_JITTER=1``, redeploy, run /diagnose/
+    # fingerprint, compare the row counts in extracted_rows.json.
+
+    @fastapi_app.post("/v1/diagnose/fingerprint")
+    def diagnose_fingerprint(
+        body: dict | None = None,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        """Submit a bot-detection diagnostic run (#827).
+
+        Optional body:
+            {"target_url": "https://bot.sannysoft.com/",
+             "cua_model":  "holo3"}
+
+        Returns the standard detached-run envelope; poll via
+        ``GET /v1/runs/{run_id}`` and read the rows via
+        ``GET /v1/runs/{run_id}/artifacts/extracted_rows.json``.
+        """
+        from mantis_agent.server.run_dispatch import (
+            DispatchError,
+            acquire_profile_lock,
+            release_profile_lock,
+        )
+
+        body = body or {}
+        target_url = str(body.get("target_url") or "https://bot.sannysoft.com/").strip()
+        if not target_url.startswith(("http://", "https://")):
+            raise HTTPException(400, "target_url must be http(s)://")
+        model = str(body.get("cua_model") or "holo3").strip() or "holo3"
+        if model not in {"holo3", "claude"}:
+            raise HTTPException(400, "cua_model must be holo3 or claude")
+
+        plan = {
+            "_micro_plan": [
+                {
+                    "intent": f"Navigate to {target_url} and wait for the fingerprint test to complete",
+                    "type": "navigate",
+                    "params": {"url": target_url, "wait_after_load_seconds": 8},
+                    "section": "setup", "required": True, "budget": 4,
+                },
+                {
+                    "intent": (
+                        "Extract each fingerprint test row visible on the page. Each "
+                        "row has a test name (e.g. 'navigator.webdriver', 'WebGL "
+                        "Vendor') and a status (Pass / Fail / value). Return one row "
+                        "per visible test."
+                    ),
+                    "type": "extract_data",
+                    "params": {"claude_only": True},
+                    "section": "extraction", "required": False, "budget": 0,
+                    "claude_only": True, "hints": {"layout": "listings"},
+                    "extract": {
+                        "schema_name": "fingerprint_diagnostic",
+                        "entity_name": "fingerprint_test",
+                        "fields": [
+                            {"name": "test_name", "type": "str", "required": True},
+                            {"name": "result", "type": "str", "required": True},
+                        ],
+                        "max_items": 60,
+                    },
+                },
+            ],
+        }
+
+        try:
+            task_file_contents = _build_suite_from_payload({
+                "task_suite": plan,
+                "cua_model": model,
+                "profile_id": f"fp-diag-{int(time.time())}",
+                "workflow_id": f"fp-diag-{int(time.time())}",
+                "max_cost": 0.30,
+                "max_time_minutes": 3,
+            })
+        except (ValueError, FileNotFoundError, DispatchError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+        profile_id = f"fp-diag-{int(time.time())}"
+        run_id = _mint_run_id()
+        if not acquire_profile_lock(tenant, profile_id, run_id):
+            raise HTTPException(409, "profile lock busy — retry in a moment")
+
+        executor_fn = resolve_executor(model)
+        spawn_kwargs: dict = {
+            "max_steps": 8,
+            "profile_dir": _chrome_profile_dir(tenant.tenant_id, profile_id),
+        }
+        if model != "claude":
+            spawn_kwargs["cua_model"] = model
+        try:
+            call_handle = executor_fn.spawn(
+                task_file_contents=task_file_contents,
+                **spawn_kwargs,
+            )
+        except Exception as exc:
+            release_profile_lock(tenant, profile_id)
+            raise HTTPException(500, f"executor spawn failed: {exc}") from exc
+
+        now = datetime.now(timezone.utc).isoformat()
+        status = {
+            "run_id": run_id,
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+            "modal_call_id": getattr(call_handle, "object_id", "") or "",
+            "tenant_id": tenant.tenant_id,
+            "profile_id": profile_id,
+            "workflow_id": profile_id,
+            "state_key": profile_id,
+            "model": model,
+            "max_steps": 8,
+            "diagnostic_kind": "fingerprint",
+            "diagnostic_target": target_url,
+        }
+        _write_status(tenant.tenant_id, run_id, status)
+        _write_task_suite(tenant.tenant_id, run_id, task_file_contents)
+        return {
+            "run_id": run_id,
+            "target_url": target_url,
+            "poll_via": f"/v1/runs/{run_id}",
+            "rows_via": f"/v1/runs/{run_id}/artifacts/extracted_rows.json",
+            "status": "queued",
+            "stealth_snapshot": {
+                "honest_mode": os.environ.get("MANTIS_STEALTH_HONEST", "1") not in {"0", "false"},
+                "behavioral_jitter": os.environ.get("MANTIS_BEHAVIORAL_JITTER", "1") not in {"0", "false"},
+                "geo_consistency": os.environ.get("MANTIS_GEO_CONSISTENCY", "1") not in {"0", "false"},
+                "cdp_stealth": os.environ.get("MANTIS_CDP_STEALTH", "1") not in {"0", "false"},
+                "proxy_provider": os.environ.get("MANTIS_PROXY_PROVIDER", "privateproxy"),
+            },
+        }
+
     return fastapi_app
 
 
