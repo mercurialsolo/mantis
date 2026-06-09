@@ -367,6 +367,31 @@ class ClaudeStepHandler:
             data = extractor.extract(screenshot)
             url = data.url if data else ""
 
+            # #833: pagination URL filter. When the extracted URL is
+            # structurally a pagination URL (``?p=2``, ``/page/3``,
+            # ``?next=...``), it's almost never what the caller wanted
+            # — they asked for a story/item URL. Reject the step so the
+            # recovery layer (or the read-only constraint from #831)
+            # can react. Plan-author can opt back in via
+            # ``extract.allow_pagination_urls: true`` on the step.
+            from ...extraction.pagination_filter import (
+                is_allowed_pagination,
+                is_pagination_url,
+            )
+            step_extract = getattr(step, "extract", None) or {}
+            if url and is_pagination_url(url) and not is_allowed_pagination(step_extract):
+                logger.warning(
+                    "  [extract_url] PAGINATION_URL — url=%s looks like a "
+                    "pagination link; rejecting (opt-in via "
+                    "extract.allow_pagination_urls=true)",
+                    url[:120],
+                )
+                return StepResult(
+                    step_index=index, intent=step.intent, success=False,
+                    data=f"PAGINATION_URL|{url}",
+                    failure_class="wrong_target",
+                )
+
             # #585: validate URL matches the recipe's detail-page pattern
             # when we're in the extraction section. Catches the wrong-page
             # case where a click landed on a marketing CTA (``/boat-loans/``,

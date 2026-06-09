@@ -1026,7 +1026,6 @@ class PlanDecomposer:
             MicroPlan with ordered list of MicroIntent steps.
         """
         import hashlib
-        import requests
 
         if not self.api_key:
             raise RuntimeError("ANTHROPIC_API_KEY not set")
@@ -1037,9 +1036,28 @@ class PlanDecomposer:
         if m:
             domain = m.group(1)
 
+        # #831: read-only intent detection. When the source plan_text
+        # contains phrasing like "do not click", "read-only", "stay on
+        # this page", etc., we prepend a hard constraint to the
+        # decomposer prompt and validate the output. Affects the
+        # prompt + cache key so read-only and standard variants of the
+        # same prose don't collide.
+        from .read_only_intent import (
+            READ_ONLY_PROMPT_CONSTRAINT,
+            is_read_only,
+            validate_read_only_plan,
+        )
+
+        read_only = is_read_only(plan_text)
+        if read_only:
+            logger.info("plan_text expresses read-only intent — enforcing #831 constraint")
+
         # Check cache — include prompt version in hash to invalidate on schema changes
         prompt_version = "v36_emit_extract_blocks"  # Bump this when DECOMPOSE_PROMPT changes
-        plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
+        cache_key_text = (
+            f"READONLY:{plan_text}" if read_only else plan_text
+        )
+        plan_hash = hashlib.md5(f"{prompt_version}:{cache_key_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
             if cache_path_template
@@ -1094,6 +1112,12 @@ class PlanDecomposer:
         # Use replace() instead of format() — the prompt has literal `{...}`
         # JSON examples (params={"label": ...}) that confuse str.format.
         prompt = DECOMPOSE_PROMPT.replace("{plan_text}", plan_text)
+        if read_only:
+            # Hard constraint prepended ABOVE the decompose prompt so the
+            # model sees it first, weighted higher than the body of
+            # examples that include click / paginate / loop steps for
+            # other shapes.
+            prompt = READ_ONLY_PROMPT_CONSTRAINT + "\n\n" + prompt
 
         request_body = {
             "model": self.model,
@@ -1101,17 +1125,26 @@ class PlanDecomposer:
             "messages": [{"role": "user", "content": prompt}],
         }
         t0 = time.monotonic()
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json=request_body,
-            timeout=60,
+        # #832: route through the shared client's retry policy so a
+        # single Anthropic 5xx / 529 Overloaded / read-timeout doesn't
+        # kill the run before any GPU work fires. Pre-fix the raw
+        # ``requests.post`` here saw a 5xx and ``raise RuntimeError``
+        # propagated up to the executor, surfacing as "execution
+        # failed before useful output" in the user-feedback HN run.
+        from ._anthropic.client import AnthropicToolUseClient
+        client = AnthropicToolUseClient(
+            api_key=self.api_key,
+            model=self.model,
+            log_prefix="[decomposer]",
         )
-
+        resp = client.post_messages_with_retry(
+            request_body, timeout=60, max_attempts=4,
+        )
+        if resp is None:
+            raise RuntimeError(
+                "Decompose API: network errors on every attempt — "
+                "Anthropic unreachable.",
+            )
         if resp.status_code != 200:
             raise RuntimeError(f"Decompose API error: {resp.status_code} {resp.text[:200]}")
 
@@ -1196,6 +1229,17 @@ class PlanDecomposer:
             )
         for s in steps_raw:
             plan.steps.append(self._build_intent(s))
+
+        # #831: validate read-only contract after parsing. If Claude
+        # ignored the constraint and emitted a click / paginate / loop
+        # step despite the source phrasing, raise here so the run
+        # fails fast instead of silently clicking the "More" link.
+        if read_only:
+            err = validate_read_only_plan(steps_raw, plan_text=plan_text)
+            if err:
+                raise RuntimeError(
+                    f"read-only contract violated by decomposer: {err}",
+                )
 
         if plan.shapes:
             logger.info(f"  [decomposer] Claude classified shape(s): {plan.shapes}")
