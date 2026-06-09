@@ -127,6 +127,89 @@ If your tenant has `allowed_domains` configured, the server scans your plan's `n
 
 If you need to add a domain, ask your operator to update your tenant config — see [URL allowlist](../operations/allowlist.md).
 
+## Inline extraction schema
+
+For plans that don't have a registered server-side recipe (the common case for ad-hoc plans), declare your extraction contract **inline on the step**. The validator then enforces the fields *you* asked for instead of falling through to the framework's `no_schema_configured` rejection.
+
+Put an `extract` block at the top level of any `extract_data` (or `claude`) step:
+
+```jsonc
+{
+  "intent": "Extract the top 5 stories",
+  "type": "extract_data",
+  "claude_only": true,
+  "extract": {
+    "schema_name": "hn_top5",                        // identifier — used as CSV filename + Augur tag
+    "entity_name": "hn_story",                       // referenced in the extraction prompt
+    "fields": [
+      {"name": "rank",           "type": "int", "required": true},
+      {"name": "title",          "type": "str", "required": true},
+      {"name": "story_url",      "type": "str", "required": false},
+      {"name": "points",         "type": "int", "required": false},
+      {"name": "author",         "type": "str", "required": false},
+      {"name": "age",            "type": "str", "required": false},
+      {"name": "comments_count", "type": "int", "required": false}
+    ],
+    "max_items": 5                                    // optional cap on rows returned
+  }
+}
+```
+
+### Field reference
+
+| Field | Required | Effect |
+|---|---|---|
+| `schema_name` | yes | Logged at runtime; CSV output filename; Augur tag |
+| `entity_name` | optional (default `"item"`) | Used in the extractor prompt ("Extract from this {entity_name}…") |
+| `fields[].name` | yes | Column name in the CSV / key in the JSON output row |
+| `fields[].type` | yes | `int` / `str` / `bool` — passed to Claude's response schema |
+| `fields[].required` | optional (default `true`) | Validator rejects rows missing `required: true` fields; `required: false` is allowed to be empty |
+| `max_items` | optional | Cap on rows returned. Omit for single-row extraction |
+
+The same shape is documented in [plan.schema.json](../reference/plan.schema.json) under `$defs.Step.properties.extract`.
+
+### What if I don't include an `extract` block?
+
+The step still runs, but the framework needs to find a schema somewhere:
+
+1. **Inline `extract` block on the step** — described above. Wins when set.
+2. **Recipe-bound schema on the extractor** — set at executor startup when your plan domain has a registered recipe (e.g. `marketplace_listings`, `job_listings`, `search_results`). Plan authors don't see this directly; it comes from `ExtractionSchema` defined alongside the recipe.
+3. **No schema at all** — the validator rejects every extracted row with reason `no_schema_configured`. The runner emits a WARNING at step entry to surface the misconfig (see "Diagnostics" below).
+
+For ad-hoc plans against arbitrary sites, declare the inline `extract` block. Recipe registration is only useful when you need domain-specific spam/control rules (forbidden buttons to skip, dealer-vs-private classification, etc.) in addition to a field schema.
+
+### Diagnostics
+
+When you submit an `extract_data` / `extract_url` step with no schema available from any source, the runner logs at WARNING level:
+
+```
+[claude_step] extract_data step has no extraction schema
+  (no `extract` block on the step, no recipe-bound `extractor.schema`).
+  The validator will reject every extracted row with `no_schema_configured`.
+  Either add an inline `extract` block to this step
+  (see docs/client/plans.md#inline-extraction-schema) or configure a recipe
+  at executor startup.
+```
+
+This fires per step at WARNING level (visible in Modal app logs by default). The rejection itself still happens — the warning just makes the misconfig obvious in the trace instead of being buried in the trailing result envelope.
+
+### What the schema enforces
+
+`is_viable()` returns `True` only when every `required: true` field has a non-empty, non-placeholder value. The framework's `_UNKNOWN_PLACEHOLDERS` set treats these strings as empty: `"" / "unknown" / "<unknown>" / "none" / "n/a" / "na" / "not visible" / "not shown" / "not available" / "tbd"` (case + whitespace insensitive). So Claude returning `"<UNKNOWN>"` for `title` is treated the same as omitting the field.
+
+Fields marked `required: false` are kept on the row even when empty — they just don't gate viability.
+
+### What's NOT in the inline `extract` block (recipe-only)
+
+The fields below live on `ExtractionSchema` but the inline path doesn't expose them. If you need them, register a recipe:
+
+- `spam_indicators`, `spam_seller_indicators` — domain-specific text that marks a row as spam/dealer
+- `forbidden_controls`, `allowed_controls` — reveal-button name filters
+- `listing_card_exclusions` — listing-tile spam (financing CTAs, sponsored cards)
+- `rejection_intents` — skip-envelope routing for downstream short-circuits
+
+For straight "give me these N fields from each item" extraction — the inline block is enough.
+
 ## What the server returns
 
 For `detached: true` (the default) — a queued handle:

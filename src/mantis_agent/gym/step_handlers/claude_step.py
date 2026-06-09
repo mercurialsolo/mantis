@@ -211,6 +211,31 @@ class ClaudeStepHandler:
             if extractor_obj is not None
             else None
         )
+        # Diagnostic when the step is an extraction step but no schema
+        # is available from any source (no inline `extract`, no
+        # recipe-bound `extractor.schema`). Without this, the only
+        # signal a plan author gets is the eventual
+        # ``no_schema_configured`` rejection in the trace — which is
+        # accurate but easy to miss. Surfaces the misconfig at the
+        # entry to the step instead. WARNING-level so it survives
+        # Modal's filter (`feedback_warning_level_for_modal_observability`).
+        if (
+            transient_schema is None
+            and original_schema is None
+            and step.type in ("extract_data", "extract_url")
+            and (step.claude_only or step.type == "extract_url")
+        ):
+            logger.warning(
+                "[claude_step] %s step has no extraction schema "
+                "(no `extract` block on the step, no recipe-bound "
+                "`extractor.schema`). The validator will reject every "
+                "extracted row with `no_schema_configured`. Either add "
+                "an inline `extract` block to this step (see "
+                "docs/client/plans.md#inline-extraction-schema) or "
+                "configure a recipe at executor startup.",
+                step.type,
+            )
+
         if transient_schema is not None:
             extractor_obj.schema = transient_schema
             # WARNING-level so it survives Modal's log filter (see

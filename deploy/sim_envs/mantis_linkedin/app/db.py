@@ -102,7 +102,12 @@ CREATE TABLE IF NOT EXISTS posts (
     body            TEXT NOT NULL,
     hashtags        TEXT NOT NULL DEFAULT '[]',  -- JSON list of strings (no leading #)
     visibility      TEXT NOT NULL DEFAULT 'public',
-    created_at      TEXT NOT NULL
+    created_at      TEXT NOT NULL,
+    media           TEXT NOT NULL DEFAULT '[]', -- JSON list of {kind, palette, caption, alt}
+    sponsored       INTEGER NOT NULL DEFAULT 0, -- 1 = promoted in feed
+    advertiser      TEXT NOT NULL DEFAULT '',   -- display name when sponsored=1
+    cta_label       TEXT NOT NULL DEFAULT '',   -- e.g. 'Learn more', 'Sign up'
+    cta_url         TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id);
 CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at);

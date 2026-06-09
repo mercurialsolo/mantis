@@ -24,8 +24,29 @@ def _author_chip(conn, user_id: str) -> dict[str, Any]:
     }
 
 
+_ADVERTISER_COLORS = {
+    "Vercel": "#000000",
+    "Stripe": "#635bff",
+    "Notion": "#191919",
+    "AWS":    "#ff9900",
+    "Figma":  "#a259ff",
+}
+
+
 def _post_view(conn, row) -> dict[str, Any]:
-    author = _author_chip(conn, row["author_id"])
+    keys = row.keys() if hasattr(row, "keys") else []
+    sponsored = bool(row["sponsored"]) if "sponsored" in keys else False
+    if sponsored:
+        adv = row["advertiser"]
+        author = {
+            "id": f"adv_{adv.lower()}",
+            "name": adv,
+            "handle": f"company-{adv.lower()}",
+            "headline": "Promoted",
+            "avatar_color": _ADVERTISER_COLORS.get(adv, "#666"),
+        }
+    else:
+        author = _author_chip(conn, row["author_id"])
     reactions = conn.execute(
         "SELECT COUNT(*) AS n FROM reactions WHERE post_id = ?",
         (row["id"],),
@@ -34,6 +55,7 @@ def _post_view(conn, row) -> dict[str, Any]:
         "SELECT COUNT(*) AS n FROM comments WHERE post_id = ?",
         (row["id"],),
     ).fetchone()["n"]
+    media = db.unpack_json(row["media"]) if "media" in keys else []
     return {
         "id": row["id"],
         "author": author,
@@ -43,6 +65,11 @@ def _post_view(conn, row) -> dict[str, Any]:
         "created_at": row["created_at"],
         "reactions": reactions,
         "comments": comments,
+        "media": media,
+        "sponsored": sponsored,
+        "advertiser": row["advertiser"] if "advertiser" in keys else "",
+        "cta_label": row["cta_label"] if "cta_label" in keys else "",
+        "cta_url": row["cta_url"] if "cta_url" in keys else "",
     }
 
 
@@ -65,13 +92,28 @@ async def feed(request: Request):
     user = request.state.current_user or {}
     user_id = user.get("id", "user_00001")
 
-    posts = [
-        _post_view(conn, r)
-        for r in conn.execute(
-            "SELECT id, author_id, body, hashtags, created_at "
-            "FROM posts ORDER BY created_at DESC, id DESC LIMIT 30"
-        ).fetchall()
-    ]
+    organic_rows = conn.execute(
+        "SELECT id, author_id, body, hashtags, created_at, media, sponsored, "
+        "advertiser, cta_label, cta_url FROM posts "
+        "WHERE sponsored = 0 ORDER BY created_at DESC, id DESC LIMIT 25"
+    ).fetchall()
+    sponsored_rows = conn.execute(
+        "SELECT id, author_id, body, hashtags, created_at, media, sponsored, "
+        "advertiser, cta_label, cta_url FROM posts "
+        "WHERE sponsored = 1 ORDER BY id"
+    ).fetchall()
+    organic = [_post_view(conn, r) for r in organic_rows]
+    sponsored_views = [_post_view(conn, r) for r in sponsored_rows]
+    # Interleave sponsored posts at fixed indexes (mirrors LinkedIn's
+    # ~every-4-posts cadence). Insert from the end so earlier indexes
+    # stay valid as we splice.
+    posts = list(organic)
+    sponsored_slots = [2, 6, 10, 14, 18]
+    for slot, sp in zip(reversed(sponsored_slots), reversed(sponsored_views)):
+        if slot <= len(posts):
+            posts.insert(slot, sp)
+        else:
+            posts.append(sp)
     connection_count = conn.execute(
         "SELECT COUNT(*) AS n FROM connections "
         "WHERE (from_user_id = ? OR to_user_id = ?) AND status = 'accepted'",
