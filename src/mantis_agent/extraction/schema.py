@@ -214,21 +214,39 @@ class ExtractionSchema:
         return [f["name"] for f in self.fields]
 
     def json_template(self) -> str:
-        """JSON template string for the extraction prompt."""
+        """JSON template string for the extraction prompt.
+
+        #785 follow-up: ``is_spam`` is appended only when the schema
+        declares spam detection (``spam_indicators`` populated).
+        Without this gate, the template forced an ``is_spam`` key into
+        the JSON Claude returns even when the plan never asked for it
+        — leaked marketplace shape into ad-hoc plans.
+        """
         obj = {}
         for f in self.fields:
             obj[f["name"]] = ""
-        obj["is_spam"] = False
+        if self.spam_indicators:
+            obj["is_spam"] = False
         return json.dumps(obj)
 
     def field_descriptions(self) -> str:
-        """Numbered field list for extraction prompts."""
+        """Numbered field list for extraction prompts.
+
+        #785 follow-up: the ``is_spam`` field is appended only when the
+        schema declares spam detection (``spam_indicators`` populated).
+        Without this gate, the description told Claude to classify
+        every row's spam-ness even when the plan never asked for it.
+        """
         lines = []
         for i, f in enumerate(self.fields, 1):
             example = f" (e.g. {f['example']})" if f.get("example") else ""
             required = " [REQUIRED]" if f.get("required") else ""
             lines.append(f"{i}. {f['name']}: {f.get('type', 'str')}{example}{required}")
-        lines.append(f"{len(self.fields) + 1}. is_spam: Is this a {self.spam_label} listing? (true/false)")
+        if self.spam_indicators:
+            lines.append(
+                f"{len(self.fields) + 1}. is_spam: Is this a "
+                f"{self.spam_label} listing? (true/false)"
+            )
         return "\n".join(lines)
 
     def contains_spam_text(self, text: str) -> bool:

@@ -227,40 +227,96 @@ class ClaudeExtractor:
 
     # ── Dynamic prompt generation from schema ─────────────────────
 
+    def _schema_has_field(self, name: str) -> bool:
+        """Does the active schema declare a field by this name?
+
+        Used to gate prompt blocks that mention specific marketplace-
+        adjacent fields (e.g. ``phone``). When the plan author doesn't
+        ask for a phone field, the prompt shouldn't tell Claude to look
+        for one — the boilerplate confused Claude on non-marketplace
+        targets like HN during the #785 verification chain.
+        """
+        if not self.schema or not self.schema.fields:
+            return False
+        return any(
+            isinstance(f, dict) and str(f.get("name", "")).lower() == name.lower()
+            for f in self.schema.fields
+        )
+
     def _get_extract_prompt(self) -> str:
-        """Return extraction prompt — dynamic from schema or legacy hardcoded."""
+        """Return extraction prompt — dynamic from schema or legacy hardcoded.
+
+        Marketplace boilerplate is **gated** on schema-declared signals
+        (#785 follow-up): the phone-search block fires only when the
+        schema includes a field named ``phone``. This stops the
+        boilerplate from leaking into ad-hoc plans that don't carry the
+        marketplace shape.
+        """
         if not self.schema:
             return EXTRACT_PROMPT
         s = self.schema
-        return (
-            f"Look at this screenshot of a {s.entity_name} page.\n\n"
-            f"Extract ALL of the following data visible on the page:\n\n"
-            f"{s.field_descriptions()}\n\n"
-            f"For phone numbers: look in description, contact, or seller sections.\n"
-            f"If no phone is visible, return phone as \"\".\n\n"
-            f"Output ONLY valid JSON:\n{s.json_template()}"
-        )
+        parts = [
+            f"Look at this screenshot of a {s.entity_name} page.",
+            "",
+            "Extract ALL of the following data visible on the page:",
+            "",
+            s.field_descriptions(),
+        ]
+        if self._schema_has_field("phone"):
+            parts.extend([
+                "",
+                "For phone numbers: look in description, contact, or seller sections.",
+                'If no phone is visible, return phone as "".',
+            ])
+        parts.extend(["", "Output ONLY valid JSON:", s.json_template()])
+        return "\n".join(parts)
 
     def _get_multi_extract_prompt(self) -> str:
-        """Return multi-screenshot extraction prompt."""
+        """Return multi-screenshot extraction prompt.
+
+        Marketplace boilerplate gated on schema-declared signals (#785
+        follow-up):
+
+        - **Phone search block** fires only when the schema has a
+          field named ``phone``.
+        - **Spam detection block** fires only when the schema has
+          ``spam_indicators`` populated.
+
+        Without these gates, the prompt told Claude to look for phones
+        and dealer-style spam on every screenshot — confusing the model
+        on non-marketplace targets (HN top-5 returned empty rank/title
+        despite the inline schema correctly enforcing them).
+        """
         if not self.schema:
             return EXTRACT_MULTI_SCREENSHOT_PROMPT
         s = self.schema
-        spam_rules = ", ".join(f'"{ind}"' for ind in s.spam_indicators[:6])
-        return (
-            f"You are looking at multiple screenshots from the SAME {s.entity_name} page.\n"
-            f"They were captured at different scroll positions.\n\n"
-            f"Extract ALL fields visible across ALL screenshots:\n\n"
-            f"{s.field_descriptions()}\n\n"
-            f"Phone search priority:\n"
-            f"- Description text, contact sections, detail areas\n"
-            f"- Phone reveal buttons if visible\n"
-            f"- International numbers are valid\n\n"
-            f"{s.spam_label.title()} detection:\n"
-            f"- is_spam=true for {s.spam_label} listings containing: {spam_rules}\n\n"
-            f"If no phone is visible, use \"\".\n\n"
-            f"Output ONLY valid JSON:\n{s.json_template()}"
-        )
+        parts = [
+            f"You are looking at multiple screenshots from the SAME {s.entity_name} page.",
+            "They were captured at different scroll positions.",
+            "",
+            "Extract ALL fields visible across ALL screenshots:",
+            "",
+            s.field_descriptions(),
+        ]
+        if self._schema_has_field("phone"):
+            parts.extend([
+                "",
+                "Phone search priority:",
+                "- Description text, contact sections, detail areas",
+                "- Phone reveal buttons if visible",
+                "- International numbers are valid",
+                "",
+                'If no phone is visible, use "".',
+            ])
+        if s.spam_indicators:
+            spam_rules = ", ".join(f'"{ind}"' for ind in s.spam_indicators[:6])
+            parts.extend([
+                "",
+                f"{s.spam_label.title()} detection:",
+                f"- is_spam=true for {s.spam_label} listings containing: {spam_rules}",
+            ])
+        parts.extend(["", "Output ONLY valid JSON:", s.json_template()])
+        return "\n".join(parts)
 
     def _get_find_listings_prompt(self, skip_titles: list[str] | None = None) -> str:
         """Return find-all-listings prompt.
@@ -271,32 +327,76 @@ class ClaudeExtractor:
         boats, etc.) as "listings". Without this, a click step picks
         coords on a CTA card → navigates to a marketing page → wrong-page
         extract → halt_reason cycle.
+
+        #785 follow-up: the "SKIP: sponsored, advertisement, {spam_label}"
+        boilerplate is gated on ``spam_indicators`` being populated. The
+        "year/make/title AND a price" qualifier is gated on the schema
+        declaring those exact fields — otherwise the prompt would tell
+        Claude to filter for marketplace shape on every listing search
+        (HN front page, GitHub issue list, etc).
         """
         if not self.schema:
             return ""  # Legacy path uses hardcoded prompt inline
         s = self.schema
-        skip = ""
-        if skip_titles:
-            skip = "\n\nSKIP these already-processed items:\n" + "\n".join(f"- {t}" for t in skip_titles[:20])
-        exclusions_block = ""
+        parts = [
+            "Look at this screenshot of a search results page.",
+            "",
+            f"Find ALL visible {s.entity_name} cards/items on this page.",
+            "For each, report the center coordinates and title text.",
+        ]
+        # Generic "skip ads" line is universal — sponsored cards are noise
+        # on every listing-style page. The marketplace-specific "{spam_label}
+        # inventory" tail is gated on spam_indicators (the canonical signal
+        # that the recipe IS marketplace-shaped).
+        if s.spam_indicators:
+            parts.extend([
+                "",
+                f"SKIP: sponsored, advertisement, {s.spam_label} inventory.",
+            ])
+        else:
+            parts.extend([
+                "",
+                "SKIP: sponsored, advertisement.",
+            ])
         if s.listing_card_exclusions:
-            exclusions_block = (
-                "\n\nEXCLUDE these specifically (they look like listings "
-                "but aren't):\n"
-                + "\n".join(f"- {e}" for e in s.listing_card_exclusions)
-            )
-        return (
-            f"Look at this screenshot of a search results page.\n\n"
-            f"Find ALL visible {s.entity_name} cards/items on this page.\n"
-            f"For each, report the center coordinates and title text.\n\n"
-            f"SKIP: sponsored, advertisement, {s.spam_label} inventory."
-            f"{exclusions_block}\n"
-            f"ONLY include organic {s.entity_name} results that show a "
-            f"product identity (year/make/title) AND a price."
-            f"{skip}\n\n"
-            f"Output ONLY valid JSON:\n"
-            f"{{\"listings\": [[x, y, \"title text\"], ...], \"pagination_y\": null_or_number}}"
+            parts.extend([
+                "",
+                "EXCLUDE these specifically (they look like listings "
+                "but aren't):",
+                *[f"- {e}" for e in s.listing_card_exclusions],
+            ])
+        # Schema-shape qualifier — only emit when the schema actually
+        # carries year/make/title fields. Otherwise this would constrain
+        # Claude to marketplace-shape on every list page.
+        has_marketplace_shape = (
+            self._schema_has_field("year")
+            and self._schema_has_field("make")
         )
+        if has_marketplace_shape:
+            parts.extend([
+                "",
+                f"ONLY include organic {s.entity_name} results that show a "
+                f"product identity (year/make/title) AND a price.",
+            ])
+        else:
+            parts.extend([
+                "",
+                f"ONLY include organic {s.entity_name} cards — skip "
+                "advertisements, navigation chrome, footer links, and "
+                "promotional callouts.",
+            ])
+        if skip_titles:
+            parts.extend([
+                "",
+                "SKIP these already-processed items:",
+                *[f"- {t}" for t in skip_titles[:20]],
+            ])
+        parts.extend([
+            "",
+            "Output ONLY valid JSON:",
+            '{"listings": [[x, y, "title text"], ...], "pagination_y": null_or_number}',
+        ])
+        return "\n".join(parts)
 
     def _get_content_control_prompt(self) -> str:
         """Return find-content-control prompt."""

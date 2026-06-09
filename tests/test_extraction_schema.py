@@ -86,7 +86,10 @@ def test_schema_field_names():
     assert schema.field_names() == ["year", "make", "model", "price", "phone", "url", "seller"]
 
 
-def test_schema_json_template():
+def test_schema_json_template_without_spam_indicators_skips_is_spam():
+    """#807: is_spam is appended only when the schema declares spam
+    detection (spam_indicators populated). A vanilla schema (no spam
+    rules) should not force Claude to populate an is_spam key."""
     schema = ExtractionSchema(
         fields=[
             {"name": "title", "type": "str"},
@@ -95,10 +98,28 @@ def test_schema_json_template():
     )
     template = schema.json_template()
     assert '"title": ""' in template
+    assert "is_spam" not in template
+
+
+def test_schema_json_template_with_spam_indicators_includes_is_spam():
+    """Marketplace-shape recipes still get the is_spam classification field."""
+    schema = ExtractionSchema(
+        fields=[
+            {"name": "title", "type": "str"},
+            {"name": "price", "type": "str"},
+        ],
+        spam_indicators=["sponsored", "promoted"],
+        spam_label="sponsored",
+    )
+    template = schema.json_template()
     assert '"is_spam": false' in template
 
 
-def test_schema_field_descriptions():
+def test_schema_field_descriptions_without_spam_indicators_skips_spam_line():
+    """#807: the trailing "is_spam: Is this a {spam_label} listing?"
+    line appears only when the schema declares spam detection. Without
+    it, plan authors who don't ask for spam classification don't get
+    Claude prompted to do it."""
     schema = ExtractionSchema(
         entity_name="job",
         spam_label="recruiter",
@@ -111,7 +132,23 @@ def test_schema_field_descriptions():
     assert "title" in desc
     assert "[REQUIRED]" in desc
     assert "Engineer" in desc
+    assert "recruiter" not in desc, (
+        "spam_label leaked into description without spam_indicators being set"
+    )
+
+
+def test_schema_field_descriptions_with_spam_indicators_includes_spam_line():
+    schema = ExtractionSchema(
+        entity_name="job",
+        spam_label="recruiter",
+        spam_indicators=["recruiter", "headhunter"],
+        fields=[
+            {"name": "title", "type": "str", "required": True, "example": "Engineer"},
+        ],
+    )
+    desc = schema.field_descriptions()
     assert "recruiter" in desc
+    assert "is_spam" in desc
 
 
 def test_schema_spam_detection():

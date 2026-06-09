@@ -304,6 +304,114 @@ def build_phase_response(st: RunState, store: RunLifecycleStore) -> RunPhaseResp
     )
 
 
+# ── File-backed phase derivation (#806) ─────────────────────────────
+#
+# Modal/Baseten run on multi-container deploys where an in-memory
+# ``RunLifecycleStore`` can't be shared. The deployed lifecycle routes
+# derive ``RunPhaseResponse`` from the file-backed ``status.json`` that
+# already drives ``POST /v1/predict {action: status}``. The helpers
+# below are pure functions over the status-string + timestamps.
+
+
+# Wire-string → RunPhase. Existing executors emit a wider taxonomy
+# than RunPhase carries; this maps the historical strings into the
+# six-phase model the new endpoints expose.
+_STATUS_STRING_TO_PHASE: dict[str, RunPhase] = {
+    "queued": RunPhase.QUEUED,
+    "running": RunPhase.RUNNING,
+    # The executor surfaces "paused" via #541 (external-pause sentinel).
+    # From the caller's poll-loop perspective the run is still working,
+    # so it maps to RUNNING — paused is operator-state, not lifecycle.
+    "paused": RunPhase.RUNNING,
+    "recovering": RunPhase.RECOVERING,
+    "cancelled": RunPhase.CANCELLED,
+    "succeeded": RunPhase.COMPLETE,
+    "completed_with_failures": RunPhase.COMPLETE,
+    "failed": RunPhase.HALTED,
+    "halted": RunPhase.HALTED,
+    "timeout": RunPhase.HALTED,
+}
+
+
+def phase_from_status_string(status: str | None) -> RunPhase:
+    """Map an executor-side status string onto the lifecycle phase."""
+    if not status:
+        return RunPhase.QUEUED
+    return _STATUS_STRING_TO_PHASE.get(status.lower(), RunPhase.RUNNING)
+
+
+def _halt_class_from_status(status: dict) -> str | None:
+    s = str(status.get("status", "") or "").lower()
+    if s == "cancelled":
+        return HALT_CANCELLED
+    if s == "timeout":
+        return HALT_TIMEOUT
+    # Executors that surface a halt-class explicitly take precedence.
+    explicit = status.get("halt_class") or status.get("halt_reason")
+    return str(explicit) if explicit else None
+
+
+def _adaptive_backoff_ms(phase: RunPhase, since_change_seconds: float) -> int:
+    """Same heuristic as ``RunLifecycleStore.polling_backoff_ms``.
+
+    Pulled out so the file-backed path can compute the hint from
+    ``status.json``'s ``updated_at`` mtime instead of the in-memory
+    ``last_phase_change_ms``. Terminal phases give a long hint
+    (state won't change); fresh transitions get the short hint;
+    stale ones progressively longer.
+    """
+    if phase.is_terminal:
+        return 30_000
+    if since_change_seconds < 2:
+        return 500
+    if since_change_seconds < 10:
+        return 1_500
+    if since_change_seconds < 30:
+        return 5_000
+    return 10_000
+
+
+def build_phase_response_from_status(
+    status: dict, *, now: float | None = None
+) -> RunPhaseResponse:
+    """Build a ``RunPhaseResponse`` from the executor's file-backed status dict.
+
+    Inputs match the shape written by Modal's ``_write_status``:
+    ``run_id`` + ``status`` (string) + ``created_at`` + ``updated_at``
+    (ISO-8601 strings). Missing fields are tolerated — the lifecycle
+    view is a superset of what every executor surfaces today.
+    """
+    import datetime as _dt
+
+    def _parse_iso(s: str | None) -> float | None:
+        if not s:
+            return None
+        try:
+            return _dt.datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            return None
+
+    phase = phase_from_status_string(str(status.get("status", "") or ""))
+    started_at = _parse_iso(status.get("started_at") or status.get("created_at"))
+    finished_at = (
+        _parse_iso(status.get("finished_at") or status.get("updated_at"))
+        if phase.is_terminal
+        else None
+    )
+    last_event_at = _parse_iso(status.get("updated_at")) or started_at
+    t = now if now is not None else time.time()
+    since_change = max(0.0, t - last_event_at) if last_event_at else 0.0
+    return RunPhaseResponse(
+        run_id=str(status.get("run_id", "") or ""),
+        phase=phase,
+        last_event_at=last_event_at,
+        polling_backoff_ms_hint=_adaptive_backoff_ms(phase, since_change),
+        started_at=started_at,
+        finished_at=finished_at,
+        halt_class=_halt_class_from_status(status),
+    )
+
+
 __all__ = [
     "CancelRunRequest",
     "CancelRunResponse",
@@ -315,4 +423,6 @@ __all__ = [
     "RunPhaseResponse",
     "RunState",
     "build_phase_response",
+    "build_phase_response_from_status",
+    "phase_from_status_string",
 ]
