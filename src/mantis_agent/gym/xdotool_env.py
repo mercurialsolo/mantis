@@ -332,9 +332,20 @@ class XdotoolGymEnv(GymEnvironment):
         # Context at the C++ binding level. More thorough than our
         # JS-injected getParameter patch which is page-context only
         # and can be probed away.
-        _stealth_ext_dir = "/opt/chrome-extensions/webgl-spoof"
-        if os.path.isdir(_stealth_ext_dir):
-            cmd.append(f"--load-extension={_stealth_ext_dir}")
+        #
+        # #823 honest mode: skip the WebGL spoof entirely. Inventing
+        # "Intel Iris OpenGL Engine" (a macOS string) on a Linux
+        # binary running SwiftShader contradicts the TLS / HTTP/2
+        # signal. Real Mesa / SwiftShader strings reported by Linux
+        # Chrome are perfectly legitimate — millions of Linux users
+        # browse the web every day. The diagnostic (#827) against
+        # bot.sannysoft.com showed the spoofed strings were leaking
+        # through anyway; honesty is the higher-trust posture.
+        from .cdp_stealth import is_honest_mode as _is_honest_mode
+        if not _is_honest_mode():
+            _stealth_ext_dir = "/opt/chrome-extensions/webgl-spoof"
+            if os.path.isdir(_stealth_ext_dir):
+                cmd.append(f"--load-extension={_stealth_ext_dir}")
         if self._proxy_server:
             cmd.append(f"--proxy-server={self._proxy_server}")
         # When extra request headers are configured (canonically a sim-env

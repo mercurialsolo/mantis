@@ -14,7 +14,8 @@ result, and the recommended tuning workflow.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MANTIS_CDP_STEALTH` | `1` | CDP-injected fingerprint patches (`navigator.webdriver` undefined, plugins, WebGL, etc.). |
+| `MANTIS_CDP_STEALTH` | `1` | Master switch for CDP-injected fingerprint patches. When off, nothing else in this table fires either. |
+| `MANTIS_STEALTH_HONEST` | `1` | **Default-on as of [#823](https://github.com/mercurialsolo/mantis/issues/823).** Present as honest Linux Chrome (matches the binary). Set `0` to fall back to the legacy Windows-claiming deceptive spoof. |
 | `MANTIS_BEHAVIORAL_JITTER` | `1` | Pre-click Bezier mouse path + jittered settle times ([#824](https://github.com/mercurialsolo/mantis/issues/824)). |
 | `MANTIS_GEO_CONSISTENCY` | `1` | Set Chrome's `TZ` and `LANG` to match the proxy exit geo ([#825](https://github.com/mercurialsolo/mantis/issues/825)). |
 | `MANTIS_BROWSER_USE_DRIVER` | unset → `patchright` | Browser-Use Plane driver. Set to `playwright` to force the vanilla import ([#826](https://github.com/mercurialsolo/mantis/issues/826)). |
@@ -109,12 +110,49 @@ so up to 60 fingerprint test rows come back from one Claude call.
 
 ### `MANTIS_CDP_STEALTH=1` (default)
 
-`src/mantis_agent/gym/cdp_stealth.py` injects 12 JS patches at
-`Page.addScriptToEvaluateOnNewDocument` time, plus a CDP
-`Network.setUserAgentOverride` that aligns `sec-ch-ua-*` headers with
-the UA we claim. Patches cover `navigator.webdriver`, `plugins`,
-`languages`, WebGL vendor/renderer, canvas + audio fingerprint noise,
-font enumeration, and platform spoofing.
+Master switch for the CDP-injected stealth path. When on, the
+specific patches that fire are gated by `MANTIS_STEALTH_HONEST`
+(below).
+
+### Honest mode (#823)
+
+`MANTIS_STEALTH_HONEST=1` (the default since the [#827](https://github.com/mercurialsolo/mantis/issues/827)
+fingerprint diagnostic confirmed the legacy spoof was leaking) makes
+Mantis present as the **real Linux Chrome** the binary actually is:
+
+- UA: `Mozilla/5.0 (X11; Linux x86_64) ... Chrome/<actual-major>.0.0.0`. The
+  major version is read from `chrome --version` at startup; falls back
+  to a documented baseline when the binary can't be probed.
+- `sec-ch-ua-platform: "Linux"` — consistent with the UA and with the
+  TLS ClientHello / HTTP/2 SETTINGS Chrome ships with on Linux.
+- WebGL strings: not patched. Real Mesa / SwiftShader values pass
+  through. Inventing `Intel Iris OpenGL Engine` (a macOS string) on a
+  Linux binary contradicted the TLS signal and the spoof was leaking
+  through anyway.
+- Canvas / audio fingerprint noise: not applied. Per-call randomization
+  is itself a detectable signal.
+- `navigator.platform`, `userAgentData.platform`: untouched. Real
+  values agree with the rest of the stack.
+
+The **only** patches that still fire are the unambiguous bot-tell
+removals:
+
+- `navigator.webdriver` returns `undefined`
+- `navigator.plugins` populated with the built-in PDF viewers (real
+  Chrome on every platform has these)
+- `navigator.languages` non-empty
+- `permissions.query("notifications")` returns the real permission
+- `window.chrome.{runtime,app}` shim populated
+- `Function.prototype.toString` proxy keeps the patched
+  `permissions.query` looking native
+
+Hiding `navigator.webdriver` is honest in the sense that no
+*legitimate* user has that flag set; only automation frameworks do.
+We're hiding the *framework*, not pretending to be a different OS.
+
+Opt-out: set `MANTIS_STEALTH_HONEST=0` to fall back to the legacy
+12-patch deceptive set (Windows UA, Intel macOS WebGL, canvas/audio
+noise, etc.). The legacy path is retained one release for rollback.
 
 ### `MANTIS_BEHAVIORAL_JITTER=1` (default)
 
@@ -155,8 +193,8 @@ specifically.
   already handles residual cases).
 - TLS / JA3 spoofing at the network layer. Real Chrome's TLS is the
   honest answer — see the epic for the rationale.
-- `MANTIS_STEALTH_HONEST` (drop Windows spoof, present as real Linux
-  Chrome) — tracked separately as [#823](https://github.com/mercurialsolo/mantis/issues/823).
+- `MANTIS_STEALTH_HONEST=0` is reachable on the legacy code path —
+  reverts to the Windows-claiming spoof. See [Honest mode](#honest-mode-823).
 
 ## See also
 
