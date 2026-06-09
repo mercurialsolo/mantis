@@ -3016,6 +3016,83 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
             },
         )
 
+    # ── Runtime recipe registration (#809) ────────────────────────
+    #
+    # Tenant-scoped CRUD over /data/tenants/<tenant>/recipes/. Lets
+    # integrators register an ExtractionSchema by name over HTTP
+    # instead of forking + redeploying for every domain. The recipe
+    # loader (mantis_agent.recipes.load_schema) consults the tenant's
+    # runtime dir first when ``tenant_id`` is supplied, then falls
+    # back to the code-shipped recipes.
+
+    @fastapi_app.post("/v1/recipes")
+    def register_recipe(
+        body: dict,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        """Register or overwrite a tenant runtime recipe (#809)."""
+        from mantis_agent.recipes import runtime_store
+
+        try:
+            persisted = runtime_store.register(
+                tenant.tenant_id,
+                str(body.get("name") or ""),
+                body.get("schema") or {},
+            )
+        except runtime_store.RuntimeRecipeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        _commit_volume()
+        return persisted
+
+    @fastapi_app.get("/v1/recipes")
+    def list_recipes(
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        """List runtime recipes registered under the caller's tenant."""
+        from mantis_agent.recipes import runtime_store
+
+        try:
+            vol.reload()
+        except Exception:
+            pass
+        return {"recipes": runtime_store.list_recipes(tenant.tenant_id)}
+
+    @fastapi_app.get("/v1/recipes/{name}")
+    def get_recipe(
+        name: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        """Fetch a registered runtime recipe by name."""
+        from mantis_agent.recipes import runtime_store
+
+        try:
+            vol.reload()
+        except Exception:
+            pass
+        try:
+            body = runtime_store.get(tenant.tenant_id, name)
+        except runtime_store.RuntimeRecipeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if body is None:
+            raise HTTPException(404, f"unknown recipe: {name}")
+        return body
+
+    @fastapi_app.delete("/v1/recipes/{name}")
+    def delete_recipe(
+        name: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        """Delete a tenant runtime recipe. Idempotent."""
+        from mantis_agent.recipes import runtime_store
+
+        try:
+            deleted = runtime_store.delete(tenant.tenant_id, name)
+        except runtime_store.RuntimeRecipeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if deleted:
+            _commit_volume()
+        return {"name": name, "deleted": deleted}
+
     return fastapi_app
 
 

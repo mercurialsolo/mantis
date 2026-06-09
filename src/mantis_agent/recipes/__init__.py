@@ -29,12 +29,29 @@ if TYPE_CHECKING:
     from ..site_config import SiteConfig
 
 
-def load_schema(name: str) -> "ExtractionSchema":
-    """Resolve ``mantis_agent.recipes.<name>.schema.SCHEMA``.
+def load_schema(name: str, *, tenant_id: str | None = None) -> "ExtractionSchema":
+    """Resolve a recipe schema by name.
 
-    Raises ``ModuleNotFoundError`` if the recipe doesn't exist or doesn't
-    export a ``SCHEMA`` symbol.
+    Lookup precedence (#809):
+
+    1. If ``tenant_id`` is supplied, check the tenant's runtime recipe
+       directory at ``/data/tenants/<tenant>/recipes/<name>.json``
+       first. Runtime recipes registered via ``POST /v1/recipes``
+       can override a code-shipped recipe of the same name without
+       affecting other tenants.
+    2. Fall back to ``mantis_agent.recipes.<name>.schema.SCHEMA`` for
+       the code-shipped recipe.
+
+    Raises ``ModuleNotFoundError`` if neither path resolves.
     """
+    if tenant_id:
+        # Lazy import to keep the static-recipe lookup path independent
+        # of the runtime store's filesystem assumptions.
+        from . import runtime_store
+
+        runtime = runtime_store.load_schema(tenant_id, name)
+        if runtime is not None:
+            return runtime
     mod = importlib.import_module(f"{__name__}.{name}.schema")
     try:
         return mod.SCHEMA
