@@ -208,38 +208,66 @@ max 10000).
 
 `PlanDecomposer` runs once per unique plan text (~$0.01–0.02), caches by
 signature, and reuses the cached MicroPlan for subsequent identical
-requests. **Decomposition assumes a marketplace-listing extraction shape
-by default** — for non-marketplace targets (brand homepages, content
-sites), author a custom `micro` plan instead.
+requests. **Since PR #801 the decomposer auto-emits inline `extract`
+blocks from prose** — if the source plan names specific fields ("Extract
+title, points, author…"), the decomposed `extract_data` step ships
+with a matching `extract` schema and the validator enforces those
+fields without needing a registered recipe.
 
-### 3.1a `extraction_schema` — what the extractor reads and rejects
+### 3.1a Inline `extract` block — per-step extraction schema (#785)
 
-Pass alongside any plan shape. Controls per-listing extraction + the
-recipe-side rejection envelope (issue #236 / #246). All fields
-optional; defaults preserve marketplace-listings behavior.
+Put an `extract` block on any `extract_data` (or `claude_only`) step
+to declare what fields the validator should enforce. This replaces
+the older `extraction_schema` global override — the schema now
+lives **per step** in the plan, not at the request level.
 
 ```jsonc
-"extraction_schema": {
-  "entity_name": "boat listing",
-  "fields": [
-    {"name": "year",  "type": "str", "required": true,  "example": "2018"},
-    {"name": "make",  "type": "str", "required": true,  "example": "Sea Ray"},
-    {"name": "price", "type": "str", "required": false, "example": "$42,500"},
-    {"name": "url",   "type": "str", "required": false, "example": "site.com/boat/..."}
-  ],
-  "required_fields": ["year", "make"],           // strict DETAIL_PAGE contract
-  "tile_required_fields": ["url"],               // looser SEARCH_TILE contract (#236)
-  "spam_indicators": ["dealer website", "more from this dealer"],
-  "spam_seller_indicators": ["marine", "yacht", "brokerage", "inc"],
-  "spam_label": "dealer",
-  "forbidden_controls": ["Contact Seller", "Request Info"],
-  "allowed_controls": ["Show Phone", "Show more"],
-  "rejection_intents": {                         // #246 — recipe → host signal
-    "dealer":              "skip",               // terminal — host advances past listing
-    "incomplete_required": "extract_more"        // may enrich on detail page
+{
+  "type": "extract_data",
+  "claude_only": true,
+  "intent": "Extract the top 5 stories",
+  "extract": {
+    "schema_name": "hn_top5",                  // identifier — logged, CSV filename, Augur tag
+    "entity_name": "hn_story",                 // used in the extractor prompt
+    "fields": [
+      {"name": "rank",           "type": "int", "required": true},
+      {"name": "title",          "type": "str", "required": true},
+      {"name": "story_url",      "type": "str", "required": false},
+      {"name": "points",         "type": "int", "required": false},
+      {"name": "author",         "type": "str", "required": false},
+      {"name": "age",            "type": "str", "required": false},
+      {"name": "comments_count", "type": "int", "required": false}
+    ],
+    "max_items": 5                              // optional cap on rows returned
   }
 }
 ```
+
+| Field | Required | Effect |
+|---|---|---|
+| `schema_name` | yes | Logged at runtime; CSV output filename; Augur tag |
+| `entity_name` | optional (default `"item"`) | Used in the extractor prompt |
+| `fields[].name` | yes | Column name in CSV / key in JSON output row |
+| `fields[].type` | yes | `int` / `str` / `bool` — passed to Claude's response schema |
+| `fields[].required` | optional (default `true`) | Validator rejects rows missing `required: true` fields |
+| `max_items` | optional | Cap on rows returned. Omit for single-row extraction |
+
+**Schema precedence (#785 chain):**
+
+1. **Inline `extract` block on the step** — wins when set
+2. **Recipe-bound schema** — set at executor startup when your plan domain has a registered recipe (`marketplace_listings`, `job_listings`, `search_results`)
+3. **No schema** — validator rejects every row with `no_schema_configured` and the runner logs a WARNING at step entry. Declare an inline block or register a recipe.
+
+The legacy `year/make` fallback that fired when no schema was configured (boattrader-shape baggage) was ripped in #797 — the failure mode is now explicit, not a misleading marketplace-shaped rejection.
+
+**What lives only in recipes** (not in the inline block):
+
+- `spam_indicators`, `spam_seller_indicators` — domain-specific spam text
+- `forbidden_controls`, `allowed_controls` — reveal-button filters
+- `listing_card_exclusions` — listing-tile spam (financing CTAs)
+- `rejection_intents` — skip-envelope routing for downstream short-circuits
+
+If you need those, register a recipe in `src/mantis_agent/recipes/<name>/`. For plain "give me these N fields from each item," the inline block is enough.
 
 Per-field merge semantics on overlay (when both derived + recipe
 present): list fields union, scalar fields fall back from default,
@@ -315,55 +343,42 @@ Or inline as a `task_suite`:
 
 ### 3.3 Non-marketplace targets (events, content, brand homepages)
 
-`plan_text` and the default `MicroPlanRunner` extraction path both assume a
-**marketplace listing schema** — they require `year` and `make` fields and
-will reject everything else with `Rejected incomplete lead: missing
-required field(s): year, make`. Don't fight this; opt out by passing a
-custom schema.
-
-The recipe — three things, all required:
-
-1. **Custom schema via `_objective`** — set `target_entity` and
-   `output_schema` so the extractor uses your fields.
-2. **Empty `start_url` in `_objective`** — the runtime probes when
-   `_objective.start_url` is set, and the probe-enhancer will rewrite your
-   plan into a filter+pagination flow that doesn't fit content sites.
-   Setting `start_url: ""` keeps the schema, skips the probe.
-3. **`loop` step** — the runner extracts ONE viable item per
-   `extract_data` step (deep-extract pattern: click in → extract → back).
-   Without a loop you get exactly one item. With `loop_count: N` you get
-   up to N. The runner now dedupes by extracted URL across loop
-   iterations, so successive loops always advance to a fresh item.
-
-Working events recipe (lu.ma, eventbrite, etc.):
+Since the legacy `year/make` fallback was ripped (#797) and the decomposer auto-emits `extract` blocks (#801), non-marketplace targets are trivial:
 
 ```jsonc
 {
-  "detached": true,
+  "plan_text": "Go to https://lu.ma/discover and extract title, date_time, location, and url for the first 5 events.",
+  "max_cost": 1.5,
+  "max_time_minutes": 12
+}
+```
+
+The decomposer reads the field list out of the prose and emits an `extract_data` step with the matching `extract` block. Validator enforces the fields you named.
+
+For finer control, author the `micro` plan with an explicit `extract` block (same shape as §3.1a):
+
+```jsonc
+{
   "task_suite": {
     "session_name": "events_extract",
-    "_objective": {
-      "raw_text": "Extract events from the discover page",
-      "domains": ["lu.ma"],
-      "start_url": "",
-      "target_entity": "event",
-      "output_schema": [
-        {"name": "title",     "type": "str", "required": true,  "example": "Tech meetup"},
-        {"name": "date_time", "type": "str", "required": true,  "example": "Sat, Jun 7"},
-        {"name": "location",  "type": "str", "required": false, "example": "San Francisco"},
-        {"name": "url",       "type": "str", "required": false, "example": "https://lu.ma/abc"}
-      ]
-    },
     "_micro_plan": [
       {"intent": "Navigate to https://lu.ma/discover",
-       "type": "navigate", "section": "setup", "required": true},
-      {"intent": "Verify the events page has loaded with multiple event cards",
-       "type": "extract_data", "claude_only": true, "section": "setup",
-       "gate": true, "verify": "page shows event listings with titles and dates"},
-      {"intent": "Extract title, date_time, location, url of the next event",
-       "type": "extract_data", "claude_only": true, "section": "extraction"},
-      {"intent": "Loop back to extract more events", "type": "loop",
-       "loop_target": 2, "loop_count": 5, "section": "extraction"}
+       "type": "navigate", "section": "setup", "required": true,
+       "params": {"url": "https://lu.ma/discover", "wait_after_load_seconds": 5}},
+      {"intent": "Extract the first 5 events with title, date_time, location, url",
+       "type": "extract_data", "claude_only": true, "section": "extraction",
+       "extract": {
+         "schema_name": "luma_events",
+         "entity_name": "event",
+         "fields": [
+           {"name": "title",     "type": "str", "required": true},
+           {"name": "date_time", "type": "str", "required": true},
+           {"name": "location",  "type": "str", "required": false},
+           {"name": "url",       "type": "str", "required": false}
+         ],
+         "max_items": 5
+       }
+      }
     ]
   },
   "max_cost": 1.5,
@@ -371,9 +386,51 @@ Working events recipe (lu.ma, eventbrite, etc.):
 }
 ```
 
-The result's `leads` field will contain N entries shaped per your
-`output_schema` instead of the marketplace-format. Cost scales linearly
-at ~$0.04 / extracted item (Claude vision + grounding).
+The pre-#797 workaround (custom `_objective` + empty `start_url` + `loop` step) still works but is **obsolete** — the inline `extract` path is canonical. Cost scales linearly at ~$0.04 / extracted item.
+
+### 3.5 `compute_backend` — pick a compute plane (#785)
+
+Mantis runs every plan on one of two compute planes. Default is **Computer Plane** (CUA-pure, stealth-capable). **Browser-Use Plane** is opt-in for plans that need DOM-aware reads (anchor `href` peek, semantic role disambiguation on dense lists, tab management).
+
+| Plane | Driver | DOM-aware | Stealth (CF/Turnstile) | Pick when… |
+|---|---|---|---|---|
+| `computer_plane` (default) | Xvfb + Chrome + xdotool | ✗ | ✓ | Production scraping, CF/Turnstile-protected sites |
+| `browser_use_plane` | Playwright + headless Chromium | ✓ | ✗ (v1 non-goal) | Dense link lists (HN, comment threads), tab plans |
+
+Per-request:
+
+```jsonc
+{
+  "plan_text": "Extract the top 5 stories from Hacker News including rank, title, story URL, points, author, age, and comment count.",
+  "compute_backend": "browser_use_plane",
+  "cua_model": "holo3",
+  "max_cost": 0.50
+}
+```
+
+In the plan's `runtime` block (survives across submissions):
+
+```jsonc
+{
+  "task_suite": {
+    "runtime": {"compute_backend": "browser_use_plane"},
+    "_micro_plan": [ /* steps */ ]
+  }
+}
+```
+
+Precedence: plan `runtime.compute_backend` > submission `compute_backend` > global default.
+
+Browser-Use Plane handlers transparently consume these DOM-aware verbs once the plane flag is set:
+
+- `state.current_url()` / `state.tabs()` / `state.focused_element()` — read-only browser state
+- `tabs.open_in_new(url)` / `tabs.close(tab_id)` / `tabs.activate(tab_id)` — tab management
+- `links.peek_target(selector)` — read anchor `href` without clicking
+- `target_role` on `click` / `capture_link_in_new_tab` steps — semantic role lookup via per-site recipe
+
+Capability-gated behind `dom_aware`: pure-CUA executors (Holo3, Claude vision) carry an allowlist that excludes them; mismatched runs fail at session start, not silently. Reference: `docs/reference/compute-client.md` + `computer-plane.md` + `browser-use-plane.md`.
+
+**v1 non-goals for Browser-Use Plane**: CF/Turnstile parity, cross-plane profile sharing (each plane keeps its own storage).
 
 ### 3.4 `task_suite` — multi-task autonomous
 
@@ -642,15 +699,15 @@ override.
    and developer sites (httpbin, etc.) often fail to tunnel through it —
    use `"proxy_disabled": true` and accept that datacenter IPs may be
    blocked by some bot-detection layers.
-2. **Free-text plans assume marketplace shape.** `plan_text` →
-   `PlanDecomposer` defaults to a lead-extraction schema (`year`,
-   `make`, `model` fields), and the runner enforces `year`+`make` as
-   required by default — extracts without those fields are rejected
-   with `Rejected incomplete lead: missing required field(s): year,
-   make`. For events / content / brand sites, use the recipe in §3.3
-   (custom `_objective.output_schema` + empty `start_url` + `loop`
-   step). Without all three, the run will halt at the lead-schema
-   gate.
+2. **`no_schema_configured` rejection on ad-hoc plans** (post-#797;
+   replaces the old `year/make` marketplace assumption). When no
+   schema is available from any source — no inline `extract` block on
+   the step AND no recipe-bound `extractor.schema` — every extracted
+   row is rejected with `no_schema_configured` and the runner logs a
+   WARNING at step entry. Fix by either declaring an inline `extract`
+   block on the step (§3.1a) or naming the fields you want in the
+   `plan_text` prose so the decomposer auto-emits one (§3.1, requires
+   PR #801).
 3. **`succeeded` ≠ goal achieved.** Always check
    `summary.dynamic_verification_summary.verdict` AND the per-step trace
    in `action=result`. The runtime returns `succeeded` even when steps
