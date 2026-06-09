@@ -91,6 +91,13 @@ class ExtractionSchema:
     # surfaces; every rejection looks like a generic step failure).
     # Recipes opt in by setting their canonical rejections explicitly.
     rejection_intents: dict[str, str] = field(default_factory=dict)
+    # Multi-row extraction cap (#785 follow-up). When > 1, an
+    # ``extract_data`` / ``extract_rows`` step triggers the extractor's
+    # multi-row code path: one Claude call returns up to this many rows
+    # in a JSON array. Default 0 means single-entity extraction (the
+    # legacy single-row path). Used by the HN top-N pattern and any
+    # list-page scraper that wants N rows without a per-item loop.
+    max_items: int = 0
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> ExtractionSchema:
@@ -140,6 +147,7 @@ class ExtractionSchema:
             rejection_intents={
                 str(k): str(v) for k, v in (payload.get("rejection_intents") or {}).items()
             },
+            max_items=int(payload.get("max_items") or 0),
         )
 
     @classmethod

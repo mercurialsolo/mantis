@@ -364,6 +364,10 @@ class RunExecutor:
                 self._handle_loop_step(plan, step, state)
                 continue
 
+            if step.type == "if_else":
+                self._handle_if_else_step(plan, step, state)
+                continue
+
             step_started_at = _utc_iso_now()
             # #518 — snapshot the cost counters BEFORE dispatch so we
             # can emit per-step deltas after the handler returns. The
@@ -889,6 +893,76 @@ class RunExecutor:
             # validator falls through to `no_schema_configured`.
             extract=dict(getattr(step, "extract", {}) or {}),
         )
+
+    def _handle_if_else_step(
+        self, plan: "MicroPlan", step: MicroIntent, state: RunState,
+    ) -> None:
+        """Branch on a state variable to one of two step indices.
+
+        Compose with ``detect_visible`` for the full conditional flow:
+        an earlier ``detect_visible`` writes a bool to
+        ``runner._state_vars[<var>]``; this step reads the same var via
+        ``condition_var`` and jumps to ``then_target`` (truthy) or
+        ``else_target`` (falsy / missing).
+
+        Fall-through semantics:
+
+        - Missing ``condition_var`` → log warning, fall through to
+          ``state.step_index + 1`` (no jump). Plans that mis-author the
+          field shouldn't silently teleport.
+        - Target out of range → same fall-through. Safer than a hang.
+        - Variable absent from ``_state_vars`` → treated as falsy
+          (jumps to ``else_target``). Matches Python truthiness for
+          missing keys.
+
+        The branch records a synthetic ``StepResult`` so the run trace
+        carries the decision (which branch was taken, what var read).
+        """
+        index = state.step_index
+        var = (step.condition_var or "").strip()
+        state_vars = getattr(self.parent, "_state_vars", {}) or {}
+
+        if not var:
+            logger.warning(
+                "  [if_else@%d] no condition_var set — falling through "
+                "to next step instead of branching",
+                index,
+            )
+            state.step_index = index + 1
+            self._persist(plan, state)
+            return
+
+        value = bool(state_vars.get(var, False))
+        target = step.then_target if value else step.else_target
+        branch_name = "then" if value else "else"
+
+        if target < 0 or target >= len(plan.steps):
+            logger.warning(
+                "  [if_else@%d] %s_target=%d out of plan range [0, %d) — "
+                "falling through to next step",
+                index, branch_name, target, len(plan.steps),
+            )
+            state.step_index = index + 1
+            self._persist(plan, state)
+            return
+
+        logger.info(
+            "  [if_else@%d] %s=%s → branch to step %d (%s)",
+            index, var, value, target, branch_name,
+        )
+        # Emit a synthetic StepResult so the run trace carries the
+        # decision. data is the canonical "var=value→target" form so
+        # post-run debuggers can grep it.
+        state.results.append(
+            StepResult(
+                step_index=index,
+                intent=step.intent or f"branch on {var}",
+                success=True,
+                data=f"if_else:{var}={value}:branch={branch_name}:target={target}",
+            )
+        )
+        state.step_index = target
+        self._persist(plan, state)
 
     def _handle_loop_step(
         self, plan: "MicroPlan", step: MicroIntent, state: RunState,

@@ -248,10 +248,93 @@ class ClaudeStepHandler:
             )
 
         try:
+            # Multi-row branch (#785 follow-up: HN top-N pattern).
+            # Triggered when (a) the step type is ``extract_rows``
+            # explicitly, or (b) the (transient or recipe) schema has
+            # ``max_items > 1`` set on a ``extract_data`` step.
+            # Otherwise fall through to the single-row pipeline.
+            effective_schema = (
+                transient_schema
+                if transient_schema is not None
+                else original_schema
+            )
+            # Coerce defensively: existing tests mock the schema with
+            # MagicMock and `mock.max_items` returns a Mock that can't
+            # be compared with int. ``int(... or 0)`` collapses both
+            # missing attr and Mock-shaped values to 0 cleanly.
+            try:
+                max_items_for_schema = int(
+                    getattr(effective_schema, "max_items", 0) or 0
+                )
+            except (TypeError, ValueError):
+                max_items_for_schema = 0
+            wants_multi = (
+                step.type == "extract_rows"
+                or (
+                    step.type == "extract_data"
+                    and effective_schema is not None
+                    and max_items_for_schema > 1
+                )
+            )
+            if wants_multi and extractor_obj is not None and effective_schema is not None:
+                return self._execute_rows(step, ctx, effective_schema)
             return self._execute(step, ctx)
         finally:
             if transient_schema is not None and extractor_obj is not None:
                 extractor_obj.schema = original_schema
+
+    def _execute_rows(
+        self, step: "MicroIntent", ctx: StepContext, schema,
+    ) -> StepResult:
+        """Multi-row extraction (#785 follow-up).
+
+        One Claude vision call returns up to ``schema.max_items`` rows
+        from the current screenshot. Each row lands on the synthesized
+        ``StepResult.extracted_rows`` list; the artifact aggregator
+        unpacks them into ``leads.csv`` / ``extracted_rows.csv`` /
+        ``extracted_rows.json`` automatically.
+        """
+        runner = self.parent
+        env = ctx.env
+        extractor = ctx.extractor
+        index = int(ctx.state.get("index", 0))
+
+        if not env or not extractor:
+            return StepResult(
+                step_index=index, intent=step.intent, success=False,
+                data="extract_rows:no_env_or_extractor",
+            )
+
+        screenshot = env.screenshot()
+        max_items = max(int(getattr(schema, "max_items", 0) or 0), 1)
+        rows = extractor.extract_rows(screenshot, max_items)
+        runner.costs["claude_extract"] = runner.costs.get("claude_extract", 0) + 1
+
+        if not rows:
+            logger.warning(
+                "[claude_step] extract_rows returned 0 rows "
+                "(schema=%s, max_items=%d) — page may not have been "
+                "loaded yet, or vision couldn't parse the list shape",
+                getattr(schema, "entity_name", "?"), max_items,
+            )
+            return StepResult(
+                step_index=index, intent=step.intent, success=False,
+                data=f"extract_rows:0/{max_items}:no_visible_rows",
+            )
+
+        logger.warning(
+            "[claude_step] extract_rows: %d/%d rows captured",
+            len(rows), max_items,
+        )
+        # Legacy single-row consumers see the first row via
+        # ``extracted_fields``; the full list is the new
+        # ``extracted_rows`` field.
+        return StepResult(
+            step_index=index, intent=step.intent, success=True,
+            data=f"extract_rows:{len(rows)}/{max_items}",
+            extracted_fields=dict(rows[0]),
+            extracted_rows=[dict(r) for r in rows],
+        )
 
     def _execute(self, step: "MicroIntent", ctx: StepContext) -> StepResult:
         runner = self.parent

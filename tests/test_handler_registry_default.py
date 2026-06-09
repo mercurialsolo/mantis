@@ -44,6 +44,10 @@ def test_registry_covers_every_step_type_phase2_lifted():
         "navigate", "click", "paginate", "filter",
         "fill_field", "submit", "select_option", "right_click",
         "extract_url", "extract_data",
+        # #785 follow-up: multi-row extraction in one Claude call (HN
+        # top-N pattern). Routes through the same ClaudeStepHandler
+        # as extract_url / extract_data via the multi-row branch.
+        "extract_rows",
         "scroll", "navigate_back",
         # #615: collect_urls primitive — single-pass listing URL harvest
         # for the fan-out runner (#616, #617).
@@ -84,14 +88,15 @@ def test_form_types_share_one_handler_instance():
 
 
 def test_claude_step_types_share_one_handler_instance():
-    """extract_url / extract_data both bind to the SAME ClaudeStepHandler
-    instance — Claude-only steps share state via the handler's
-    parent-runner back-reference."""
+    """extract_url / extract_data / extract_rows all bind to the SAME
+    ClaudeStepHandler instance — Claude-only steps share state via
+    the handler's parent-runner back-reference."""
     reg = _registry()
     url = reg.get("extract_url")
     data = reg.get("extract_data")
+    rows = reg.get("extract_rows")
     assert isinstance(url, ClaudeStepHandler)
-    assert url is data
+    assert url is data is rows
 
 
 def test_navigate_back_uses_dispatcher_routing_to_mechanical_or_holo3():

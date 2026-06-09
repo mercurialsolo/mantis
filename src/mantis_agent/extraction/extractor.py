@@ -816,6 +816,111 @@ class ClaudeExtractor:
             confidence=0.9,
         )
 
+    def extract_rows(
+        self,
+        screenshot: Image.Image,
+        max_items: int,
+    ) -> list[dict[str, str]]:
+        """Multi-row extraction from a single screenshot (#785 follow-up).
+
+        Pattern: caller declares a schema with ``max_items > 1`` and a
+        step type ``extract_rows`` (or ``extract_data`` with
+        ``schema.max_items > 1``). The extractor builds an array-shaped
+        prompt + tool_use schema and asks Claude to return up to
+        ``max_items`` rows in one call. Each row is a dict keyed by
+        schema field name, values stringified for CSV-friendly artifact
+        emission.
+
+        Returns the list of rows extracted (length ≤ max_items). Empty
+        list on parse failure or when the schema is unset — callers
+        treat empty as "no rows found".
+
+        Cost: one Claude vision call (~$0.04). Equivalent to N=1 single
+        ``extract`` so this is the cost-efficient way to harvest top-N
+        from a list page (HN front page, GitHub issue list, Reddit
+        front page, etc.).
+        """
+        if not self.schema:
+            return []
+        prompt = self._get_rows_extract_prompt(max_items)
+        input_schema = self._build_rows_extract_input_schema(max_items)
+        parsed = self._call_with_tool_schema(
+            screenshot,
+            prompt,
+            tool_name="report_extracted_rows",
+            tool_description=(
+                f"Report up to {max_items} rows visible on this page, "
+                "one per repeated UI element (list item, card, table row)."
+            ),
+            input_schema=input_schema,
+            max_tokens=4000,
+            _bucket="extract_rows",
+        )
+        if not parsed:
+            return []
+        raw_rows = parsed.get("rows") if isinstance(parsed, dict) else None
+        if not isinstance(raw_rows, list):
+            return []
+        rows: list[dict[str, str]] = []
+        field_names = self.schema.field_names()
+        for raw in raw_rows[:max_items]:
+            if not isinstance(raw, dict):
+                continue
+            normalized: dict[str, str] = {}
+            for name in field_names:
+                value = raw.get(name)
+                if value is None:
+                    normalized[name] = ""
+                elif isinstance(value, bool):
+                    normalized[name] = "true" if value else "false"
+                else:
+                    normalized[name] = str(value)
+            rows.append(normalized)
+        return rows
+
+    def _get_rows_extract_prompt(self, max_items: int) -> str:
+        """Multi-row extraction prompt. Mirrors _get_extract_prompt
+        shape but asks for an array of N items rather than one entity."""
+        s = self.schema
+        if not s:
+            return ""
+        parts = [
+            f"You are looking at a single screenshot of a {s.entity_name} list page.",
+            f"Find every visible {s.entity_name} item and return one row per item.",
+            f"Return at most {max_items} rows. Items are repeated UI elements — list rows, cards, table rows, search hits.",
+            "",
+            "For each row, extract these fields:",
+            "",
+            s.field_descriptions(),
+            "",
+            "Use the empty string for fields that aren't visible on the row.",
+            "Do NOT include navigation chrome, footer, ads, or promotional callouts.",
+        ]
+        if s.spam_indicators:
+            spam_rules = ", ".join(f'"{ind}"' for ind in s.spam_indicators[:6])
+            parts.extend([
+                "",
+                f"{s.spam_label.title()} detection:",
+                f"- is_spam=true for rows containing: {spam_rules}",
+            ])
+        return "\n".join(parts)
+
+    def _build_rows_extract_input_schema(self, max_items: int) -> dict[str, Any]:
+        """Tool-use schema for multi-row extraction. ``rows`` is an array of
+        objects matching the per-row shape from _build_extract_input_schema."""
+        row_schema = self._build_extract_input_schema()
+        return {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": row_schema,
+                    "maxItems": max_items,
+                },
+            },
+            "required": ["rows"],
+        }
+
     # Type lookup for the dynamic extract input_schema. Maps the
     # ``type`` string the schema fields use to the JSON-Schema type
     # name Anthropic's tool_use expects. New types added to
