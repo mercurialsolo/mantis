@@ -134,16 +134,25 @@ def test_is_enabled_garbage_falls_through_to_enabled(monkeypatch):
 
 def test_inject_calls_cdp_with_correct_method_and_source(monkeypatch):
     """The single observable side-effect: a CDP call to
-    ``Page.addScriptToEvaluateOnNewDocument`` with the STEALTH_JS
-    string as ``source``."""
+    ``Page.addScriptToEvaluateOnNewDocument``.
+
+    Honest mode (#823, default-on as of 2026-06) sends the minimal
+    ``STEALTH_JS_HONEST`` payload (no platform / WebGL / canvas
+    spoofing — just the bot-tell removals). The legacy ``STEALTH_JS``
+    is still reachable via ``MANTIS_STEALTH_HONEST=0`` on this same
+    code path; that opt-out branch is covered by
+    ``test_inject_uses_legacy_source_when_opted_out`` in
+    ``test_stealth_honest_mode.py``.
+    """
     monkeypatch.delenv("MANTIS_CDP_STEALTH", raising=False)
+    monkeypatch.delenv("MANTIS_STEALTH_HONEST", raising=False)
     cdp_call = MagicMock(return_value=(True, {"identifier": "id-001"}))
     ok = cdp_stealth.inject_stealth_patches(cdp_call)
     assert ok is True
     cdp_call.assert_called_once()
     method, params = cdp_call.call_args.args
     assert method == "Page.addScriptToEvaluateOnNewDocument"
-    assert params == {"source": cdp_stealth.STEALTH_JS}
+    assert params == {"source": cdp_stealth.STEALTH_JS_HONEST}
 
 
 def test_inject_noop_when_disabled(monkeypatch):
@@ -250,22 +259,28 @@ def test_stealth_js_patches_platform_spoofing():
 
 def test_apply_ua_override_calls_network_setuseragent(monkeypatch):
     """The single observable side-effect: a CDP call to
-    ``Network.setUserAgentOverride`` with a Windows Chrome UA +
-    full UA-CH metadata so both request-layer and JS-layer
-    fingerprints match."""
+    ``Network.setUserAgentOverride`` with the right UA + full UA-CH
+    metadata so the request-layer and JS-layer surfaces match.
+
+    Honest mode (#823, default-on) sends a Linux Chrome UA that
+    matches the binary the Modal image actually runs. The legacy
+    Windows spoof remains reachable via ``MANTIS_STEALTH_HONEST=0``
+    (covered by ``test_ua_override_sends_windows_when_opted_out``
+    in ``test_stealth_honest_mode.py``).
+    """
     monkeypatch.delenv("MANTIS_CDP_STEALTH", raising=False)
+    monkeypatch.delenv("MANTIS_STEALTH_HONEST", raising=False)
     cdp_call = MagicMock(return_value=(True, {}))
     ok = cdp_stealth.apply_ua_override(cdp_call)
     assert ok is True
     cdp_call.assert_called_once()
     method, params = cdp_call.call_args.args
     assert method == "Network.setUserAgentOverride"
-    # Must spoof a Windows + Chrome 132 UA string.
-    assert "Windows NT 10.0" in params["userAgent"]
-    assert "Chrome/132" in params["userAgent"]
-    # Must include userAgentMetadata for the sec-ch-ua-* headers.
+    # Honest mode → Linux Chrome UA matching the binary.
+    assert "X11; Linux x86_64" in params["userAgent"]
+    assert "Chrome/" in params["userAgent"]
     md = params["userAgentMetadata"]
-    assert md["platform"] == "Windows"
+    assert md["platform"] == "Linux"
     assert md["mobile"] is False
     assert any(b["brand"] == "Google Chrome" for b in md["brands"])
 
