@@ -883,6 +883,11 @@ class RunExecutor:
             guard=getattr(step, "guard", "") or "",
             out_var=getattr(step, "out_var", "") or "",
             stop_var=getattr(step, "stop_var", "") or "",
+            # #785 follow-up: plan-author inline extraction schema. Without
+            # this, the effective step that reaches `ClaudeStepHandler.execute`
+            # loses the schema declared on the original plan step and the
+            # validator falls through to `no_schema_configured`.
+            extract=dict(getattr(step, "extract", {}) or {}),
         )
 
     def _handle_loop_step(
