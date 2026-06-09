@@ -1,4 +1,37 @@
-# Example plans
+# Example plans + submission scripts
+
+Two flavors of examples live here. Pick by integration shape:
+
+- **JSON plans** (this README's existing list below) — feed to `/v1/predict` via curl. Best for shell pipelines, CI smoke tests, and operator one-shots.
+- **Python submission scripts** (`*.py` files) — use the `mantis_agent.client.MantisClient` SDK. Best for application code that needs structured rows back.
+
+## Python submission scripts (showcases the #785 chain)
+
+| Script | Showcases | Cost (rough) | Plane |
+|---|---|---|---|
+| [`hn_top_5.py`](hn_top_5.py) | `plan_text` submission with decomposer-auto-emitted `extract` block (PR #801) | ~$0.20 | Browser-Use Plane |
+| [`github_issues.py`](github_issues.py) | Explicit `micro` step list with inline `extract` block and `compute_backend` selection | ~$0.30 | Browser-Use Plane |
+| [`pricing_page.py`](pricing_page.py) | `dry_run: true` preview before submitting for real (DX-3) | ~$0.08 | Computer Plane (default) |
+
+Setup:
+
+```bash
+pip install -e ".[client]"
+export MANTIS_API_ENDPOINT="https://your-deployment.modal.run"
+export MANTIS_API_TOKEN="mantis_..."
+python examples/hn_top_5.py
+```
+
+What if it fails:
+
+- **`HTTP 400 + \"cua_model='claude' requires task_suite.tasks\"`** — submit-time shape validation (PR #812). Either switch `cua_model` or restructure the suite.
+- **`status=succeeded` + `result.rows == []`** — your `extract` schema didn't match what the page actually has. Use `dry_run: true` (PR #813) to inspect the decomposed plan and verify the field list.
+- **`status=completed_with_failures` + `halt_reason=\"extract_data_failed\"`** — Claude got the schema but couldn't find the fields. Check `action=logs` for the per-step trace; the page may have changed structure.
+- **`profile_id` 409** — another run is holding the Chrome profile. Wait, or use a unique `profile_id` per call (typical: `f\"{user_id}-{job_id}\"`).
+
+---
+
+# JSON example plans (legacy curl-style)
 
 These are committed, generic micro-plans you can run against a fresh Mantis
 deployment. Unlike the customer-specific plans under `plans/` (gitignored),
