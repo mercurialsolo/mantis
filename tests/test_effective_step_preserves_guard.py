@@ -107,16 +107,28 @@ def test_skip_envelope_outer_loop_bypass_in_run_executor():
     step_result.skip:`` branch exists between the success and failure
     branches. A grep-style structural test — cheaper than mocking the
     whole MicroPlanRunner just to assert a 4-line control-flow
-    change."""
+    change.
+
+    Honours the #835 navigation-drift pre-dispatch gate that may
+    also call ``_handle_failure`` BEFORE the main dispatch — find the
+    success/skip/failure positions in the post-dispatch block by
+    anchoring on the ``state.results[-1]`` line that the main branch
+    reads.
+    """
     import inspect
     from mantis_agent.gym.run_executor import RunExecutor
 
     source = inspect.getsource(RunExecutor._execute_inner)
-    # Find the order of the three branches.
-    success_pos = source.find("step_result.success")
-    skip_pos = source.find("step_result.skip")
-    failure_pos = source.find("_handle_failure")
+    # Anchor on the post-dispatch ``step_result = state.results[-1]``
+    # line so the drift gate's pre-dispatch ``_handle_failure`` call
+    # doesn't shift the positions we care about.
+    anchor = source.find("step_result = state.results[-1]")
+    assert anchor > 0, "expected dispatch anchor in _execute_inner"
+    post_dispatch = source[anchor:]
+    success_pos = post_dispatch.find("step_result.success")
+    skip_pos = post_dispatch.find("step_result.skip")
+    failure_pos = post_dispatch.find("_handle_failure")
     assert success_pos < skip_pos < failure_pos, (
         f"Expected branch order success({success_pos}) < "
-        f"skip({skip_pos}) < failure({failure_pos}). Source:\n{source[:2000]}"
+        f"skip({skip_pos}) < failure({failure_pos}). Source:\n{post_dispatch[:2000]}"
     )

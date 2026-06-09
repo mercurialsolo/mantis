@@ -181,6 +181,34 @@ class NavigateHandler:
                 context="results_top", url=url, page_downs=0, wheel_downs=0,
             )
 
+            # #835: stamp the auto URL-drift hint for the next step.
+            # When the navigate completes successfully against a
+            # literal URL, the runner stores the expected hostname +
+            # first-path-segment substring so the next step can
+            # short-circuit if the page bounced (proxy redirect, CF
+            # challenge, slow first-paint) before it ran.
+            #
+            # Explicit step-level override wins: if the plan author
+            # set ``step.expect_url_contains`` (string or False), use
+            # that. ``False`` opts out entirely.
+            from ..navigate_gate import (
+                derive_expected_substring as _derive_url_hint,
+                is_enabled as _url_gate_enabled,
+            )
+            # Per-step override via ``params.expect_url_contains``.
+            # ``False`` → opt out; non-empty string → use that
+            # substring verbatim; otherwise → auto-derive when the
+            # system-wide gate is enabled.
+            explicit = (step.params or {}).get("expect_url_contains")
+            if explicit is False:
+                runner._post_navigate_url_hint = ""
+            elif isinstance(explicit, str) and explicit.strip():
+                runner._post_navigate_url_hint = explicit.strip().lower()
+            elif _url_gate_enabled():
+                runner._post_navigate_url_hint = _derive_url_hint(url)
+            else:
+                runner._post_navigate_url_hint = ""
+
             if dynamic_verifier is not None:
                 dynamic_verifier.set_required_filter_tokens(
                     runner._required_filter_tokens

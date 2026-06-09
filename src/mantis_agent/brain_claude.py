@@ -176,21 +176,29 @@ class ClaudeBrain:
             "max_tokens": self.max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }
+        # #836: route through the shared retry client so 429/502/503/
+        # 504/529 + timeouts don't kill a brain step on a single
+        # transient. The shared policy already covers everything we'd
+        # implement here.
         try:
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=self._headers(),
-                json=payload,
-                timeout=60,
+            from ._anthropic.client import AnthropicToolUseClient
+            client = AnthropicToolUseClient(
+                api_key=self.api_key, model=self.model,
+                log_prefix="[brain.claude.query]",
             )
-            resp.raise_for_status()
+            resp = client.post_messages_with_retry(payload, timeout=60)
+            if resp is None or resp.status_code != 200:
+                logger.warning(
+                    "query: Anthropic call failed%s",
+                    f" (HTTP {resp.status_code})" if resp is not None else " (network exhaustion)",
+                )
+                return ""
             data = resp.json()
-            # Extract text from content blocks
             for block in data.get("content", []):
                 if block.get("type") == "text":
                     return block["text"]
             return ""
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — best-effort; never propagate
             logger.error(f"query failed: {e}")
             return ""
 
@@ -249,18 +257,34 @@ class ClaudeBrain:
                 "budget_tokens": self.thinking_budget,
             }
 
+        # #836: route through the shared retry client. Lower max_attempts
+        # (2 instead of 4) because this is the per-step brain inference
+        # call — every step pays the latency cost. One retry covers
+        # the common transient (529 / 503 / read-timeout) without
+        # ballooning step latency on persistent failures.
         try:
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=self._headers(),
-                json=payload,
-                timeout=120,
+            from ._anthropic.client import AnthropicToolUseClient
+            client = AnthropicToolUseClient(
+                api_key=self.api_key, model=self.model,
+                log_prefix="[brain.claude.think]",
             )
+            resp = client.post_messages_with_retry(
+                payload, timeout=120, max_attempts=2,
+            )
+            if resp is None:
+                logger.error("Claude API network exhaustion (all attempts)")
+                return InferenceResult(
+                    action=Action(
+                        ActionType.WAIT, {"seconds": 1.0},
+                        reasoning="Anthropic unreachable",
+                    ),
+                    raw_output="Anthropic unreachable",
+                )
             if resp.status_code != 200:
                 logger.error(f"Claude API {resp.status_code}: {resp.text[:500]}")
-            resp.raise_for_status()
+                resp.raise_for_status()
             data = resp.json()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — never propagate
             logger.error(f"Claude API request failed: {e}")
             return InferenceResult(
                 action=Action(ActionType.WAIT, {"seconds": 1.0}, reasoning=str(e)),
