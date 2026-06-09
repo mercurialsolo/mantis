@@ -827,6 +827,104 @@ STEP TYPES:
                  (budget=6, params={"dropdown_label": "<dropdown name>",
                                     "option_label": "<option text>"})
 
+PER-STEP EXTRACTION SCHEMA — emit on extract_data / extract_url steps
+whose source plan names specific fields the user wants returned.
+
+When the source plan says "extract X, Y, Z" (or "list the title, price,
+url of each item", or "return each story's rank, title, points, author"),
+ADD an `extract` block to the step. The runtime uses this to validate
+each row Claude returns — without it the validator falls through to the
+recipe schema if one is registered for the domain, or rejects every row
+with `no_schema_configured` for ad-hoc plans.
+
+Shape:
+
+  "extract": {
+    "schema_name": "<short identifier — used in logs + CSV filename>",
+    "entity_name": "<what each row represents, e.g. 'hn_story', 'product', 'lead'>",
+    "fields": [
+      {"name": "<column>", "type": "str|int|bool", "required": true|false},
+      ...
+    ],
+    "max_items": <int>   // optional — cap on rows returned
+  }
+
+When to mark a field `required: true`:
+  - The user named it as something the row MUST have to be useful.
+    "Extract title (required), points (if shown), author" → title is
+    required, points/author are required: false.
+  - In the absence of clear required-vs-optional language, default
+    `required: true` for fields the user lists FIRST (the primary
+    identifiers — title, name, id, url) and `required: false` for
+    fields that are obviously bonus context (timestamps, counts,
+    metadata).
+  - For verification-style extract_data steps (the source says "verify"
+    / "confirm" / "check that the page shows..."), DO NOT emit an
+    extract block. Those steps don't produce rows; they assert state.
+
+Types: pick `int` when the field is numerically aggregable (counts,
+prices, ranks, points); `bool` for true/false signals; `str` for
+everything else including URLs, emails, dates expressed in prose.
+
+WORKED EXAMPLES — extract block emission:
+
+  Source: "Extract the top 5 stories from Hacker News including rank,
+           title, story URL, points, author, age, and comment count."
+  → {"type": "extract_data", "intent": "Extract the top 5 stories...",
+     "claude_only": true,
+     "extract": {
+       "schema_name": "hn_top5",
+       "entity_name": "hn_story",
+       "fields": [
+         {"name": "rank",           "type": "int", "required": true},
+         {"name": "title",          "type": "str", "required": true},
+         {"name": "story_url",      "type": "str", "required": false},
+         {"name": "points",         "type": "int", "required": false},
+         {"name": "author",         "type": "str", "required": false},
+         {"name": "age",            "type": "str", "required": false},
+         {"name": "comments_count", "type": "int", "required": false}
+       ],
+       "max_items": 5
+     }, ...}
+
+  Source: "List each product's name, price, and stock status from the
+           catalog page."
+  → {"type": "extract_data", "intent": "List each product's name...",
+     "claude_only": true,
+     "extract": {
+       "schema_name": "catalog_products",
+       "entity_name": "product",
+       "fields": [
+         {"name": "name",         "type": "str", "required": true},
+         {"name": "price",        "type": "int", "required": false},
+         {"name": "stock_status", "type": "str", "required": false}
+       ]
+     }, ...}
+
+  Source: "Verify the heading reads 'Welcome back'."
+  → {"type": "extract_data", "intent": "Verify the heading...",
+     "claude_only": true,
+     "required": true,
+     "gate": true
+     # NO `extract` block — this is a verification gate, not data extraction
+    }
+
+  Source: "Go to the site and click around to see what's on the home page."
+  → No `extract_data` step at all, so no extract block needed.
+
+  Source: "Search and find any private-seller boats above $35,000 in
+           Florida and pull their full listing details."
+  → If the plan domain has a registered recipe (marketplace_listings,
+     here), OMIT the inline `extract` block — let the recipe's
+     schema govern. Emit a block only when the source plan names
+     specific fields that don't match the recipe's contract, or when
+     the plan is for an ad-hoc target with no recipe.
+
+Do NOT emit `extract` blocks on `click`, `navigate`, `scroll`, or any
+non-extraction step. Do NOT invent fields the source plan didn't ask
+for — better to omit the block (no validation) than hallucinate fields
+that constrain the validator incorrectly.
+
 OUTPUT FORMAT — emit ONE valid JSON object and nothing else.
 
 CRITICAL: do NOT include prose preamble ("Here's the decomposition:"),
@@ -929,7 +1027,7 @@ class PlanDecomposer:
             domain = m.group(1)
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v35_preferred_target_description_hints"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v36_emit_extract_blocks"  # Bump this when DECOMPOSE_PROMPT changes
         plan_hash = hashlib.md5(f"{prompt_version}:{plan_text}".encode()).hexdigest()[:8]
         cache_path = (
             cache_path_template.replace("{hash}", plan_hash)
@@ -1176,6 +1274,45 @@ class PlanDecomposer:
     )
 
     @staticmethod
+    def _coerce_extract_block(raw: Any) -> dict[str, Any]:
+        """Defensively normalize Claude's `extract` output into the
+        shape :class:`ExtractionSchema.from_dict` expects.
+
+        Tolerates malformed shapes (non-dict, missing fields, fields
+        not a list) by returning ``{}`` — the runtime falls back to
+        the recipe schema or the loud ``no_schema_configured``
+        warning. The handler also catches `from_dict` ValueError if a
+        partially-shaped block slips through.
+
+        Drops unknown top-level keys to keep the wire payload tight;
+        adds ``required: True`` default per field when Claude omitted
+        the flag (mirrors :meth:`ExtractionSchema.from_dict`).
+        """
+        if not isinstance(raw, dict):
+            return {}
+        fields = raw.get("fields")
+        if not isinstance(fields, list) or not fields:
+            return {}
+        cleaned_fields: list[dict[str, Any]] = []
+        for f in fields:
+            if not isinstance(f, dict) or not f.get("name"):
+                continue
+            cleaned_fields.append({
+                "name": str(f["name"]),
+                "type": str(f.get("type", "str")),
+                "required": bool(f.get("required", True)),
+            })
+        if not cleaned_fields:
+            return {}
+        out: dict[str, Any] = {"fields": cleaned_fields}
+        for key in ("schema_name", "entity_name"):
+            if raw.get(key):
+                out[key] = str(raw[key])
+        if isinstance(raw.get("max_items"), int) and raw["max_items"] > 0:
+            out["max_items"] = int(raw["max_items"])
+        return out
+
+    @staticmethod
     def _is_verification_intent(intent: str) -> bool:
         """Return True iff ``intent`` reads as verification language —
         i.e. asserting a state holds rather than reading authoritative
@@ -1272,6 +1409,15 @@ class PlanDecomposer:
             guard=str(s.get("guard", "") or ""),
             out_var=str(s.get("out_var", "") or ""),
             stop_var=str(s.get("stop_var", "") or ""),
+            # #785 follow-up: carry plan-author inline extract schema
+            # through the parser. The decomposer prompt asks Claude to
+            # emit `extract` blocks on extract_data steps whose source
+            # named specific fields ("extract title, price, ..."), so
+            # ad-hoc plans get a per-step schema without needing a
+            # registered recipe. Empty dict on legacy plans / steps
+            # without a schema → falls through to recipe-bound schema
+            # or the `no_schema_configured` rejection.
+            extract=PlanDecomposer._coerce_extract_block(s.get("extract", {})),
         )
 
     @staticmethod
