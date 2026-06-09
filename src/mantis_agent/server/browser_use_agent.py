@@ -118,13 +118,48 @@ def _require_session(request: Request) -> _Session:
     return _sessions[token]
 
 
+def _import_sync_playwright():
+    """Import the Playwright sync API, preferring ``patchright`` (#826).
+
+    ``patchright`` is a drop-in patched fork that strips Playwright's
+    automation tells at the binary level (``navigator.webdriver``, CDP
+    traces, runtime function signatures, etc.). It exposes the SAME
+    sync API surface — caller code doesn't change.
+
+    Resolution order:
+
+    1. ``MANTIS_BROWSER_USE_DRIVER=playwright`` env override → vanilla
+       Playwright (escape hatch for the few targets that detect
+       patchright specifically).
+    2. ``patchright.sync_api.sync_playwright`` if importable.
+    3. ``playwright.sync_api.sync_playwright`` fallback.
+
+    Defaulting to patchright is the #826 win: Browser-Use Plane gains
+    the ability to run against CF-protected targets (previously
+    blocked per ``feedback_headless_vs_xvfb.md``).
+    """
+    import os
+    override = os.environ.get("MANTIS_BROWSER_USE_DRIVER", "").strip().lower()
+    if override == "playwright":
+        from playwright.sync_api import sync_playwright  # noqa: PLC0415
+        return sync_playwright
+    try:
+        from patchright.sync_api import sync_playwright  # noqa: PLC0415
+        return sync_playwright
+    except ImportError:
+        from playwright.sync_api import sync_playwright  # noqa: PLC0415
+        return sync_playwright
+
+
 def _start_playwright(req: BrowserUseSessionInitRequest) -> _Session:
     """Lazy-import Playwright + launch a browser.
 
     Import is deferred so this module remains importable in environments
     without Playwright (e.g. test runners that mock the client).
+    Defaults to ``patchright`` when available (#826) so the Browser-Use
+    Plane can serve CF-protected targets.
     """
-    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    sync_playwright = _import_sync_playwright()  # noqa: PLC0415
 
     pw = sync_playwright().start()
     launch_args: dict[str, Any] = {"headless": req.headless}

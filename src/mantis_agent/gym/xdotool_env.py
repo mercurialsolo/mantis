@@ -586,6 +586,58 @@ class XdotoolGymEnv(GymEnvironment):
             env=self._env, capture_output=True, timeout=5,
         )
 
+    def _xdotool_capture(self, *args: str) -> str:
+        """Run xdotool and return stdout (for ``getmouselocation`` etc.)."""
+        try:
+            r = subprocess.run(
+                ["xdotool"] + list(args),
+                env=self._env, capture_output=True, timeout=2, text=True,
+            )
+            return r.stdout or ""
+        except (subprocess.TimeoutExpired, OSError):
+            return ""
+
+    def _current_mouse_position(self) -> tuple[int, int] | None:
+        """Read the cursor position via xdotool. Returns ``None`` when
+        the X server / display isn't reachable (test contexts, headless
+        without Xvfb)."""
+        out = self._xdotool_capture("getmouselocation")
+        if not out:
+            return None
+        try:
+            x_part, y_part, *_ = out.split()
+            x = int(x_part.split(":", 1)[1])
+            y = int(y_part.split(":", 1)[1])
+            return x, y
+        except (ValueError, IndexError):
+            return None
+
+    def _mousemove_with_curve(self, x: int, y: int) -> None:
+        """Move the cursor to ``(x, y)`` via a Bezier curve when
+        humanlike behavioral signals are enabled (#824).
+
+        Falls back to a direct ``mousemove`` when:
+        - ``MANTIS_BEHAVIORAL_JITTER=0`` (opt-out for CI / replay)
+        - Current cursor position is unreadable (no X display)
+        - Start and end are the same point
+        """
+        from .behavioral import bezier_waypoints, is_enabled, waypoint_delay
+
+        if not is_enabled():
+            self._xdotool("mousemove", str(x), str(y))
+            return
+        current = self._current_mouse_position()
+        if current is None:
+            self._xdotool("mousemove", str(x), str(y))
+            return
+        for wx, wy in bezier_waypoints(current, (x, y), steps=3):
+            self._xdotool("mousemove", str(wx), str(wy))
+            time.sleep(waypoint_delay())
+        # Always land on the exact target — the Bezier sampling
+        # excludes endpoints so this final mousemove is what actually
+        # parks the cursor on the click target.
+        self._xdotool("mousemove", str(x), str(y))
+
     def _cdp_call(
         self, method: str, params: dict[str, Any] | None = None,
         *, timeout: float = 3.0,
@@ -1514,7 +1566,13 @@ class XdotoolGymEnv(GymEnvironment):
                 x, y = self._clamp(x, y)
                 button = action.params.get("button", "left")
                 btn_num = {"left": "1", "middle": "2", "right": "3"}.get(button, "1")
-                self._xdotool("mousemove", str(x), str(y))
+                # #824 humanlike behavioral: when jitter is enabled,
+                # interpolate the cursor path with a Bezier curve so
+                # the click doesn't look like a teleport followed by an
+                # immediate fire. Falls back to direct mousemove when
+                # MANTIS_BEHAVIORAL_JITTER=0 or when the current cursor
+                # position can't be read.
+                self._mousemove_with_curve(x, y)
                 if self._human_speed:
                     time.sleep(random.uniform(0.05, 0.15))
                 self._xdotool("click", btn_num)
@@ -1523,7 +1581,7 @@ class XdotoolGymEnv(GymEnvironment):
                 x = action.params.get("x", self._viewport[0] // 2)
                 y = action.params.get("y", self._viewport[1] // 2)
                 x, y = self._clamp(x, y)
-                self._xdotool("mousemove", str(x), str(y))
+                self._mousemove_with_curve(x, y)
                 self._xdotool("click", "--repeat", "2", "1")
 
             case ActionType.TYPE:

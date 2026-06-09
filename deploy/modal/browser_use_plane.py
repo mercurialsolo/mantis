@@ -70,6 +70,18 @@ browser_use_image = (
         # server doesn't need it at runtime, the import path is
         # evaluated on container start.
         "requests>=2.28",
+        # #826: patchright — drop-in patched Playwright that strips
+        # automation tells at the binary level. Default-preferred over
+        # vanilla Playwright. Falls back to playwright.sync_api when
+        # MANTIS_BROWSER_USE_DRIVER=playwright is set.
+        "patchright>=1.49",
+    )
+    .run_commands(
+        # patchright ships its own Chromium build; the playwright
+        # browsers we got from the base image are also fine. Make sure
+        # at least one stack is initialized so the first request
+        # doesn't pay a 60 s download.
+        "python -m patchright install chromium || python -m playwright install chromium",
     )
     .add_local_python_source("mantis_agent")
 )
