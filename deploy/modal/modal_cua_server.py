@@ -2685,6 +2685,93 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
     ) -> dict:
         return _do_action({"action": "cancel", "run_id": run_id}, tenant)
 
+    # ── Lifecycle routes (#806 — PR #792 data layer wiring) ─────────
+    #
+    # These three routes give clients a cheap "phase + backoff hint"
+    # poll surface in addition to the existing detail-heavy
+    # ``GET /v1/runs/{id}/status``. Phase is derived from the
+    # file-backed ``status.json`` the executor already writes — no
+    # in-memory store needed (Modal runs the API + executor in
+    # different containers, where a singleton store wouldn't be
+    # visible anyway).
+
+    @fastapi_app.get("/v1/runs/{run_id}")
+    def get_run_phase(
+        run_id: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        """Cheap phase poll + adaptive backoff hint (#806).
+
+        Returns ``RunPhaseResponse`` derived from status.json. Clients
+        SHOULD honor ``polling_backoff_ms_hint`` to stop hammering
+        terminal or idle runs. For full detail (per-step results,
+        artifacts), use ``GET /v1/runs/{id}/status`` or
+        ``GET /v1/runs/{id}/result`` after this returns a terminal phase.
+        """
+        from mantis_agent.run_lifecycle import build_phase_response_from_status
+
+        try:
+            vol.reload()
+        except Exception:
+            pass
+        status = _read_status(tenant.tenant_id, run_id)
+        if status is None:
+            raise HTTPException(404, f"unknown run_id: {run_id}")
+        return build_phase_response_from_status(status).model_dump()
+
+    @fastapi_app.get("/v1/queue")
+    def get_queue(
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        """Per-tenant queue snapshot (#806).
+
+        Scans the tenant's run directory and counts active phases.
+        Terminal runs are excluded — operators wanting historical
+        totals can grep ``status.json`` files directly.
+        """
+        from mantis_agent.run_lifecycle import (
+            QueueStatusResponse,
+            RunPhase,
+            phase_from_status_string,
+        )
+
+        try:
+            vol.reload()
+        except Exception:
+            pass
+        from pathlib import Path as _Path
+
+        from mantis_agent.server_utils import safe_state_key as _safe
+
+        queued = running = recovering = 0
+        root = _Path(os.environ.get("MANTIS_DATA_DIR", "/data"))
+        tenant_dir = root / "tenants" / _safe(tenant.tenant_id) / "runs"
+        if tenant_dir.exists() and tenant_dir.is_dir():
+            for run_subdir in tenant_dir.iterdir():
+                if not run_subdir.is_dir():
+                    continue
+                status_path = run_subdir / "status.json"
+                if not status_path.exists():
+                    continue
+                try:
+                    status_blob = json.loads(status_path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    continue
+                phase = phase_from_status_string(str(status_blob.get("status", "") or ""))
+                if phase is RunPhase.QUEUED:
+                    queued += 1
+                elif phase is RunPhase.RUNNING:
+                    running += 1
+                elif phase is RunPhase.RECOVERING:
+                    recovering += 1
+        return QueueStatusResponse(
+            tenant_id=tenant.tenant_id,
+            queued=queued,
+            running=running,
+            recovering=recovering,
+            eta_ms=None,
+        ).model_dump()
+
     # #508 artifact download. Allowlisted filenames so we never stream
     # arbitrary files from the run dir; path-traversal guard via
     # Path.resolve() to block ``..`` even if a future allowlist entry
