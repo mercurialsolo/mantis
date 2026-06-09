@@ -258,12 +258,22 @@ class ClaudeStepHandler:
                 if transient_schema is not None
                 else original_schema
             )
+            # Coerce defensively: existing tests mock the schema with
+            # MagicMock and `mock.max_items` returns a Mock that can't
+            # be compared with int. ``int(... or 0)`` collapses both
+            # missing attr and Mock-shaped values to 0 cleanly.
+            try:
+                max_items_for_schema = int(
+                    getattr(effective_schema, "max_items", 0) or 0
+                )
+            except (TypeError, ValueError):
+                max_items_for_schema = 0
             wants_multi = (
                 step.type == "extract_rows"
                 or (
                     step.type == "extract_data"
                     and effective_schema is not None
-                    and getattr(effective_schema, "max_items", 0) > 1
+                    and max_items_for_schema > 1
                 )
             )
             if wants_multi and extractor_obj is not None and effective_schema is not None:
