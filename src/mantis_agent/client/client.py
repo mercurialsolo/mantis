@@ -294,6 +294,52 @@ class MantisClient:
         self._raise_for_status(resp)
         return resp.json()
 
+    # ── SSE event stream (#808) ─────────────────────────────────────────
+
+    def stream_events(
+        self,
+        run_id: str,
+        *,
+        since: str = "",
+        timeout_s: float | None = None,
+    ):
+        """Stream run events as parsed dicts (#808).
+
+        Yields one dict per event:
+
+        - ``{"event": "phase", "data": {...}}`` on phase transitions
+        - ``{"event": "<kind>", "data": {...}}`` per reasoning-trace event
+        - ``{"event": "terminal", "data": {...}}`` once on terminal phase, then exits
+
+        The server bounds each stream at 600s; long runs need
+        reconnection. Pass ``since=<ts>`` (or rely on the iterator's own
+        cursor on retry) to resume.
+
+        Usage::
+
+            for event in client.stream_events(run_id):
+                if event["event"] == "terminal":
+                    break
+                print(event)
+        """
+        url = f"{self.endpoint}/v1/runs/{run_id}/events"
+        params = {"sse": "true"}
+        if since:
+            params["since"] = since
+        with self._session.get(
+            url,
+            params=params,
+            headers={
+                **self._headers(),
+                "Accept": "text/event-stream",
+                "Cache-Control": "no-cache",
+            },
+            timeout=timeout_s or self.timeout_s,
+            stream=True,
+        ) as resp:
+            self._raise_for_status(resp)
+            yield from _parse_sse_stream(resp)
+
     # ── Video + health ──────────────────────────────────────────────────
 
     def fetch_video(
@@ -440,3 +486,60 @@ class MantisClient:
         cursor-style pagination.
         """
         yield from self.logs(run_id, tail=batch)
+
+
+# ── SSE stream parser (#808 helper) ────────────────────────────────
+
+
+def _parse_sse_stream(resp) -> Iterable[dict]:
+    """Parse a ``text/event-stream`` HTTP response into event dicts.
+
+    Implements just enough of the SSE spec for our server's emits:
+    ``id:`` cursor, ``event:`` name, ``data:`` JSON body, ``:`` heartbeat
+    lines (skipped). Events end on a blank line — anything else is
+    accumulated. Robust to mid-line truncation: a partial event at EOF
+    is silently dropped (the caller reconnects with the last yielded id).
+    """
+    import json as _json
+
+    current_event = "message"
+    current_id = ""
+    data_buf: list[str] = []
+    for raw_line in resp.iter_lines(decode_unicode=True):
+        if raw_line is None:
+            continue
+        # Heartbeat comment lines (starting with ":") are ignored per
+        # the SSE spec — the server emits ``: ping`` every 25s.
+        if raw_line.startswith(":"):
+            continue
+        if raw_line == "":
+            # Event boundary.
+            if data_buf:
+                try:
+                    payload = _json.loads("\n".join(data_buf))
+                except (_json.JSONDecodeError, ValueError):
+                    payload = {"_raw": "\n".join(data_buf)}
+                yield {
+                    "event": current_event,
+                    "data": payload,
+                    "id": current_id,
+                }
+                if current_event == "terminal":
+                    return
+            current_event = "message"
+            current_id = ""
+            data_buf = []
+            continue
+        # Field parsing — split on first colon, strip optional leading space.
+        if ":" not in raw_line:
+            # SSE spec: line without colon → field name with empty value.
+            continue
+        field, _, value = raw_line.partition(":")
+        if value.startswith(" "):
+            value = value[1:]
+        if field == "event":
+            current_event = value
+        elif field == "id":
+            current_id = value
+        elif field == "data":
+            data_buf.append(value)

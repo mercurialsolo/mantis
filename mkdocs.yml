@@ -114,6 +114,7 @@ nav:
       - Sending plans: client/plans.md
       - Pure CUA mode: client/pure-cua.md
       - Runs and polling: client/runs-and-polling.md
+      - Streaming events (SSE): client/streaming-events.md
       - Recordings: client/recordings.md
       - Errors: client/errors.md
   - Operations:
