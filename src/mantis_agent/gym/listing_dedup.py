@@ -44,12 +44,47 @@ class ListingDedup:
 
     @staticmethod
     def successful_lead_data(results: list["StepResult"]) -> list[str]:
-        """Return the ``data`` field of every ``success`` step that yielded
-        a ``VIABLE`` extraction row."""
-        return [
-            r.data for r in results
-            if r.success and (r.data or "").startswith(_VIABLE_PREFIX)
-        ]
+        """Return one ``VIABLE | ...`` summary string per extracted lead.
+
+        Two extraction shapes both contribute:
+
+        - Single-row legacy: ``r.data`` starts with ``VIABLE | `` (this
+          is what ``ExtractionResult.to_summary()`` produces). The
+          string is returned verbatim.
+        - Multi-row (#820 ``_execute_rows`` branch): the step ships
+          ``r.extracted_rows`` (a list of dicts) and a ``data`` like
+          ``"extract_rows:5/5"``. Pre-#841 this branch was IGNORED
+          because the ``data`` field didn't carry the ``VIABLE``
+          prefix — runs that captured 5 rows reported ``viable: 0``
+          and an empty ``leads`` list. This branch now synthesizes
+          one ``VIABLE`` summary line per row so the counter and
+          downstream consumers agree with the artifact pipeline.
+
+        Both shapes can co-exist in the same plan; both contribute.
+        """
+        out: list[str] = []
+        for r in results:
+            if not getattr(r, "success", False):
+                continue
+            # Multi-row branch first (carries explicit row dicts).
+            extracted_rows = getattr(r, "extracted_rows", None) or []
+            for row in extracted_rows:
+                if not isinstance(row, dict) or not row:
+                    continue
+                parts = [
+                    f"{k.replace('_', ' ').title()}: {v}"
+                    for k, v in row.items()
+                    if str(v or "").strip() != ""
+                ]
+                if parts:
+                    out.append(f"VIABLE | " + " | ".join(parts))
+            if extracted_rows:
+                continue
+            # Single-row legacy branch.
+            data = r.data or ""
+            if data.startswith(_VIABLE_PREFIX):
+                out.append(data)
+        return out
 
     @staticmethod
     def lead_key(data: str) -> str:
