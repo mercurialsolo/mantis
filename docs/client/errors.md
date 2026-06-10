@@ -126,6 +126,60 @@ curl -fsS -X POST "$ENDPOINT/v1/predict" \
 
 `screenshot_b64` is omitted on success and on steps where capture failed.
 
+### `failure_help` on the lifecycle response
+
+Every terminal-failure response on `GET /v1/runs/{id}` (and the
+status-action body) carries a `failure_help` dict — the
+human-actionable companion to `halt_class` and `failure_class`:
+
+```jsonc
+{
+  "phase": "halted",
+  "halt_class": "anthropic_unreachable",
+  "failure_help": {
+    "halt_class": "anthropic_unreachable",
+    "summary": "Could not reach the Anthropic API after the retry budget was exhausted.",
+    "likely_causes": [
+      "Transient Anthropic 5xx / 529 Overloaded during peak hours",
+      "Per-IP rate limit on the Modal egress shared pool",
+      "Deployed image is stale (>14 days) and its TLS / certifi stack hasn't been refreshed",
+      "Anthropic API key revoked or hit account quota"
+    ],
+    "next_steps": [
+      "Wait 60s and retry — the retry policy backs off exponentially",
+      "Check `GET /v1/version` — if `deploy_age_days > 14`, redeploy from current main",
+      "Verify ANTHROPIC_API_KEY hasn't been rotated in the Modal Secret"
+    ],
+    "debug_surfaces": {
+      "events": "/v1/runs/<run_id>/events?sse=true",
+      "augur":  "/v1/runs/<run_id>/augur",
+      "logs":   "POST /v1/predict {action: logs, run_id: <run_id>}",
+      "phase":  "/v1/runs/<run_id>",
+      "status": "/v1/runs/<run_id>/status",
+      "result": "/v1/runs/<run_id>/result"
+    },
+    "retries_spent": 3
+  }
+}
+```
+
+The taxonomy currently covers `anthropic_unreachable`, `cf_challenge`,
+`page_blocked`, `navigation_drift`, `navigate_failed`, `bad_url`,
+`extract_data_failed`, `no_schema_configured`, `budget_cap`,
+`time_cap`, `halt_timeout`, and `cancelled`. Unknown classes fall
+back to a default help dict that still surfaces the `debug_surfaces`
+URLs — operators always have a path forward.
+
+When `retries_spent > 0`, the API actually retried before giving up;
+this is the most common cause of slow failures and tells you the
+budget was exhausted (vs e.g. an API-key error which would never
+retry).
+
+The `extraction_quality` summary field on `action=result` carries
+`unknown_placeholder_row_count` — non-zero means rows were captured
+but their non-URL fields were all `<UNKNOWN>` / `none` / empty
+placeholders. Useful when `viable > 0` but the data feels thin.
+
 ### When `failure_class` isn't enough
 
 For `unknown` (or to read the traceback / per-step Holo3 logs), fall through to:

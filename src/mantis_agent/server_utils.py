@@ -830,6 +830,26 @@ def build_micro_result(
     # downstream consumers can fetch via the artifact endpoint.
     artifacts = build_extraction_artifacts(step_results, run_id=run_id, leads=leads)
 
+    # #841 (user-feedback quality): count extracted rows whose
+    # non-URL fields are all UNKNOWN-placeholders. The legacy no-
+    # schema path can let these through into ``extracted_rows.json``
+    # — operators see them as "viable rows" until they grep. Surface
+    # the count so the summary shows how thin the extraction was.
+    _UNKNOWN_PLACEHOLDERS = {"", "unknown", "<unknown>", "none", "n/a",
+                             "na", "not visible", "not shown",
+                             "not available", "tbd"}
+    extracted_rows_collected, _ = _collect_extracted_rows(step_results)
+    unknown_placeholder_row_count = 0
+    for _row in extracted_rows_collected:
+        non_url_values = [
+            str(v or "").strip().lower()
+            for k, v in _row.items() if k.lower() not in {"url", "story_url"}
+        ]
+        if non_url_values and all(
+            v in _UNKNOWN_PLACEHOLDERS for v in non_url_values
+        ):
+            unknown_placeholder_row_count += 1
+
     return {
         "run_id": run_id,
         "provider": provider,
@@ -846,6 +866,11 @@ def build_micro_result(
         "steps_executed": len(step_results),
         "viable": len(leads),
         "leads_with_phone": sum(1 for lead in leads if runner._lead_has_phone(lead)),
+        # #841: how many extracted rows were ALL-UNKNOWN placeholders.
+        # Non-zero → the extraction was thin even when ``viable`` looks
+        # healthy. Operators read this alongside ``viable`` to gauge
+        # extraction quality.
+        "unknown_placeholder_row_count": unknown_placeholder_row_count,
         "state_key": state_key or workflow_id,
         "profile_id": profile_id or state_key,
         "workflow_id": workflow_id or state_key,
