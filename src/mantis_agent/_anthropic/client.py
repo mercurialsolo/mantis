@@ -321,6 +321,12 @@ class AnthropicToolUseClient:
 
         Honours ``Retry-After`` header when numeric. Sleeps between
         attempts via ``time.sleep`` — tests monkeypatch that for speed.
+
+        Side-effect: stashes the retry count on
+        :attr:`last_retries_spent` (#841 user-feedback quality).
+        Zero on first-attempt success, ``max_attempts - 1`` on
+        exhaustion. Read by callers that want to surface "we retried
+        N times" in the run summary or failure_help dict.
         """
         import requests
 
@@ -331,6 +337,7 @@ class AnthropicToolUseClient:
             "content-type": "application/json",
         }
         last_response = None
+        self.last_retries_spent = 0
         for attempt in range(max_attempts):
             try:
                 resp = requests.post(
@@ -338,6 +345,7 @@ class AnthropicToolUseClient:
                 )
             except (requests.Timeout, requests.ConnectionError) as exc:
                 if attempt == max_attempts - 1:
+                    self.last_retries_spent = attempt
                     logger.warning(
                         "%s network error after %d attempts: %s",
                         self._log_prefix, max_attempts, exc,
@@ -352,9 +360,11 @@ class AnthropicToolUseClient:
                 time.sleep(delay)
                 continue
             if resp.status_code not in _TRANSIENT_STATUS_CODES:
+                self.last_retries_spent = attempt
                 return resp
             last_response = resp
             if attempt == max_attempts - 1:
+                self.last_retries_spent = attempt
                 logger.warning(
                     "%s transient HTTP %s after %d attempts; giving up",
                     self._log_prefix, resp.status_code, max_attempts,

@@ -2693,9 +2693,22 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
                     # TimeoutError from .get(timeout=0.1) means still running.
                     msg = str(type(exc).__name__).lower()
                     if "timeout" not in msg:
-                        # Real error — mark failed, release the lock.
+                        # Real error — mark failed, release the lock,
+                        # attach human-actionable failure_help (#841).
+                        from mantis_agent.run_failure_help import failure_help_for
                         status["status"] = "failed"
                         status["error"] = f"{type(exc).__name__}: {exc}"
+                        # Best-effort halt-class derivation from the raw
+                        # exception type. The runner's per-step
+                        # ``halt_class`` is richer when set; this is the
+                        # fallback for executor-spawn-side failures.
+                        _exc_name = type(exc).__name__.lower()
+                        if "connectionreset" in _exc_name or "connectionerror" in _exc_name:
+                            status.setdefault("halt_class", "anthropic_unreachable")
+                        status["failure_help"] = failure_help_for(
+                            status.get("halt_class", "unknown"),
+                            run_id=run_id,
+                        )
                         status["updated_at"] = datetime.now(timezone.utc).isoformat()
                         _write_status(tenant.tenant_id, run_id, status)
                         release_profile_lock(tenant, status.get("profile_id", ""))
@@ -2836,6 +2849,22 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         if augur_meta and augur_meta.get("augur_run_id"):
             body["augur_run_id"] = augur_meta["augur_run_id"]
             body["augur_bundle_url"] = f"/v1/runs/{run_id}/augur"
+        # Surface failure_help on terminal halted / cancelled phases
+        # (#841). Prefer the help dict already attached to status.json
+        # by the failure path; otherwise synthesize from halt_class so
+        # older executor crashes still get an actionable response.
+        terminal_failure = body.get("phase") in {"halted", "cancelled"} or (
+            body.get("phase") == "complete" and status.get("error")
+        )
+        if terminal_failure:
+            help_dict = status.get("failure_help")
+            if not help_dict and status.get("halt_class"):
+                from mantis_agent.run_failure_help import failure_help_for
+                help_dict = failure_help_for(
+                    status.get("halt_class", ""), run_id=run_id,
+                )
+            if help_dict:
+                body["failure_help"] = help_dict
         return body
 
     @fastapi_app.get("/v1/queue")
