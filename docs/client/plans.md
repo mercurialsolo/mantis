@@ -243,6 +243,17 @@ behind a "Show" button, full job description on a sub-page), the
 single-row `extract_data` inside a `collect_urls` → `loop` chain is
 still the right pattern.
 
+**Where multi-row rows surface in the response.** The captured rows
+land in three places, all consistent since [#842](https://github.com/mercurialsolo/mantis/pull/842):
+
+- `extracted_rows.json` / `extracted_rows.csv` artifacts — one entry per row, canonical structured form
+- `leads.csv` artifact — same rows in CSV summary form
+- Lifecycle envelope — `viable: N` counts every row whose `required: true` fields are all populated, and `leads: [...]` carries one `"VIABLE | Field: value | …"` summary string per row
+
+Pre-#842 the counter and summary array silently reported `viable: 0`
+and `leads: []` even when the multi-row primitive captured rows
+correctly — only the artifacts were trustworthy. They now agree.
+
 ## Control-flow primitives
 
 For plans that need to vary their behaviour based on what the page
