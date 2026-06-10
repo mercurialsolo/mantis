@@ -77,7 +77,7 @@ class ListingDedup:
                     if str(v or "").strip() != ""
                 ]
                 if parts:
-                    out.append(f"VIABLE | " + " | ".join(parts))
+                    out.append("VIABLE | " + " | ".join(parts))
             if extracted_rows:
                 continue
             # Single-row legacy branch.
