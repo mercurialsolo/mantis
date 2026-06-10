@@ -966,6 +966,15 @@ def _run_holo3_executor(
             if workflow_id else _uuid_for_augur.uuid4().hex[:12]
         )
 
+        # Stamp the API-run-id → augur-run-id mapping into a side-channel
+        # file so the lifecycle endpoint can surface it to operators.
+        # Best-effort — telemetry must never block the run.
+        try:
+            if api_run_id and api_tenant_id:
+                _write_augur_metadata(api_tenant_id, api_run_id, augur_run_id)
+        except Exception as _augur_exc:  # noqa: BLE001
+            print(f"  WARNING: augur metadata write failed: {_augur_exc}")
+
         # #657 PR 2: read the per-domain ``SiteConfig`` from the suite
         # (written by ``build_micro_suite`` after resolving
         # ``MicroPlan.domain`` → DomainProfile). Passing it explicitly
@@ -2152,6 +2161,55 @@ def _read_viewer_url(tenant_id: str, run_id: str) -> str | None:
         return None
 
 
+def _augur_bundle_dir(augur_run_id: str):
+    """Resolve the on-disk Augur bundle directory for ``augur_run_id``.
+
+    Mirrors :func:`mantis_agent.observability.augur.default_out_dir` but
+    runs in the API container's filesystem (no extra import of the
+    augur_sdk package needed). Honors ``MANTIS_AUGUR_DIR`` for the same
+    override the runner reads.
+    """
+    from pathlib import Path as _Path
+    override = os.environ.get("MANTIS_AUGUR_DIR", "").strip()
+    if override:
+        return _Path(override) / augur_run_id
+    root = os.environ.get("MANTIS_DATA_DIR", "/data").strip() or "/data"
+    return _Path(root) / "augur" / augur_run_id
+
+
+def _write_augur_metadata(
+    tenant_id: str, run_id: str, augur_run_id: str,
+) -> None:
+    """Persist the API-run-id → augur-run-id mapping (gap #1 of the
+    observability ergonomics audit).
+
+    Stored in a side-channel file so the executor can stamp it from a
+    different container than the API. The API's lifecycle endpoint
+    reads this on every poll and surfaces ``augur_run_id`` plus a
+    derived bundle URL.
+    """
+    if not augur_run_id:
+        return
+    run_dir = _run_dir(tenant_id, run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "augur.json").write_text(json.dumps({
+        "augur_run_id": augur_run_id,
+        "bundle_dir": str(_augur_bundle_dir(augur_run_id)),
+        "dsn_workspace": os.environ.get("AUGUR_DSN_WORKSPACE_URL", "") or "",
+    }))
+    _commit_volume()
+
+
+def _read_augur_metadata(tenant_id: str, run_id: str) -> dict | None:
+    path = _run_dir(tenant_id, run_id) / "augur.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
 def _write_result(tenant_id: str, run_id: str, result: dict) -> None:
     run_dir = _run_dir(tenant_id, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -2769,7 +2827,16 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         status = _read_status(tenant.tenant_id, run_id)
         if status is None:
             raise HTTPException(404, f"unknown run_id: {run_id}")
-        return build_phase_response_from_status(status).model_dump()
+        body = build_phase_response_from_status(status).model_dump()
+        # Surface the Augur run id when available so consumers can
+        # cross-link to the Augur workspace / bundle (gap #1 of the
+        # observability ergonomics audit). Best-effort — missing
+        # metadata never breaks the lifecycle response.
+        augur_meta = _read_augur_metadata(tenant.tenant_id, run_id)
+        if augur_meta and augur_meta.get("augur_run_id"):
+            body["augur_run_id"] = augur_meta["augur_run_id"]
+            body["augur_bundle_url"] = f"/v1/runs/{run_id}/augur"
+        return body
 
     @fastapi_app.get("/v1/queue")
     def get_queue(
@@ -2858,6 +2925,111 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
                 status_code=404, detail=f"artifact not available: {name}",
             )
         return FileResponse(candidate, media_type=media_type, filename=name)
+
+    # ── Augur bundle access (observability ergonomics gap #2) ──────
+    #
+    # The runner writes the per-run Augur DebugSession bundle under
+    # ``/data/augur/<augur_run_id>/`` — separate from the API run dir.
+    # These routes let operators fetch the bundle by Mantis run_id
+    # without needing the Augur SDK workspace.
+    #
+    # Path-traversal guard via ``Path.resolve() + relative_to``. The
+    # allowlist of fetchable files is intentionally narrow — we
+    # don't stream the per-step PNG screenshots (heavyweight, the
+    # live viewer covers that lane).
+
+    _AUGUR_BUNDLE_FILE_TYPES: dict[str, str] = {
+        ".json": "application/json",
+        ".jsonl": "application/jsonl",
+        ".png": "image/png",
+    }
+
+    @fastapi_app.get("/v1/runs/{run_id}/augur")
+    def get_augur_envelope(
+        run_id: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> dict:
+        """Return the Augur metadata envelope for this run.
+
+        Includes the ``augur_run_id``, the on-disk bundle directory,
+        a list of fetchable files, and (when configured) the workspace
+        URL the live stream targets.
+        """
+        from pathlib import Path as _Path
+
+        try:
+            vol.reload()
+        except Exception:
+            pass
+        meta = _read_augur_metadata(tenant.tenant_id, run_id)
+        if meta is None:
+            raise HTTPException(
+                404,
+                f"no Augur metadata for run_id={run_id} — either the run "
+                "hasn't started or Augur is disabled",
+            )
+        bundle = _Path(meta.get("bundle_dir", ""))
+        files: list[dict] = []
+        if bundle.exists() and bundle.is_dir():
+            for path in sorted(bundle.rglob("*")):
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(bundle)
+                files.append({
+                    "name": str(rel),
+                    "size_bytes": path.stat().st_size,
+                    "fetch_url": f"/v1/runs/{run_id}/augur/files/{rel}",
+                })
+        return {
+            "run_id": run_id,
+            "augur_run_id": meta.get("augur_run_id", ""),
+            "bundle_dir": meta.get("bundle_dir", ""),
+            "dsn_workspace": meta.get("dsn_workspace", ""),
+            "bundle_present": bool(files),
+            "files": files,
+        }
+
+    @fastapi_app.get("/v1/runs/{run_id}/augur/files/{path:path}")
+    def get_augur_file(
+        run_id: str,
+        path: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ):
+        """Stream a specific file from the Augur bundle.
+
+        Path-traversal guard: the resolved path must live under the
+        bundle directory. File extension must be in the allowlist
+        (``.json``, ``.jsonl``, ``.png``). Returns 404 for missing
+        files; 400 for traversal attempts or disallowed extensions.
+        """
+        from pathlib import Path as _Path
+
+        from fastapi.responses import FileResponse
+
+        try:
+            vol.reload()
+        except Exception:
+            pass
+        meta = _read_augur_metadata(tenant.tenant_id, run_id)
+        if meta is None:
+            raise HTTPException(404, f"no Augur metadata for run_id={run_id}")
+        bundle = _Path(meta.get("bundle_dir", "")).resolve()
+        if not bundle.exists():
+            raise HTTPException(404, "augur bundle not present on volume")
+        candidate = (bundle / path).resolve()
+        try:
+            candidate.relative_to(bundle)
+        except ValueError:
+            raise HTTPException(400, "invalid bundle path")
+        if not candidate.exists() or not candidate.is_file():
+            raise HTTPException(404, f"file not in bundle: {path}")
+        ext = candidate.suffix.lower()
+        media_type = _AUGUR_BUNDLE_FILE_TYPES.get(ext)
+        if media_type is None:
+            raise HTTPException(400, f"file type not exposed via HTTP: {ext}")
+        return FileResponse(
+            candidate, media_type=media_type, filename=candidate.name,
+        )
 
     # ── SSE event stream (#808) ────────────────────────────────────
     #
