@@ -31,6 +31,7 @@ import modal
 from mantis_agent.run_state_store import (
     KIND_AUGUR,
     KIND_PAUSE_REQUEST,
+    KIND_SESSION,
     KIND_STATUS,
     KIND_VIEWER,
     NullRunStateStore,
@@ -2144,6 +2145,39 @@ def _get_run_state_store() -> object:
     return _RUN_STATE_STORE
 
 
+# Phase 1.5 (#846) — session tunnel signal dict. Bridges the per-
+# session container (which publishes its modal.forward tunnel URL on
+# startup) to the router endpoint (which polls for the URL and hands
+# it to the brain). Separate from the run-state store on purpose: the
+# router uses this for short-lived runtime signaling, the run-state
+# store carries the persistent SessionRecord that the reaper reads.
+_SESSION_DICT: object | None = None
+
+
+def _get_session_dict() -> object:
+    """Lazy build of the session-tunnel ``modal.Dict``.
+
+    Off-Modal contexts fall back to an in-process ``dict`` so tests
+    without the modal control plane don't hang
+    (``feedback_modal_dict_blocks_off_modal``). Tests usually inject
+    via ``build_api_app(session_dict=...)`` and bypass this entirely.
+    """
+    global _SESSION_DICT
+    if _SESSION_DICT is not None:
+        return _SESSION_DICT
+    if not os.environ.get("MODAL_TASK_ID"):
+        _SESSION_DICT = {}
+        return _SESSION_DICT
+    try:
+        _SESSION_DICT = modal.Dict.from_name(
+            "mantis-cua-session-tunnels", create_if_missing=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: session_dict init failed, using in-process dict: {exc}")
+        _SESSION_DICT = {}
+    return _SESSION_DICT
+
+
 def _read_status_disk(tenant_id: str, run_id: str) -> dict | None:
     """Disk-only status read. Used as the fallback when the cross-replica
     store misses (or as the primary in tests with the null store)."""
@@ -2383,7 +2417,8 @@ def _read_task_suite(tenant_id: str, run_id: str) -> str | None:
 
 
 def build_api_app(executor_resolver=None, function_call_lookup=None,
-                  run_state_store=None):
+                  run_state_store=None, session_spawner=None,
+                  session_dict=None):
     """Construct the FastAPI app exposed by the Modal ASGI endpoint (#342).
 
     Factored into a plain function (not wrapped by ``@modal.asgi_app()``)
@@ -2401,6 +2436,13 @@ def build_api_app(executor_resolver=None, function_call_lookup=None,
       cache (#866). Tests pass a plain-dict-backed ``RunStateStore``
       so the terminal-sticky and cancel-race paths are exercised
       without going through ``modal.Dict``.
+    * ``session_spawner(payload: dict) -> handle`` — Phase 1.5 (#846).
+      Overrides ``computer_session.spawn``. Tests pass a stub that
+      records the spawn call + returns a fake FunctionCall handle.
+    * ``session_dict`` — Phase 1.5 (#846). Overrides the module-level
+      ``session_dict`` used to pass the tunnel URL from the per-session
+      container back to the router. Tests pass a plain ``dict``; the
+      router writes ``close_requested=True`` here on DELETE.
     """
     from datetime import datetime, timezone
 
@@ -3669,6 +3711,237 @@ def build_api_app(executor_resolver=None, function_call_lookup=None,
             },
         }
 
+    # ── Phase 1.5 session router (#846) ───────────────────────────
+    #
+    # Mints per-session computer-plane containers so parallel CUA
+    # plans don't share the one pinned ``computer_plane()`` ASGI
+    # instance. The brain (PR 3) calls ``POST /v1/computer_sessions``
+    # at run start to get a dedicated ``base_url``, then talks to
+    # that URL via ``RemoteComputerImpl`` for the rest of the run.
+    # ``DELETE /v1/computer_sessions/{id}`` tears it down.
+
+    from mantis_agent.session_wire import (
+        SessionCloseResponse,
+        SessionCreateRequest,
+        SessionCreateResponse,
+        SessionListResponse,
+        SessionRecord,
+        iter_session_records,
+        parse_session_record,
+        serialize_session_record,
+    )
+
+    # DI seams default to the deployed function + module dict;
+    # tests inject stubs so the orchestrator path is exercisable
+    # without spawning real Modal containers.
+    resolve_session_dict = (
+        session_dict if session_dict is not None else _get_session_dict()
+    )
+
+    def _do_session_spawn(payload: dict):
+        """Indirection layer so tests can swap in a fake spawner.
+
+        Default forwards to ``computer_session.spawn(**payload)`` —
+        defined later in this module, so we import it at call time
+        rather than at ``build_api_app`` invocation time to avoid an
+        import-order tangle (the function lives in the same Python
+        module as ``build_api_app``).
+        """
+        if session_spawner is not None:
+            return session_spawner(payload)
+        return computer_session.spawn(**payload)  # noqa: F821 — fwd-ref
+
+    @fastapi_app.post(
+        "/v1/computer_sessions", response_model=SessionCreateResponse,
+    )
+    def create_computer_session(
+        req: SessionCreateRequest,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> SessionCreateResponse:
+        # The token already proves the tenant; treat the request's
+        # ``tenant_id`` field as a brain-side hint and normalize to
+        # the token's authoritative tenant. Brain executors don't
+        # always know their tenant id outside the token (it's not
+        # exposed as a separate env var), so making the router strict
+        # would force every brain to surface that out-of-band.
+        req = req.model_copy(update={"tenant_id": tenant.tenant_id})
+
+        import secrets as _secrets
+        import uuid as _uuid
+
+        store = run_state_store if run_state_store is not None else _get_run_state_store()
+
+        # Idempotent re-create: if a session already exists for this
+        # (tenant, run_id) AND it's still active, return that one
+        # instead of spawning a duplicate. Mirrors the
+        # ``computer_wire.SessionInitRequest`` 200-on-same-run_id
+        # behaviour at the ComputerAgent layer.
+        for existing in iter_session_records(store, tenant_id=tenant.tenant_id):
+            if existing.run_id == req.run_id and existing.status == "active":
+                return SessionCreateResponse(
+                    session_id=existing.session_id,
+                    base_url=existing.base_url,
+                    session_token=existing.session_token,
+                    expires_at_ms=existing.expires_at_ms,
+                    sandbox_id=existing.sandbox_id,
+                    reused=True,
+                )
+
+        session_id = (
+            "sess_"
+            + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            + "_" + _uuid.uuid4().hex[:8]
+        )
+        session_token = _secrets.token_urlsafe(24)
+
+        spawn_payload = {
+            "session_id": session_id,
+            "session_token": session_token,
+            "init_payload": req.model_dump(exclude={"ttl_seconds"}),
+            "ttl_seconds": int(req.ttl_seconds),
+        }
+        try:
+            call_handle = _do_session_spawn(spawn_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, f"session spawn failed: {exc}") from exc
+
+        # Wait for the orchestrator to publish its tunnel URL. The
+        # per-session container handles cold start + Chrome boot +
+        # modal.forward, so this can be 30-60s under cold start. Cap
+        # at 120s; tunable later via an env var.
+        deadline = time.time() + 120.0
+        base_url = ""
+        while time.time() < deadline:
+            entry = resolve_session_dict.get(session_id)  # type: ignore[attr-defined]
+            if isinstance(entry, dict) and entry.get("tunnel_url"):
+                base_url = entry["tunnel_url"]
+                break
+            time.sleep(1.0)
+
+        if not base_url:
+            # Couldn't reach the session — cancel and 504. Persist a
+            # terminal record so operators can grep what happened.
+            try:
+                call_handle.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+            terminal = SessionRecord(
+                session_id=session_id,
+                tenant_id=req.tenant_id,
+                profile_id=req.profile_id,
+                run_id=req.run_id,
+                base_url="",
+                sandbox_id=getattr(call_handle, "object_id", "") or "",
+                session_token=session_token,
+                created_at_ms=int(time.time() * 1000),
+                expires_at_ms=int(time.time() * 1000),
+                status="error",
+                error="session orchestrator did not publish tunnel URL within 120s",
+            )
+            store.put(  # type: ignore[attr-defined]
+                tenant.tenant_id, session_id, KIND_SESSION,
+                serialize_session_record(terminal),
+            )
+            raise HTTPException(
+                504, "session orchestrator did not publish tunnel URL within 120s",
+            )
+
+        now_ms = int(time.time() * 1000)
+        expires_at_ms = now_ms + int(req.ttl_seconds) * 1000
+        record = SessionRecord(
+            session_id=session_id,
+            tenant_id=req.tenant_id,
+            profile_id=req.profile_id,
+            run_id=req.run_id,
+            base_url=base_url,
+            sandbox_id=getattr(call_handle, "object_id", "") or "",
+            session_token=session_token,
+            created_at_ms=now_ms,
+            expires_at_ms=expires_at_ms,
+            status="active",
+        )
+        store.put(  # type: ignore[attr-defined]
+            tenant.tenant_id, session_id, KIND_SESSION,
+            serialize_session_record(record),
+        )
+
+        return SessionCreateResponse(
+            session_id=session_id,
+            base_url=base_url,
+            session_token=session_token,
+            expires_at_ms=expires_at_ms,
+            sandbox_id=record.sandbox_id,
+        )
+
+    @fastapi_app.delete(
+        "/v1/computer_sessions/{session_id}",
+        response_model=SessionCloseResponse,
+    )
+    def close_computer_session(
+        session_id: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+        reason: str = "brain_closed",
+    ) -> SessionCloseResponse:
+        store = run_state_store if run_state_store is not None else _get_run_state_store()
+        blob = store.get(tenant.tenant_id, session_id, KIND_SESSION)  # type: ignore[attr-defined]
+        record = parse_session_record(blob)
+        if record is None:
+            raise HTTPException(404, f"unknown session_id: {session_id}")
+
+        # Signal the orchestrator loop to exit. The container will
+        # write its own terminal status into session_dict on exit;
+        # we still update the persistent record optimistically here
+        # so a subsequent GET returns the closed state immediately.
+        try:
+            entry = resolve_session_dict.get(session_id) or {}  # type: ignore[attr-defined]
+            if not isinstance(entry, dict):
+                entry = {}
+            entry.update({"close_requested": True, "close_reason": reason})
+            resolve_session_dict[session_id] = entry  # type: ignore[index]
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Belt-and-braces: also cancel the Modal function call. If the
+        # orchestrator is alive it'll exit via the dict signal; if it
+        # crashed already, the cancel makes sure Modal accounting
+        # closes too.
+        if record.sandbox_id:
+            try:
+                lookup_function_call(record.sandbox_id).cancel()
+            except Exception:  # noqa: BLE001
+                pass
+
+        closed = record.model_copy(update={"status": "closed"})
+        store.put(  # type: ignore[attr-defined]
+            tenant.tenant_id, session_id, KIND_SESSION,
+            serialize_session_record(closed),
+        )
+        return SessionCloseResponse(closed=True, terminal_state="closed")
+
+    @fastapi_app.get(
+        "/v1/computer_sessions/{session_id}", response_model=SessionRecord,
+    )
+    def get_computer_session(
+        session_id: str,
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> SessionRecord:
+        store = run_state_store if run_state_store is not None else _get_run_state_store()
+        blob = store.get(tenant.tenant_id, session_id, KIND_SESSION)  # type: ignore[attr-defined]
+        record = parse_session_record(blob)
+        if record is None:
+            raise HTTPException(404, f"unknown session_id: {session_id}")
+        return record
+
+    @fastapi_app.get(
+        "/v1/computer_sessions", response_model=SessionListResponse,
+    )
+    def list_computer_sessions(
+        tenant: TenantConfig = Depends(require_run_scope),
+    ) -> SessionListResponse:
+        store = run_state_store if run_state_store is not None else _get_run_state_store()
+        records = list(iter_session_records(store, tenant_id=tenant.tenant_id))
+        return SessionListResponse(sessions=records, count=len(records))
+
     return fastapi_app
 
 
@@ -3756,6 +4029,97 @@ computer_plane_image = (
     image=computer_plane_image,
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
+    timeout=14400,  # 4 hours — caller-supplied TTL clamps this lower
+    memory=8192,
+    cpu=4.0,
+    scaledown_window=60,
+)
+def computer_session(
+    session_id: str,
+    session_token: str,
+    init_payload: dict,
+    ttl_seconds: int = 3600,
+) -> dict:
+    """Per-session computer-plane container (Phase 1.5, #846).
+
+    Lifts the ``min_containers=1, max_containers=1`` pin on
+    ``computer_plane()`` by giving each session its own container.
+    Spawned by the router (``POST /v1/computer_sessions``) and torn
+    down by ``DELETE /v1/computer_sessions/{session_id}`` (or by the
+    reaper if the brain crashes).
+
+    Steps:
+
+    1. Bind the session inline (Xvfb + Chrome up, ``ComputerAgent``
+       state populated).
+    2. Start uvicorn on port 8090.
+    3. ``modal.forward(8090)`` to mint a tunnel URL.
+    4. Publish the URL into the shared session_dict so the router
+       can hand it to the brain.
+    5. Loop: poll for ``close_requested`` sentinel or TTL.
+    6. On exit: shutdown Chrome, write terminal status.
+    """
+    from mantis_agent.server.computer_agent import build_app
+    from mantis_agent.server.session_orchestrator import (
+        _bind_session_inline,
+        _start_uvicorn_in_thread,
+        run_session_loop,
+    )
+
+    session_dict_handle = modal.Dict.from_name(
+        "mantis-cua-session-tunnels", create_if_missing=True,
+    )
+
+    env = None
+    try:
+        app_inner = build_app()
+        env, _session = _bind_session_inline(session_token, init_payload)
+        _thread, server = _start_uvicorn_in_thread(app_inner, port=8090)
+        # Brief settle for uvicorn to bind the port before modal.forward
+        # opens its side.
+        time.sleep(2.0)
+        with modal.forward(8090) as tunnel:
+            result = run_session_loop(
+                session_id=session_id,
+                session_token=session_token,
+                init_payload=init_payload,
+                ttl_seconds=ttl_seconds,
+                session_dict=session_dict_handle,
+                tunnel_url=tunnel.url,
+            )
+        # Stop uvicorn cleanly so Modal's container teardown is fast.
+        try:
+            server.should_exit = True
+        except Exception:  # noqa: BLE001
+            pass
+        return result
+    except Exception as exc:  # noqa: BLE001
+        # Publish the error so the router's create-session poll either
+        # times out OR reads the error and surfaces it.
+        try:
+            cur = session_dict_handle.get(session_id) or {}
+            if not isinstance(cur, dict):
+                cur = {}
+            cur.update({
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            session_dict_handle[session_id] = cur
+        except Exception:  # noqa: BLE001
+            pass
+        return {"session_id": session_id, "status": "error", "error": str(exc)}
+    finally:
+        if env is not None:
+            try:
+                env.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+@app.function(
+    image=computer_plane_image,
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours — match executor timeouts
     memory=8192,
     cpu=4.0,
@@ -3764,10 +4128,10 @@ computer_plane_image = (
     # (`ComputerAgentState._state.session`). With more than one
     # replica, the brain's second request fans out to a different
     # container which has no session and 401s — the failure mode the
-    # prior holo3 smoke surfaced. Phase 2 (#699) lifts this via
-    # per-session `.spawn()`; for Phase 1 we hard-pin to a single
-    # container and turn up per-container concurrency so the brain's
-    # parallel screenshot + xdotool calls still don't queue serially.
+    # prior holo3 smoke surfaced. Phase 1.5 (#846) lifts this via
+    # ``computer_session`` per-session spawns; this ASGI app stays
+    # available as a fallback during rollout. Phase 2 (#699) further
+    # generalizes to pluggable backends.
     min_containers=1,
     max_containers=1,
 )
