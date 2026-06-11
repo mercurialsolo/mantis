@@ -28,6 +28,15 @@ import time
 
 import modal
 
+from mantis_agent.run_state_store import (
+    KIND_AUGUR,
+    KIND_PAUSE_REQUEST,
+    KIND_STATUS,
+    KIND_VIEWER,
+    NullRunStateStore,
+    RunStateStore,
+    read_with_store,
+)
 from mantis_agent.server_utils import (
     build_micro_result,
     build_micro_suite,
@@ -2081,16 +2090,9 @@ def _commit_volume() -> None:
 #
 # Off-Modal contexts (unit tests, local dev) get a ``NullRunStateStore``
 # by default; tests override via ``build_api_app(run_state_store=...)``
-# with a plain-dict-backed store.
-from mantis_agent.run_state_store import (
-    KIND_AUGUR,
-    KIND_PAUSE_REQUEST,
-    KIND_STATUS,
-    KIND_VIEWER,
-    NullRunStateStore,
-    RunStateStore,
-    read_with_store,
-)
+# with a plain-dict-backed store. The ``run_state_store`` module is
+# imported at the top of the file alongside the other ``mantis_agent``
+# imports so ruff doesn't trip on the inline-import pattern.
 
 # First-terminal-wins. Once a run reaches any of these, subsequent
 # writes that would change the status field are rejected so a late
