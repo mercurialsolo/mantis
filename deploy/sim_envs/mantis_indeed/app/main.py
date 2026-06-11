@@ -81,18 +81,21 @@ def create_app() -> FastAPI:
             m_h = _re.match(r"^(#{1,6})\s+(.*)$", line)
             if m_h:
                 if in_ul:
-                    out_lines.append("</ul>"); in_ul = False
+                    out_lines.append("</ul>")
+                    in_ul = False
                 lvl = len(m_h.group(1))
                 out_lines.append(f"<h{lvl}>{html.escape(m_h.group(2))}</h{lvl}>")
                 continue
             if line.lstrip().startswith(("- ", "* ")):
                 if not in_ul:
-                    out_lines.append("<ul>"); in_ul = True
+                    out_lines.append("<ul>")
+                    in_ul = True
                 item = line.lstrip()[2:]
                 out_lines.append(f"<li>{html.escape(item)}</li>")
                 continue
             if in_ul:
-                out_lines.append("</ul>"); in_ul = False
+                out_lines.append("</ul>")
+                in_ul = False
             out_lines.append(f"<p>{html.escape(line)}</p>")
         if in_ul:
             out_lines.append("</ul>")

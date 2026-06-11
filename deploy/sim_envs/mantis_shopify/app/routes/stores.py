@@ -31,11 +31,14 @@ async def stores(request: Request, tab: str = "all", q: str = "",
     tab_norm = tab if tab in TAB_KIND_MAP else "all"
     kind_filter = TAB_KIND_MAP[tab_norm]
     if tab_norm == "archived":
-        where.append("status = ?"); params.append("archived")
+        where.append("status = ?")
+        params.append("archived")
     elif tab_norm == "inactive":
-        where.append("status = ?"); params.append("inactive")
+        where.append("status = ?")
+        params.append("inactive")
     elif kind_filter:
-        where.append("kind = ? AND status='active'"); params.append(kind_filter)
+        where.append("kind = ? AND status='active'")
+        params.append(kind_filter)
     else:
         where.append("status='active'")
 

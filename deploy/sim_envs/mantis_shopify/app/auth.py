@@ -15,7 +15,6 @@ import time
 from typing import Any
 
 from fastapi import Request, Response
-from fastapi.responses import RedirectResponse
 
 from . import db
 

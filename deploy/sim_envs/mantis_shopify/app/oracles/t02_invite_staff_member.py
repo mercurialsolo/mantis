@@ -13,8 +13,6 @@ ACCEPTABLE_ROLES = {
 
 
 def grade(conn: sqlite3.Connection, *, now: str, seed_val: int) -> dict[str, Any]:
-    reasons: list[str] = []
-
     audit_rows = conn.execute(
         "SELECT id, target_id, payload_json FROM audit_log "
         "WHERE operation='staff_invited' ORDER BY id DESC"
