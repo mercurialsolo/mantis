@@ -405,7 +405,10 @@ class BasetenCUARuntime:
         # ``_start_detached`` and either 400 on an already-running run
         # or overwrite a finished run as a new submission. Mirrors the
         # Modal CUA fix in ``modal_cua_server.predict`` (#866).
-        if action in {"status", "result", "logs", "resume", "cancel", "pause"}:
+        if action in {
+            "status", "result", "logs", "resume", "cancel", "pause",
+            "reasoning_trace",
+        }:
             return self._detached_action(action, payload)
         if action == "graph_learn":
             return self._graph_learn(payload)
@@ -530,6 +533,114 @@ class BasetenCUARuntime:
         with (run_dir / "events.log").open("a") as handle:
             handle.write(line + "\n")
 
+    # ── Augur metadata sidecar (parity with Modal #838) ───────────
+    #
+    # The runner mints an Augur ``run_id`` distinct from the API
+    # run id (the Augur SDK groups its Runs view on it). We persist
+    # the mapping into ``<run_dir>/augur.json`` so the lifecycle
+    # endpoints can cross-link the API run id to the Augur bundle
+    # without the executor and the API speaking directly.
+
+    def _augur_bundle_dir(self, augur_run_id: str) -> Path:
+        """Resolve the on-disk Augur bundle directory.
+
+        Mirrors :func:`mantis_agent.observability.augur.default_out_dir`
+        but does not import augur-sdk (the bundle root is the file
+        layout we own; we don't need the SDK in the API hot path).
+        Honors ``MANTIS_AUGUR_DIR`` for the same override the runner
+        reads.
+        """
+        override = os.environ.get("MANTIS_AUGUR_DIR", "").strip()
+        if override:
+            return Path(override) / augur_run_id
+        return _data_root() / "augur" / augur_run_id
+
+    def _write_augur_metadata(
+        self, run_id: str, augur_run_id: str,
+    ) -> None:
+        """Persist the API-run-id → augur-run-id mapping.
+
+        Best-effort — telemetry must never break a finishing run, so
+        callers wrap with try/except. The lifecycle / augur endpoints
+        read this on every poll.
+        """
+        if not augur_run_id:
+            return
+        run_dir = self._run_path(run_id, create=True)
+        blob = {
+            "augur_run_id": augur_run_id,
+            "bundle_dir": str(self._augur_bundle_dir(augur_run_id)),
+            "dsn_workspace": os.environ.get(
+                "AUGUR_DSN_WORKSPACE_URL", "",
+            ) or "",
+        }
+        self._write_json_atomic(run_dir / "augur.json", blob)
+
+    def _read_augur_metadata(self, run_id: str) -> dict[str, Any] | None:
+        path = self._run_path(run_id) / "augur.json"
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+
+    # ── Status enrichment (parity with Modal #841 + viewer surface) ──
+
+    def _enrich_status(
+        self, run_id: str, status: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Annotate a status blob with derived fields the polling
+        callers expect.
+
+        - ``viewer_url`` from any sidecar viewer.json (file is dropped
+          alongside status.json by the viewer setup path; falls back
+          to a value already merged into status.json).
+        - ``failure_help`` synthesized from ``halt_class`` when the
+          run reached a terminal failure phase and the runner hasn't
+          already attached one.
+
+        Idempotent — re-running on an already-enriched dict is a no-op.
+        """
+        # viewer_url sidecar (#416 parity). ``_maybe_start_live_viewer``
+        # already merges the URL into status.json, but a tenant-side
+        # tool may also drop a ``viewer.json`` file separately; honor
+        # both shapes.
+        if not status.get("viewer_url"):
+            viewer_path = self._run_path(run_id) / "viewer.json"
+            if viewer_path.exists():
+                try:
+                    blob = json.loads(viewer_path.read_text())
+                    if isinstance(blob, dict) and blob.get("viewer_url"):
+                        status["viewer_url"] = str(blob["viewer_url"])
+                except (OSError, ValueError, json.JSONDecodeError):
+                    pass
+
+        cur_phase = str(status.get("status", "")).lower()
+        if cur_phase in self._TERMINAL_STATUSES and not status.get("failure_help"):
+            halt_class = str(status.get("halt_class") or "").strip()
+            if not halt_class:
+                # Some halts carry the wire reason on ``halt_reason``
+                # rather than ``halt_class`` (the runner's older
+                # field). Treat that as the same signal so the help
+                # taxonomy still fires.
+                halt_class = str(status.get("halt_reason") or "").strip()
+            if halt_class or cur_phase in {
+                "halted", "failed", "completed_with_failures",
+                "timeout", "cancelled",
+            }:
+                try:
+                    from ..run_failure_help import failure_help_for
+                    status["failure_help"] = failure_help_for(
+                        halt_class or cur_phase, run_id=run_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 — diagnostic only
+                    logger.debug(
+                        "failure_help synthesis failed for %s: %s",
+                        run_id, exc,
+                    )
+        return status
+
     def _save_pause_state(self, run_id: str, pause_state: dict[str, Any]) -> Path:
         """Persist a paused run's :class:`PauseState` blob (#344)."""
         run_dir = self._run_path(run_id, create=True)
@@ -616,6 +727,28 @@ class BasetenCUARuntime:
             with self.lock:
                 self._append_detached_event(run_id, "running")
                 self._write_detached_status(run_id, {"status": "running", "started_at": _utc_now()})
+                # Mint a per-session Augur run id and stamp the
+                # sidecar (Modal #838 parity). Distinct from the API
+                # ``run_id`` so the Augur Runs view doesn't pile
+                # overlapping rows under one identifier. Best-effort:
+                # an augur write failure must never break a finishing
+                # run, and a redo on resume is fine because the existing
+                # sidecar wins via _read_augur_metadata.
+                if not self._read_augur_metadata(run_id):
+                    try:
+                        import uuid as _uuid_for_augur
+                        workflow_id = str(payload.get("workflow_id") or "")
+                        augur_run_id = (
+                            f"{workflow_id}-{_uuid_for_augur.uuid4().hex[:8]}"
+                            if workflow_id
+                            else _uuid_for_augur.uuid4().hex[:12]
+                        )
+                        self._write_augur_metadata(run_id, augur_run_id)
+                    except Exception as exc:  # noqa: BLE001 — telemetry
+                        logger.warning(
+                            "augur metadata write failed run=%s: %s",
+                            run_id, exc,
+                        )
                 if payload.get("_mode") == "pure_cua":
                     result = self._run_pure_cua(payload, run_id=run_id)
                 else:
@@ -797,23 +930,54 @@ class BasetenCUARuntime:
                 "completed_with_failures", "timeout", "halted",
             }
             if cur in terminal:
-                return status
+                return self._enrich_status(run_id, status)
             now_iso = _utc_now()
+            cancel_lookup_error: str | None = None
+            # Loosely mirrors Modal ``modal_cua_server.py:2731-2745`` —
+            # surface infra failures (sentinel write OSError, thread
+            # signal failure) on the response WITHOUT failing the cancel
+            # itself. The operator's intent always lands; the diagnostic
+            # tells them whether the worker thread will observe it.
             try:
                 (run_dir / "cancel_request.json").write_text(
                     json.dumps({"requested_at": now_iso}),
                     encoding="utf-8",
                 )
             except OSError as exc:
-                raise RuntimeError(
-                    f"failed to write cancel sentinel: {exc}"
-                ) from exc
+                cancel_lookup_error = f"sentinel_write_failed: {exc}"
+                logger.warning(
+                    "cancel sentinel write failed for run=%s: %s",
+                    run_id, exc,
+                )
+            # Best-effort thread-state sanity check. The worker thread
+            # observes the sentinel via the gym checkpoint pump; we
+            # don't kill it here (Python lacks a safe thread-kill),
+            # but we do surface whether the thread is reachable for
+            # the operator to interpret.
+            try:
+                thread = self.detached_threads.get(run_id)
+                if thread is not None and not thread.is_alive():
+                    # Worker already exited but a stale status said
+                    # ``running`` — surface so the caller can take
+                    # appropriate cleanup action.
+                    if cancel_lookup_error is None:
+                        cancel_lookup_error = (
+                            "worker_thread_not_alive: cancel sentinel "
+                            "written but no worker is polling it"
+                        )
+            except Exception as exc:  # noqa: BLE001 — diagnostic only
+                if cancel_lookup_error is None:
+                    cancel_lookup_error = (
+                        f"thread_lookup_failed: {type(exc).__name__}: {exc}"
+                    )
             status["status"] = "cancelled"
             status["cancelled_at"] = now_iso
             status["updated_at"] = now_iso
+            if cancel_lookup_error:
+                status["cancel_lookup_error"] = cancel_lookup_error
             self._write_detached_status(run_id, status)
             self._append_detached_event(run_id, "cancelled")
-            return status
+            return self._enrich_status(run_id, status)
 
         if action == "pause":
             # External pause (mirrors Modal #541). The detached worker
@@ -858,7 +1022,39 @@ class BasetenCUARuntime:
             # everything they need to resume without a second round-trip.
             if status.get("status") == "paused":
                 status["pause_state"] = self._read_pause_state(run_id)
-            return status
+            return self._enrich_status(run_id, status)
+
+        if action == "reasoning_trace":
+            # Parity with Modal ``modal_cua_server.py:2686-2710``.
+            # Tail the per-run reasoning.jsonl with an optional ``since``
+            # ISO-8601 cursor on ``ts``. Returns the same envelope as
+            # Modal so callers can switch endpoints transparently.
+            status = self._read_json_file(run_dir / "status.json")
+            self._enrich_status(run_id, status)
+            since_ts = str(payload.get("since") or "") or None
+            jsonl_path = run_dir / "reasoning.jsonl"
+            events: list[dict[str, Any]] = []
+            if jsonl_path.exists():
+                try:
+                    with jsonl_path.open("r", encoding="utf-8") as handle:
+                        for line in handle:
+                            stripped = line.strip()
+                            if not stripped:
+                                continue
+                            try:
+                                event = json.loads(stripped)
+                            except (json.JSONDecodeError, ValueError):
+                                continue
+                            if not isinstance(event, dict):
+                                continue
+                            if since_ts and str(event.get("ts", "")) <= since_ts:
+                                continue
+                            events.append(event)
+                except OSError as exc:
+                    logger.warning(
+                        "reasoning_trace read failed for %s: %s", run_id, exc,
+                    )
+            return {**status, "events": events, "count": len(events)}
 
         if action == "result":
             result_path = run_dir / "result.json"

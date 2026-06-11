@@ -714,6 +714,389 @@ async def predict(
     return await _handle_predict(request, tenant)
 
 
+# ── REST shorthands + lifecycle endpoints (parity with Modal #806) ─────────
+#
+# Each route below is a thin wrapper over the corresponding
+# ``runtime.run({"action": ..., "run_id": ...})`` dispatch — same
+# response shape, same error mapping. Run-scope tokens are required;
+# read-only observer tokens are rejected (mirrors the /v1/predict gate).
+
+
+def _run_action_response(
+    action: str, run_id: str,
+) -> dict[str, Any]:
+    """Wrap an action dispatch with the standard error mapping.
+
+    Centralises the FileNotFoundError → 404 / ValueError → 400 mapping
+    so the four shorthand routes don't each duplicate the try/except
+    chain.
+    """
+    payload = {"action": action, "run_id": run_id}
+    try:
+        return runtime.run(payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"unknown run_id: {run_id}",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/v1/runs/{run_id}/status")
+async def get_run_status(
+    run_id: str,
+    tenant: TenantConfig = Depends(_require_run_scope),
+) -> dict[str, Any]:
+    """REST shorthand for ``POST /v1/predict {action: status}`` (Modal parity).
+
+    Returns the per-run status blob, including the lifecycle annotations
+    (failure_help on terminal failures, viewer_url when set,
+    pause_state when paused).
+    """
+    return await run_in_threadpool(_run_action_response, "status", run_id)
+
+
+@app.get("/v1/runs/{run_id}/result")
+async def get_run_result(
+    run_id: str,
+    tenant: TenantConfig = Depends(_require_run_scope),
+) -> dict[str, Any]:
+    """REST shorthand for ``POST /v1/predict {action: result}``.
+
+    Returns the per-run result envelope when finished; ``result_ready=False``
+    with the current status when still in flight.
+    """
+    return await run_in_threadpool(_run_action_response, "result", run_id)
+
+
+@app.post("/v1/runs/{run_id}/cancel")
+async def cancel_run(
+    run_id: str,
+    tenant: TenantConfig = Depends(_require_run_scope),
+) -> dict[str, Any]:
+    """REST shorthand for ``POST /v1/predict {action: cancel}``.
+
+    Idempotent: cancelling a finished run returns the existing status
+    unchanged. Surfaces ``cancel_lookup_error`` when the sentinel write
+    succeeded but the worker thread can't be signalled cleanly.
+    """
+    return await run_in_threadpool(_run_action_response, "cancel", run_id)
+
+
+@app.get("/v1/runs/{run_id}")
+async def get_run_phase(
+    run_id: str,
+    tenant: TenantConfig = Depends(_require_run_scope),
+) -> dict[str, Any]:
+    """Cheap phase poll + adaptive backoff hint (Modal #806 parity).
+
+    Returns a ``RunPhaseResponse`` derived from status.json plus, for
+    terminal failures, a ``failure_help`` dict mapped from the run's
+    ``halt_class``. For full detail (per-step results, artifacts), use
+    ``GET /v1/runs/{id}/status`` or ``GET /v1/runs/{id}/result`` once
+    this returns a terminal phase.
+    """
+    from mantis_agent.run_lifecycle import build_phase_response_from_status
+
+    def _read_and_build() -> dict[str, Any]:
+        status_path = runtime._run_path(run_id) / "status.json"
+        if not status_path.exists():
+            raise FileNotFoundError(f"unknown run_id: {run_id}")
+        status = json.loads(status_path.read_text())
+        body = build_phase_response_from_status(status).model_dump()
+        # Augur surface — when the runner stamped a sidecar, expose
+        # the augur run id + a derived bundle URL.
+        augur_meta = runtime._read_augur_metadata(run_id)
+        if augur_meta and augur_meta.get("augur_run_id"):
+            body["augur_run_id"] = augur_meta["augur_run_id"]
+            body["augur_bundle_url"] = f"/v1/runs/{run_id}/augur"
+        # failure_help on terminal halted / failed / cancelled phases.
+        # Prefer the dict already on status.json (set by the runner);
+        # synthesize from halt_class when absent.
+        terminal_failure = body.get("phase") in {"halted", "cancelled"} or (
+            body.get("phase") == "complete" and status.get("error")
+        )
+        if terminal_failure:
+            help_dict = status.get("failure_help")
+            if not help_dict and (
+                status.get("halt_class") or status.get("halt_reason")
+            ):
+                from mantis_agent.run_failure_help import failure_help_for
+                help_dict = failure_help_for(
+                    str(
+                        status.get("halt_class")
+                        or status.get("halt_reason")
+                        or "",
+                    ),
+                    run_id=run_id,
+                )
+            if help_dict:
+                body["failure_help"] = help_dict
+        return body
+
+    try:
+        return await run_in_threadpool(_read_and_build)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"unknown run_id: {run_id}",
+        ) from exc
+
+
+@app.get("/v1/queue")
+async def get_queue(
+    tenant: TenantConfig = Depends(_require_run_scope),
+) -> dict[str, Any]:
+    """Per-tenant queue snapshot (Modal #806 parity).
+
+    Scans the active runs and counts by lifecycle phase. Terminal runs
+    are excluded — operators wanting historical totals can use
+    ``GET /v1/runs/{id}/status`` directly.
+
+    NOTE: Baseten is single-tenant per container, so this is functionally
+    a global queue view. The shape matches Modal's per-tenant response
+    so callers can use the same client code.
+    """
+    from mantis_agent.run_lifecycle import (
+        QueueStatusResponse,
+        RunPhase,
+        phase_from_status_string,
+    )
+
+    def _scan() -> dict[str, Any]:
+        runs_root = runtime._run_path("0").parent  # _data_root() / "runs"
+        queued = running = recovering = 0
+        if runs_root.exists() and runs_root.is_dir():
+            for run_subdir in runs_root.iterdir():
+                if not run_subdir.is_dir():
+                    continue
+                status_path = run_subdir / "status.json"
+                if not status_path.exists():
+                    continue
+                try:
+                    status_blob = json.loads(status_path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    continue
+                phase = phase_from_status_string(
+                    str(status_blob.get("status", "") or ""),
+                )
+                if phase is RunPhase.QUEUED:
+                    queued += 1
+                elif phase is RunPhase.RUNNING:
+                    running += 1
+                elif phase is RunPhase.RECOVERING:
+                    recovering += 1
+        return QueueStatusResponse(
+            tenant_id=tenant.tenant_id,
+            queued=queued,
+            running=running,
+            recovering=recovering,
+            eta_ms=None,
+        ).model_dump()
+
+    return await run_in_threadpool(_scan)
+
+
+@app.get("/v1/runs/{run_id}/augur")
+async def get_augur_envelope(
+    run_id: str,
+    tenant: TenantConfig = Depends(_require_run_scope),
+) -> dict[str, Any]:
+    """Augur metadata envelope for a run (Modal #838 parity).
+
+    Includes the ``augur_run_id`` the runner minted, the on-disk
+    bundle directory, and a list of files in the bundle (when the
+    runner produced any).
+    """
+    def _read() -> dict[str, Any]:
+        meta = runtime._read_augur_metadata(run_id)
+        if meta is None:
+            raise FileNotFoundError(
+                f"no Augur metadata for run_id={run_id}"
+            )
+        from pathlib import Path as _Path
+        bundle = _Path(meta.get("bundle_dir", ""))
+        files: list[dict[str, Any]] = []
+        if bundle.exists() and bundle.is_dir():
+            for path in sorted(bundle.rglob("*")):
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(bundle)
+                files.append({
+                    "name": str(rel),
+                    "size_bytes": path.stat().st_size,
+                })
+        return {
+            "run_id": run_id,
+            "augur_run_id": meta.get("augur_run_id", ""),
+            "bundle_dir": meta.get("bundle_dir", ""),
+            "dsn_workspace": meta.get("dsn_workspace", ""),
+            "bundle_present": bool(files),
+            "files": files,
+        }
+
+    try:
+        return await run_in_threadpool(_read)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"no Augur metadata for run_id={run_id} — either the "
+                "run hasn't started or Augur is disabled"
+            ),
+        ) from exc
+
+
+@app.get("/v1/runs/{run_id}/events")
+async def stream_run_events(
+    run_id: str,
+    request: Request,
+    sse: bool = False,
+    since: str = "",
+    tenant: TenantConfig = Depends(_require_run_scope),
+) -> Any:
+    """Stream run events (Modal #808 parity).
+
+    Default: returns the same JSON envelope as
+    ``POST /v1/predict {action: reasoning_trace}`` for plain HTTP
+    consumers. With ``?sse=true``, returns a ``text/event-stream``
+    SSE response that tails reasoning.jsonl + phase transitions and
+    closes on a terminal phase.
+    """
+    from starlette.responses import StreamingResponse
+
+    status_path = runtime._run_path(run_id) / "status.json"
+    if not status_path.exists():
+        raise HTTPException(
+            status_code=404, detail=f"unknown run_id: {run_id}",
+        )
+    jsonl_path = runtime._run_path(run_id) / "reasoning.jsonl"
+
+    if not sse:
+        # Plain JSON fallback: same shape as action=reasoning_trace.
+        return await run_in_threadpool(
+            runtime.run,
+            {"action": "reasoning_trace", "run_id": run_id, "since": since},
+        )
+
+    # SSE path. Reuse the status-string → lifecycle phase map so the
+    # ``phase`` events match what ``GET /v1/runs/{id}`` returns.
+    from mantis_agent.run_lifecycle import (
+        RunPhase,
+        phase_from_status_string,
+    )
+    _TERMINAL_PHASES = {
+        RunPhase.HALTED, RunPhase.CANCELLED, RunPhase.COMPLETE,
+    }
+
+    last_event_id = request.headers.get("last-event-id", "") or since
+
+    def _sse_format(event_name: str, payload: dict, event_id: str = "") -> str:
+        parts = []
+        if event_id:
+            parts.append(f"id: {event_id}")
+        parts.append(f"event: {event_name}")
+        parts.append(f"data: {json.dumps(payload, default=str)}")
+        return "\n".join(parts) + "\n\n"
+
+    async def event_stream():
+        import asyncio
+        nonlocal last_event_id
+        # Bound the stream so a stuck client can't hold a worker forever.
+        max_stream_seconds = 600
+        poll_interval = 1.0
+        heartbeat_interval = 25.0
+
+        loop_start = _time.monotonic()
+        last_heartbeat = loop_start
+
+        # Initial phase event so the client has the ground state.
+        try:
+            initial_status = json.loads(status_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            initial_status = {}
+        last_phase_seen = phase_from_status_string(
+            str(initial_status.get("status", "") or "")
+        )
+        yield _sse_format(
+            "phase",
+            {"phase": last_phase_seen.value, "run_id": run_id},
+        )
+
+        while True:
+            if await request.is_disconnected():
+                return
+
+            # Drain any new reasoning events appended since last cursor.
+            if jsonl_path.exists():
+                try:
+                    with jsonl_path.open("r", encoding="utf-8") as handle:
+                        for line in handle:
+                            stripped = line.strip()
+                            if not stripped:
+                                continue
+                            try:
+                                event = json.loads(stripped)
+                            except (json.JSONDecodeError, ValueError):
+                                continue
+                            if not isinstance(event, dict):
+                                continue
+                            ts = str(event.get("ts", "") or "")
+                            if last_event_id and ts <= last_event_id:
+                                continue
+                            event_name = str(
+                                event.get("kind")
+                                or event.get("type")
+                                or "message"
+                            )
+                            yield _sse_format(event_name, event, event_id=ts)
+                            if ts:
+                                last_event_id = ts
+                except OSError:
+                    pass
+
+            # Phase transitions + terminal check.
+            try:
+                cur_status = json.loads(status_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                cur_status = {}
+            cur_phase = phase_from_status_string(
+                str(cur_status.get("status", "") or "")
+            )
+            if cur_phase != last_phase_seen:
+                yield _sse_format(
+                    "phase",
+                    {"phase": cur_phase.value, "run_id": run_id},
+                )
+                last_phase_seen = cur_phase
+            if cur_phase in _TERMINAL_PHASES:
+                yield _sse_format(
+                    "terminal",
+                    {"phase": cur_phase.value, "run_id": run_id},
+                )
+                return
+
+            now = _time.monotonic()
+            if now - last_heartbeat >= heartbeat_interval:
+                yield ": ping\n\n"
+                last_heartbeat = now
+            if now - loop_start >= max_stream_seconds:
+                yield _sse_format(
+                    "timeout",
+                    {"reason": "max_stream_seconds", "run_id": run_id},
+                )
+                return
+            await asyncio.sleep(poll_interval)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/v1/cua")
 async def cua_v1(
     request: Request,
