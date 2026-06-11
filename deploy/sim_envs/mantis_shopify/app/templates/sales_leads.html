@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Leads — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Leads</h1>
+</header>
+<p class="sp-page-subtitle">Earn revenue by referring merchants to Shopify.
+  <a href="#">Learn more</a></p>
+
+<section class="sp-card" data-testid="sales-submit-card">
+  <header class="sp-card-header"><h2>Submit a lead</h2></header>
+  <div class="sp-card-body-flush">
+    <div class="sp-product-row" data-testid="product-plus">
+      <div class="sp-product-row-glyph">S</div>
+      <div>
+        <div class="sp-product-row-name">Plus</div>
+        <div class="sp-product-row-desc">
+          Earn $2,500 USD one-time referral when you submit an eligible Plus lead. Plus 15% recurring revenue and variable platform fees on successful launch.
+        </div>
+      </div>
+      <a class="sp-btn" href="/sales/leads/new?product=plus" data-testid="submit-plus">Submit a Plus lead</a>
+    </div>
+    <div class="sp-product-row" data-testid="product-pos">
+      <div class="sp-product-row-glyph" style="background:#fcefe0;color:#bf6900">P</div>
+      <div>
+        <div class="sp-product-row-name">Shopify POS</div>
+        <div class="sp-product-row-desc">
+          Earn a one-time POS Pro activation bonus plus a recurring 20% Shopify POS payments profit-share for 24 months.
+        </div>
+      </div>
+      <a class="sp-btn" href="/sales/leads/new?product=pos" data-testid="submit-pos">Submit a POS lead</a>
+    </div>
+    <div class="sp-product-row" data-testid="product-plus-b2b">
+      <div class="sp-product-row-glyph">B</div>
+      <div>
+        <div class="sp-product-row-name">Shopify Plus B2B</div>
+        <div class="sp-product-row-desc">
+          Refer a new B2B customer to Shopify Plus and earn qualified opportunities.
+        </div>
+      </div>
+      <a class="sp-btn" href="/sales/leads/new?product=plus_b2b" data-testid="submit-plus-b2b">Submit a Plus B2B lead</a>
+    </div>
+  </div>
+</section>
+
+<section class="sp-card" data-testid="sales-list-card">
+  <header class="sp-card-header"><h2>Submitted leads</h2></header>
+  <ul class="sp-list" data-testid="sales-leads-list">
+    {% if leads %}
+      {% for lead in leads %}
+      <li class="sp-list-row" data-testid="lead-row">
+        <div>
+          <div class="sp-list-row-name">{{ lead.merchant_name }}</div>
+          <div class="sp-list-row-sub">{{ lead.contact_email }}</div>
+        </div>
+        <div>
+          <span class="sp-pill">{{ lead.product|upper|replace('_',' ') }}</span>
+          <span class="sp-pill {% if lead.status == 'won' %}sp-pill-green{% endif %}" style="margin-left:8px">{{ lead.status }}</span>
+        </div>
+        <div class="sp-text-sub">{{ lead.submitted_at | short_date }}</div>
+      </li>
+      {% endfor %}
+    {% else %}
+      <li class="sp-empty-state">
+        <div class="sp-empty-illu"></div>
+        <p class="sp-text-sub">Earn monthly by referring merchants to Shopify.</p>
+      </li>
+    {% endif %}
+  </ul>
+</section>
+{% endblock %}

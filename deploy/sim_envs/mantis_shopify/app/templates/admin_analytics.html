@@ -1,0 +1,77 @@
+{% extends "admin_base.html" %}
+{% block title %}Analytics · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <h1 class="adm-page-h1">Analytics</h1>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="#export" data-testid="adm-an-export">Export</a>
+    <a class="adm-btn" href="#date-range" data-testid="adm-an-range">Last 7 days ▾</a>
+    <a class="adm-btn" href="#compare" data-testid="adm-an-compare">Compare ▾</a>
+  </div>
+</div>
+
+<div class="adm-stats-grid">
+  <div class="adm-stat-card"><div class="adm-stat-label">Total sales</div><div class="adm-stat-value">{{ total_sales | money }}</div><div class="adm-stat-delta up">▲ 12.4%</div></div>
+  <div class="adm-stat-card"><div class="adm-stat-label">Orders</div><div class="adm-stat-value">{{ orders_total }}</div><div class="adm-stat-delta up">▲ 4.2%</div></div>
+  <div class="adm-stat-card"><div class="adm-stat-label">Average order value</div><div class="adm-stat-value">{{ aov_cents | money }}</div><div class="adm-stat-delta up">▲ 3.4%</div></div>
+  <div class="adm-stat-card"><div class="adm-stat-label">Returning customer rate</div><div class="adm-stat-value">{{ returning_rate }}</div><div class="adm-stat-delta up">▲ 1.1 pts</div></div>
+</div>
+
+<section class="adm-card" data-testid="adm-an-chart">
+  <header class="adm-card-header">
+    <h2>Sales over time</h2>
+    <a href="#open-chart">Open report</a>
+  </header>
+  <div class="adm-card-body">
+    {# Sparkline-style SVG chart #}
+    <svg viewBox="0 0 1024 220" preserveAspectRatio="none" width="100%" height="220" aria-label="Sales last 7 days">
+      <defs>
+        <linearGradient id="g-sales" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#0e8767" stop-opacity="0.25"/>
+          <stop offset="100%" stop-color="#0e8767" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <polyline points="0,160 146,140 292,150 438,90 584,110 730,70 876,80 1024,40" fill="none" stroke="#0e8767" stroke-width="2.5"/>
+      <polygon points="0,160 146,140 292,150 438,90 584,110 730,70 876,80 1024,40 1024,220 0,220" fill="url(#g-sales)"/>
+      {% for x in [0, 146, 292, 438, 584, 730, 876, 1024] %}
+        <line x1="{{ x }}" y1="0" x2="{{ x }}" y2="220" stroke="#ececec" stroke-dasharray="2 4"/>
+      {% endfor %}
+    </svg>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:#6a6a6a;margin-top:6px">
+      <span>Jun 3</span><span>Jun 4</span><span>Jun 5</span><span>Jun 6</span>
+      <span>Jun 7</span><span>Jun 8</span><span>Jun 9</span><span>Today</span>
+    </div>
+  </div>
+</section>
+
+<div class="adm-detail-grid">
+  <section class="adm-card" data-testid="adm-an-top-products">
+    <header class="adm-card-header"><h2>Top products by sales</h2></header>
+    <table class="adm-table">
+      <thead><tr><th>Product</th><th class="col-right">Units</th><th class="col-right">Revenue</th></tr></thead>
+      <tbody>
+        {% for p in top_products %}
+        <tr>
+          <td>{{ p.title }}</td>
+          <td class="col-right">{{ p.units }}</td>
+          <td class="col-right">{{ p.revenue | money }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <aside class="adm-card" data-testid="adm-an-reports">
+    <header class="adm-card-header"><h2>Saved reports</h2></header>
+    <div class="adm-card-body">
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
+        <a href="#r-sessions">Sessions by device</a>
+        <a href="#r-conv">Conversion funnel</a>
+        <a href="#r-cart">Cart abandonment</a>
+        <a href="#r-segments">Customer segments</a>
+        <a href="#r-ltv">Lifetime value</a>
+      </div>
+    </div>
+  </aside>
+</div>
+{% endblock %}

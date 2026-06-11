@@ -1,0 +1,49 @@
+{% extends "admin_base.html" %}
+{% block title %}Apps · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <h1 class="adm-page-h1">Apps</h1>
+  <div class="adm-page-actions">
+    <input type="search" placeholder="Search the App Store" style="width:280px;height:32px;padding:0 12px;border:1px solid #c3c3c3;border-radius:8px;background:#fff;font-size:13px;font-family:inherit"/>
+    <a class="adm-btn adm-btn-primary" href="#open-store" data-testid="adm-apps-open-store">Visit App Store</a>
+  </div>
+</div>
+
+<section class="adm-card" data-testid="adm-apps-installed">
+  <header class="adm-card-header"><h2>Installed</h2></header>
+  <div class="adm-card-body">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      {% for a in installed %}
+      <div style="border:1px solid #e3e3e3;border-radius:8px;padding:14px" data-testid="adm-app-installed-card">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+          <div style="width:36px;height:36px;background:linear-gradient(135deg,#9c6ade,#5c6ac4);border-radius:8px"></div>
+          <strong>{{ a.name }}</strong>
+        </div>
+        <div style="font-size:12px;color:#6a6a6a;margin-bottom:6px">{{ a.category }} · ★ {{ a.rating }}</div>
+        <a class="adm-btn" href="#open">Open</a>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="adm-card" data-testid="adm-apps-suggested">
+  <header class="adm-card-header">
+    <h2>Recommended for you</h2>
+    <a href="#all">See all</a>
+  </header>
+  <div class="adm-card-body">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+      {% for a in suggested %}
+      <div style="border:1px solid #e3e3e3;border-radius:8px;padding:14px" data-testid="adm-app-suggested-card">
+        <div style="width:48px;height:48px;background:linear-gradient(135deg,#f4a261,#e76f51);border-radius:10px;margin-bottom:8px"></div>
+        <div style="font-weight:600;margin-bottom:2px">{{ a.name }}</div>
+        <div style="font-size:12px;color:#6a6a6a;margin-bottom:8px">{{ a.category }} · ★ {{ a.rating }}</div>
+        <a class="adm-btn" href="#install" style="font-size:12px">Install</a>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Team — Shopify Partners{% endblock %}
+
+{% block content %}
+{% include "_banner.html" %}
+
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Team</h1>
+</header>
+
+<section class="sp-section" data-testid="team-owners">
+  <div>
+    <h2>Owners</h2>
+    <p class="sp-section-desc">Owners have permission to see and do everything. They can also add and remove other owners.</p>
+  </div>
+  <div class="sp-roster">
+    <div class="sp-roster-tabs">
+      <span class="sp-roster-tab is-active">Active</span>
+      <span class="sp-roster-tab">Invited</span>
+    </div>
+    {% for u in owners %}
+    <div class="sp-member-row" data-testid="owner-row">
+      <span class="sp-member-avatar" style="background:{{ u.avatar_color }}">{{ u.name | initials }}</span>
+      <div class="sp-member-name"><a href="#">{{ u.name }}</a></div>
+      <div class="sp-member-meta">Last login {{ humanize_last_login(u.last_login_at, now) }}</div>
+    </div>
+    {% endfor %}
+    <div class="sp-card-footer"><a class="sp-btn" href="/team/invite?role=owner" data-testid="invite-owner">Invite owner</a><span></span></div>
+  </div>
+</section>
+
+<section class="sp-section" data-testid="team-staff">
+  <div>
+    <h2>Staff members</h2>
+    <p class="sp-section-desc">Staff members can only see or manage sensitive business information such as financial data if you give them access.</p>
+  </div>
+  <div class="sp-roster">
+    <div class="sp-roster-tabs">
+      <span class="sp-roster-tab {% if tab == 'active' %}is-active{% endif %}">Active</span>
+      <span class="sp-roster-tab {% if tab == 'invited' %}is-active{% endif %}">Invited</span>
+    </div>
+    {% set rows = staff_invited if tab == 'invited' else staff_active %}
+    {% for u in rows %}
+    <div class="sp-member-row" data-testid="staff-row">
+      <span class="sp-member-avatar" style="background:{{ u.avatar_color }}">{{ u.name | initials }}</span>
+      <div class="sp-member-name"><a href="#">{{ u.name }}</a></div>
+      <div class="sp-member-meta">
+        {% if tab == 'invited' %}Invited{% else %}Last login {{ humanize_last_login(u.last_login_at, now) }}{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    <div class="sp-card-footer">
+      <a class="sp-btn" href="/team/invite" data-testid="invite-staff">Invite staff</a>
+      <a class="sp-link-quiet" href="/team?tab={{ 'active' if tab == 'invited' else 'invited' }}">View {{ 'active' if tab == 'invited' else 'invited' }} →</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

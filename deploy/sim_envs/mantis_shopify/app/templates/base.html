@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Shopify Partners{% endblock %}</title>
+  <link rel="stylesheet" href="/static/site.css?v=20260609c" />
+  <link rel="stylesheet" href="/static/polish.css?v=20260610a" />
+  <script src="/static/polish.js?v=20260610a" defer></script>
+</head>
+<body>
+{% set _u = request.state.effective_user %}
+{% set _n = notification_count if notification_count is defined else 22 %}
+
+<header class="sp-topbar" data-testid="sp-topbar">
+  <a class="sp-brand" href="/" data-testid="sp-brand" aria-label="Shopify Partners home">
+    <svg class="sp-brand-mark" viewBox="0 0 32 36" width="28" height="32"
+         xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+      <path d="M27.7 7.4c0-.2-.2-.4-.4-.4l-3.6-.3-2.4-2.4c-.2-.2-.7-.2-.9 0l-.9.3c-.6-1.7-1.5-3.3-3.4-3.3h-.2c-.5-.7-1.2-1-1.8-1-4.6.1-6.8 5.9-7.5 8.8l-3.2 1c-1 .3-1 .3-1.2 1.3L0 30.6l16.6 3.1 15.4-3.3L27.7 7.4z" fill="#95BF47"/>
+      <path d="M27.3 7c-.2 0-3.6-.3-3.6-.3l-2.4-2.4c-.2-.2-.5-.2-.7-.2v30.6l15.4-3.3L27.7 7.4c0-.2-.2-.4-.4-.4z" fill="#5E8E3E"/>
+      <path d="M16.6 14.4l-1.9 5.6s-1.6-.9-3.6-.9c-2.9 0-3 1.8-3 2.3 0 2.5 6.6 3.4 6.6 9.3 0 4.6-2.9 7.6-6.9 7.6-4.7 0-7.2-3-7.2-3l1.3-4.2s2.5 2.1 4.6 2.1c1.4 0 2-1.1 2-1.9 0-3.2-5.4-3.4-5.4-8.7 0-4.5 3.2-8.9 9.8-8.9 2.5 0 3.7.7 3.7.7z" fill="#FFF"/>
+    </svg>
+    <span class="sp-brand-text">shopify <em>partners</em></span>
+  </a>
+
+  <div class="sp-topbar-search">
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+      <path d="M9 3a6 6 0 014.47 10.03l3.25 3.25-1.42 1.42-3.25-3.25A6 6 0 119 3zm0 2a4 4 0 100 8 4 4 0 000-8z" fill="#6d7175"/>
+    </svg>
+    <input type="search" placeholder="Search" data-testid="sp-search" name="q"
+           aria-label="Search Partners dashboard" />
+  </div>
+
+  <div class="sp-topbar-actions" data-testid="sp-topbar-actions">
+    <a class="sp-notif" href="/notifications" data-testid="sp-notif"
+       aria-label="Notifications">
+      <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+        <path d="M10 2a5 5 0 00-5 5v3l-2 2v1h14v-1l-2-2V7a5 5 0 00-5-5zM8 16a2 2 0 004 0H8z" fill="#202223"/>
+      </svg>
+      {% if _n %}<span class="sp-notif-badge">{{ _n }}</span>{% endif %}
+    </a>
+    <a class="sp-user" href="/settings" data-testid="sp-user-chip">
+      <span class="sp-user-avatar" style="background:#6d7175">MA</span>
+      <span class="sp-user-meta">
+        <span class="sp-user-name">Mason</span>
+        <span class="sp-user-sub">{{ _u.name }}</span>
+      </span>
+    </a>
+  </div>
+</header>
+
+<div class="sp-shell">
+  <aside class="sp-sidebar" data-testid="sp-sidebar" aria-label="Primary">
+    {% set active = active_section|default('') %}
+    <nav class="sp-nav-group">
+      {% for item in [
+        ('home',          'Home',            '/'),
+        ('stores',        'Stores',          '/stores'),
+        ('sales',         'Sales',           '/sales'),
+        ('app_dist',      'App distribution','/apps'),
+        ('catalogs',      'Catalogs',        '/catalogs'),
+        ('themes',        'Themes',          '/themes'),
+        ('directory',     'Partner Directory','/partner_directory'),
+        ('pos',           'Shopify POS',     '/pos'),
+      ] %}
+        <a class="sp-nav-row{% if active == item[0] %} is-active{% endif %}"
+           href="{{ item[2] }}" data-testid="sp-nav-{{ item[0] }}">
+          <span class="sp-nav-ico sp-ico-{{ item[0] }}" aria-hidden="true"></span>
+          <span class="sp-nav-label">{{ item[1] }}</span>
+        </a>
+        {% if active == 'sales' and item[0] == 'sales' %}
+          <a class="sp-nav-sub{% if (sub_section|default('')) == 'leads' %} is-active{% endif %}"
+             href="/sales" data-testid="sp-nav-sales-leads">Leads</a>
+          <a class="sp-nav-sub{% if (sub_section|default('')) == 'referrals' %} is-active{% endif %}"
+             href="/sales/referrals" data-testid="sp-nav-sales-referrals">Referrals</a>
+        {% endif %}
+        {% if active == 'directory' and item[0] == 'directory' %}
+          <a class="sp-nav-sub{% if (sub_section|default('')) == 'profile' %} is-active{% endif %}"
+             href="/partner_directory/profile" data-testid="sp-nav-dir-profile">Profile</a>
+        {% endif %}
+      {% endfor %}
+    </nav>
+
+    <div class="sp-nav-grouplabel">Resources</div>
+    <nav class="sp-nav-group">
+      {% for item in [
+        ('partner_docs', 'Partner docs', '/docs/partner'),
+        ('product_docs', 'Product docs', '/docs/product'),
+        ('support',      'Support',      '/support'),
+      ] %}
+        <a class="sp-nav-row{% if active == item[0] %} is-active{% endif %}"
+           href="{{ item[2] }}" data-testid="sp-nav-{{ item[0] }}">
+          <span class="sp-nav-ico sp-ico-{{ item[0] }}" aria-hidden="true"></span>
+          <span class="sp-nav-label">{{ item[1] }}</span>
+        </a>
+      {% endfor %}
+    </nav>
+
+    <div class="sp-nav-grouplabel">Admin</div>
+    <nav class="sp-nav-group">
+      {% for item in [
+        ('payouts',  'Payouts',  '/payouts'),
+        ('team',     'Team',     '/team'),
+        ('settings', 'Settings', '/settings'),
+      ] %}
+        <a class="sp-nav-row{% if active == item[0] %} is-active{% endif %}"
+           href="{{ item[2] }}" data-testid="sp-nav-{{ item[0] }}">
+          <span class="sp-nav-ico sp-ico-{{ item[0] }}" aria-hidden="true"></span>
+          <span class="sp-nav-label">{{ item[1] }}</span>
+        </a>
+      {% endfor %}
+    </nav>
+  </aside>
+
+  <main class="sp-main" data-testid="sp-main">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

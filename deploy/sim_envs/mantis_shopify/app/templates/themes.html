@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Themes — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Build themes for the Shopify Theme Store</h1>
+  <div class="sp-page-actions">
+    <a class="sp-btn sp-btn-primary" href="/themes/new" data-testid="themes-submit-cta">Submit a theme</a>
+  </div>
+</header>
+<p class="sp-page-subtitle">Help power millions of merchant businesses by developing themes that drive conversions and build brands.</p>
+
+<section class="sp-card" data-testid="themes-card-1">
+  <div class="sp-card-body">
+    <div class="sp-row" style="gap:24px">
+      <div style="flex:1">
+        <h3 style="margin:0 0 8px 0">Build and sell your theme on the leading commerce platform</h3>
+        <ul class="sp-pl-bullet">
+          <li>Develop powerful themes for a specific commerce niche — from food to fashion</li>
+          <li>Streamline your workflow with the new Online Store and tooling, like the Shopify Github integration</li>
+          <li>Showcase your theme to a built-in market with millions of merchants on the <a href="#">Shopify Theme Store ↗</a></li>
+        </ul>
+      </div>
+      <div class="sp-hero-art" style="flex:0 0 240px;min-height:140px">
+        <div style="position:absolute;left:24px;top:24px;font-size:18px;font-weight:600">Theme Store</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sp-card" data-testid="themes-card-2">
+  <div class="sp-card-body">
+    <h3 style="margin:0 0 12px 0">Move fast with smart tooling</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px">
+      <div><a href="#" data-testid="themes-link-tooling">Explore developer tooling ↗</a>
+        <p style="margin:4px 0 0;color:var(--c-text-sub);font-size:13px">Optimize themes and avoid bugs with the unified theme development tools.</p></div>
+      <div><a href="#" data-testid="themes-link-cli">Download Shopify CLI ↗</a>
+        <p style="margin:4px 0 0;color:var(--c-text-sub);font-size:13px">Hot reload CSS and section changes, populate test data, and more.</p></div>
+      <div><a href="#" data-testid="themes-link-skeleton">Get started with our Skeleton theme ↗</a>
+        <p style="margin:4px 0 0;color:var(--c-text-sub);font-size:13px">A modern, minimal starting point for a new theme.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="sp-card" data-testid="themes-card-3">
+  <div class="sp-card-body">
+    <h3 style="margin:0 0 8px 0">Submit your theme for review</h3>
+    <p class="sp-text-sub">When your theme is ready for the Theme Store, submit it from here.</p>
+    <a class="sp-btn sp-btn-primary" href="/themes/new" data-testid="themes-card-submit-cta">Submit a theme</a>
+  </div>
+</section>
+
+{% if rows %}
+<section class="sp-card" data-testid="themes-history">
+  <header class="sp-card-header"><h2>Your themes</h2></header>
+  <table class="sp-data-table">
+    <thead><tr><th>Theme</th><th>Status</th><th>Submitted</th></tr></thead>
+    <tbody>
+      {% for t in rows %}
+      <tr data-testid="theme-row">
+        <td>{{ t.name }}</td>
+        <td><span class="sp-pill {% if t.status == 'approved' %}sp-pill-green{% endif %}">{{ t.status | replace('_', ' ') }}</span></td>
+        <td>{{ t.created_at | short_date }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

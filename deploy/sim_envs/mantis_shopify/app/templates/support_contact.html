@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Contact Partner Support — Shopify Partners{% endblock %}
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">Contact Partner Support</h1></header>
+
+<section class="sp-card">
+  <div class="sp-card-body">
+    <form method="post" action="/support/contact" data-testid="support-form">
+      <div class="sp-form-group">
+        <label>Subject</label>
+        <input type="text" name="subject" required data-testid="support-subject"/>
+      </div>
+      <div class="sp-form-group">
+        <label>Category</label>
+        <select name="category" class="sp-select" data-testid="support-category">
+          {% for c in categories %}
+          <option value="{{ c }}">{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="sp-form-group">
+        <label>Description</label>
+        <textarea name="description" rows="6" required data-testid="support-description"></textarea>
+      </div>
+      <div class="sp-form-actions">
+        <a class="sp-btn" href="/support">Cancel</a>
+        <button class="sp-btn sp-btn-primary" type="submit" data-testid="support-submit">Submit ticket</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

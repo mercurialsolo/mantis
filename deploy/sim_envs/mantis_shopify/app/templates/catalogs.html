@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Catalogs — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Catalogs</h1>
+  <div class="sp-page-actions">
+    <a class="sp-btn sp-btn-primary" href="/catalogs/new" data-testid="catalogs-new-cta">Create catalog</a>
+  </div>
+</header>
+<p class="sp-page-subtitle">Publish products to merchant stores via the Catalogs API.</p>
+
+<div class="sp-info-grid">
+  <div class="sp-info-card"><h3>How catalogs work</h3>
+    <p>Group products into a catalog and publish it to one or many merchant stores. Each store sees the catalog as a hosted assortment.</p></div>
+  <div class="sp-info-card"><h3>Catalogs API reference</h3>
+    <p>REST + GraphQL surfaces with sandbox keys for dev stores. Idempotent publish endpoints.</p></div>
+</div>
+
+<section class="sp-card">
+  <header class="sp-card-header"><h2>Your catalogs</h2></header>
+  <table class="sp-data-table" data-testid="catalogs-table">
+    <thead><tr><th>Catalog</th><th>Products</th><th>Status</th><th>Created</th><th></th></tr></thead>
+    <tbody>
+      {% for c in rows %}
+      <tr data-testid="catalog-row">
+        <td><a href="/catalogs/{{ c.id }}" data-testid="catalog-name-link">{{ c.name }}</a></td>
+        <td>{{ c.products_count }}</td>
+        <td><span class="sp-pill {% if c.status == 'published' %}sp-pill-green{% endif %}">{{ c.status }}</span></td>
+        <td>{{ c.created_at | short_date }}</td>
+        <td class="sp-text-right">
+          {% if c.status == 'draft' %}
+          <form method="post" action="/catalogs/{{ c.id }}/publish" style="display:inline">
+            <button class="sp-link-quiet" style="background:none;border:0;cursor:pointer;color:var(--c-link);font-size:13px" data-testid="catalog-publish">Publish</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

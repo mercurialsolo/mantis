@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Create catalog — Shopify Partners{% endblock %}
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">Create catalog</h1></header>
+<section class="sp-card">
+  <div class="sp-card-body">
+    <form method="post" action="/catalogs/new" data-testid="catalog-new-form">
+      <div class="sp-form-row">
+        <div class="sp-form-group">
+          <label>Catalog name</label>
+          <input type="text" name="name" required data-testid="catalog-new-name"/>
+        </div>
+        <div class="sp-form-group">
+          <label>Products (initial count)</label>
+          <input type="number" name="products_count" value="0" min="0" data-testid="catalog-new-products"/>
+        </div>
+      </div>
+      <div class="sp-form-actions">
+        <a class="sp-btn" href="/catalogs">Cancel</a>
+        <button class="sp-btn sp-btn-primary" type="submit" data-testid="catalog-new-submit">Create catalog</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

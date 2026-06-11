@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}{{ catalog.name }} — Shopify Partners{% endblock %}
+
+{% block content %}
+<div class="sp-row-between" style="align-items:flex-start;gap:16px;margin-bottom:24px">
+  <div>
+    <div class="sp-row" style="gap:12px;align-items:center;flex-wrap:wrap">
+      <h1 class="sp-page-h1" data-testid="catalog-detail-name">{{ catalog.name }}</h1>
+      <span class="sp-pill {% if catalog.status == 'published' %}sp-pill-green{% endif %}"
+            data-testid="catalog-detail-status">{{ catalog.status }}</span>
+    </div>
+    <p class="sp-text-sub" style="margin:6px 0 0 0;font-size:13px">
+      Created {{ catalog.created_at | short_date }} · {{ catalog.products_count }} product{{ '' if catalog.products_count == 1 else 's' }}
+    </p>
+  </div>
+  <div class="sp-page-actions">
+    <a class="sp-btn sp-btn-icon-after" href="#" data-testid="catalog-detail-more">More actions</a>
+    {% if catalog.status == 'draft' %}
+    <form method="post" action="/catalogs/{{ catalog.id }}/publish" style="display:inline">
+      <button class="sp-btn sp-btn-primary" type="submit" data-testid="catalog-detail-publish">Publish</button>
+    </form>
+    {% else %}
+    <form method="post" action="/catalogs/{{ catalog.id }}/publish" style="display:inline">
+      <button class="sp-btn" type="submit" data-testid="catalog-detail-republish">Republish</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<section class="sp-card" data-testid="catalog-detail-card">
+  <div class="sp-tabs" data-testid="catalog-detail-tabs">
+    {% for tab_id, label in [
+      ('products', 'Products'),
+      ('stores',   'Stores'),
+      ('settings', 'Settings'),
+    ] %}
+      <a class="sp-tab{% if current_tab == tab_id %} is-active{% endif %}"
+         href="/catalogs/{{ catalog.id }}?tab={{ tab_id }}"
+         data-testid="catalog-tab-{{ tab_id }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+
+  {% if current_tab == 'products' %}
+    <table class="sp-data-table" data-testid="catalog-products-table">
+      <thead>
+        <tr><th>Product</th><th>SKU</th><th class="sp-text-right">Inventory</th><th class="sp-text-right">Price</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for p in products %}
+        <tr data-testid="catalog-product-row">
+          <td>{{ p.title }}</td>
+          <td><span class="sp-text-sub" style="font-size:12px">{{ p.sku }}</span></td>
+          <td class="sp-text-right">{{ p.inventory }}</td>
+          <td class="sp-text-right">{{ p.price_cents | money }}</td>
+          <td><span class="sp-pill {% if p.status == 'Active' %}sp-pill-green{% endif %}">{{ p.status }}</span></td>
+        </tr>
+        {% endfor %}
+        {% if not products %}
+        <tr><td colspan="5"><div class="sp-text-sub" style="padding:24px;text-align:center">No products in this catalog yet.</div></td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+    <div class="sp-card-footer">
+      <a href="#" class="sp-btn" data-testid="catalog-add-product">Add product</a>
+      <span class="sp-text-sub">{{ products|length }} of {{ catalog.products_count }} shown</span>
+    </div>
+  {% elif current_tab == 'stores' %}
+    <table class="sp-data-table" data-testid="catalog-stores-table">
+      <thead><tr><th>Store</th><th>Plan</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for s in target_stores %}
+        <tr data-testid="catalog-target-store-row">
+          <td><a href="/stores/{{ s.id }}">{{ s.name }}</a><div class="sp-text-sub" style="font-size:12px">{{ s.slug }}.myshopify.com</div></td>
+          <td>{{ s.plan }}</td>
+          <td>
+            {% if catalog.status == 'published' %}
+              <span class="sp-pill sp-pill-green">Published</span>
+            {% else %}
+              <span class="sp-pill">Pending</span>
+            {% endif %}
+          </td>
+          <td class="sp-text-right"><a href="#" class="sp-link-quiet" data-testid="catalog-store-remove">Remove</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="sp-card-footer">
+      <a href="#" class="sp-btn" data-testid="catalog-add-store">Add store</a>
+      <span></span>
+    </div>
+  {% else %}
+    <div class="sp-card-body" data-testid="catalog-settings-pane">
+      <div class="sp-form-group">
+        <label>NAME</label>
+        <div style="font-size:14px">{{ catalog.name }}</div>
+      </div>
+      <div class="sp-form-group">
+        <label>PRICING</label>
+        <div class="sp-text-sub" style="font-size:13px">Default storefront prices</div>
+      </div>
+      <div class="sp-form-group">
+        <label>GEO RESTRICTIONS</label>
+        <div class="sp-text-sub" style="font-size:13px">No restrictions</div>
+      </div>
+      <div class="sp-form-actions">
+        <a class="sp-btn" href="/catalogs">Cancel</a>
+        <button class="sp-btn sp-btn-primary" type="submit" data-testid="catalog-settings-save">Save</button>
+      </div>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

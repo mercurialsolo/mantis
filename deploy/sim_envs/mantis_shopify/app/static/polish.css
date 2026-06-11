@@ -1,0 +1,119 @@
+/* mantis-polish.css — universal UI fidelity polish.
+   Drops into every env. Uses semantic selectors so no per-env classes needed.
+   Lift, focus rings, transitions, reduced-motion respect. */
+
+/* Smoother default font rendering (matches real Shopify/LinkedIn/Indeed) */
+html {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Universal focus-visible ring — keyboard accessibility */
+*:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid #2c6ecb;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+button:focus-visible,
+a:focus-visible,
+[role=button]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #2c6ecb;
+  outline-offset: 2px;
+}
+
+/* Card hover lift — only when motion not reduced */
+@media (prefers-reduced-motion: no-preference) {
+  .sp-card, .adm-card, .card, article,
+  .sp-stat-card, .adm-stat-card,
+  [data-testid$="-card"], [data-testid^="post-card"],
+  [data-testid$="-row"], [data-testid$="-cell"],
+  .jh-job-row, .opp-card,
+  .info-card, .gig-card, .job-card {
+    transition: transform 120ms cubic-bezier(.4,0,.2,1),
+                box-shadow 120ms cubic-bezier(.4,0,.2,1);
+  }
+  /* Subtle lift on hover for clickable cards */
+  a:hover > .sp-card,
+  a:hover > .adm-card,
+  .opp-card:hover,
+  .info-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+  }
+}
+
+/* Reduced-motion users: no animations */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Toast notifications — shared across envs */
+.mantis-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1a1a1a;
+  color: #fff;
+  padding: 12px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  z-index: 9999;
+  pointer-events: none;
+  transition: opacity 240ms ease, transform 240ms ease;
+}
+.mantis-toast-success {
+  background: #0c5132;
+  border-left: 4px solid #aee9d1;
+}
+.mantis-toast-critical {
+  background: #8e0a04;
+  border-left: 4px solid #fda9a4;
+}
+@keyframes mantis-toast-in {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.mantis-toast {
+  animation: mantis-toast-in 200ms ease forwards;
+}
+
+/* Skeleton shimmer for loading states (utility) */
+.mantis-skeleton {
+  background: linear-gradient(90deg, #ececec 0%, #f6f6f6 50%, #ececec 100%);
+  background-size: 200% 100%;
+  border-radius: 4px;
+  animation: mantis-shimmer 1.4s linear infinite;
+  color: transparent !important;
+  pointer-events: none;
+}
+@keyframes mantis-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Selection color — matches the active dropdown blue */
+::selection {
+  background: #d6e4ff;
+  color: #1a1a1a;
+}
+
+/* Smoother native form-field appearance */
+button, input, select, textarea {
+  font-family: inherit;
+}

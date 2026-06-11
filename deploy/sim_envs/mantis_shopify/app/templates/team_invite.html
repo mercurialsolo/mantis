@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Invite team member — Shopify Partners{% endblock %}
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">Invite team member</h1></header>
+
+<section class="sp-card">
+  <div class="sp-card-body">
+    <form method="post" action="/team/invite" data-testid="team-invite-form">
+      <div class="sp-form-row">
+        <div class="sp-form-group">
+          <label for="name">Name</label>
+          <input type="text" id="name" name="name" data-testid="team-invite-name"/>
+        </div>
+        <div class="sp-form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required data-testid="team-invite-email"/>
+        </div>
+      </div>
+      <div class="sp-form-group">
+        <label for="role">Role</label>
+        <select id="role" name="role" class="sp-select" data-testid="team-invite-role">
+          <option value="owner" {% if role_default == 'owner' %}selected{% endif %}>Owner</option>
+          <option value="staff_business" {% if role_default == 'staff_business' %}selected{% endif %}>Staff — Business</option>
+          <option value="staff_dev" {% if role_default == 'staff_dev' %}selected{% endif %}>Staff — Developer</option>
+          <option value="staff_marketing" {% if role_default == 'staff_marketing' %}selected{% endif %}>Staff — Marketing</option>
+          <option value="staff_support" {% if role_default == 'staff_support' %}selected{% endif %}>Staff — Support</option>
+          <option value="staff_finance" {% if role_default == 'staff_finance' %}selected{% endif %}>Staff — Finance</option>
+        </select>
+      </div>
+      <div class="sp-form-actions">
+        <a class="sp-btn" href="/team">Cancel</a>
+        <button type="submit" class="sp-btn sp-btn-primary" data-testid="team-invite-submit">Send invitation</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

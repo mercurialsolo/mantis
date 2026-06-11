@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Notifications — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Notifications</h1>
+</header>
+
+<section class="sp-card">
+  <ul class="sp-list">
+    {% for n in notifications %}
+    <li class="sp-list-row" data-testid="notif-row">
+      <div>
+        <div class="sp-list-row-name">{{ n.title }}</div>
+        <div class="sp-list-row-sub">{{ n.body }}</div>
+      </div>
+      <div class="sp-text-sub">{{ n.occurred_at | short_date }}</div>
+      <div></div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

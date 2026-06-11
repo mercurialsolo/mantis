@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Home — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Stores</h1>
+  <div class="sp-page-actions">
+    <a class="sp-btn sp-btn-primary sp-btn-icon-after" href="/stores/new" data-testid="home-add-store">Add store</a>
+  </div>
+</header>
+
+<div class="sp-home-grid">
+  <div>
+    <section class="sp-card" data-testid="home-stores-card">
+      <ul class="sp-list">
+        {% for s in stores %}
+        <li class="sp-list-row" data-testid="home-store-row">
+          <div>
+            <a class="sp-list-row-name" href="/stores/{{ s.id }}"
+               style="color:var(--c-text);text-decoration:none" data-testid="home-store-name-link">{{ s.name }}</a>
+            <div class="sp-list-row-sub">{{ s.slug }}.myshopify.com</div>
+          </div>
+          <div>
+            <span class="sp-pill">
+              {% if s.kind == 'client_transfer' %}Client transfer
+              {% elif s.kind == 'collaborator' %}Collaborator access
+              {% else %}Active development store{% endif %}
+            </span>
+          </div>
+          <div class="sp-list-row-actions">
+            <a class="sp-link-quiet" href="/stores/{{ s.id }}/actions" data-testid="home-store-actions">Actions ▾</a>
+            <form method="post" action="/stores/{{ s.id }}/login" style="display:inline">
+              <button class="sp-link-quiet" style="background:none;border:0;cursor:pointer;color:var(--c-link);font-size:13px"
+                      data-testid="home-store-login">Log in</button>
+            </form>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+      <div class="sp-card-footer">
+        <a href="/stores" class="sp-link-quiet" data-testid="home-view-all-stores">View all stores →</a>
+      </div>
+    </section>
+
+    <h2 style="font-size:14px; font-weight:600; margin:24px 0 12px;">Business overview</h2>
+    <div class="sp-stats-grid" data-testid="home-stats">
+      <div class="sp-stat-card">
+        <div class="sp-stat-label">Pending payout</div>
+        <div class="sp-stat-value" data-testid="home-pending-amount">
+          {% if pending_payout %}
+            {{ pending_payout.amount_cents | money }} USD
+          {% else %}
+            $0.00 USD
+          {% endif %}
+        </div>
+        <a class="sp-stat-link" href="/payouts">View payouts</a>
+      </div>
+      <div class="sp-stat-card">
+        <div class="sp-stat-label">Active store referrals</div>
+        <div class="sp-stat-value" data-testid="home-active-referrals">{{ active_referrals }}</div>
+        <a class="sp-stat-link" href="/sales">Submit a lead</a>
+      </div>
+      <div class="sp-stat-card">
+        <div class="sp-stat-label">Lifetime leads submitted</div>
+        <div class="sp-stat-value" data-testid="home-lifetime-leads">{{ lifetime_leads }}</div>
+        <a class="sp-stat-link" href="/sales">View leads</a>
+      </div>
+    </div>
+  </div>
+
+  <aside class="sp-changelog" data-testid="home-changelog">
+    <header>
+      <h2>Changelog</h2>
+      <a href="#" class="sp-link-quiet">View all</a>
+    </header>
+    {% for item in changelog %}
+    <div class="sp-changelog-item">
+      <div class="sp-changelog-date">
+        <span>{{ item.published_at | short_date }}</span>
+        <span class="sp-pill">{{ item.category }}</span>
+      </div>
+      <h3 class="sp-changelog-title">{{ item.title }}</h3>
+      <p class="sp-changelog-summary">{{ item.summary }}</p>
+    </div>
+    {% endfor %}
+  </aside>
+</div>
+{% endblock %}

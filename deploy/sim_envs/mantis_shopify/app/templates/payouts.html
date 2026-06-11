@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Payouts — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Payouts</h1>
+  <div class="sp-page-actions">
+    <a class="sp-btn sp-btn-primary" href="/payouts/export" data-testid="payouts-export">Export CSV</a>
+  </div>
+</header>
+
+{% if pending %}
+<section class="sp-card" data-testid="payouts-pending">
+  <div class="sp-pending-card">
+    <div class="sp-row-between">
+      <h2 style="margin:0;font-size:14px;font-weight:600">Pending</h2>
+      <a class="sp-link-quiet" href="/payouts/{{ pending.id }}">View pending transactions</a>
+    </div>
+    <div class="sp-pending-amt" data-testid="payouts-pending-amt">{{ pending.amount_cents | money }} USD</div>
+    <p class="sp-pending-sub">Estimated amount excluding taxes</p>
+    <p class="sp-pending-eta">Estimated payout date {{ pending.period_end | short_date }} via {{ pending.method }}</p>
+  </div>
+</section>
+{% endif %}
+
+<section class="sp-payouts-list" data-testid="payouts-list">
+  {% for p in sent %}
+  <div class="sp-payouts-row" data-testid="payouts-row">
+    <a href="/payouts/{{ p.id }}">{{ p.period_start | short_date }} – {{ p.period_end | short_date }} – Sales</a>
+    <div class="sp-payouts-sent">Sent {{ p.sent_at | short_date }}</div>
+    <div class="sp-payouts-amount">{{ p.amount_cents | money }} USD</div>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

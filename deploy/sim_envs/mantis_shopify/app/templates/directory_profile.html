@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Directory profile — Shopify Partners{% endblock %}
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">Directory profile</h1></header>
+<p class="sp-page-subtitle">Edit how your business appears in the Partner Directory.</p>
+
+<section class="sp-card">
+  <div class="sp-card-body">
+    <form method="post" action="/partner_directory/profile" data-testid="directory-profile-form">
+      <div class="sp-form-group"><label>Studio name</label>
+        <input type="text" name="studio_name" value="{{ partner.business_name }}" data-testid="dp-studio-name"/></div>
+      <div class="sp-form-group"><label>Bio</label>
+        <textarea name="bio" placeholder="What does your studio do?" data-testid="dp-bio"></textarea></div>
+      <div class="sp-form-row">
+        <div class="sp-form-group"><label>Services offered</label>
+          <input type="text" name="services" placeholder="Design, Development, Marketing" data-testid="dp-services"/></div>
+        <div class="sp-form-group"><label>Languages</label>
+          <input type="text" name="languages" placeholder="English, Spanish, Portuguese" data-testid="dp-languages"/></div>
+      </div>
+      <div class="sp-form-row">
+        <div class="sp-form-group"><label>Locations served</label>
+          <input type="text" name="locations" placeholder="United States, Canada" data-testid="dp-locations"/></div>
+        <div class="sp-form-group"><label>Hourly rate (USD)</label>
+          <input type="text" name="hourly_rate" placeholder="$150" data-testid="dp-rate"/></div>
+      </div>
+      <div class="sp-form-actions">
+        <a class="sp-btn" href="/partner_directory">Cancel</a>
+        <button class="sp-btn sp-btn-primary" type="submit" data-testid="dp-save">Save profile</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

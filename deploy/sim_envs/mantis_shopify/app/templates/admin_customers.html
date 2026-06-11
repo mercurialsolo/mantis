@@ -1,0 +1,81 @@
+{% extends "admin_base.html" %}
+{% block title %}Customers · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <h1 class="adm-page-h1">Customers</h1>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="/store/{{ store_id }}/admin/customers?export=csv" data-testid="adm-cust-export">Export</a>
+    <a class="adm-btn" href="/store/{{ store_id }}/admin/customers?import=1" data-testid="adm-cust-import">Import</a>
+    <a class="adm-btn" href="/store/{{ store_id }}/admin/customers?view=segments" data-testid="adm-cust-segments">Segments</a>
+    <a class="adm-btn adm-btn-primary" href="/store/{{ store_id }}/admin/customers/create" data-testid="adm-cust-add">Add customer</a>
+  </div>
+</div>
+
+<section class="adm-card">
+  <form class="adm-filterrow" method="get" action="/store/{{ store_id }}/admin/customers">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search customers" data-testid="adm-cust-search" />
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-cust-filter">Filter ▾</summary>
+      <div class="adm-dropdown-menu" style="min-width:220px">
+        <div style="padding:6px 12px;font-size:11px;text-transform:uppercase;color:#6a6a6a">Segment</div>
+        <a class="adm-dropdown-item" href="?q=&amp;sort=spent_desc">Highest spenders</a>
+        <a class="adm-dropdown-item" href="?q=&amp;sort=orders_desc">Most orders</a>
+        <a class="adm-dropdown-item" href="?q=&amp;sort=recent">Recently active</a>
+        <div class="adm-dropdown-sep"></div>
+        <a class="adm-dropdown-item" href="?q=">Clear filter</a>
+      </div>
+    </details>
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-cust-sort">Sort
+        {% if sort == 'spent_asc' %}: Spent ↑{% elif sort == 'name_asc' %}: A→Z{% elif sort == 'name_desc' %}: Z→A{% elif sort == 'orders_desc' %}: Most orders{% elif sort == 'recent' %}: Recent{% else %}: Spent ↓{% endif %}
+        ▾</summary>
+      <div class="adm-dropdown-menu">
+        {% for sid, label in [
+          ('spent_desc',  'Highest spent first'),
+          ('spent_asc',   'Lowest spent first'),
+          ('name_asc',    'Name A → Z'),
+          ('name_desc',   'Name Z → A'),
+          ('orders_desc', 'Most orders'),
+          ('recent',      'Most recent order'),
+        ] %}
+        <a class="adm-dropdown-item" href="?q={{ q }}&sort={{ sid }}">{{ label }}</a>
+        {% endfor %}
+      </div>
+    </details>
+  </form>
+
+  {% if customers %}
+  <table class="adm-table" data-testid="adm-cust-table">
+    <thead>
+      <tr>
+        <th><input type="checkbox" aria-label="Select all" /></th>
+        <th>Customer</th><th>Email</th><th>Location</th>
+        <th>Orders</th><th class="col-right">Amount spent</th><th>Last order</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in customers %}
+      <tr data-testid="adm-cust-row">
+        <td><input type="checkbox" aria-label="Select {{ c.name }}"/></td>
+        <td>
+          <div style="display:flex;gap:10px;align-items:center">
+            <span class="sp-user-avatar" style="background:#5c6ac4;width:28px;height:28px">{{ c.name | initials }}</span>
+            <a href="/store/{{ store_id }}/admin/customers/{{ c.id }}"
+               style="font-weight:500;color:#303030;text-decoration:none" data-testid="adm-cust-name-link">{{ c.name }}</a>
+          </div>
+        </td>
+        <td><a href="mailto:{{ c.email }}">{{ c.email }}</a></td>
+        <td>{{ c.location }}</td>
+        <td>{{ c.orders_count }}</td>
+        <td class="col-right">{{ c.total_spent_cents | money }}</td>
+        <td>{{ c.last_order_at | short_date }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="adm-empty">No customers match your search.</div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Settings — Shopify Partners{% endblock %}
+
+{% block content %}
+{% include "_banner.html" %}
+
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Partner account settings</h1>
+</header>
+
+<section class="sp-section" data-testid="settings-profile">
+  <div>
+    <h2>Personal profile information</h2>
+    <p class="sp-section-desc">Edit your personal profile to change your password, email contact, avatar photo, and preferred language.</p>
+  </div>
+  <div class="sp-card">
+    <div class="sp-card-body">
+      <div class="sp-row" style="gap:16px">
+        <span class="sp-member-avatar" style="width:48px;height:48px;background:{{ owner.avatar_color }};font-size:14px">{{ owner.name | initials }}</span>
+        <div style="flex:1">
+          <div style="font-weight:600">{{ owner.name }}</div>
+          <div><a href="mailto:{{ owner.email }}">{{ owner.email }}</a></div>
+          <div class="sp-text-sub" style="font-size:12px">English</div>
+          <div class="sp-text-sub" style="font-size:12px">Last login {{ humanize_last_login(owner.last_login_at, now) }}</div>
+        </div>
+        <a class="sp-btn" href="#" data-testid="settings-edit-profile">Edit personal profile</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sp-section" data-testid="settings-account">
+  <div>
+    <h2>Account information</h2>
+    <p class="sp-section-desc">Account-level identifiers for your Partner account.</p>
+  </div>
+  <div class="sp-card">
+    <div class="sp-card-body">
+      <div class="sp-form-group">
+        <label>PARTNER ID</label>
+        <div style="font-size:14px">{{ partner.partner_id }}</div>
+      </div>
+      <div class="sp-form-group">
+        <label>APP STORE REGISTRATION</label>
+        <div><span class="sp-pill sp-pill-green">Registered</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sp-section" data-testid="settings-business-details">
+  <div>
+    <h2>Business details</h2>
+    <p class="sp-section-desc">Information about your business. Used by Shopify to verify your Partner account.</p>
+  </div>
+  <div class="sp-card">
+    <div class="sp-card-body">
+      <div class="sp-form-group"><label>BUSINESS NAME</label>
+        <div style="font-size:14px">{{ partner.business_name }}</div></div>
+      <div class="sp-form-group"><label>BUSINESS TYPE</label>
+        <div style="font-size:14px">Limited liability company (LLC)</div></div>
+      <div class="sp-form-group"><label>INDUSTRY</label>
+        <div style="font-size:14px">Software &amp; technology consulting</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="sp-section" data-testid="settings-contact">
+  <div>
+    <h2>Contact information</h2>
+    <p class="sp-section-desc">Business contact information and address. Used in payouts and tax filings.</p>
+  </div>
+  <div class="sp-card">
+    <div class="sp-card-body">
+      <form method="post" action="/settings/business" data-testid="settings-business-form">
+        <div class="sp-form-row">
+          <div class="sp-form-group"><label>Business name</label>
+            <input type="text" name="business_name" value="{{ partner.business_name }}" data-testid="settings-business-name"/></div>
+          <div class="sp-form-group"><label>Website</label>
+            <input type="text" name="website" value="{{ partner.website }}"/></div>
+        </div>
+        <div class="sp-form-row">
+          <div class="sp-form-group"><label>Business email</label>
+            <input type="email" name="business_email" value="{{ partner.business_email }}" data-testid="settings-business-email"/></div>
+          <div class="sp-form-group"><label>Support email</label>
+            <input type="email" name="support_email" value="{{ partner.support_email }}"/></div>
+        </div>
+        <div class="sp-form-row">
+          <div class="sp-form-group"><label>Phone number</label>
+            <input type="text" name="phone" value="{{ partner.phone }}"/></div>
+          <div class="sp-form-group"><label>Country</label>
+            <input type="text" name="country" value="{{ partner.country }}"/></div>
+        </div>
+        <div class="sp-form-row">
+          <div class="sp-form-group"><label>Address 1</label>
+            <input type="text" name="address1" value="{{ partner.address1 }}"/></div>
+          <div class="sp-form-group"><label>Address 2</label>
+            <input type="text" name="address2" value="{{ partner.address2 }}"/></div>
+        </div>
+        <div class="sp-form-row">
+          <div class="sp-form-group"><label>City</label>
+            <input type="text" name="city" value="{{ partner.city }}"/></div>
+          <div class="sp-form-group"><label>ZIP / Postal Code</label>
+            <input type="text" name="zip" value="{{ partner.zip }}"/></div>
+        </div>
+        <div class="sp-form-row">
+          <div class="sp-form-group"><label>State</label>
+            <input type="text" name="state" value="{{ partner.state }}"/></div>
+          <div></div>
+        </div>
+        <div class="sp-form-actions">
+          <a class="sp-btn" href="/settings">Cancel</a>
+          <button class="sp-btn sp-btn-primary" type="submit" data-testid="settings-business-save">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+<section class="sp-section" id="emergency" data-testid="settings-emergency">
+  <div>
+    <h2>Emergency developer contact information</h2>
+    <p class="sp-section-desc">We'll contact this developer about urgent and upcoming changes to the Shopify API.</p>
+  </div>
+  <div class="sp-card">
+    <div class="sp-card-body">
+      <form method="post" action="/settings/emergency" data-testid="settings-emergency-form">
+        <div class="sp-form-group"><label>Name</label>
+          <input type="text" name="emergency_name" value="{{ partner.emergency_name }}" data-testid="settings-emergency-name"/></div>
+        <div class="sp-form-row">
+          <div class="sp-form-group"><label>Email</label>
+            <input type="email" name="emergency_email" value="{{ partner.emergency_email }}" data-testid="settings-emergency-email"/></div>
+          <div class="sp-form-group"><label>Phone</label>
+            <input type="text" name="emergency_phone" value="{{ partner.emergency_phone }}"/></div>
+        </div>
+        <div class="sp-form-actions">
+          <a class="sp-btn" href="/settings">Cancel</a>
+          <button class="sp-btn sp-btn-primary" type="submit" data-testid="settings-emergency-save">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+<section class="sp-section" data-testid="settings-payouts">
+  <div>
+    <h2>Payouts</h2>
+    <p class="sp-section-desc">How and where you receive payouts.</p>
+  </div>
+  <div class="sp-card">
+    <div class="sp-card-body">
+      <div class="sp-row-between">
+        <div>
+          <div style="font-weight:600">Bank account</div>
+          <div class="sp-text-sub">{{ partner.payout_method }}</div>
+        </div>
+        <a class="sp-btn" href="#">Edit payout method</a>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
