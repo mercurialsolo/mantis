@@ -40,7 +40,11 @@ def mcs(monkeypatch, tmp_path):
 
     import modal_cua_server as mod  # type: ignore[import-not-found]
     importlib.reload(mod)
-    mod._RECENT_RUNS.clear()
+    # #866: per-test plain-dict cross-replica store so leakage between
+    # cases can't make a regression look like a pass.
+    from mantis_agent.run_state_store import RunStateStore
+    mod._RUN_STATE_STORE = RunStateStore(backing={})
+    mod._RUN_STATE_STORE_INIT = True
     return mod
 
 

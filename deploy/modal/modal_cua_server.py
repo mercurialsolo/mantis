@@ -2070,71 +2070,130 @@ def _commit_volume() -> None:
         pass
 
 
-# In-memory recent-runs cache. Modal Volume commit + reload has a small
-# eventual-consistency window: an immediate poll right after submit
-# could land on a container whose volume mount hasn't yet seen the
-# status.json we just wrote, returning a misleading 404 / "unknown
-# run_id". This cache backstops that window — when the same container
-# that wrote a status reads it back, the cache is authoritative.
+# Cross-replica run-state cache (#866). Modal Volume commit + reload has
+# a small eventual-consistency window: a poll that lands on a different
+# replica than the writer can read stale data or 404 a freshly-minted
+# run. The legacy in-memory cache (``_RECENT_RUNS``) only helped when
+# the same container that wrote a status read it back. The shared
+# store lifts that to a ``modal.Dict`` so every replica sees writes
+# immediately — disk stays as the durable backing store (queue scans
+# and the lifecycle phase route still read files directly).
 #
-# Bounded LRU-style: at 1024 entries we drop the oldest. The cache is
-# also cleared lazily when a status flips to a terminal phase (no point
-# caching a finished run that the client will fetch via /result).
-_RECENT_RUNS: dict[str, dict] = {}
-_RECENT_RUNS_MAX = 1024
+# Off-Modal contexts (unit tests, local dev) get a ``NullRunStateStore``
+# by default; tests override via ``build_api_app(run_state_store=...)``
+# with a plain-dict-backed store.
+from mantis_agent.run_state_store import (
+    KIND_AUGUR,
+    KIND_PAUSE_REQUEST,
+    KIND_STATUS,
+    KIND_VIEWER,
+    NullRunStateStore,
+    RunStateStore,
+    read_with_store,
+)
+
+# First-terminal-wins. Once a run reaches any of these, subsequent
+# writes that would change the status field are rejected so a late
+# executor terminal-write cannot clobber an API-side cancel (#866).
 _TERMINAL_STATUSES = frozenset({
     "succeeded", "failed", "cancelled", "completed_with_failures",
     "timeout", "halted",
 })
 
+# Module-level default. Initialized lazily so module import doesn't
+# touch the Modal control plane (unit tests import this file without
+# being inside a Modal app context).
+_RUN_STATE_STORE: object = NullRunStateStore()
+_RUN_STATE_STORE_INIT = False
 
-def _cache_status(tenant_id: str, run_id: str, status: dict) -> None:
-    """Stash ``status`` in the in-memory cache keyed by (tenant, run)."""
-    key = f"{tenant_id}::{run_id}"
-    _RECENT_RUNS[key] = dict(status)
-    if len(_RECENT_RUNS) > _RECENT_RUNS_MAX:
-        # Drop the oldest ~25% so we don't trim on every write.
-        drop = max(1, _RECENT_RUNS_MAX // 4)
-        for k in list(_RECENT_RUNS.keys())[:drop]:
-            _RECENT_RUNS.pop(k, None)
+
+def _get_run_state_store() -> object:
+    """Return the active run-state store, building the default lazily.
+
+    Tests inject via ``build_api_app(run_state_store=...)`` and bypass
+    this path entirely. Inside a deployed Modal container this builds
+    a single ``modal.Dict``-backed store on first use; failures fall
+    back to the no-op store so a control-plane hiccup never breaks
+    a request.
+    """
+    global _RUN_STATE_STORE, _RUN_STATE_STORE_INIT
+    if _RUN_STATE_STORE_INIT:
+        return _RUN_STATE_STORE
+    _RUN_STATE_STORE_INIT = True
+    try:
+        _RUN_STATE_STORE = RunStateStore.from_name(
+            "mantis-cua-run-state", create_if_missing=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — falls back to disk-only
+        print(f"WARNING: run-state store init failed, using disk-only: {exc}")
+        _RUN_STATE_STORE = NullRunStateStore()
+    return _RUN_STATE_STORE
+
+
+def _read_status_disk(tenant_id: str, run_id: str) -> dict | None:
+    """Disk-only status read. Used as the fallback when the cross-replica
+    store misses (or as the primary in tests with the null store)."""
+    path = _run_dir(tenant_id, run_id) / "status.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
 
 
 def _write_status(tenant_id: str, run_id: str, status: dict) -> None:
+    """Persist ``status``. First-terminal-wins guard (#866).
+
+    If the current on-record status is terminal AND the incoming
+    write would change the status field, the write is rejected (logged
+    at WARNING). This keeps a cancel sticky against late executor
+    terminal writes from a different container.
+    """
     run_dir = _run_dir(tenant_id, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    store = _get_run_state_store()
+    existing = read_with_store(
+        store,
+        tenant_id=tenant_id, run_id=run_id, kind=KIND_STATUS,
+        disk_reader=lambda: _read_status_disk(tenant_id, run_id),
+    )
+    if existing is not None:
+        cur = str(existing.get("status", "")).lower()
+        new = str(status.get("status", "")).lower()
+        if cur in _TERMINAL_STATUSES and new != cur:
+            print(
+                f"WARNING: refusing to overwrite terminal status "
+                f"tenant={tenant_id} run={run_id} cur={cur!r} new={new!r}"
+            )
+            return
+
     (run_dir / "status.json").write_text(json.dumps(status, indent=2))
-    _cache_status(tenant_id, run_id, status)
+    try:
+        store.put(tenant_id, run_id, KIND_STATUS, status)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — cache write is best-effort
+        pass
     _commit_volume()
 
 
 def _read_status(tenant_id: str, run_id: str) -> dict | None:
     """Return the run's status dict.
 
-    Reads the in-memory cache first (covers the volume-commit
-    eventual-consistency window), then falls back to the file-backed
-    status.json. When the file read returns a newer status than the
-    cache (executor wrote it from a different container), the cache
-    is refreshed so subsequent calls see the latest.
+    Reads the cross-replica store first (immediate visibility across
+    container replicas), then falls back to the file-backed
+    status.json on disk. When disk has a newer updated_at than the
+    cache, the cache is refreshed so subsequent calls see the latest.
     """
-    key = f"{tenant_id}::{run_id}"
-    cached = _RECENT_RUNS.get(key)
-    path = _run_dir(tenant_id, run_id) / "status.json"
-    on_disk: dict | None = None
-    if path.exists():
-        try:
-            on_disk = json.loads(path.read_text())
-        except Exception:
-            on_disk = None
-    # Prefer the on-disk view when it exists AND its updated_at is
-    # newer than the cached view — that's the executor having
-    # progressed the run from a different container.
+    store = _get_run_state_store()
+    cached = store.get(tenant_id, run_id, KIND_STATUS)  # type: ignore[attr-defined]
+    on_disk = _read_status_disk(tenant_id, run_id)
     if on_disk is not None:
         if cached is None or str(on_disk.get("updated_at", "")) >= str(cached.get("updated_at", "")):
-            _cache_status(tenant_id, run_id, on_disk)
-            # Evict from cache once terminal — no need to keep
-            # finished runs around.
-            if str(on_disk.get("status", "")).lower() in _TERMINAL_STATUSES:
-                _RECENT_RUNS.pop(key, None)
+            try:
+                store.put(tenant_id, run_id, KIND_STATUS, on_disk)  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
             return on_disk
     return cached
 
@@ -2143,22 +2202,43 @@ def _write_viewer_url(tenant_id: str, run_id: str, viewer_url: str) -> None:
     """Persist the live-viewer URL in a side-channel file (#416).
 
     Kept separate from ``status.json`` so the executor never has to
-    read-merge-write a file the API container also owns.
+    read-merge-write a file the API container also owns. Mirrored
+    into the cross-replica store (#866) so a status poll on a
+    different container sees the viewer URL without waiting for the
+    volume reload window.
     """
     run_dir = _run_dir(tenant_id, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "viewer.json").write_text(json.dumps({"viewer_url": viewer_url}))
+    blob = {"viewer_url": viewer_url}
+    (run_dir / "viewer.json").write_text(json.dumps(blob))
+    try:
+        _get_run_state_store().put(  # type: ignore[attr-defined]
+            tenant_id, run_id, KIND_VIEWER, blob,
+        )
+    except Exception:  # noqa: BLE001 — cache write is best-effort
+        pass
     _commit_volume()
 
 
-def _read_viewer_url(tenant_id: str, run_id: str) -> str | None:
+def _read_viewer_url_disk(tenant_id: str, run_id: str) -> dict | None:
     path = _run_dir(tenant_id, run_id) / "viewer.json"
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text()).get("viewer_url")
+        return json.loads(path.read_text())
     except Exception:
         return None
+
+
+def _read_viewer_url(tenant_id: str, run_id: str) -> str | None:
+    blob = read_with_store(
+        _get_run_state_store(),
+        tenant_id=tenant_id, run_id=run_id, kind=KIND_VIEWER,
+        disk_reader=lambda: _read_viewer_url_disk(tenant_id, run_id),
+    )
+    if not blob:
+        return None
+    return blob.get("viewer_url")
 
 
 def _augur_bundle_dir(augur_run_id: str):
@@ -2192,15 +2272,22 @@ def _write_augur_metadata(
         return
     run_dir = _run_dir(tenant_id, run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "augur.json").write_text(json.dumps({
+    blob = {
         "augur_run_id": augur_run_id,
         "bundle_dir": str(_augur_bundle_dir(augur_run_id)),
         "dsn_workspace": os.environ.get("AUGUR_DSN_WORKSPACE_URL", "") or "",
-    }))
+    }
+    (run_dir / "augur.json").write_text(json.dumps(blob))
+    try:
+        _get_run_state_store().put(  # type: ignore[attr-defined]
+            tenant_id, run_id, KIND_AUGUR, blob,
+        )
+    except Exception:  # noqa: BLE001
+        pass
     _commit_volume()
 
 
-def _read_augur_metadata(tenant_id: str, run_id: str) -> dict | None:
+def _read_augur_metadata_disk(tenant_id: str, run_id: str) -> dict | None:
     path = _run_dir(tenant_id, run_id) / "augur.json"
     if not path.exists():
         return None
@@ -2208,6 +2295,14 @@ def _read_augur_metadata(tenant_id: str, run_id: str) -> dict | None:
         return json.loads(path.read_text())
     except Exception:
         return None
+
+
+def _read_augur_metadata(tenant_id: str, run_id: str) -> dict | None:
+    return read_with_store(
+        _get_run_state_store(),
+        tenant_id=tenant_id, run_id=run_id, kind=KIND_AUGUR,
+        disk_reader=lambda: _read_augur_metadata_disk(tenant_id, run_id),
+    )
 
 
 def _write_result(tenant_id: str, run_id: str, result: dict) -> None:
@@ -2273,7 +2368,8 @@ def _read_task_suite(tenant_id: str, run_id: str) -> str | None:
         return None
 
 
-def build_api_app(executor_resolver=None, function_call_lookup=None):
+def build_api_app(executor_resolver=None, function_call_lookup=None,
+                  run_state_store=None):
     """Construct the FastAPI app exposed by the Modal ASGI endpoint (#342).
 
     Factored into a plain function (not wrapped by ``@modal.asgi_app()``)
@@ -2287,6 +2383,10 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
       ``modal.FunctionCall.from_id``. Tests pass a stub that returns
       a fake ``.get(timeout=...) / .cancel()`` interface so polling
       doesn't need a live Modal runtime.
+    * ``run_state_store`` — overrides the cross-replica run-state
+      cache (#866). Tests pass a plain-dict-backed ``RunStateStore``
+      so the terminal-sticky and cancel-race paths are exercised
+      without going through ``modal.Dict``.
     """
     from datetime import datetime, timezone
 
@@ -2305,6 +2405,14 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
 
     resolve_executor = executor_resolver or _executor_for_model
     lookup_function_call = function_call_lookup or modal.FunctionCall.from_id
+
+    # #866: override the module-level run-state store when the caller
+    # supplied one (tests). The module reads through ``_get_run_state_store``
+    # so a global swap is enough — no per-request plumbing.
+    if run_state_store is not None:
+        global _RUN_STATE_STORE, _RUN_STATE_STORE_INIT
+        _RUN_STATE_STORE = run_state_store
+        _RUN_STATE_STORE_INIT = True
 
     fastapi_app = FastAPI(
         title="Mantis CUA (Modal)",
@@ -2481,16 +2589,28 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
         # from Modal's perspective (executor is sleeping in
         # wait_while_paused), but for the caller we want the
         # paused-state signal so the dashboard / poll loop knows to
-        # surface the viewer URL + the resume hint.
+        # surface the viewer URL + the resume hint. Reads the
+        # cross-replica store (#866) first so a poll that lands on a
+        # different replica from the pause-write sees the sentinel
+        # without waiting for the volume reload window.
         pause_path = _run_dir(tenant.tenant_id, run_id) / "pause_request.json"
-        if pause_path.exists() and status.get("status") in {"queued", "running"}:
-            try:
-                pause_blob = json.loads(pause_path.read_text())
-                status["status"] = "paused"
-                status["pause_reason"] = pause_blob.get("reason", "")
-                status["paused_at"] = pause_blob.get("requested_at", "")
-            except (OSError, json.JSONDecodeError):
-                pass
+        pause_blob: dict | None = None
+        try:
+            pause_blob = read_with_store(
+                _get_run_state_store(),
+                tenant_id=tenant.tenant_id, run_id=run_id,
+                kind=KIND_PAUSE_REQUEST,
+                disk_reader=lambda: (
+                    json.loads(pause_path.read_text())
+                    if pause_path.exists() else None
+                ),
+            )
+        except (OSError, json.JSONDecodeError):
+            pause_blob = None
+        if pause_blob and status.get("status") in {"queued", "running"}:
+            status["status"] = "paused"
+            status["pause_reason"] = pause_blob.get("reason", "")
+            status["paused_at"] = pause_blob.get("requested_at", "")
 
         action = payload["action"]
 
@@ -2536,21 +2656,45 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
             }
 
         if action == "cancel":
+            cancel_lookup_error: str | None = None
             if status.get("status") in {"queued", "running", "paused"}:
                 call_id = status.get("modal_call_id", "")
                 if call_id and status.get("status") != "paused":
+                    # Surface the lookup failure (#866). Previously the
+                    # exception was swallowed, so an unreachable Modal
+                    # control-plane left the executor running while the
+                    # API reported ``cancelled``. The terminal-sticky
+                    # guard in ``_write_status`` then blocked the
+                    # executor's eventual terminal write, masking the
+                    # real outcome. We still write the cancelled status
+                    # — the user's intent stands — but we surface the
+                    # lookup failure so the caller can retry the Modal
+                    # cancel if needed.
                     try:
                         lookup_function_call(call_id).cancel()
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        cancel_lookup_error = f"{type(exc).__name__}: {exc}"
+                        print(
+                            f"WARNING: cancel lookup failed for "
+                            f"run={run_id} call_id={call_id!r}: "
+                            f"{cancel_lookup_error}"
+                        )
                 status["status"] = "cancelled"
                 status["updated_at"] = datetime.now(timezone.utc).isoformat()
+                if cancel_lookup_error:
+                    status["cancel_lookup_error"] = cancel_lookup_error
                 _write_status(tenant.tenant_id, run_id, status)
                 release_profile_lock(tenant, status.get("profile_id", ""))
             # #541: tidy the pause sentinel on cancel too.
             try:
                 pause_path.unlink(missing_ok=True)
             except OSError:
+                pass
+            try:
+                _get_run_state_store().delete(  # type: ignore[attr-defined]
+                    tenant.tenant_id, run_id, KIND_PAUSE_REQUEST,
+                )
+            except Exception:  # noqa: BLE001
                 pass
             return status
 
@@ -2570,14 +2714,22 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
                 )
             reason = str(payload.get("reason") or "external") or "external"
             now_iso = datetime.now(timezone.utc).isoformat()
+            pause_blob_write = {
+                "reason": reason,
+                "requested_at": now_iso,
+            }
             try:
                 pause_path.parent.mkdir(parents=True, exist_ok=True)
-                pause_path.write_text(json.dumps({
-                    "reason": reason,
-                    "requested_at": now_iso,
-                }))
+                pause_path.write_text(json.dumps(pause_blob_write))
             except OSError as exc:
                 raise HTTPException(500, f"failed to write pause sentinel: {exc}")
+            try:
+                _get_run_state_store().put(  # type: ignore[attr-defined]
+                    tenant.tenant_id, run_id, KIND_PAUSE_REQUEST,
+                    pause_blob_write,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             status["status"] = "paused"
             status["pause_reason"] = reason
             status["paused_at"] = now_iso
@@ -2593,13 +2745,28 @@ def build_api_app(executor_resolver=None, function_call_lookup=None):
             # task_suite rehydration / spawn / user_input needed —
             # this path is for human-takeover-via-viewer, where the
             # user has already cleared the page state manually.
-            if pause_path.exists():
+            # Sentinel may exist on disk, in the cross-replica store, or
+            # both. Clear it from both backings so a stale read from the
+            # other side can't re-pause the run on the next poll.
+            store_has_pause = (
+                _get_run_state_store().get(  # type: ignore[attr-defined]
+                    tenant.tenant_id, run_id, KIND_PAUSE_REQUEST,
+                )
+                is not None
+            )
+            if pause_path.exists() or store_has_pause:
                 try:
                     pause_path.unlink(missing_ok=True)
                 except OSError as exc:
                     raise HTTPException(
                         500, f"failed to clear pause sentinel: {exc}",
                     )
+                try:
+                    _get_run_state_store().delete(  # type: ignore[attr-defined]
+                        tenant.tenant_id, run_id, KIND_PAUSE_REQUEST,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 status["status"] = "running"
                 status.pop("pause_reason", None)
                 status.pop("paused_at", None)
