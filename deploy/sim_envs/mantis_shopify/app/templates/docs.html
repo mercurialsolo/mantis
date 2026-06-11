@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">{{ title }}</h1></header>
+<p class="sp-page-subtitle">{{ subtitle }}</p>
+
+<section class="sp-card">
+  <div class="sp-filterrow">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search the docs" data-testid="docs-search"/>
+    <button class="sp-btn">Search</button>
+  </div>
+  <div style="display:grid;grid-template-columns:240px 1fr;gap:24px;padding:20px">
+    <nav data-testid="docs-toc">
+      <h3 style="font-size:13px;margin:0 0 8px 0;color:var(--c-text-sub);text-transform:uppercase">Topics</h3>
+      <ul style="list-style:none;padding:0;margin:0">
+        {% for topic in toc %}
+        <li style="padding:8px 0;border-bottom:1px solid var(--c-border)"><a href="#" data-testid="docs-toc-link">{{ topic }}</a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+    <div data-testid="docs-articles">
+      {% for title_, body in articles %}
+      <article style="padding:0 0 20px 0;border-bottom:1px solid var(--c-border);margin-bottom:20px">
+        <h3 style="margin:0 0 6px 0;font-size:15px"><a href="#" data-testid="docs-article-link">{{ title_ }}</a></h3>
+        <p style="margin:0;color:var(--c-text-sub)">{{ body }}</p>
+      </article>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -1,7 +1,9 @@
-"""Mock auth surface — signed-cookie sessions.
+"""Mock auth for mantis-shopify.
 
-Same shape as mantis-shop/app/auth.py minus the OAuth bits (Indeed
-mirror is username+password only per scope).
+Single-tenant Partners shell — the seeded owner is auto-signed-in
+when ENV_REQUIRE_AUTH=0 (the default), so the entire post-login
+dashboard is reachable without a real session cookie. Sessions are
+signed cookies via plain hmac for the optional login flow.
 """
 
 from __future__ import annotations
@@ -13,13 +15,14 @@ import time
 from typing import Any
 
 from fastapi import Request, Response
-from fastapi.responses import RedirectResponse
 
 from . import db
 
-SESSION_COOKIE = "mantis_indeed_session"
-SESSION_TTL_DEFAULT_S = 60 * 60
+SESSION_COOKIE = "mantis_shopify_session"
+SESSION_TTL_DEFAULT_S = 60 * 60 * 8  # 8h
 LOGIN_PATH = "/login"
+
+CANONICAL_OWNER_ID = "owner_00001"
 
 
 def session_secret() -> str:
@@ -100,7 +103,8 @@ def clear_session_cookie(response: Response) -> None:
 def lookup_user_by_id(user_id: str) -> dict[str, Any] | None:
     conn = db.connect()
     row = conn.execute(
-        "SELECT id, email, role, name, company_id FROM users WHERE id = ?",
+        "SELECT id, email, name, role, status, last_login_at, avatar_color "
+        "FROM users WHERE id = ?",
         (user_id,),
     ).fetchone()
     return dict(row) if row else None
@@ -109,7 +113,7 @@ def lookup_user_by_id(user_id: str) -> dict[str, Any] | None:
 def lookup_user_by_email(email: str) -> dict[str, Any] | None:
     conn = db.connect()
     row = conn.execute(
-        "SELECT id, email, password_hash, role, name, company_id "
+        "SELECT id, email, password_hash, name, role, status, last_login_at, avatar_color "
         "FROM users WHERE email = ?",
         (email.strip().lower(),),
     ).fetchone()
@@ -124,48 +128,22 @@ def current_user(request: Request) -> dict[str, Any] | None:
     return lookup_user_by_id(user_id)
 
 
-def require_user(
-    request: Request, *, roles: list[str] | None = None
-) -> Response | None:
-    if not auth_required():
-        # When auth not required, default acting-user is a seeker.
-        return None
-    user = current_user(request)
-    next_path = request.url.path
-    if user is None:
-        return RedirectResponse(
-            f"{LOGIN_PATH}?next={next_path}", status_code=303
-        )
-    if roles and user.get("role") not in roles:
-        return RedirectResponse(LOGIN_PATH, status_code=303)
-    return None
+def effective_user(request: Request) -> dict[str, Any]:
+    """Return current user, or the canonical seeded owner if no auth.
 
-
-def effective_user_id(request: Request, *, default: str = "user_00001") -> str:
-    user = current_user(request)
-    if user:
-        return str(user["id"])
-    return default
-
-
-def effective_user(request: Request, *, default_id: str = "user_00001") -> dict[str, Any]:
-    """Return the current user OR the canonical seeded fallback so the
-    post-login topbar/sidebar shell always renders. Mirrors the pattern
-    used in mantis_shopify."""
+    Keeps the Partners shell rendering the owner identity in the
+    topbar even when ENV_REQUIRE_AUTH=0 (default).
+    """
     u = current_user(request)
     if u:
         return u
-    fb = lookup_user_by_id(default_id)
+    fb = lookup_user_by_id(CANONICAL_OWNER_ID)
     return fb or {
-        "id": default_id,
-        "email": "demo@indeed.example",
-        "role": "seeker",
-        "name": "Demo Mantis",
+        "id": CANONICAL_OWNER_ID,
+        "email": "barada@example.com",
+        "name": "Barada Sahu",
+        "role": "owner",
+        "status": "active",
+        "last_login_at": "",
+        "avatar_color": "#5c6ac4",
     }
-
-
-def effective_employer_id(request: Request, *, default: str = "user_emp_00003") -> str:
-    user = current_user(request)
-    if user and user.get("role") == "employer":
-        return str(user["id"])
-    return default

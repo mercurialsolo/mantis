@@ -1,0 +1,114 @@
+{% extends "admin_base.html" %}
+{% block title %}{{ order.order_number }} · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <div>
+    <div class="sp-row" style="gap:10px;align-items:center;flex-wrap:wrap">
+      <h1 class="adm-page-h1" data-testid="adm-order-number">{{ order.order_number }}</h1>
+      <span class="adm-pill adm-pill-{{ order.financial_status }}" data-testid="adm-order-financial">{{ order.financial_status | title }}</span>
+      <span class="adm-pill adm-pill-{{ order.fulfillment_status }}" data-testid="adm-order-fulfillment">{{ order.fulfillment_status | title }}</span>
+    </div>
+    <p style="color:#6a6a6a;font-size:13px;margin:6px 0 0 0" data-testid="adm-order-meta">
+      {{ order.ordered_at | short_date }} · from Online Store · {{ order.items_count }} item{{ '' if order.items_count == 1 else 's' }}
+    </p>
+  </div>
+  <div class="adm-page-actions">
+    {% if order.financial_status != 'refunded' %}
+    <form method="post" action="/store/{{ store_id }}/admin/orders/{{ order.id }}/refund" style="display:inline">
+      <button type="submit" class="adm-btn adm-btn-critical" data-testid="adm-order-refund">Refund</button>
+    </form>
+    {% else %}
+    <span class="adm-pill adm-pill-refunded">Refunded</span>
+    {% endif %}
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-order-more">More actions ▾</summary>
+      <div class="adm-dropdown-menu">
+        <a href="/store/{{ store_id }}/admin/orders/{{ order.id }}?edit=1" class="adm-dropdown-item" data-testid="adm-order-edit">Edit</a>
+        <a href="/store/{{ store_id }}/admin/orders/{{ order.id }}?duplicate=1" class="adm-dropdown-item">Duplicate</a>
+        <a href="/store/{{ store_id }}/admin/orders/{{ order.id }}?print=1" class="adm-dropdown-item">Print packing slip</a>
+        <div class="adm-dropdown-sep"></div>
+        <a href="/store/{{ store_id }}/admin/orders/{{ order.id }}?cancel=1" class="adm-dropdown-item adm-dropdown-item-critical">Cancel order</a>
+      </div>
+    </details>
+    {% if order.fulfillment_status != 'fulfilled' %}
+    <form method="post" action="/store/{{ store_id }}/admin/orders/{{ order.id }}/fulfill" style="display:inline">
+      <button type="submit" class="adm-btn adm-btn-primary" data-testid="adm-order-fulfill">Fulfill items</button>
+    </form>
+    {% else %}
+    <span class="adm-pill adm-pill-fulfilled" data-testid="adm-order-fulfilled-state">Fulfilled</span>
+    {% endif %}
+  </div>
+</div>
+
+<div class="adm-detail-grid">
+  <div>
+    <section class="adm-card" data-testid="adm-order-items-card">
+      <header class="adm-card-header">
+        <h2>{{ order.fulfillment_status | title }} ({{ items|length }})</h2>
+        <span style="color:#6a6a6a;font-size:12px">{{ order.delivery_method }}</span>
+      </header>
+      {% for it in items %}
+      <div class="adm-line-item" data-testid="adm-order-item">
+        <div class="adm-line-thumb">▣</div>
+        <div>
+          <div class="adm-line-title">{{ it.title }}</div>
+          <div class="adm-line-meta">SKU · {{ it.qty }} × {{ it.price_cents | money }}</div>
+        </div>
+        <div style="font-weight:500">{{ (it.price_cents * it.qty) | money }}</div>
+      </div>
+      {% endfor %}
+    </section>
+
+    <section class="adm-card" data-testid="adm-order-totals">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 12px 0;font-size:14px">Paid</h3>
+        <div style="display:flex;justify-content:space-between;padding:4px 0">
+          <span>Subtotal</span><span>{{ order.total_cents | money }}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0">
+          <span>Shipping</span><span>$0.00</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0">
+          <span>Tax</span><span>$0.00</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid #e3e3e3;margin-top:6px;font-weight:600">
+          <span>Total</span><span>{{ order.total_cents | money }}</span>
+        </div>
+        <div style="font-size:12px;color:#6a6a6a;margin-top:6px">Paid via Shopify Payments</div>
+      </div>
+    </section>
+  </div>
+
+  <aside>
+    <section class="adm-card" data-testid="adm-order-customer">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">Customer</h3>
+        <div style="font-weight:500">{{ order.customer_name }}</div>
+        <div style="font-size:12px;color:#6a6a6a;margin-bottom:10px">{{ order.customer_email }}</div>
+        <div style="font-size:12px;color:#6a6a6a">3 orders all time</div>
+      </div>
+    </section>
+
+    <section class="adm-card" data-testid="adm-order-shipping">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">Shipping address</h3>
+        <div style="font-size:13px;line-height:1.6">
+          {{ order.customer_name }}<br/>
+          221 Linden Lane<br/>
+          Apartment 3B<br/>
+          Brooklyn NY 11215<br/>
+          United States
+        </div>
+      </div>
+    </section>
+
+    <section class="adm-card" data-testid="adm-order-tags">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">Tags</h3>
+        <div style="font-size:12px;color:#6a6a6a">No tags yet — <a href="#tag">add a tag</a></div>
+      </div>
+    </section>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Submit a theme — Shopify Partners{% endblock %}
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">Submit a theme</h1></header>
+
+<section class="sp-card">
+  <div class="sp-card-body">
+    <form method="post" action="/themes/new" data-testid="theme-new-form">
+      <div class="sp-form-group">
+        <label>Theme name</label>
+        <input type="text" name="name" required data-testid="theme-new-name"/>
+      </div>
+      <div class="sp-form-actions">
+        <a class="sp-btn" href="/themes">Cancel</a>
+        <button class="sp-btn sp-btn-primary" type="submit" data-testid="theme-new-submit">Submit for review</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

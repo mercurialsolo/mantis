@@ -1,0 +1,92 @@
+{% extends "admin_base.html" %}
+{% block title %}{{ customer.name }} · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <div>
+    <div class="sp-row" style="gap:12px;align-items:center;flex-wrap:wrap">
+      <h1 class="adm-page-h1" data-testid="adm-cust-name">{{ customer.name }}</h1>
+      <span class="adm-pill adm-pill-active" data-testid="adm-cust-status">Customer</span>
+    </div>
+    <p style="color:#6a6a6a;font-size:13px;margin:6px 0 0 0" data-testid="adm-cust-meta">
+      {{ customer.location }} · Customer since {{ customer.created_at | short_date }}
+    </p>
+  </div>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="#email" data-testid="adm-cust-email-cta">Send email</a>
+    <a class="adm-btn" href="#more" data-testid="adm-cust-more">More actions ▾</a>
+    <a class="adm-btn adm-btn-primary" href="#edit" data-testid="adm-cust-edit">Edit customer</a>
+  </div>
+</div>
+
+<div class="adm-detail-grid">
+  <div>
+    <section class="adm-card" data-testid="adm-cust-orders-card">
+      <header class="adm-card-header">
+        <h2>Last orders ({{ recent_orders|length }})</h2>
+        <a href="/store/{{ store_id }}/admin/orders?q={{ customer.email }}">View all</a>
+      </header>
+      {% if recent_orders %}
+      <table class="adm-table">
+        <thead>
+          <tr><th>Order</th><th>Date</th><th>Payment</th><th>Fulfillment</th><th class="col-right">Total</th></tr>
+        </thead>
+        <tbody>
+          {% for o in recent_orders %}
+          <tr data-testid="adm-cust-order-row">
+            <td><a href="/store/{{ store_id }}/admin/orders/{{ o.id }}">{{ o.order_number }}</a></td>
+            <td>{{ o.ordered_at | short_date }}</td>
+            <td><span class="adm-pill adm-pill-{{ o.financial_status }}">{{ o.financial_status | title }}</span></td>
+            <td><span class="adm-pill adm-pill-{{ o.fulfillment_status }}">{{ o.fulfillment_status | title }}</span></td>
+            <td class="col-right">{{ o.total_cents | money }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="adm-empty">No orders yet from this customer.</div>
+      {% endif %}
+    </section>
+
+    <section class="adm-card" data-testid="adm-cust-notes">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">Notes</h3>
+        <div style="font-size:13px;color:#6a6a6a">No notes from staff yet.</div>
+      </div>
+    </section>
+  </div>
+
+  <aside>
+    <section class="adm-card" data-testid="adm-cust-overview">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 10px 0;font-size:14px">Customer overview</h3>
+        <div style="font-weight:500">{{ customer.name }}</div>
+        <div style="font-size:12px;color:#6a6a6a">
+          <a href="mailto:{{ customer.email }}">{{ customer.email }}</a>
+        </div>
+        <div style="font-size:12px;color:#6a6a6a">{{ customer.location }}</div>
+        <div class="sp-divider" style="margin:12px 0"></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0">
+          <span style="color:#6a6a6a">Amount spent</span>
+          <strong>{{ customer.total_spent_cents | money }}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0">
+          <span style="color:#6a6a6a">Orders</span>
+          <strong>{{ customer.orders_count }}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0">
+          <span style="color:#6a6a6a">Last order</span>
+          <strong>{{ customer.last_order_at | short_date }}</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="adm-card" data-testid="adm-cust-tags">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">Tags</h3>
+        <div style="font-size:12px;color:#6a6a6a">No tags yet — <a href="#tag">add a tag</a></div>
+      </div>
+    </section>
+  </aside>
+</div>
+{% endblock %}

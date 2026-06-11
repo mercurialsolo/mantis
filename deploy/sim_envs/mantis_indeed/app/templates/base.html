@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Indeed{% endblock %}</title>
   <link rel="stylesheet" href="/static/site.css" />
+  <link rel="stylesheet" href="/static/polish.css?v=20260610a" />
+  <script src="/static/polish.js?v=20260610a" defer></script>
 </head>
 <body>
   <header class="top-nav" data-testid="top-nav">
@@ -13,16 +15,42 @@
         <span class="brand-wordmark">indeed</span>
       </a>
       <nav class="top-nav-links">
+        {# Show signed-in topnav whenever we have an effective_user
+           AND we're on a post-login route (or current_user is real). #}
+        {% set _path = request.url.path %}
+        {% set _post_login = _path.startswith(('/myjobs', '/resumes',
+            '/apply/', '/employers/')) %}
         {% set _u = request.state.current_user if request.state and request.state.current_user else None %}
-        {% if _u %}
+        {% set _eu = request.state.effective_user if request.state and request.state.effective_user else None %}
+        {% set _display = _u or (_eu if _post_login else None) %}
+        {% if _display %}
           <a href="/myjobs" data-testid="nav-myjobs">My jobs</a>
-          {% if _u.role == 'employer' %}
+          {% if _display.role == 'employer' %}
             <a href="/employers/dashboard" data-testid="nav-employer">Employer dashboard</a>
           {% endif %}
-          <span class="user-chip">{{ _u.email }}</span>
+          <a href="#messages" class="top-nav-icon" data-testid="nav-messages" aria-label="Messages">
+            <span style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-size:11px">
+              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+                <path d="M3 5h14v10H3V5zm0 0l7 5 7-5" fill="none" stroke="#5a5a5a" stroke-width="1.5"/>
+              </svg>
+              Messages
+            </span>
+          </a>
+          <a href="#notifications" class="top-nav-icon" data-testid="nav-notifications" aria-label="Notifications">
+            <span style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-size:11px">
+              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+                <path d="M10 2a5 5 0 00-5 5v3l-2 2v1h14v-1l-2-2V7a5 5 0 00-5-5zM8 16a2 2 0 004 0H8z" fill="#5a5a5a"/>
+              </svg>
+              Notifications
+            </span>
+          </a>
+          <span class="user-chip" data-testid="nav-user-chip"
+                style="background:#2557A7;color:#fff;width:32px;height:32px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:13px">{{ (_display.name or _display.email)[:1] | upper }}</span>
+          {% if _u %}
           <form method="post" action="/logout" class="inline-form">
             <button type="submit" class="link-button" data-testid="nav-signout">Sign out</button>
           </form>
+          {% endif %}
         {% else %}
           <a href="/login" data-testid="nav-signin">Sign in</a>
           <span class="nav-divider">|</span>

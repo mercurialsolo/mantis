@@ -1,0 +1,93 @@
+{% extends "admin_base.html" %}
+{% block title %}Content · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <h1 class="adm-page-h1">Content</h1>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="#more" data-testid="adm-content-more">More actions ▾</a>
+    {% if tab == 'pages' %}<a class="adm-btn adm-btn-primary" href="#add" data-testid="adm-content-add-page">Add page</a>
+    {% elif tab == 'blog_posts' %}<a class="adm-btn adm-btn-primary" href="#add" data-testid="adm-content-add-post">Add blog post</a>
+    {% elif tab == 'files' %}<a class="adm-btn adm-btn-primary" href="#add" data-testid="adm-content-upload">Upload</a>
+    {% else %}<a class="adm-btn adm-btn-primary" href="#add" data-testid="adm-content-add-meta">Add definition</a>
+    {% endif %}
+  </div>
+</div>
+
+<section class="adm-card">
+  <div class="adm-tabs" data-testid="adm-content-tabs">
+    {% for tid, label, n in [
+      ('pages', 'Pages', pages|length),
+      ('blog_posts', 'Blog posts', blog_posts|length),
+      ('files', 'Files', files|length),
+      ('metaobjects', 'Metaobjects', metaobjects|length),
+    ] %}
+    <a class="adm-tab{% if tab == tid %} is-active{% endif %}"
+       href="/store/{{ store_id }}/admin/content?tab={{ tid }}"
+       data-testid="adm-content-tab-{{ tid }}">{{ label }} <span class="adm-tab-count">{{ n }}</span></a>
+    {% endfor %}
+  </div>
+
+  {% if tab == 'pages' %}
+  <table class="adm-table" data-testid="adm-content-pages">
+    <thead><tr><th><input type="checkbox"/></th><th>Title</th><th>Status</th><th>Last updated</th></tr></thead>
+    <tbody>
+      {% for p in pages %}
+      <tr data-testid="adm-content-page-row">
+        <td><input type="checkbox"/></td>
+        <td><a href="#pg/{{ p.id }}">{{ p.title }}</a></td>
+        <td><span class="adm-pill {% if p.status == 'Visible' %}adm-pill-active{% else %}adm-pill-draft{% endif %}">{{ p.status }}</span></td>
+        <td>{{ p.updated }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif tab == 'blog_posts' %}
+  <table class="adm-table" data-testid="adm-content-blog">
+    <thead><tr><th><input type="checkbox"/></th><th>Title</th><th>Author</th><th>Status</th><th>Published</th></tr></thead>
+    <tbody>
+      {% for b in blog_posts %}
+      <tr data-testid="adm-content-blog-row">
+        <td><input type="checkbox"/></td>
+        <td><a href="#bp/{{ b.id }}">{{ b.title }}</a></td>
+        <td>{{ b.author }}</td>
+        <td>
+          {% if b.status == 'Published' %}<span class="adm-pill adm-pill-active">Published</span>
+          {% elif b.status == 'Scheduled' %}<span class="adm-pill adm-pill-pending">Scheduled</span>
+          {% else %}<span class="adm-pill adm-pill-draft">Draft</span>{% endif %}
+        </td>
+        <td>{{ b.published }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif tab == 'files' %}
+  <table class="adm-table" data-testid="adm-content-files">
+    <thead><tr><th><input type="checkbox"/></th><th>File</th><th>Kind</th><th class="col-right">Size</th></tr></thead>
+    <tbody>
+      {% for f in files %}
+      <tr data-testid="adm-content-file-row">
+        <td><input type="checkbox"/></td>
+        <td><a href="#file/{{ f.name }}">{{ f.name }}</a></td>
+        <td>{{ f.kind }}</td>
+        <td class="col-right">{{ f.size }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <table class="adm-table" data-testid="adm-content-meta">
+    <thead><tr><th>Definition</th><th class="col-right">Entries</th><th>Last updated</th></tr></thead>
+    <tbody>
+      {% for m in metaobjects %}
+      <tr data-testid="adm-content-meta-row">
+        <td><a href="#meta/{{ m.name }}">{{ m.name }}</a></td>
+        <td class="col-right">{{ m.entries }}</td>
+        <td>{{ m.updated }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "admin_base.html" %}
+{% block title %}Settings · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <h1 class="adm-page-h1">Settings</h1>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="/store/{{ store_id }}/admin" data-testid="adm-set-back">← Back to admin</a>
+  </div>
+</div>
+
+<p style="color:#6a6a6a;font-size:13px;margin:-12px 0 16px 0">
+  {{ store.name }} ({{ store.slug }}.myshopify.com)
+</p>
+
+{% for group_name, items in groups %}
+<section class="adm-card" data-testid="adm-set-group">
+  <header class="adm-card-header"><h2>{{ group_name }}</h2></header>
+  <div class="adm-card-body" style="padding:0">
+    {% for label, desc in items %}
+    <a href="#{{ label|lower|replace(' ', '-') }}"
+       class="adm-set-row" data-testid="adm-set-item"
+       style="display:grid;grid-template-columns:200px 1fr auto;gap:16px;padding:14px 18px;border-top:1px solid #e3e3e3;text-decoration:none;color:#303030;align-items:center">
+      <strong style="font-size:13px">{{ label }}</strong>
+      <span style="color:#6a6a6a;font-size:13px">{{ desc }}</span>
+      <span style="color:#6a6a6a;font-size:14px">›</span>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+{% endblock %}

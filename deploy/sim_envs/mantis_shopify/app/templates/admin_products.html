@@ -1,0 +1,108 @@
+{% extends "admin_base.html" %}
+{% block title %}Products · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <h1 class="adm-page-h1">Products</h1>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="/store/{{ store_id }}/admin/products?export=csv" data-testid="adm-prod-export">Export</a>
+    <a class="adm-btn" href="/store/{{ store_id }}/admin/products?import=1" data-testid="adm-prod-import">Import</a>
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-prod-more">More actions ▾</summary>
+      <div class="adm-dropdown-menu">
+        <a href="/store/{{ store_id }}/admin/products?bulk=tag" class="adm-dropdown-item">Bulk tag</a>
+        <a href="/store/{{ store_id }}/admin/products?bulk=set_vendor" class="adm-dropdown-item">Set vendor</a>
+        <a href="/store/{{ store_id }}/admin/products?bulk=publish" class="adm-dropdown-item">Publish to channels</a>
+        <div class="adm-dropdown-sep"></div>
+        <a href="/store/{{ store_id }}/admin/products?bulk=archive" class="adm-dropdown-item adm-dropdown-item-critical">Bulk archive</a>
+      </div>
+    </details>
+    <a class="adm-btn adm-btn-primary" href="/store/{{ store_id }}/admin/products/create" data-testid="adm-prod-add">Add product</a>
+  </div>
+</div>
+
+<section class="adm-card">
+  <div class="adm-tabs">
+    <a class="adm-tab is-active">All <span class="adm-tab-count">{{ products|length }}</span></a>
+    <a class="adm-tab">Active</a>
+    <a class="adm-tab">Draft</a>
+    <a class="adm-tab">Archived</a>
+  </div>
+  <form class="adm-filterrow" method="get" action="/store/{{ store_id }}/admin/products">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search products" data-testid="adm-prod-search" />
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-prod-filter">Filter ▾</summary>
+      <div class="adm-dropdown-menu" style="min-width:220px">
+        <div style="padding:6px 12px;font-size:11px;text-transform:uppercase;color:#6a6a6a">Status</div>
+        <a class="adm-dropdown-item" href="?q=active">Active only</a>
+        <a class="adm-dropdown-item" href="?q=draft">Draft only</a>
+        <a class="adm-dropdown-item" href="?q=archived">Archived only</a>
+        <div class="adm-dropdown-sep"></div>
+        <a class="adm-dropdown-item" href="?q=">Clear filter</a>
+      </div>
+    </details>
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-prod-sort">Sort
+        {% if sort == 'title_asc' %}: A→Z{% elif sort == 'title_desc' %}: Z→A{% elif sort == 'price_high' %}: Price ↓{% elif sort == 'price_low' %}: Price ↑{% elif sort == 'inv_low' %}: Low stock{% elif sort == 'oldest' %}: Oldest{% else %}: Newest{% endif %}
+        ▾</summary>
+      <div class="adm-dropdown-menu">
+        {% for sid, label in [
+          ('newest',     'Newest first'),
+          ('oldest',     'Oldest first'),
+          ('title_asc',  'Title A → Z'),
+          ('title_desc', 'Title Z → A'),
+          ('price_high', 'Highest price'),
+          ('price_low',  'Lowest price'),
+          ('inv_low',    'Low inventory first'),
+        ] %}
+        <a class="adm-dropdown-item" href="?q={{ q }}&sort={{ sid }}">{{ label }}</a>
+        {% endfor %}
+      </div>
+    </details>
+  </form>
+
+  {% if products %}
+  <table class="adm-table" data-testid="adm-prod-table">
+    <thead>
+      <tr>
+        <th><input type="checkbox" aria-label="Select all" /></th>
+        <th>Product</th><th>Status</th><th>Inventory</th>
+        <th>Type</th><th>Vendor</th><th class="col-right">Price</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in products %}
+      <tr data-testid="adm-prod-row">
+        <td><input type="checkbox" aria-label="Select {{ p.title }}"/></td>
+        <td>
+          <div style="display:flex;gap:10px;align-items:center">
+            <div class="adm-line-thumb" style="width:36px;height:36px">▣</div>
+            <div>
+              <a href="/store/{{ store_id }}/admin/products/{{ p.id }}"
+                 style="font-weight:500;color:#303030;text-decoration:none" data-testid="adm-prod-name-link">{{ p.title }}</a>
+              <div style="font-size:12px;color:#6a6a6a">{{ p.sku }}</div>
+            </div>
+          </div>
+        </td>
+        <td><span class="adm-pill adm-pill-{{ p.status }}">{{ p.status | title }}</span></td>
+        <td>
+          {% if p.inventory == 0 %}
+            <span style="color:#b54708">Out of stock</span>
+          {% elif p.inventory < 10 %}
+            <span style="color:#b54708">{{ p.inventory }} low</span>
+          {% else %}
+            {{ p.inventory }} in stock
+          {% endif %}
+        </td>
+        <td>{{ p.product_type }}</td>
+        <td>{{ p.vendor }}</td>
+        <td class="col-right">{{ p.price_cents | money }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="adm-empty">No products match your search.</div>
+  {% endif %}
+</section>
+{% endblock %}

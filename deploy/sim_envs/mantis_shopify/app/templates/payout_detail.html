@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Payout {{ payout.id }} — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">{{ payout.period_start | short_date }} – {{ payout.period_end | short_date }}</h1>
+</header>
+<p class="sp-page-subtitle">
+  {% if payout.status == 'paid' %}Sent {{ payout.sent_at | short_date }}{% else %}Pending{% endif %} via {{ payout.method }}
+</p>
+
+<section class="sp-card">
+  <header class="sp-card-header">
+    <h2>Line items</h2>
+    <div class="sp-text-sub">Total: {{ payout.amount_cents | money }} USD</div>
+  </header>
+  <table class="sp-data-table" data-testid="payout-line-items">
+    <thead><tr><th>Date</th><th>Description</th><th class="sp-text-right">Amount</th></tr></thead>
+    <tbody>
+      {% for li in items %}
+      <tr data-testid="payout-li">
+        <td>{{ li.occurred_at | short_date }}</td>
+        <td>{{ li.description }}</td>
+        <td class="sp-text-right">{{ li.amount_cents | money }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

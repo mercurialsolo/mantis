@@ -1,0 +1,48 @@
+{% extends "admin_base.html" %}
+{% block title %}Marketing · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <h1 class="adm-page-h1">Marketing</h1>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="/store/{{ store_id }}/admin/marketing?view=templates" data-testid="adm-mkt-templates">Templates</a>
+    <a class="adm-btn adm-btn-primary" href="/store/{{ store_id }}/admin/discounts/new?from=marketing" data-testid="adm-mkt-create">Create campaign</a>
+  </div>
+</div>
+
+<div class="adm-stats-grid" data-testid="adm-mkt-stats">
+  <div class="adm-stat-card"><div class="adm-stat-label">Sessions from marketing</div><div class="adm-stat-value">1,284</div><div class="adm-stat-delta up">▲ 8.6% vs last period</div></div>
+  <div class="adm-stat-card"><div class="adm-stat-label">Orders attributed</div><div class="adm-stat-value">38</div><div class="adm-stat-delta up">▲ 4.1%</div></div>
+  <div class="adm-stat-card"><div class="adm-stat-label">Sales attributed</div><div class="adm-stat-value">$4,802.30</div><div class="adm-stat-delta up">▲ 11.0%</div></div>
+  <div class="adm-stat-card"><div class="adm-stat-label">Avg conversion rate</div><div class="adm-stat-value">2.4%</div><div class="adm-stat-delta down">▼ 0.2 pts</div></div>
+</div>
+
+<section class="adm-card" data-testid="adm-mkt-campaigns">
+  <header class="adm-card-header">
+    <h2>Campaigns</h2>
+    <div style="display:inline-flex;gap:8px">
+      <a class="adm-btn" href="#filter">Filter</a>
+      <a class="adm-btn" href="#sort">Sort ▾</a>
+    </div>
+  </header>
+  <table class="adm-table">
+    <thead><tr><th>Name</th><th>Channel</th><th>Status</th><th class="col-right">Spend</th><th>Window</th></tr></thead>
+    <tbody>
+      {% for c in campaigns %}
+      <tr data-testid="adm-mkt-row">
+        <td><a href="#campaign/{{ c.id }}">{{ c.name }}</a></td>
+        <td>{{ c.channel }}</td>
+        <td>
+          {% if c.status == 'Active' %}<span class="adm-pill adm-pill-active">Active</span>
+          {% elif c.status == 'Scheduled' %}<span class="adm-pill adm-pill-pending">Scheduled</span>
+          {% elif c.status == 'Completed' %}<span class="adm-pill adm-pill-fulfilled">Completed</span>
+          {% else %}<span class="adm-pill adm-pill-draft">{{ c.status }}</span>{% endif %}
+        </td>
+        <td class="col-right">{{ c.spend_cents | money }}</td>
+        <td>{{ c.window }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

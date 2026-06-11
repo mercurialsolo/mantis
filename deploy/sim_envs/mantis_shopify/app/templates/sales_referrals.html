@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Referrals — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">Referrals</h1></header>
+<p class="sp-page-subtitle">Track your active referrals and recurring earnings.</p>
+
+<section class="sp-card">
+  <table class="sp-data-table" data-testid="referrals-table">
+    <thead>
+      <tr><th>Referral ID</th><th>Merchant</th><th>Plan</th><th>Status</th><th class="sp-text-right">Earned</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr data-testid="referral-row">
+        <td>{{ r.id }}</td>
+        <td>{{ r.merchant_name }}</td>
+        <td><span class="sp-pill">{{ r.plan }}</span></td>
+        <td><span class="sp-pill {% if r.status == 'active' %}sp-pill-green{% endif %}">{{ r.status }}</span></td>
+        <td class="sp-text-right">{{ r.earnings_cents | money }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

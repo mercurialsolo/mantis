@@ -1,0 +1,59 @@
+{% extends "admin_base.html" %}
+{% block title %}Create order · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <div>
+    <a href="/store/{{ store_id }}/admin/orders" style="color:#6a6a6a;font-size:13px;text-decoration:none">← Orders</a>
+    <h1 class="adm-page-h1" style="margin-top:4px">Create order</h1>
+  </div>
+</div>
+
+<form method="post" action="/store/{{ store_id }}/admin/orders/create" data-testid="adm-order-new-form">
+<div class="adm-detail-grid">
+  <div>
+    <section class="adm-card">
+      <header class="adm-card-header"><h2>Customer</h2></header>
+      <div class="adm-card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><label style="font-size:12px;color:#6a6a6a">Name</label>
+            <input type="text" name="customer_name" required style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px" data-testid="adm-order-new-name"/></div>
+          <div><label style="font-size:12px;color:#6a6a6a">Email</label>
+            <input type="email" name="customer_email" style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px" data-testid="adm-order-new-email"/></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="adm-card">
+      <header class="adm-card-header"><h2>Line item</h2></header>
+      <div class="adm-card-body">
+        <div style="margin-bottom:10px"><label style="font-size:12px;color:#6a6a6a">Product</label>
+          <input type="text" name="item_title" required style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px" data-testid="adm-order-new-item"/></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><label style="font-size:12px;color:#6a6a6a">Quantity</label>
+            <input type="number" name="item_qty" value="1" min="1" style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px"/></div>
+          <div><label style="font-size:12px;color:#6a6a6a">Unit price (USD)</label>
+            <input type="number" name="item_price" value="0" min="0" style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px"/></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <aside>
+    <section class="adm-card">
+      <header class="adm-card-header"><h2>Delivery</h2></header>
+      <div class="adm-card-body">
+        <select name="delivery_method" style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px">
+          <option>Standard</option><option>Express</option>
+          <option>Local pickup</option><option>Same-day</option>
+        </select>
+      </div>
+    </section>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+      <a class="adm-btn" href="/store/{{ store_id }}/admin/orders">Cancel</a>
+      <button type="submit" class="adm-btn adm-btn-primary" data-testid="adm-order-new-submit">Create order</button>
+    </div>
+  </aside>
+</div>
+</form>
+{% endblock %}

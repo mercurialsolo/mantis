@@ -1,0 +1,56 @@
+{% extends "admin_base.html" %}
+{% block title %}Point of Sale · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <div>
+    <h1 class="adm-page-h1">Point of Sale</h1>
+    <p style="color:#6a6a6a;font-size:13px;margin:4px 0 0 0">
+      Run in-person sales at your physical locations with Shopify POS.
+    </p>
+  </div>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="#install-app" data-testid="adm-pos-app">Get the POS app</a>
+    <a class="adm-btn adm-btn-primary" href="#upgrade-pro" data-testid="adm-pos-pro">Upgrade to POS Pro</a>
+  </div>
+</div>
+
+<div class="adm-stats-grid" data-testid="adm-pos-stats">
+  <div class="adm-stat-card"><div class="adm-stat-label">In-person sales (7d)</div><div class="adm-stat-value">$3,124.40</div><div class="adm-stat-delta up">▲ 9.2%</div></div>
+  <div class="adm-stat-card"><div class="adm-stat-label">Transactions (7d)</div><div class="adm-stat-value">82</div><div class="adm-stat-delta up">▲ 4%</div></div>
+  <div class="adm-stat-card"><div class="adm-stat-label">Locations</div><div class="adm-stat-value">{{ locations | length }}</div><div class="adm-stat-delta">2 open · 1 inactive</div></div>
+  <div class="adm-stat-card"><div class="adm-stat-label">Devices</div><div class="adm-stat-value">5</div><div class="adm-stat-delta">All connected</div></div>
+</div>
+
+<section class="adm-card" data-testid="adm-pos-locations">
+  <header class="adm-card-header">
+    <h2>Locations</h2>
+    <a class="adm-btn" href="#add-location">Add location</a>
+  </header>
+  <table class="adm-table">
+    <thead><tr><th>Location</th><th>City</th><th>Staff</th><th>Devices</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+      {% for l in locations %}
+      <tr data-testid="adm-pos-location-row">
+        <td><a href="#loc">{{ l.name }}</a></td>
+        <td>{{ l.city }}</td>
+        <td>{{ l.staff }}</td>
+        <td>{{ l.devices }}</td>
+        <td><span class="adm-pill {% if l.status == 'Open' %}adm-pill-active{% else %}adm-pill-draft{% endif %}">{{ l.status }}</span></td>
+        <td class="col-right"><a href="#manage" class="adm-btn">Manage</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="adm-card" data-testid="adm-pos-pro-card">
+  <div class="adm-card-body" style="display:flex;gap:24px;align-items:center">
+    <div style="flex:1">
+      <h3 style="margin:0 0 6px 0">Unlock POS Pro</h3>
+      <p style="margin:0;color:#6a6a6a">Smart inventory, line-busting, BOPIS, custom permissions, and reporting per-staff. $89/mo per location.</p>
+    </div>
+    <a class="adm-btn adm-btn-primary" href="#upgrade">Upgrade</a>
+  </div>
+</section>
+{% endblock %}

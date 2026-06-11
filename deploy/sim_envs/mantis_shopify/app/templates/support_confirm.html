@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Ticket submitted — Shopify Partners{% endblock %}
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">Thanks — ticket submitted</h1></header>
+<section class="sp-card">
+  <div class="sp-card-body">
+    <p data-testid="support-confirm-id">Your ticket <strong>{{ ticket_id }}</strong> is in the queue. Expect an update within one business day.</p>
+    <a class="sp-btn" href="/support">Back to Support</a>
+  </div>
+</section>
+{% endblock %}

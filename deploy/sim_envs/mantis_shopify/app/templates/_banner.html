@@ -1,0 +1,11 @@
+{% if not banner_dismissed %}
+<div class="sp-banner" data-testid="emergency-banner">
+  <span class="sp-banner-icon">!</span>
+  <form method="post" action="/team/banner/dismiss" style="position:absolute;right:8px;top:8px">
+    <button class="sp-banner-dismiss" data-testid="emergency-banner-dismiss" aria-label="Dismiss banner">×</button>
+  </form>
+  <h3>Update emergency contact information to receive important API alerts</h3>
+  <p>Developers on your team will be notified about urgent and upcoming changes to the Shopify API.</p>
+  <a class="sp-btn" href="/settings#emergency" data-testid="emergency-banner-add-contact">Add contact information</a>
+</div>
+{% endif %}

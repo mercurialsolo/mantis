@@ -1,0 +1,104 @@
+{% extends "admin_base.html" %}
+{% block title %}Orders · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <h1 class="adm-page-h1">Orders</h1>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="/store/{{ store_id }}/admin/orders?export=csv" data-testid="adm-orders-export">Export</a>
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-orders-more">More actions ▾</summary>
+      <div class="adm-dropdown-menu">
+        <a href="/store/{{ store_id }}/admin/orders?print=1" class="adm-dropdown-item">Print packing slips</a>
+        <a href="/store/{{ store_id }}/admin/orders?bulk=tag" class="adm-dropdown-item">Bulk tag</a>
+        <a href="/store/{{ store_id }}/admin/orders?bulk=archive" class="adm-dropdown-item">Bulk archive</a>
+        <div class="adm-dropdown-sep"></div>
+        <a href="/store/{{ store_id }}/admin/orders?bulk=cancel" class="adm-dropdown-item adm-dropdown-item-critical">Bulk cancel</a>
+      </div>
+    </details>
+    <a class="adm-btn adm-btn-primary" href="/store/{{ store_id }}/admin/orders/create" data-testid="adm-orders-create">Create order</a>
+  </div>
+</div>
+
+<section class="adm-card">
+  <div class="adm-tabs" data-testid="adm-orders-tabs">
+    {% for tid, label in [
+      ('all', 'All'),
+      ('unfulfilled', 'Unfulfilled'),
+      ('unpaid', 'Unpaid'),
+      ('open', 'Open'),
+      ('closed', 'Closed'),
+    ] %}
+      <a class="adm-tab{% if tab == tid %} is-active{% endif %}"
+         href="/store/{{ store_id }}/admin/orders?tab={{ tid }}"
+         data-testid="adm-orders-tab-{{ tid }}">
+        {{ label }} <span class="adm-tab-count">{{ tab_counts[tid] }}</span>
+      </a>
+    {% endfor %}
+  </div>
+  <form class="adm-filterrow" method="get" action="/store/{{ store_id }}/admin/orders">
+    <input type="hidden" name="tab" value="{{ tab }}" />
+    <input type="search" name="q" value="{{ q }}" placeholder="Search orders" data-testid="adm-orders-search" />
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-orders-filter">Filter ▾</summary>
+      <div class="adm-dropdown-menu" style="min-width:240px">
+        <div style="padding:6px 12px;font-size:11px;text-transform:uppercase;color:#6a6a6a">Quick filters</div>
+        <a class="adm-dropdown-item" href="?tab={{ tab }}&q=paid">Payment: Paid</a>
+        <a class="adm-dropdown-item" href="?tab={{ tab }}&q=pending">Payment: Pending</a>
+        <a class="adm-dropdown-item" href="?tab={{ tab }}&q=refunded">Payment: Refunded</a>
+        <div class="adm-dropdown-sep"></div>
+        <a class="adm-dropdown-item" href="?tab={{ tab }}">Clear all</a>
+      </div>
+    </details>
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-orders-sort">Sort
+        {% if sort == 'oldest' %}: Oldest{% elif sort == 'total_desc' %}: Total ↓{% elif sort == 'total_asc' %}: Total ↑{% elif sort == 'customer' %}: Customer{% else %}: Newest{% endif %}
+        ▾</summary>
+      <div class="adm-dropdown-menu">
+        {% for sid, label in [
+          ('newest', 'Newest first'),
+          ('oldest', 'Oldest first'),
+          ('total_desc', 'Highest total'),
+          ('total_asc', 'Lowest total'),
+          ('customer', 'Customer A → Z'),
+        ] %}
+        <a class="adm-dropdown-item{% if sort == sid %} adm-is-active{% endif %}"
+           href="?tab={{ tab }}&q={{ q }}&sort={{ sid }}">{{ label }}</a>
+        {% endfor %}
+      </div>
+    </details>
+  </form>
+
+  {% if orders %}
+  <table class="adm-table" data-testid="adm-orders-table">
+    <thead>
+      <tr>
+        <th><input type="checkbox" aria-label="Select all" /></th>
+        <th>Order</th><th>Date</th><th>Customer</th>
+        <th>Channel</th><th>Total</th>
+        <th>Payment status</th><th>Fulfillment status</th><th>Items</th>
+        <th>Delivery</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for o in orders %}
+      <tr data-testid="adm-orders-row">
+        <td><input type="checkbox" aria-label="Select {{ o.order_number }}"/></td>
+        <td><a href="/store/{{ store_id }}/admin/orders/{{ o.id }}">{{ o.order_number }}</a></td>
+        <td>{{ o.ordered_at | short_date }}</td>
+        <td>{{ o.customer_name }}</td>
+        <td>Online Store</td>
+        <td>{{ o.total_cents | money }}</td>
+        <td><span class="adm-pill adm-pill-{{ o.financial_status }}">{{ o.financial_status | title }}</span></td>
+        <td><span class="adm-pill adm-pill-{{ o.fulfillment_status }}">{{ o.fulfillment_status | title }}</span></td>
+        <td>{{ o.items_count }} item{{ '' if o.items_count == 1 else 's' }}</td>
+        <td>{{ o.delivery_method }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="adm-empty">No orders match this filter.</div>
+  {% endif %}
+</section>
+{% endblock %}

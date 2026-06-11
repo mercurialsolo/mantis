@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn>=0.27
+jinja2>=3.1
+python-multipart>=0.0.9
+starlette>=0.27,<1.0
+itsdangerous>=2.1

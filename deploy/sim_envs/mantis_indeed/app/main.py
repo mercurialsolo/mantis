@@ -60,6 +60,51 @@ def create_app() -> FastAPI:
     app = FastAPI(title="mantis-indeed", docs_url=None, redoc_url=None)
 
     templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+
+    # Tiny markdown filter for templates that use `{{ x | md | safe }}`.
+    # Handles ##/###/**bold**/bullet lists; otherwise wraps paragraphs.
+    def _md(text: str) -> str:
+        import html
+        import re as _re
+        if not text:
+            return ""
+        out_lines: list[str] = []
+        in_ul = False
+        for raw in str(text).split("\n"):
+            line = raw.rstrip()
+            if not line:
+                if in_ul:
+                    out_lines.append("</ul>")
+                    in_ul = False
+                out_lines.append("")
+                continue
+            m_h = _re.match(r"^(#{1,6})\s+(.*)$", line)
+            if m_h:
+                if in_ul:
+                    out_lines.append("</ul>")
+                    in_ul = False
+                lvl = len(m_h.group(1))
+                out_lines.append(f"<h{lvl}>{html.escape(m_h.group(2))}</h{lvl}>")
+                continue
+            if line.lstrip().startswith(("- ", "* ")):
+                if not in_ul:
+                    out_lines.append("<ul>")
+                    in_ul = True
+                item = line.lstrip()[2:]
+                out_lines.append(f"<li>{html.escape(item)}</li>")
+                continue
+            if in_ul:
+                out_lines.append("</ul>")
+                in_ul = False
+            out_lines.append(f"<p>{html.escape(line)}</p>")
+        if in_ul:
+            out_lines.append("</ul>")
+        body = "\n".join(out_lines)
+        # **bold** → <strong>
+        body = _re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", body)
+        return body
+
+    templates.env.filters["md"] = _md
     app.state.templates = templates
     app.state.admin_token = _admin_token()
 
@@ -69,6 +114,13 @@ def create_app() -> FastAPI:
             request.state.current_user = auth.current_user(request)
         except Exception:
             request.state.current_user = None
+
+        # Always populate an effective_user so the post-login topnav
+        # renders the signed-in shell when ENV_REQUIRE_AUTH=0 (default).
+        try:
+            request.state.effective_user = auth.effective_user(request)
+        except Exception:
+            request.state.effective_user = None
 
         if auth.auth_required():
             path = request.url.path

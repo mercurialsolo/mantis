@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}{{ store.name }} — Shopify Partners{% endblock %}
+
+{% block content %}
+{% include "_banner.html" %}
+
+<div class="sp-row-between" style="align-items:flex-start;gap:16px;margin-bottom:24px">
+  <div>
+    <div class="sp-row" style="gap:12px;align-items:center;flex-wrap:wrap">
+      <h1 class="sp-page-h1" data-testid="store-detail-name">{{ store.name }}</h1>
+      <span class="sp-pill" data-testid="store-detail-kind">
+        {% if store.kind == 'client_transfer' %}Client transfer
+        {% elif store.kind == 'collaborator' %}Collaborator access
+        {% else %}Active development store{% endif %}
+      </span>
+    </div>
+    <div class="sp-row" style="gap:16px;margin-top:6px">
+      <a class="sp-link-quiet" href="#" data-testid="store-detail-transfer">
+        <span style="font-size:12px;margin-right:4px">↑</span>Transfer ownership
+      </a>
+    </div>
+  </div>
+  <div class="sp-page-actions">
+    <a class="sp-btn sp-btn-icon-after" href="#" data-testid="store-detail-more">More actions</a>
+    <form method="post" action="/stores/{{ store.id }}/login" style="display:inline">
+      <button class="sp-btn sp-btn-primary" type="submit" data-testid="store-detail-login">Log in</button>
+    </form>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:24px;align-items:start">
+
+  <div>
+    <section class="sp-card" data-testid="store-detail-activity">
+      <header class="sp-card-header"><h2>Store activity</h2></header>
+      {% if activity %}
+      <ul class="sp-list">
+        {% for ev in activity %}
+        <li class="sp-list-row" data-testid="store-activity-row">
+          <div>
+            <div class="sp-list-row-name">{{ ev.operation | replace('_', ' ') | title }}</div>
+            <div class="sp-list-row-sub">{{ ev.payload }}</div>
+          </div>
+          <div></div>
+          <div class="sp-text-sub">{{ ev.ts | short_date }}</div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="sp-empty-state" data-testid="store-activity-empty">
+        <h3 style="margin:8px 0 4px 0;font-size:16px">No store events</h3>
+        <p class="sp-text-sub">There are no events related to this store</p>
+      </div>
+      {% endif %}
+    </section>
+  </div>
+
+  <aside>
+    <section class="sp-card" data-testid="store-info-card">
+      <div class="sp-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">{{ store.name }}</h3>
+        <div style="margin-bottom:16px">
+          <a href="#" class="sp-link-quiet" data-testid="store-info-url">
+            {{ store.slug }}.myshopify.com
+            <span style="font-size:10px">↗</span>
+          </a>
+        </div>
+
+        <div style="margin-bottom:6px"><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--c-text-sub);letter-spacing:0.06em">Store information</label></div>
+        <div><a href="#" class="sp-link-quiet" data-testid="store-info-email">{{ support_email }}</a></div>
+        <div class="sp-text-sub" style="margin-bottom:16px">{{ country }}</div>
+
+        <div class="sp-divider" style="margin:12px 0"></div>
+
+        <div style="margin-bottom:6px"><label style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--c-text-sub);letter-spacing:0.06em">Created</label></div>
+        <div data-testid="store-info-created">{{ created_human }}</div>
+      </div>
+    </section>
+
+    <section class="sp-card" data-testid="store-members-card">
+      <header class="sp-card-header">
+        <h2>Team members with access</h2>
+        <a class="sp-link-quiet" href="/team">View</a>
+      </header>
+      <div class="sp-card-body-flush">
+        {% for u in members %}
+        <div class="sp-member-row" data-testid="store-member-row">
+          <span class="sp-member-avatar" style="background:{{ u.avatar_color }}">{{ u.name | initials }}</span>
+          <div class="sp-member-name">{{ u.name }}</div>
+          <div></div>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+  </aside>
+</div>
+{% endblock %}

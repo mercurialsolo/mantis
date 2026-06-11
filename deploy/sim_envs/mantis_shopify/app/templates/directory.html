@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Partner Directory — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Partner Directory</h1>
+  <div class="sp-page-actions">
+    <a class="sp-btn" href="/partner_directory/profile" data-testid="directory-view">👁 View</a>
+    <a class="sp-btn sp-btn-primary" href="/partner_directory/profile" data-testid="directory-edit-profile">Edit profile</a>
+  </div>
+</header>
+
+<section class="sp-card" data-testid="directory-eligible">
+  <header class="sp-card-header"><h2>Eligible directory reviews</h2></header>
+  <div class="sp-card-body">
+    <p>After collaborating with a merchant for more than 1 week, you can request a review. If you don't send a request within 90 days of the collaboration start date, and if the contact was initiated through the Partner Directory, an automatic request will be sent. <a href="#">Learn more about review eligibility requirements</a></p>
+  </div>
+  <table class="sp-data-table" data-testid="directory-table">
+    <thead><tr><th>Business Name</th><th>Plan</th><th>Review Status</th><th></th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr data-testid="directory-row">
+        <td>{{ row.business_name }}</td>
+        <td>{{ row.plan }}</td>
+        <td><span class="sp-pill sp-pill-green">{{ row.review_status | replace('_', ' ') | title }}</span></td>
+        <td class="sp-text-right">
+          {% if row.review_status == 'available' %}
+          <form method="post" action="/partner_directory/{{ row.id }}/request_review" style="display:inline">
+            <button class="sp-link-quiet" style="background:none;border:0;cursor:pointer;color:var(--c-link);font-size:13px"
+                    data-testid="directory-request-review">Request review</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

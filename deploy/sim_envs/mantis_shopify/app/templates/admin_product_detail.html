@@ -1,0 +1,106 @@
+{% extends "admin_base.html" %}
+{% block title %}{{ product.title }} · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <div>
+    <div class="sp-row" style="gap:12px;align-items:center;flex-wrap:wrap">
+      <h1 class="adm-page-h1" data-testid="adm-prod-title">{{ product.title }}</h1>
+      <span class="adm-pill adm-pill-{{ product.status }}" data-testid="adm-prod-status">{{ product.status | title }}</span>
+    </div>
+    <p style="color:#6a6a6a;font-size:13px;margin:6px 0 0 0" data-testid="adm-prod-meta">
+      {{ product.product_type }} · {{ product.vendor }} · {{ product.sku }}
+    </p>
+  </div>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="#duplicate" data-testid="adm-prod-duplicate">Duplicate</a>
+    <a class="adm-btn" href="#more" data-testid="adm-prod-more">More actions ▾</a>
+    <a class="adm-btn adm-btn-primary" href="#save" data-testid="adm-prod-save">Save</a>
+  </div>
+</div>
+
+<div class="adm-detail-grid">
+  <div>
+    <section class="adm-card" data-testid="adm-prod-info">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 12px 0;font-size:14px">Title</h3>
+        <input type="text" value="{{ product.title }}" class="sp-form-group" style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px"/>
+        <h3 style="margin:18px 0 12px 0;font-size:14px">Description</h3>
+        <textarea rows="6" class="sp-form-group" style="width:100%;padding:8px 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px;font-family:inherit">A premium {{ product.product_type|lower }} from {{ product.vendor }} — small-batch, hand-finished, and built to last.</textarea>
+      </div>
+    </section>
+
+    <section class="adm-card" data-testid="adm-prod-media">
+      <header class="adm-card-header"><h2>Media</h2></header>
+      <div class="adm-card-body">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+          {% for n in range(4) %}
+          <div style="aspect-ratio:1;background:linear-gradient(135deg,#f1f1f1 0%,#e7e7e7 100%);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:32px;color:#b4b4b4">▣</div>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
+
+    <section class="adm-card" data-testid="adm-prod-pricing">
+      <header class="adm-card-header"><h2>Pricing</h2></header>
+      <div class="adm-card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div>
+            <label style="font-size:12px;color:#6a6a6a">Price</label>
+            <input type="text" value="{{ product.price_cents | money }}" style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px"/>
+          </div>
+          <div>
+            <label style="font-size:12px;color:#6a6a6a">Compare-at</label>
+            <input type="text" placeholder="$0.00" style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px"/>
+          </div>
+          <div>
+            <label style="font-size:12px;color:#6a6a6a">Cost per item</label>
+            <input type="text" placeholder="$0.00" style="width:100%;height:36px;padding:0 12px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px"/>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="adm-card" data-testid="adm-prod-inventory">
+      <header class="adm-card-header"><h2>Inventory</h2></header>
+      <div class="adm-card-body">
+        <div style="display:flex;gap:32px;align-items:center;font-size:13px">
+          <div>SKU<br/><strong>{{ product.sku }}</strong></div>
+          <div>In stock<br/><strong>{{ product.inventory }}</strong></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <aside>
+    <section class="adm-card" data-testid="adm-prod-status-card">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">Status</h3>
+        <select style="width:100%;height:32px;padding:0 8px;border:1px solid #c3c3c3;border-radius:6px;font-size:13px">
+          <option value="active" {% if product.status == 'active' %}selected{% endif %}>Active</option>
+          <option value="draft" {% if product.status == 'draft' %}selected{% endif %}>Draft</option>
+          <option value="archived" {% if product.status == 'archived' %}selected{% endif %}>Archived</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="adm-card" data-testid="adm-prod-org">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">Product organization</h3>
+        <div style="font-size:12px;color:#6a6a6a">TYPE</div>
+        <div style="margin-bottom:8px">{{ product.product_type }}</div>
+        <div style="font-size:12px;color:#6a6a6a">VENDOR</div>
+        <div>{{ product.vendor }}</div>
+      </div>
+    </section>
+
+    <section class="adm-card" data-testid="adm-prod-channels">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">Sales channels</h3>
+        <div style="font-size:13px">✓ Online Store</div>
+        <div style="font-size:13px">✓ Point of Sale</div>
+      </div>
+    </section>
+  </aside>
+</div>
+{% endblock %}

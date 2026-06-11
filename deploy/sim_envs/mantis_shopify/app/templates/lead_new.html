@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">{{ title }}</h1></header>
+<p class="sp-page-subtitle">Provide the merchant's details to start the referral.</p>
+
+<section class="sp-card">
+  <div class="sp-card-body">
+    <form method="post" action="/sales/leads/new" data-testid="lead-new-form">
+      <input type="hidden" name="product" value="{{ product }}"/>
+      <div class="sp-form-row">
+        <div class="sp-form-group">
+          <label for="merchant_name">Merchant business name</label>
+          <input type="text" id="merchant_name" name="merchant_name" required data-testid="lead-merchant-name"/>
+        </div>
+        <div class="sp-form-group">
+          <label for="contact_name">Primary contact name</label>
+          <input type="text" id="contact_name" name="contact_name" data-testid="lead-contact-name"/>
+        </div>
+      </div>
+      <div class="sp-form-group">
+        <label for="contact_email">Primary contact email</label>
+        <input type="email" id="contact_email" name="contact_email" required data-testid="lead-contact-email"/>
+      </div>
+      <div class="sp-form-group">
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes" placeholder="Anything to know about the merchant" data-testid="lead-notes"></textarea>
+      </div>
+      <div class="sp-form-actions">
+        <a class="sp-btn" href="/sales">Cancel</a>
+        <button class="sp-btn sp-btn-primary" type="submit" data-testid="lead-submit">Submit lead</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

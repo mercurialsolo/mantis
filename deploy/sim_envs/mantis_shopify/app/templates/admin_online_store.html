@@ -1,0 +1,72 @@
+{% extends "admin_base.html" %}
+{% block title %}Online Store · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <div>
+    <h1 class="adm-page-h1">Online Store</h1>
+    <p style="color:#6a6a6a;font-size:13px;margin:4px 0 0 0">
+      Themes, pages, navigation, and storefront preferences for
+      <a href="https://{{ domain }}">{{ domain }}</a>.
+    </p>
+  </div>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="https://{{ domain }}" target="_blank" data-testid="adm-os-preview">Preview store</a>
+    <a class="adm-btn adm-btn-primary" href="#customize" data-testid="adm-os-customize">Customize</a>
+  </div>
+</div>
+
+<section class="adm-card" data-testid="adm-os-themes">
+  <header class="adm-card-header">
+    <h2>Themes</h2>
+    <a class="adm-btn" href="#add-theme">Add theme</a>
+  </header>
+  <table class="adm-table">
+    <thead><tr><th>Theme</th><th>Role</th><th>Status</th><th>Last updated</th><th></th></tr></thead>
+    <tbody>
+      {% for t in themes %}
+      <tr data-testid="adm-os-theme-row">
+        <td><a href="#theme">{{ t.name }}</a></td>
+        <td>{{ t.role }}</td>
+        <td><span class="adm-pill {% if t.status == 'Published' %}adm-pill-active{% else %}adm-pill-draft{% endif %}">{{ t.status }}</span></td>
+        <td>{{ t.updated }}</td>
+        <td class="col-right"><a href="#actions" class="adm-btn">Actions ▾</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<div class="adm-detail-grid">
+  <section class="adm-card" data-testid="adm-os-pages">
+    <header class="adm-card-header"><h2>Pages &amp; blogs</h2></header>
+    <table class="adm-table">
+      <tbody>
+        {% for p in pages %}
+        <tr><td>{{ p.name }}</td><td>{{ p.type }}</td><td class="col-right"><a href="#edit">Edit</a></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <aside>
+    <section class="adm-card" data-testid="adm-os-menus">
+      <header class="adm-card-header"><h2>Navigation</h2></header>
+      <div class="adm-card-body">
+        {% for m in menus %}
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0">
+          <span>{{ m.name }}</span><span style="color:#6a6a6a">{{ m.item_count }} items</span>
+        </div>
+        {% endfor %}
+        <a class="adm-btn" href="#add-menu" style="margin-top:10px">Add menu</a>
+      </div>
+    </section>
+    <section class="adm-card" data-testid="adm-os-domain">
+      <header class="adm-card-header"><h2>Domains</h2></header>
+      <div class="adm-card-body">
+        <div style="margin-bottom:8px"><strong>{{ custom_domain }}</strong> <span class="adm-pill adm-pill-active">Primary</span></div>
+        <div class="adm-pill adm-pill-draft">{{ domain }}</div>
+      </div>
+    </section>
+  </aside>
+</div>
+{% endblock %}

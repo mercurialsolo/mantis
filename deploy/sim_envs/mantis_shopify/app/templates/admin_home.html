@@ -1,0 +1,89 @@
+{% extends "admin_base.html" %}
+{% block title %}Home · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-greeting">
+  <h1 class="adm-greeting-h1" data-testid="adm-greeting">Good afternoon, Mason</h1>
+  <p class="adm-greeting-sub">Here's what's happening with your store today.</p>
+</div>
+
+<div class="adm-stats-grid" data-testid="adm-stats">
+  <div class="adm-stat-card" data-testid="adm-stat-sales">
+    <div class="adm-stat-label">Total sales</div>
+    <div class="adm-stat-value">{{ total_sales | money }}</div>
+    <div class="adm-stat-delta up">▲ 12.4% vs last 7 days</div>
+  </div>
+  <div class="adm-stat-card" data-testid="adm-stat-orders">
+    <div class="adm-stat-label">Orders</div>
+    <div class="adm-stat-value">{{ orders_total }}</div>
+    <div class="adm-stat-delta up">▲ 4.2% vs last 7 days</div>
+  </div>
+  <div class="adm-stat-card" data-testid="adm-stat-sessions">
+    <div class="adm-stat-label">Online store sessions</div>
+    <div class="adm-stat-value">{{ sessions }}</div>
+    <div class="adm-stat-delta down">▼ 2.1% vs last 7 days</div>
+  </div>
+  <div class="adm-stat-card" data-testid="adm-stat-conv">
+    <div class="adm-stat-label">Conversion rate</div>
+    <div class="adm-stat-value">{{ conversion_rate }}</div>
+    <div class="adm-stat-delta up">▲ 0.3 pts vs last 7 days</div>
+  </div>
+</div>
+
+<div class="adm-detail-grid">
+  <section class="adm-card" data-testid="adm-recent-orders">
+    <header class="adm-card-header">
+      <h2>Recent orders</h2>
+      <a href="/store/{{ store_id }}/admin/orders" data-testid="adm-recent-view-all">View all</a>
+    </header>
+    {% if recent_orders %}
+    <table class="adm-table">
+      <thead>
+        <tr><th>Order</th><th>Date</th><th>Customer</th><th>Payment</th><th>Fulfillment</th><th class="col-right">Total</th></tr>
+      </thead>
+      <tbody>
+        {% for o in recent_orders %}
+        <tr data-testid="adm-recent-order-row">
+          <td><a href="/store/{{ store_id }}/admin/orders/{{ o.id }}">{{ o.order_number }}</a></td>
+          <td>{{ o.ordered_at | short_date }}</td>
+          <td>{{ o.customer_name }}</td>
+          <td><span class="adm-pill adm-pill-{{ o.financial_status }}">{{ o.financial_status | title }}</span></td>
+          <td><span class="adm-pill adm-pill-{{ o.fulfillment_status }}">{{ o.fulfillment_status | title }}</span></td>
+          <td class="col-right">{{ o.total_cents | money }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="adm-empty">No orders yet</div>
+    {% endif %}
+  </section>
+
+  <aside>
+    <section class="adm-card" data-testid="adm-quick">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 6px 0;font-size:14px">Today's tasks</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
+          <div data-testid="adm-task-unfulfilled">📦 <strong>{{ unfulfilled }}</strong> orders awaiting fulfillment</div>
+          <div>📊 Weekly recap report ready</div>
+          <div>📨 Reply to {{ customers_total // 4 }} customer messages</div>
+        </div>
+      </div>
+    </section>
+    <section class="adm-card" data-testid="adm-quick-counts">
+      <div class="adm-card-body">
+        <h3 style="margin:0 0 8px 0;font-size:14px">Catalog at a glance</h3>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0">
+          <span>Products</span><strong>{{ products_total }}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0">
+          <span>Customers</span><strong>{{ customers_total }}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0">
+          <span>Orders</span><strong>{{ orders_total }}</strong>
+        </div>
+      </div>
+    </section>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Support — Shopify Partners{% endblock %}
+{% block content %}
+<header class="sp-page-header"><h1 class="sp-page-h1">Support</h1></header>
+
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:24px">
+  <section class="sp-card" data-testid="support-forum-card">
+    <div class="sp-card-body">
+      <h3 style="margin:0 0 8px 0">Visit the community forum</h3>
+      <p>The developer community forum serves as a valuable resource for addressing frequently asked questions and offers access to a wide array of experts who can provide assistance.</p>
+      <a class="sp-btn sp-btn-primary" href="#" data-testid="support-visit-forum">Visit the forum</a>
+    </div>
+  </section>
+  <aside>
+    <h3 style="margin:0 0 8px 0;font-size:14px">Partner support</h3>
+    <p class="sp-text-sub">If you have questions pertaining to your Partner account, Payouts or you require additional help and would like to speak with a support agent, please contact <a href="/support/contact" data-testid="support-contact-link">Partner Support</a>.</p>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Add store — Shopify Partners{% endblock %}
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Add store</h1>
+</header>
+
+<section class="sp-card">
+  <div class="sp-card-body">
+    <form method="post" action="/stores/new" data-testid="store-new-form">
+      <div class="sp-form-row">
+        <div class="sp-form-group">
+          <label for="name">Store name</label>
+          <input type="text" id="name" name="name" placeholder="Sample Store" required data-testid="store-new-name"/>
+        </div>
+        <div class="sp-form-group">
+          <label for="slug">Subdomain (optional)</label>
+          <input type="text" id="slug" name="slug" placeholder="sample-store" data-testid="store-new-slug"/>
+        </div>
+      </div>
+      <div class="sp-form-group">
+        <label for="kind">Store type</label>
+        <select id="kind" name="kind" class="sp-select" data-testid="store-new-kind">
+          <option value="client_transfer">Client transfer (new store)</option>
+          <option value="collaborator">Collaborator access</option>
+          <option value="active_development">Active development store</option>
+        </select>
+      </div>
+      <div class="sp-form-actions">
+        <a class="sp-btn" href="/stores">Cancel</a>
+        <button class="sp-btn sp-btn-primary" type="submit" data-testid="store-new-submit">Add store</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

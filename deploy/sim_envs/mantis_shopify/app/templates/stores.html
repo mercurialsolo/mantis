@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Stores — Shopify Partners{% endblock %}
+
+{% block content %}
+<header class="sp-page-header">
+  <h1 class="sp-page-h1">Stores</h1>
+  <div class="sp-page-actions">
+    <details class="sp-dropdown">
+      <summary class="sp-btn sp-btn-icon-after" data-testid="stores-more-actions">More actions</summary>
+      <div class="sp-dropdown-menu" role="menu">
+        <a href="#export" class="sp-dropdown-item" data-testid="stores-menu-export">Export stores</a>
+        <a href="#bulk-archive" class="sp-dropdown-item" data-testid="stores-menu-bulk-archive">Bulk archive</a>
+        <a href="#bulk-transfer" class="sp-dropdown-item" data-testid="stores-menu-bulk-transfer">Bulk transfer</a>
+      </div>
+    </details>
+    <details class="sp-dropdown">
+      <summary class="sp-btn sp-btn-primary sp-btn-icon-after" data-testid="stores-add-store">Add store</summary>
+      <div class="sp-dropdown-menu" role="menu">
+        <a href="/stores/new?kind=client_transfer" class="sp-dropdown-item" data-testid="stores-add-menu-client">Create a development store</a>
+        <a href="/stores/new?kind=collaborator" class="sp-dropdown-item" data-testid="stores-add-menu-collab">Request collaborator access</a>
+        <a href="/stores/new?kind=active_development" class="sp-dropdown-item" data-testid="stores-add-menu-active">Add a Managed Markets store</a>
+      </div>
+    </details>
+  </div>
+</header>
+
+<section class="sp-card">
+  <div class="sp-tabs" data-testid="stores-tabs">
+    {% for tab_id, label in [
+      ('all', 'All'),
+      ('client_transfer', 'Client transfer'),
+      ('collaborator', 'Collaborator access'),
+      ('archived', 'Archived'),
+      ('inactive', 'Inactive'),
+    ] %}
+      <a class="sp-tab{% if current_tab == tab_id %} is-active{% endif %}"
+         href="/stores?tab={{ tab_id }}"
+         data-testid="stores-tab-{{ tab_id }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+
+  <form class="sp-filterrow" method="get" action="/stores" data-testid="stores-filter-form">
+    <input type="hidden" name="tab" value="{{ current_tab }}" />
+    <input type="search" name="q" value="{{ q }}" placeholder="Filter stores"
+           data-testid="stores-search" onchange="this.form.submit()"/>
+    <select class="sp-select" name="status" data-testid="stores-status-filter"
+            onchange="this.form.submit()">
+      <option value="">Store status</option>
+      <option value="Plus" {% if status_filter == 'Plus' %}selected{% endif %}>Plus</option>
+      <option value="Grow" {% if status_filter == 'Grow' %}selected{% endif %}>Grow</option>
+      <option value="Basic" {% if status_filter == 'Basic' %}selected{% endif %}>Basic</option>
+      <option value="Custom" {% if status_filter == 'Custom' %}selected{% endif %}>Custom</option>
+      <option value="Partner Test" {% if status_filter == 'Partner Test' %}selected{% endif %}>Partner Test</option>
+    </select>
+  </form>
+
+  <div class="sp-summary-row">
+    <span>Showing {{ n }} store{{ '' if n == 1 else 's' }}</span>
+    <select class="sp-select" name="sort" onchange="window.location='/stores?tab={{ current_tab }}&sort='+this.value">
+      <option value="last_login" {% if sort == 'last_login' %}selected{% endif %}>Sort by Last login</option>
+      <option value="name" {% if sort == 'name' %}selected{% endif %}>Sort by Name</option>
+    </select>
+  </div>
+
+  <ul class="sp-list" data-testid="stores-list">
+    {% for s in rows %}
+    <li class="sp-list-row" data-testid="stores-row">
+      <div>
+        <a class="sp-list-row-name" href="/stores/{{ s.id }}"
+           style="color:var(--c-text);text-decoration:none" data-testid="stores-name-link">{{ s.name }}</a>
+        <div class="sp-list-row-sub">{{ s.slug }}.myshopify.com</div>
+      </div>
+      <div>
+        <span class="sp-pill">
+          {% if s.kind == 'client_transfer' %}Client transfer
+          {% elif s.kind == 'collaborator' %}Collaborator access
+          {% else %}Active development store{% endif %}
+        </span>
+      </div>
+      <div class="sp-list-row-actions">
+        <details class="sp-dropdown" data-testid="stores-actions-dd">
+          <summary class="sp-link-quiet sp-dropdown-summary"
+                   data-testid="stores-actions">Actions ▾</summary>
+          <div class="sp-dropdown-menu" role="menu">
+            <a href="/stores/{{ s.id }}" class="sp-dropdown-item" data-testid="stores-menu-view">View store details</a>
+            <a href="/stores/{{ s.id }}#edit" class="sp-dropdown-item" data-testid="stores-menu-edit">Edit info</a>
+            <a href="#transfer" class="sp-dropdown-item" data-testid="stores-menu-transfer">Transfer ownership</a>
+            <form method="post" action="/stores/{{ s.id }}/archive" style="margin:0">
+              <button type="submit" class="sp-dropdown-item sp-dropdown-item-danger"
+                      data-testid="stores-menu-archive">Archive store</button>
+            </form>
+          </div>
+        </details>
+        <form method="post" action="/stores/{{ s.id }}/login" style="display:inline">
+          <button class="sp-link-quiet"
+                  style="background:none;border:0;cursor:pointer;color:var(--c-link);font-size:13px"
+                  data-testid="stores-login">Log in</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+    {% if not rows %}
+    <li class="sp-list-row"><div class="sp-text-sub">No stores match the current filters.</div><div></div><div></div></li>
+    {% endif %}
+  </ul>
+</section>
+{% endblock %}

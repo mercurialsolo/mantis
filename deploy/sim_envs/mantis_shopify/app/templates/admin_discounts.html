@@ -1,0 +1,55 @@
+{% extends "admin_base.html" %}
+{% block title %}Discounts · {{ store.name }} — Shopify{% endblock %}
+
+{% block content %}
+<div class="adm-page-header">
+  <h1 class="adm-page-h1">Discounts</h1>
+  <div class="adm-page-actions">
+    <a class="adm-btn" href="/store/{{ store_id }}/admin/discounts?export=csv" data-testid="adm-disc-export">Export</a>
+    <details class="adm-dropdown">
+      <summary class="adm-btn" data-testid="adm-disc-more">More actions ▾</summary>
+      <div class="adm-dropdown-menu">
+        <a href="/store/{{ store_id }}/admin/discounts?bulk=activate" class="adm-dropdown-item">Bulk activate</a>
+        <a href="/store/{{ store_id }}/admin/discounts?bulk=duplicate" class="adm-dropdown-item">Bulk duplicate</a>
+        <div class="adm-dropdown-sep"></div>
+        <a href="/store/{{ store_id }}/admin/discounts?bulk=delete" class="adm-dropdown-item adm-dropdown-item-critical">Bulk delete</a>
+      </div>
+    </details>
+    <a class="adm-btn adm-btn-primary" href="/store/{{ store_id }}/admin/discounts/new" data-testid="adm-disc-create">Create discount</a>
+  </div>
+</div>
+
+<section class="adm-card">
+  <div class="adm-tabs">
+    <a class="adm-tab is-active">All <span class="adm-tab-count">{{ discounts|length }}</span></a>
+    <a class="adm-tab">Active</a>
+    <a class="adm-tab">Scheduled</a>
+    <a class="adm-tab">Expired</a>
+  </div>
+  <div class="adm-filterrow">
+    <input type="search" placeholder="Search discount codes" data-testid="adm-disc-search"/>
+    <a class="adm-btn" href="#filter">Filter</a>
+    <a class="adm-btn" href="#sort">Sort ▾</a>
+  </div>
+  <table class="adm-table" data-testid="adm-disc-table">
+    <thead><tr><th><input type="checkbox" aria-label="Select all"/></th><th>Code</th><th>Type</th><th>Value</th><th>Status</th><th class="col-right">Uses</th><th>Schedule</th></tr></thead>
+    <tbody>
+      {% for d in discounts %}
+      <tr data-testid="adm-disc-row">
+        <td><input type="checkbox" aria-label="Select {{ d.code }}"/></td>
+        <td><a href="#disc/{{ d.code }}"><code style="font-family:'JetBrains Mono',monospace;font-weight:600">{{ d.code }}</code></a></td>
+        <td>{{ d.type }}</td>
+        <td>{{ d.value }}</td>
+        <td>
+          {% if d.status == 'Active' %}<span class="adm-pill adm-pill-active">Active</span>
+          {% elif d.status == 'Scheduled' %}<span class="adm-pill adm-pill-pending">Scheduled</span>
+          {% else %}<span class="adm-pill adm-pill-archived">Expired</span>{% endif %}
+        </td>
+        <td class="col-right">{{ d.uses }}</td>
+        <td>{{ d.schedule }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
