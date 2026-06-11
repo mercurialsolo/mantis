@@ -56,6 +56,10 @@ def test_registry_covers_every_step_type_phase2_lifted():
         # binds boolean to runner._state_vars for ``step.guard`` to
         # consume on subsequent conditional steps.
         "detect_visible",
+        # User-bug fix: plan-text accessible bridge to the runner's
+        # ``request_user_input`` host tool — emits the deterministic
+        # pause/resume hook from a decomposed plan_text plan.
+        "request_user_input",
     }
     assert set(reg.types()) == expected
 
