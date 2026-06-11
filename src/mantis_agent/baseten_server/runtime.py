@@ -399,7 +399,13 @@ class BasetenCUARuntime:
 
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = str(payload.get("action") or payload.get("op") or "").lower()
-        if action in {"status", "result", "logs", "resume"}:
+        # ``cancel`` and ``pause`` MUST dispatch ahead of the
+        # ``detached`` check — ``PredictRequest`` defaults ``detached``
+        # to true, so an action-only call would otherwise fall into
+        # ``_start_detached`` and either 400 on an already-running run
+        # or overwrite a finished run as a new submission. Mirrors the
+        # Modal CUA fix in ``modal_cua_server.predict`` (#866).
+        if action in {"status", "result", "logs", "resume", "cancel", "pause"}:
             return self._detached_action(action, payload)
         if action == "graph_learn":
             return self._graph_learn(payload)
@@ -468,6 +474,15 @@ class BasetenCUARuntime:
             raise FileNotFoundError(str(path))
         return json.loads(path.read_text())
 
+    # First-terminal-wins guard (mirrors ``modal_cua_server`` #866).
+    # Once a run reaches any of these the late worker write can't
+    # clobber an API-side cancel — the brain's terminal status loses
+    # to the operator's intent.
+    _TERMINAL_STATUSES: frozenset[str] = frozenset({
+        "succeeded", "failed", "cancelled", "completed_with_failures",
+        "timeout", "halted",
+    })
+
     def _write_detached_status(self, run_id: str, status: dict[str, Any]) -> dict[str, Any]:
         run_dir = self._run_path(run_id, create=True)
         status_path = run_dir / "status.json"
@@ -477,6 +492,24 @@ class BasetenCUARuntime:
                 existing = json.loads(status_path.read_text())
             except Exception:
                 existing = {}
+
+        existing_phase = str(existing.get("status", "")).lower()
+        incoming_phase = str(status.get("status", "")).lower()
+        if (
+            existing_phase in self._TERMINAL_STATUSES
+            and incoming_phase
+            and incoming_phase != existing_phase
+        ):
+            # Refuse the terminal overwrite — return the existing
+            # status unchanged so the caller's polling stays
+            # coherent. Important so a late worker write doesn't
+            # clobber an operator's cancel.
+            logger.warning(
+                "refusing to overwrite terminal status "
+                "run=%s cur=%r new=%r",
+                run_id, existing_phase, incoming_phase,
+            )
+            return existing
 
         merged = {
             **existing,
@@ -740,6 +773,81 @@ class BasetenCUARuntime:
         if not run_id:
             raise ValueError("run_id is required")
         run_dir = self._run_path(run_id)
+
+        # ``cancel`` / ``pause`` MUST be a 404 when the run isn't
+        # known — otherwise the dispatch is back-pressured into
+        # the run-submission path (the bug this fix prevents). The
+        # status read below is permissive (returns ``{}`` on
+        # missing); explicitly check existence so misrouted cancels
+        # surface as an error the caller can act on.
+        if action in {"cancel", "pause"}:
+            status_path = run_dir / "status.json"
+            if not status_path.exists():
+                raise FileNotFoundError(f"unknown run_id: {run_id}")
+
+        if action == "cancel":
+            # First-terminal-wins (mirrors ``modal_cua_server`` #866).
+            # A cancel on a finished run reports the existing status
+            # without overwriting; a cancel on an active run drops
+            # the cancel sentinel + flips status to ``cancelled``.
+            status = self._read_json_file(status_path)
+            cur = str(status.get("status", "")).lower()
+            terminal = {
+                "succeeded", "failed", "cancelled",
+                "completed_with_failures", "timeout", "halted",
+            }
+            if cur in terminal:
+                return status
+            now_iso = _utc_now()
+            try:
+                (run_dir / "cancel_request.json").write_text(
+                    json.dumps({"requested_at": now_iso}),
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                raise RuntimeError(
+                    f"failed to write cancel sentinel: {exc}"
+                ) from exc
+            status["status"] = "cancelled"
+            status["cancelled_at"] = now_iso
+            status["updated_at"] = now_iso
+            self._write_detached_status(run_id, status)
+            self._append_detached_event(run_id, "cancelled")
+            return status
+
+        if action == "pause":
+            # External pause (mirrors Modal #541). The detached worker
+            # checks the sentinel between micro steps via
+            # :func:`gym.external_pause.wait_while_paused` and stalls
+            # until ``action=resume`` clears it.
+            status = self._read_json_file(status_path)
+            cur = str(status.get("status", "")).lower()
+            if cur not in {"queued", "running"}:
+                raise ValueError(
+                    f"action='pause' requires a running run; "
+                    f"run_id={run_id!r} is in status={status.get('status')!r}"
+                )
+            reason = str(payload.get("reason") or "external") or "external"
+            now_iso = _utc_now()
+            try:
+                (run_dir / "pause_request.json").write_text(
+                    json.dumps({
+                        "reason": reason,
+                        "requested_at": now_iso,
+                    }),
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                raise RuntimeError(
+                    f"failed to write pause sentinel: {exc}"
+                ) from exc
+            status["status"] = "paused"
+            status["pause_reason"] = reason
+            status["paused_at"] = now_iso
+            status["updated_at"] = now_iso
+            self._write_detached_status(run_id, status)
+            self._append_detached_event(run_id, f"paused:{reason}")
+            return status
 
         if action == "status":
             status = self._read_json_file(run_dir / "status.json")

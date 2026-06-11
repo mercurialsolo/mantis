@@ -37,6 +37,7 @@ from .holo3 import Holo3StepHandler
 from .navigate import NavigateHandler
 from .navigate_back import MechanicalNavigateBackHandler
 from .paginate import PaginateHandler
+from .request_user_input import RequestUserInputHandler
 from .scroll import MechanicalScrollHandler
 
 if TYPE_CHECKING:
@@ -107,6 +108,11 @@ def default_registry(runner: "MicroPlanRunner") -> HandlerRegistry:
     # MicroIntents — one Claude verify-shaped call against the
     # current screenshot, boolean bound to runner._state_vars.
     reg.register(DetectVisibleHandler(runner))
+    # User-bug fix: plan-text accessible bridge to the runner's
+    # ``request_user_input`` host tool. Without this the decomposer's
+    # ``request_user_input`` step gets emitted but never reaches a
+    # handler — silently no-ops and Claude/Holo3 makes up the value.
+    reg.register(RequestUserInputHandler(runner))
     reg.register_for_types(
         ClaudeGuidedFormHandler(runner),
         ("fill_field", "submit", "select_option", "right_click"),

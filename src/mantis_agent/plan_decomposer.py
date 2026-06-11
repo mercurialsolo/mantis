@@ -121,7 +121,7 @@ def _extract_json_payload(text: str) -> Any:
 class MicroIntent:
     """A single atomic instruction for the CUA executor."""
     intent: str             # 1 sentence for Holo3: "Click the blue title text below the photo"
-    type: str               # click, scroll, navigate, extract_url, extract_data, filter, paginate, loop, navigate_back, fill_field, submit, select_option, right_click
+    type: str               # click, scroll, navigate, extract_url, extract_data, filter, paginate, loop, navigate_back, fill_field, submit, select_option, right_click, request_user_input
     verify: str = ""        # Expected outcome: "URL contains boattrader.com/boat/"
     budget: int = 5         # Max Holo3 steps
     reverse: str = ""       # How to undo: "Press Alt+Left"
@@ -473,6 +473,39 @@ choice, etc.), that value MUST appear verbatim in `params.value` (or
 `params.option_label` for selects) of the corresponding step. Never
 emit a fill_field with an empty `value` when the source provided one
 — the runner will type "" into the field and the form will be empty.
+
+PAUSE FOR USER INPUT (request_user_input) — deterministic plan-text
+pause/resume hook.
+When the source plan asks the runtime to STOP and ASK THE HUMAN for a
+value the plan does NOT carry literally — common phrasings are
+"ask the user for <X>", "prompt the user", "request the user's <X>",
+"pause for credentials", "wait for the OTP", "have the operator paste
+<X>" — emit a single ``request_user_input`` step at the point in the
+plan where the value is needed. The runtime catches the step and
+raises ``PauseRequested`` so the caller can poll ``action=status``,
+see ``status=paused``, then call ``action=resume`` with the value.
+Subsequent steps reference the resumed value via ``{{user_input}}``
+in their intent / params; the runtime substitutes the staged value
+at execute time.
+
+Required shape:
+  {
+    "type": "request_user_input",
+    "intent": "Pause and ask the operator for <X>",
+    "params": {
+      "prompt": "Please enter <X> (the runtime will pass it to the next step)",
+      "reason": "user_input"
+    },
+    "required": true,
+    "section": "setup"
+  }
+
+Use the literal value substitution token ``{{user_input}}`` in any
+later step that needs the staged value — e.g. a follow-up
+``fill_field`` whose ``params.value`` is ``"{{user_input}}"`` types
+whatever the caller submitted on resume. NEVER guess a value when
+the source said to ask the user — emitting ``fill_field`` with a
+fabricated string silently breaks the plan.
 
 WORKED EXAMPLES — credential / value preservation:
   Source: "Log in with user ID alice password hunter2"
@@ -1053,7 +1086,7 @@ class PlanDecomposer:
             logger.info("plan_text expresses read-only intent — enforcing #831 constraint")
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v36_emit_extract_blocks"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v37_request_user_input"  # Bump this when DECOMPOSE_PROMPT changes
         cache_key_text = (
             f"READONLY:{plan_text}" if read_only else plan_text
         )
@@ -1400,10 +1433,21 @@ class PlanDecomposer:
             elif step_type in PlanDecomposer.FORM_STEP_TYPES:
                 # Form steps default to "setup" — login + form-fill happens before extraction.
                 section = "setup"
+            elif step_type == "request_user_input":
+                # Pause-for-user-input is part of setup — the staged
+                # value (credential / OTP / etc.) feeds the form-fill
+                # steps that follow.
+                section = "setup"
 
         # Form steps default to required=True — failing to fill a login field
-        # or click Submit is fatal to the rest of the plan.
-        default_required = step_type == "filter" or step_type in PlanDecomposer.FORM_STEP_TYPES
+        # or click Submit is fatal to the rest of the plan. Same for
+        # ``request_user_input`` — if the runtime can't pause for the
+        # staged value the downstream form-fill has nothing to type.
+        default_required = (
+            step_type == "filter"
+            or step_type in PlanDecomposer.FORM_STEP_TYPES
+            or step_type == "request_user_input"
+        )
 
         params = s.get("params") or {}
         if not isinstance(params, dict):
