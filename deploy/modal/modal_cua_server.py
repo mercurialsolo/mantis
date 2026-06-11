@@ -4026,6 +4026,74 @@ computer_plane_image = (
 
 
 @app.function(
+    image=api_image,
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_dotenv()],
+    timeout=300,
+    memory=1024,
+    cpu=1,
+    schedule=modal.Period(minutes=5),
+)
+def session_reaper() -> dict:
+    """Cleanup orphaned session containers (Phase 1.5, #846).
+
+    Runs every 5 minutes. Scans the run-state store for
+    ``KIND_SESSION`` records whose ``expires_at_ms`` has passed or
+    that look stuck in ``status="active"`` without a ``base_url``,
+    cancels the underlying Modal FunctionCall, and marks the record
+    as ``status="reaped"``.
+
+    Doesn't touch sessions in brain-terminal states
+    (``closed``/``reaped``/``error``/``expired``) — the brain's
+    happy-path teardown is preserved.
+
+    Returns the summary dict so ``modal app logs mantis-cua-server``
+    has the count visible (look for ``session_reaper summary``).
+    """
+    import time as _time
+
+    from mantis_agent.server.session_reaper import (
+        apply_reap_decisions,
+        find_reapable_sessions,
+    )
+
+    store = _get_run_state_store()
+    sd = _get_session_dict()
+    now_ms = int(_time.time() * 1000)
+
+    decisions = find_reapable_sessions(store, now_ms=now_ms)
+    if not decisions:
+        return {"reaped": 0, "skipped": 0, "errors": []}
+
+    def _cancel(sandbox_id: str) -> None:
+        try:
+            modal.FunctionCall.from_id(sandbox_id).cancel()
+        except Exception as exc:  # noqa: BLE001
+            print(f"  reaper: cancel({sandbox_id}) raised: {exc}")
+
+    def _signal_close(session_id: str) -> None:
+        try:
+            cur = sd.get(session_id) or {}  # type: ignore[attr-defined]
+            if not isinstance(cur, dict):
+                cur = {}
+            cur.update({"close_requested": True, "close_reason": "reaper"})
+            sd[session_id] = cur  # type: ignore[index]
+        except Exception as exc:  # noqa: BLE001
+            print(f"  reaper: signal({session_id}) raised: {exc}")
+
+    summary = apply_reap_decisions(
+        decisions,
+        store=store,
+        cancel_function_call=_cancel,
+        signal_close_in_session_dict=_signal_close,
+        now_ms=now_ms,
+    )
+    # Visible via ``modal app logs`` (per feedback_warning_level_for_modal_observability).
+    print(f"WARNING: session_reaper summary {summary}")
+    return summary
+
+
+@app.function(
     image=computer_plane_image,
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],
