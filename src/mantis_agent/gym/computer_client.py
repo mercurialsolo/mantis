@@ -46,6 +46,16 @@ class ComputerPlaneConfig:
     # Opt-in CDP escape hatch. Defaults off per `feedback_cua_no_dom_access`.
     enable_cdp: bool = False
 
+    # Phase 1.5 (#846) — when set, brain talks to the session router
+    # to mint a per-session computer-plane container instead of the
+    # pinned ``computer_plane()`` ASGI app. ``session_router_url`` is
+    # the base URL of the router (typically the api() ASGI URL);
+    # ``session_router_auth_token`` is the tenant token the router's
+    # ``require_run_scope`` middleware expects.
+    session_router_url: str | None = None
+    session_router_auth_token: str | None = None
+    session_ttl_seconds: int = 3600
+
     # Per-executor overrides — `{"run_claude_cua": "modal"}`.
     per_executor_overrides: dict[str, ComputerPlaneBackend] = field(default_factory=dict)
 
@@ -65,6 +75,9 @@ class ComputerPlaneConfig:
             remote_base_url=self.remote_base_url,
             remote_auth_token=self.remote_auth_token,
             enable_cdp=self.enable_cdp,
+            session_router_url=self.session_router_url,
+            session_router_auth_token=self.session_router_auth_token,
+            session_ttl_seconds=self.session_ttl_seconds,
             per_executor_overrides=self.per_executor_overrides,
         )
 
@@ -103,9 +116,32 @@ def make_computer_client(
         return LocalXdotoolImpl(**env_kwargs)
 
     if backend == "modal":
+        # Phase 1.5 (#846) — session-routed path. When the caller
+        # configured a session router, mint a per-session container
+        # via the router and talk to that container's tunnel URL.
+        # Falls through to the pinned ``computer_plane()`` ASGI app
+        # when ``session_router_url`` isn't set, preserving Phase 1
+        # behaviour for callers that haven't opted in.
+        if cfg.session_router_url:
+            if not cfg.session_router_auth_token:
+                raise ValueError(
+                    "ComputerPlaneConfig.session_router_url requires "
+                    "session_router_auth_token"
+                )
+            from .session_routed_impl import SessionRoutedComputerImpl
+
+            return SessionRoutedComputerImpl(
+                router_url=cfg.session_router_url,
+                auth_token=cfg.session_router_auth_token,
+                enable_cdp=cfg.enable_cdp,
+                ttl_seconds=cfg.session_ttl_seconds,
+                **env_kwargs,
+            )
+
         if not cfg.remote_base_url:
             raise ValueError(
-                "ComputerPlaneConfig.backend='modal' requires remote_base_url"
+                "ComputerPlaneConfig.backend='modal' requires remote_base_url "
+                "(or session_router_url for the Phase 1.5 path)"
             )
         from .remote_computer_impl import RemoteComputerImpl
 
