@@ -2117,11 +2117,23 @@ def _get_run_state_store() -> object:
     a single ``modal.Dict``-backed store on first use; failures fall
     back to the no-op store so a control-plane hiccup never breaks
     a request.
+
+    Outside a Modal container (CI, local dev, unit tests that didn't
+    inject a store) we explicitly skip the ``modal.Dict`` construction
+    — ``modal.Dict.from_name`` blocks waiting for control-plane auth
+    when there are no credentials, which manifested as a CI hang on
+    the test_modal_endpoint fixture (PR #845). Gating on
+    ``MODAL_TASK_ID`` keeps the production path unchanged while making
+    the off-Modal path fail fast.
     """
     global _RUN_STATE_STORE, _RUN_STATE_STORE_INIT
     if _RUN_STATE_STORE_INIT:
         return _RUN_STATE_STORE
     _RUN_STATE_STORE_INIT = True
+    inside_modal = bool(os.environ.get("MODAL_TASK_ID"))
+    if not inside_modal:
+        _RUN_STATE_STORE = NullRunStateStore()
+        return _RUN_STATE_STORE
     try:
         _RUN_STATE_STORE = RunStateStore.from_name(
             "mantis-cua-run-state", create_if_missing=True,

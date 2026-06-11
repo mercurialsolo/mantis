@@ -231,6 +231,55 @@ def test_unknown_run_id_returns_404(app_with_stub) -> None:
     assert "unknown run_id" in r.json()["detail"]
 
 
+# ── Lazy init doesn't hang off-Modal (CI regression guard) ──────────
+
+
+def test_lazy_init_does_not_hit_modal_outside_container(monkeypatch, tmp_path) -> None:
+    """Regression guard for PR #845 CI hang.
+
+    Outside a Modal container (no ``MODAL_TASK_ID`` env var), the
+    lazy ``_get_run_state_store`` path must NOT call
+    ``modal.Dict.from_name`` — that blocks waiting for control-plane
+    auth in CI and previously hung shard 2 for >75 minutes.
+    """
+    monkeypatch.setenv("MANTIS_API_TOKEN", "test-token")
+    monkeypatch.setenv("MANTIS_DATA_DIR", str(tmp_path / "mantis-data"))
+    monkeypatch.delenv("MODAL_TASK_ID", raising=False)
+    monkeypatch.delenv("MANTIS_TENANT_KEYS_PATH", raising=False)
+    ta_mod.reset_key_store()
+
+    import modal_cua_server as mcs  # type: ignore[import-not-found]
+    importlib.reload(mcs)
+
+    # Sentinel: monkey-patch RunStateStore.from_name to explode if hit.
+    called = {"n": 0}
+
+    def _boom(*args, **kwargs):
+        called["n"] += 1
+        raise RuntimeError("modal.Dict.from_name should not be called off-Modal")
+
+    monkeypatch.setattr(mcs.RunStateStore, "from_name", _boom)
+
+    # First call to _get_run_state_store should return NullRunStateStore
+    # without touching modal.Dict.
+    store = mcs._get_run_state_store()
+    assert isinstance(store, mcs.NullRunStateStore)
+    assert called["n"] == 0
+
+    # And inside a Modal container, the path IS taken — verified by
+    # flipping the env var, resetting module state, and confirming
+    # from_name was called. The function swallows the sentinel
+    # RuntimeError and falls back to NullRunStateStore, so we assert
+    # via the call counter rather than via raises.
+    monkeypatch.setenv("MODAL_TASK_ID", "ta-stub-123")
+    mcs._RUN_STATE_STORE = mcs.NullRunStateStore()
+    mcs._RUN_STATE_STORE_INIT = False
+    store2 = mcs._get_run_state_store()
+    assert called["n"] == 1, "from_name must be called when MODAL_TASK_ID is set"
+    # Fell back to NullRunStateStore because sentinel raised.
+    assert isinstance(store2, mcs.NullRunStateStore)
+
+
 # ── Store is the cross-replica visibility layer ──────────────────────
 
 
