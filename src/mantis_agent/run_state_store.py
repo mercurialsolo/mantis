@@ -46,8 +46,16 @@ KIND_STATUS = "status"
 KIND_VIEWER = "viewer"
 KIND_AUGUR = "augur"
 KIND_PAUSE_REQUEST = "pause_request"
+# Phase 1.5 (#846): per-session computer-plane record. Keyed by the
+# router-minted ``session_id``, not the ``run_id`` — one run can
+# theoretically open and close multiple sessions (e.g. reaper kills
+# one and the brain transparently re-creates), and we want both
+# records discoverable for forensics.
+KIND_SESSION = "session"
 
-_VALID_KINDS = frozenset({KIND_STATUS, KIND_VIEWER, KIND_AUGUR, KIND_PAUSE_REQUEST})
+_VALID_KINDS = frozenset({
+    KIND_STATUS, KIND_VIEWER, KIND_AUGUR, KIND_PAUSE_REQUEST, KIND_SESSION,
+})
 
 
 def _safe(value: str) -> str:
