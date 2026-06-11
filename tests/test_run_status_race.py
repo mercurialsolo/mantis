@@ -9,10 +9,10 @@ lands on a different container, the volume mount on that container
 might not have seen the ``status.json`` we just wrote — so the poll
 returns 404.
 
-Fix: an in-memory recent-runs cache on the API container, queried
-ahead of the file-backed read. When the executor (different container)
-later writes a fresher status to the volume, the file read trumps the
-cache.
+Fix (#866): a cross-replica run-state store (``modal.Dict`` in prod,
+plain ``dict`` in tests) queried ahead of the file-backed read. When
+the executor (different container) later writes a fresher status to
+the volume, the file read trumps the cache.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ pytest.importorskip("modal")
 from fastapi.testclient import TestClient  # noqa: E402 — guarded by importorskip
 
 from mantis_agent import tenant_auth as ta_mod
+from mantis_agent.run_state_store import KIND_STATUS, RunStateStore
 
 
 _DEPLOY_MODAL = Path(__file__).resolve().parent.parent / "deploy" / "modal"
@@ -44,26 +45,30 @@ def mcs(monkeypatch, tmp_path):
 
     import modal_cua_server as mod  # type: ignore[import-not-found]
     importlib.reload(mod)
-    # Wipe the module-level cache between tests so leakage between
+    # Install a fresh per-test plain-dict store so leakage between
     # cases doesn't make a regression look like a pass.
-    mod._RECENT_RUNS.clear()
+    store = RunStateStore(backing={})
+    mod._RUN_STATE_STORE = store
+    mod._RUN_STATE_STORE_INIT = True
     return mod
 
 
-def test_write_status_seeds_cache(mcs):
-    """``_write_status`` must put the status in the in-memory cache
-    so the same container's poll-immediately-after path hits it."""
+def test_write_status_seeds_store(mcs):
+    """``_write_status`` must put the status in the cross-replica
+    store so the same container's poll-immediately-after path hits it."""
     status = {"run_id": "r1", "status": "queued", "updated_at": "2026-06-09T20:00:00+00:00"}
     mcs._write_status("default", "r1", status)
-    assert "default::r1" in mcs._RECENT_RUNS
-    assert mcs._RECENT_RUNS["default::r1"]["status"] == "queued"
+    store = mcs._get_run_state_store()
+    cached = store.get("default", "r1", KIND_STATUS)
+    assert cached is not None
+    assert cached["status"] == "queued"
 
 
 def test_read_status_returns_cached_when_volume_empty(mcs, tmp_path):
     """The cache must satisfy a poll even when the on-disk status.json
     isn't there yet (volume eventual-consistency window)."""
     status = {"run_id": "r-fresh", "status": "queued", "updated_at": "2026-06-09T20:00:00+00:00"}
-    mcs._cache_status("default", "r-fresh", status)
+    mcs._get_run_state_store().put("default", "r-fresh", KIND_STATUS, status)
     # Confirm the file doesn't exist.
     assert not (mcs._run_dir("default", "r-fresh") / "status.json").exists()
     got = mcs._read_status("default", "r-fresh")
@@ -80,19 +85,16 @@ def test_read_status_returns_none_for_truly_unknown(mcs):
 def test_on_disk_newer_wins_over_cache(mcs):
     """The executor writes the status from a different container; on
     next read the file should win and refresh the cache."""
+    store = mcs._get_run_state_store()
     # Seed cache with an older queued state.
-    mcs._cache_status("default", "r1", {
+    store.put("default", "r1", KIND_STATUS, {
         "run_id": "r1",
         "status": "queued",
         "updated_at": "2026-06-09T20:00:00+00:00",
     })
     # Executor flips it to running via the file (simulating a
     # different-container write that the API hasn't cached).
-    mcs._write_status_raw_to_file("default", "r1", {
-        "run_id": "r1",
-        "status": "running",
-        "updated_at": "2026-06-09T20:00:30+00:00",
-    }) if hasattr(mcs, "_write_status_raw_to_file") else _direct_file_write(
+    _direct_file_write(
         mcs, "default", "r1", {
             "run_id": "r1",
             "status": "running",
@@ -103,40 +105,9 @@ def test_on_disk_newer_wins_over_cache(mcs):
     assert got is not None
     assert got["status"] == "running"
     # Cache should have been refreshed.
-    assert mcs._RECENT_RUNS["default::r1"]["status"] == "running"
-
-
-def test_cache_evicts_terminal_runs(mcs):
-    """Finished runs don't need to stay in the cache — the client
-    will use the result endpoint after a terminal poll."""
-    _direct_file_write(mcs, "default", "r-done", {
-        "run_id": "r-done",
-        "status": "succeeded",
-        "updated_at": "2026-06-09T20:01:00+00:00",
-    })
-    mcs._cache_status("default", "r-done", {
-        "run_id": "r-done",
-        "status": "running",
-        "updated_at": "2026-06-09T20:00:00+00:00",
-    })
-    got = mcs._read_status("default", "r-done")
-    assert got["status"] == "succeeded"
-    assert "default::r-done" not in mcs._RECENT_RUNS
-
-
-def test_cache_bounded(mcs):
-    """Cache must not grow unboundedly — eviction kicks in past the cap."""
-    cap = mcs._RECENT_RUNS_MAX
-    for i in range(cap + 100):
-        mcs._cache_status("default", f"r-{i}", {
-            "run_id": f"r-{i}",
-            "status": "queued",
-            "updated_at": "2026-06-09T20:00:00+00:00",
-        })
-    assert len(mcs._RECENT_RUNS) <= cap + 100  # at minimum: hasn't exploded
-    # Some old entries must have been evicted — the most recent ones
-    # survive.
-    assert f"default::r-{cap + 50}" in mcs._RECENT_RUNS
+    refreshed = store.get("default", "r1", KIND_STATUS)
+    assert refreshed is not None
+    assert refreshed["status"] == "running"
 
 
 def _direct_file_write(mcs, tenant_id: str, run_id: str, payload: dict) -> None:
@@ -176,9 +147,11 @@ def test_immediate_poll_after_submit_does_not_return_404(mcs):
     import json
 
     executor = _StubExecutor()
+    store = RunStateStore(backing={})
     app = mcs.build_api_app(
         executor_resolver=lambda model: executor,
         function_call_lookup=lambda call_id: executor.call,
+        run_state_store=store,
     )
     client = TestClient(app)
     h = {"X-Mantis-Token": "test-token", "Content-Type": "application/json"}
