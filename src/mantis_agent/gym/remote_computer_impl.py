@@ -95,6 +95,13 @@ class RemoteComputerImpl(ComputerClient):
         # profile with the brain-supplied header set.
         profile_dir: str | None = None,
         extra_http_headers: dict[str, str] | None = None,
+        # Phase 1.5 (#846): when the brain talks to a per-session
+        # container via the router, the router has already bound the
+        # session and minted a token before publishing the tunnel URL.
+        # Pre-setting ``self._session_token`` short-circuits
+        # ``session_init()`` so we don't double-bind (which would 409
+        # against the orchestrator's existing session).
+        pre_minted_session_token: str | None = None,
         # The following kwargs are accepted for parity with
         # XdotoolGymEnv.__init__ but unused server-side (computer plane
         # manages its own lifecycle).
@@ -119,7 +126,7 @@ class RemoteComputerImpl(ComputerClient):
         self._timeout = request_timeout_seconds
         self._profile_dir = profile_dir
         self._extra_http_headers = extra_http_headers or None
-        self._session_token: str | None = None
+        self._session_token: str | None = pre_minted_session_token or None
 
         self.screenshot_latency = LatencyTracker("screenshot")
         self.xdotool_latency = LatencyTracker("xdotool")
@@ -225,6 +232,16 @@ class RemoteComputerImpl(ComputerClient):
     # ── wire contract surface (used by tests + advanced callers) ────
 
     def session_init(self) -> SessionInitResponse:
+        # Phase 1.5 (#846): when the router already minted a session
+        # against the per-session container, skip the /session/init
+        # hop — that container's ComputerAgent state is already bound
+        # and a second init would 409 against the live session.
+        if self._session_token:
+            return SessionInitResponse(
+                session_token=self._session_token,
+                chrome_pid=None,
+                xvfb_display=":99",
+            )
         req = SessionInitRequest(
             tenant_id=self._tenant_id,
             profile_id=self._profile_id,

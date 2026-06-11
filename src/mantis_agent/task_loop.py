@@ -141,6 +141,18 @@ def _computer_plane_config_from_env(
     * `MANTIS_COMPUTER_PLANE_TOKEN` — `Authorization: Bearer ...`
     * `MANTIS_COMPUTER_PLANE_ENABLE_CDP` — `1`/`true` to opt in
       (off by default per the wire-contract CUA-purity constraint).
+
+    Phase 1.5 (#846) — session-routed mode:
+
+    * `MANTIS_SESSION_ROUTER_URL` — router base URL (typically the
+      ``api()`` ASGI URL). When set, brain mints a dedicated
+      per-session computer-plane container via
+      ``POST /v1/computer_sessions`` instead of sharing the pinned
+      ``computer_plane()`` ASGI app.
+    * `MANTIS_SESSION_ROUTER_TOKEN` — tenant token forwarded to the
+      router's ``require_run_scope`` middleware.
+    * `MANTIS_SESSION_TTL_SECONDS` — per-session lifetime (seconds);
+      clamped against the deployment cap server-side.
     """
     from .gym.computer_client import ComputerPlaneConfig
 
@@ -150,11 +162,18 @@ def _computer_plane_config_from_env(
     enable_cdp = (os.environ.get("MANTIS_COMPUTER_PLANE_ENABLE_CDP") or "").strip().lower() in (
         "1", "true", "yes", "on",
     )
+    try:
+        session_ttl = int(os.environ.get("MANTIS_SESSION_TTL_SECONDS") or "3600")
+    except ValueError:
+        session_ttl = 3600
     cfg = ComputerPlaneConfig(
         backend=backend_env,  # type: ignore[arg-type]
         remote_base_url=(os.environ.get("MANTIS_COMPUTER_PLANE_URL") or "").strip() or None,
         remote_auth_token=(os.environ.get("MANTIS_COMPUTER_PLANE_TOKEN") or "").strip() or None,
         enable_cdp=enable_cdp,
+        session_router_url=(os.environ.get("MANTIS_SESSION_ROUTER_URL") or "").strip() or None,
+        session_router_auth_token=(os.environ.get("MANTIS_SESSION_ROUTER_TOKEN") or "").strip() or None,
+        session_ttl_seconds=session_ttl,
     )
     return cfg.resolve_for_executor(executor_name)
 
