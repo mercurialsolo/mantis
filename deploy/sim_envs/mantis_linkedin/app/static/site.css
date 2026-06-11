@@ -293,12 +293,88 @@ pre.md-body {
 .post-action:hover { background: rgba(0,0,0,0.06); color: rgba(0,0,0,0.9); }
 
 .comment-form {
-  display: flex; gap: 8px; margin-top: 8px; padding-top: 8px;
+  display: flex; gap: 8px; margin-top: 8px; padding-top: 12px;
   border-top: 1px solid rgba(0,0,0,0.08);
+  align-items: flex-start;
 }
-.comment-form input {
-  flex: 1; padding: 8px 12px; border: 1px solid rgba(0,0,0,0.3);
-  border-radius: 9999px; font-size: 14px;
+.comment-form-avatar {
+  width: 32px; height: 32px;
+  border-radius: 999px;
+  background: #0a66c2;
+  color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 13px;
+  flex-shrink: 0;
+}
+.comment-form-input-wrap {
+  flex: 1;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.6);
+  border-radius: 16px;
+  padding: 8px 12px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  display: flex; flex-direction: column;
+}
+.comment-form-input-wrap:focus-within {
+  border-color: #0a66c2;
+  box-shadow: 0 0 0 1px #0a66c2;
+}
+.comment-form-input {
+  flex: 1;
+  border: 0; outline: 0;
+  background: transparent;
+  padding: 4px 0;
+  font-size: 14px;
+  font-family: inherit;
+  color: rgba(0,0,0,0.9);
+}
+.comment-form-input::placeholder { color: rgba(0,0,0,0.6); }
+/* Suppress polish.css focus-visible ring on the inner input; wrap shows its own */
+.comment-form-input:focus,
+.comment-form-input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border: 0 !important;
+}
+.comment-form-actions {
+  display: flex; align-items: center; gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(0,0,0,0.06);
+}
+.comment-form-icon {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  width: 32px; height: 32px;
+  border-radius: 4px;
+  color: rgba(0,0,0,0.6);
+  font-size: 16px;
+  font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.12s;
+}
+.comment-form-icon:hover {
+  background: rgba(0,0,0,0.06); color: rgba(0,0,0,0.9);
+}
+.comment-form-submit {
+  margin-left: auto;
+  background: #0a66c2;
+  color: #fff;
+  border: 0;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  transition: background 0.12s, opacity 0.12s;
+}
+.comment-form-submit:hover:not([disabled]) { background: #084d92; }
+.comment-form-submit[disabled] {
+  background: rgba(0,0,0,0.08);
+  color: rgba(0,0,0,0.4);
+  cursor: not-allowed;
 }
 
 /* right rail */

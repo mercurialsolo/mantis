@@ -148,6 +148,22 @@ def effective_user_id(request: Request, *, default: str = "user_00001") -> str:
     return default
 
 
+def effective_user(request: Request, *, default_id: str = "user_00001") -> dict[str, Any]:
+    """Return the current user OR the canonical seeded fallback so the
+    post-login topbar/sidebar shell always renders. Mirrors the pattern
+    used in mantis_shopify."""
+    u = current_user(request)
+    if u:
+        return u
+    fb = lookup_user_by_id(default_id)
+    return fb or {
+        "id": default_id,
+        "email": "demo@indeed.example",
+        "role": "seeker",
+        "name": "Demo Mantis",
+    }
+
+
 def effective_employer_id(request: Request, *, default: str = "user_emp_00003") -> str:
     user = current_user(request)
     if user and user.get("role") == "employer":

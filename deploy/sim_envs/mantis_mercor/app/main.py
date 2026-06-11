@@ -81,6 +81,12 @@ def create_app() -> FastAPI:
             request.state.current_user = auth.current_user(request)
         except Exception:  # noqa: BLE001
             request.state.current_user = None
+        try:
+            request.state.effective_user = auth.effective_user(
+                request, default_role="candidate",
+            )
+        except Exception:  # noqa: BLE001
+            request.state.effective_user = None
 
         if auth.auth_required():
             path = request.url.path

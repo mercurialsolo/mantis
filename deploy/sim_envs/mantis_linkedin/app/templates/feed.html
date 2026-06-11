@@ -168,7 +168,7 @@
             </button>
           </form>
           <button class="post-action" data-testid="action-comment"
-                  onclick="document.getElementById('comment-form-{{ post.id }}').style.display='block'">
+                  onclick="(function(f){f.style.display='flex';f.querySelector('input').focus();})(document.getElementById('comment-form-{{ post.id }}'))">
             <span class="ico-glyph">💬</span> Comment
           </button>
           <button class="post-action" data-testid="action-repost">
@@ -181,10 +181,26 @@
 
         <form id="comment-form-{{ post.id }}" method="post"
               action="/feed/posts/{{ post.id }}/comment"
-              class="comment-form" style="display:none">
-          <input type="text" name="body" placeholder="Add a comment…"
-                 data-testid="comment-input"/>
-          <button class="btn-primary btn-small" type="submit">Post</button>
+              class="comment-form" style="display:none"
+              data-testid="comment-form">
+          <span class="comment-form-avatar"
+                style="background:{{ me.avatar_color }}">
+            {{ me.name[:1]|upper }}</span>
+          <div class="comment-form-input-wrap">
+            <input type="text" name="body" placeholder="Add a comment…"
+                   class="comment-form-input"
+                   data-testid="comment-input"/>
+            <div class="comment-form-actions">
+              <button type="button" class="comment-form-icon" title="Emoji"
+                      data-testid="comment-emoji">😊</button>
+              <button type="button" class="comment-form-icon" title="Photo"
+                      data-testid="comment-photo">▤</button>
+              <button type="button" class="comment-form-icon" title="GIF"
+                      data-testid="comment-gif">GIF</button>
+              <button type="submit" class="comment-form-submit"
+                      data-testid="comment-submit" disabled>Comment</button>
+            </div>
+          </div>
         </form>
       </article>
     {% endfor %}
@@ -268,5 +284,13 @@
     function sync() { btn.disabled = !t.value.trim(); }
     t.addEventListener('input', sync); sync();
   })();
+  // Enable per-comment Post button on input
+  document.querySelectorAll('[data-testid="comment-form"]').forEach(function(f) {
+    var input = f.querySelector('[data-testid="comment-input"]');
+    var submit = f.querySelector('[data-testid="comment-submit"]');
+    if (!input || !submit) return;
+    function sync() { submit.disabled = !input.value.trim(); }
+    input.addEventListener('input', sync); sync();
+  });
 </script>
 {% endblock %}

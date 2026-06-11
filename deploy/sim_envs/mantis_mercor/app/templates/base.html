@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Mercor — Shape the frontier of AI{% endblock %}</title>
   <link rel="stylesheet" href="/static/site.css" />
+  <link rel="stylesheet" href="/static/polish.css?v=20260610a" />
+  <script src="/static/polish.js?v=20260610a" defer></script>
 </head>
 <body>
 <header class="topbar" data-testid="topbar">
@@ -21,10 +23,12 @@
       <a href="/experts" data-testid="nav-experts">Experts</a>
     </nav>
     <div class="topbar-actions" data-testid="topbar-actions">
-      {% set _u = request.state.current_user if request.state and request.state.current_user else None %}
+      {% set _u = (request.state.current_user if request.state and request.state.current_user else None) or (request.state.effective_user if request.state and request.state.effective_user else None) %}
       {% if _u %}
         <a class="link-quiet" href="/dashboard" data-testid="topbar-dashboard">Dashboard</a>
-        <span class="topbar-avatar" data-testid="topbar-avatar">{{ _u.name | initials }}</span>
+        <a class="link-quiet" href="/profile" data-testid="topbar-profile">Profile</a>
+        <span class="topbar-avatar" data-testid="topbar-avatar"
+              title="{{ _u.name }}">{{ _u.name | initials }}</span>
         <form method="post" action="/logout" style="display:inline">
           <button type="submit" class="btn-quiet" data-testid="topbar-logout">Sign out</button>
         </form>
@@ -44,7 +48,9 @@
     <div class="footer-links">
       <a href="/jobs">Roles</a>
       <a href="/experts">Experts</a>
-      <a href="/login">Sign in</a>
+      {% if not ((request.state.current_user if request.state else None) or (request.state.effective_user if request.state else None)) %}
+        <a href="/login">Sign in</a>
+      {% endif %}
     </div>
   </div>
 </footer>
