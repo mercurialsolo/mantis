@@ -212,6 +212,12 @@ class ProfileSnapshotter:
         self._allow_hot_mode = bool(allow_hot_mode)
         self._max_archive_bytes = int(max_archive_bytes)
         self._clock = clock or time.monotonic
+        # Backblaze B2 (and possibly other S3-compatible stores) rejects
+        # the ``If-None-Match`` / ``If-Match`` headers on PutObject with
+        # "NotImplemented". We detect this lazily on the first attempt
+        # and fall back to read-then-write with post-write read-back
+        # verification. ``None`` = not probed yet.
+        self._conditional_put_supported: Optional[bool] = None
 
     @classmethod
     def from_env(cls) -> "ProfileSnapshotter":
@@ -582,6 +588,472 @@ class ProfileSnapshotter:
         )
 
 
+# ── Capture (M2 writer) ───────────────────────────────────────────────
+
+
+CaptureOutcome = Literal[
+    "captured",        # New snapshot written and pointer flipped
+    "deduplicated",    # Identical archive_sha already canonical (no-op)
+    "too_large",       # Source exceeded policy ceiling — refused
+    "empty_source",    # Source dir didn't exist or had no files
+    "upload_failed",   # Archive / manifest upload didn't complete
+    "pointer_race",    # CAS retries exhausted; archive uploaded, pointer not flipped
+    "exception",       # Unhandled error inside capture
+]
+
+
+@dataclass(frozen=True)
+class CaptureResult:
+    """Structured outcome of a ``capture()`` call.
+
+    Mirrors :class:`LoadResult`'s shape so brain code can treat the
+    two outcomes symmetrically (every plan run loads at boot, captures
+    at teardown).
+    """
+
+    outcome: CaptureOutcome
+    reason: str = ""
+    archive_sha256: str = ""
+    archive_size_bytes: int = 0
+    uncompressed_size_bytes: int = 0
+    elapsed_seconds: float = 0.0
+    manifest_key: str = ""
+    archive_key: str = ""
+    predecessor_sha256: str = ""
+
+
+# How many times to retry the ``latest.json`` conditional PUT before
+# giving up. Spec § 2 — 3 attempts is the empirical sweet spot for B2
+# under typical concurrent-writer pressure (two reapers, one brain).
+_POINTER_FLIP_RETRIES = 3
+
+
+def _capture(self, *, tenant_id: str, profile_id: str,
+             source_profile_dir: Path,
+             mode: Literal["cold", "hot"] = "cold",
+             chrome_uptime_seconds_at_capture: int = 0,
+             notes: str = "",
+             captured_in: Optional[dict[str, Any]] = None) -> "CaptureResult":
+    """Production writer — spec § 1 + § 2.
+
+    Tars + zstd-9 compresses ``source_profile_dir`` into an in-memory
+    archive, uploads the archive + sibling manifest, then flips
+    ``latest.json`` via S3 conditional PUT (compare-and-swap on ETag).
+
+    Hot mode raises ``NotImplementedError`` until the cold-mode test
+    harness lands — spec § 3 deliberately defers hot mode.
+
+    Idempotency:
+
+    * If the computed ``archive_sha256`` matches the currently
+      pointed-at snapshot, the upload is a content-addressed no-op:
+      we don't re-upload, and the pointer flip is also skipped. We
+      return ``outcome="deduplicated"`` so the caller can log it as
+      free.
+    * If the conditional PUT fails after ``_POINTER_FLIP_RETRIES``
+      attempts, the archive + manifest STAY in the bucket (visible
+      via listing). The pointer just didn't flip. Operator can flip
+      manually via the M3 CLI.
+
+    Failure modes that don't raise (return CaptureResult instead):
+
+    * Source dir doesn't exist → ``empty_source``
+    * Source dir empty (tar of nothing) → ``empty_source``
+    * Compressed size exceeds policy ceiling → ``too_large``
+    * Archive PUT raises → ``upload_failed``
+    * Pointer CAS retries exhausted → ``pointer_race``
+
+    Caller decides whether to surface these as a hard error or just
+    log + carry on (the brain's hot path typically logs + carries on:
+    a missed snapshot doesn't break the run, just costs a fresh-boot
+    next time).
+    """
+    import zstandard as zstd
+
+    if mode == "hot":
+        raise NotImplementedError(
+            "hot-mode capture is deferred — see "
+            "docs/reference/computer-plane-profile-snapshots.md § 3. "
+            "Use cold mode (the default) until the WAL-checkpoint "
+            "test harness lands."
+        )
+
+    t0 = self._clock()
+    source = Path(source_profile_dir)
+    if not source.is_dir():
+        return CaptureResult(
+            outcome="empty_source",
+            reason=f"source dir does not exist: {source}",
+            elapsed_seconds=self._clock() - t0,
+        )
+
+    # 1. Tar the directory contents into an in-memory buffer.
+    buf = io.BytesIO()
+    file_count = 0
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for path in sorted(source.rglob("*")):
+            rel = path.relative_to(source)
+            tf.add(path, arcname=str(rel))
+            if path.is_file():
+                file_count += 1
+    if file_count == 0:
+        return CaptureResult(
+            outcome="empty_source",
+            reason="source dir contains no files",
+            elapsed_seconds=self._clock() - t0,
+        )
+    uncompressed_size = buf.tell()
+
+    # 2. zstd-9 compress.
+    cctx = zstd.ZstdCompressor(level=9)
+    compressed = cctx.compress(buf.getvalue())
+    archive_sha256 = hashlib.sha256(compressed).hexdigest()
+    sha_prefix = archive_sha256[:12]
+    archive_size = len(compressed)
+
+    # 3. Policy ceiling — refuse if too large.
+    if archive_size > self._max_archive_bytes:
+        return CaptureResult(
+            outcome="too_large",
+            reason=(
+                f"archive {archive_size}B exceeds policy ceiling "
+                f"{self._max_archive_bytes}B"
+            ),
+            archive_sha256=archive_sha256,
+            archive_size_bytes=archive_size,
+            uncompressed_size_bytes=uncompressed_size,
+            elapsed_seconds=self._clock() - t0,
+        )
+
+    # 4. Dedup check — if the current pointer already points at this
+    # sha, we have nothing new to upload.
+    prefix = self._prefix(tenant_id, profile_id)
+    archive_key = f"{prefix}profile-{sha_prefix}.tar.zst"
+    manifest_key = f"{prefix}profile-{sha_prefix}.manifest.json"
+    pointer_key = f"{prefix}latest.json"
+    predecessor_sha = ""
+    existing_pointer_etag = ""
+    try:
+        existing = self._s3.get_object(Bucket=self._bucket, Key=pointer_key)
+        existing_pointer_etag = (existing.get("ETag") or "").strip('"')
+        existing_body = existing["Body"].read()
+        existing_pointer = LatestPointer.model_validate_json(existing_body)
+        predecessor_sha = existing_pointer.active_sha256_prefix
+        if existing_pointer.active_sha256_prefix == sha_prefix:
+            return CaptureResult(
+                outcome="deduplicated",
+                reason="archive sha matches current latest pointer",
+                archive_sha256=archive_sha256,
+                archive_size_bytes=archive_size,
+                uncompressed_size_bytes=uncompressed_size,
+                manifest_key=manifest_key,
+                archive_key=archive_key,
+                predecessor_sha256=predecessor_sha,
+                elapsed_seconds=self._clock() - t0,
+            )
+    except Exception as exc:  # noqa: BLE001
+        if not _is_not_found(exc):
+            logger.warning(
+                "profile snapshot: pointer pre-read failed "
+                "tenant=%s profile=%s (%s)",
+                tenant_id, profile_id, exc,
+            )
+        # No existing pointer → first-ever snapshot. predecessor stays
+        # empty, etag stays empty, conditional PUT below uses
+        # If-None-Match: *.
+
+    # 5. Upload archive + manifest. Archive first so a successful
+    # manifest never points at a missing archive.
+    try:
+        self._s3.put_object(
+            Bucket=self._bucket, Key=archive_key, Body=compressed,
+            ContentType="application/zstd",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "profile snapshot: archive upload failed "
+            "tenant=%s profile=%s key=%s (%s)",
+            tenant_id, profile_id, archive_key, exc,
+        )
+        return CaptureResult(
+            outcome="upload_failed", reason=f"archive PUT: {exc}",
+            archive_sha256=archive_sha256,
+            archive_size_bytes=archive_size,
+            uncompressed_size_bytes=uncompressed_size,
+            elapsed_seconds=self._clock() - t0,
+        )
+
+    manifest = {
+        "version": 1,
+        "schema": "computer-plane.profile-snapshot",
+        "tenant_id": tenant_id,
+        "profile_id": profile_id,
+        "chrome_major_version": self._chrome_major,
+        "archive_sha256": archive_sha256,
+        "archive_size_bytes": archive_size,
+        "uncompressed_size_bytes": uncompressed_size,
+        "captured_at_ms": int(time.time() * 1000),
+        "mode": mode,
+        "chrome_uptime_seconds_at_capture": int(
+            chrome_uptime_seconds_at_capture
+        ),
+        "predecessor_sha256": predecessor_sha,
+        "notes": notes or "",
+        "captured_by": {
+            "host": "modal",  # M2 will accept this as a kwarg in M3
+            "writer_version": "snapshotter-0.2.0-m2",
+        },
+        "captured_in": captured_in or {},
+    }
+    try:
+        self._s3.put_object(
+            Bucket=self._bucket, Key=manifest_key,
+            Body=json.dumps(manifest, indent=2).encode("utf-8"),
+            ContentType="application/json",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "profile snapshot: manifest upload failed "
+            "tenant=%s profile=%s key=%s (%s)",
+            tenant_id, profile_id, manifest_key, exc,
+        )
+        return CaptureResult(
+            outcome="upload_failed", reason=f"manifest PUT: {exc}",
+            archive_sha256=archive_sha256,
+            archive_size_bytes=archive_size,
+            uncompressed_size_bytes=uncompressed_size,
+            archive_key=archive_key,
+            elapsed_seconds=self._clock() - t0,
+        )
+
+    # 6. Conditional pointer flip via ETag CAS.
+    flipped = self._flip_pointer(
+        pointer_key=pointer_key,
+        new_sha_prefix=sha_prefix,
+        new_archive_key=archive_key,
+        new_manifest_key=manifest_key,
+        expected_etag=existing_pointer_etag,
+        predecessor_sha_prefix=predecessor_sha,
+    )
+    if not flipped:
+        return CaptureResult(
+            outcome="pointer_race",
+            reason=(
+                f"conditional PUT on {pointer_key} exhausted "
+                f"{_POINTER_FLIP_RETRIES} retries; archive+manifest "
+                f"uploaded under sha={sha_prefix} but pointer not flipped"
+            ),
+            archive_sha256=archive_sha256,
+            archive_size_bytes=archive_size,
+            uncompressed_size_bytes=uncompressed_size,
+            manifest_key=manifest_key,
+            archive_key=archive_key,
+            predecessor_sha256=predecessor_sha,
+            elapsed_seconds=self._clock() - t0,
+        )
+
+    return CaptureResult(
+        outcome="captured",
+        archive_sha256=archive_sha256,
+        archive_size_bytes=archive_size,
+        uncompressed_size_bytes=uncompressed_size,
+        manifest_key=manifest_key,
+        archive_key=archive_key,
+        predecessor_sha256=predecessor_sha,
+        elapsed_seconds=self._clock() - t0,
+    )
+
+
+def _flip_pointer(self, *,
+                  pointer_key: str,
+                  new_sha_prefix: str,
+                  new_archive_key: str,
+                  new_manifest_key: str,
+                  expected_etag: str,
+                  predecessor_sha_prefix: str) -> bool:
+    """Conditional PUT of ``latest.json`` with ETag CAS.
+
+    On backends that support ``If-Match`` / ``If-None-Match`` on
+    PutObject (AWS S3, Cloudflare R2, MinIO), the flip is a true CAS.
+
+    On backends that return ``NotImplemented`` for those headers
+    (notably Backblaze B2), we fall back to "read-then-write + post-
+    write read-back verify": write unconditionally, then re-read; if
+    the stored body matches what we wrote, we won the race. The race
+    window is bounded by the per-profile lock's mutual exclusion (the
+    brain holds the lock for the full plan duration), so concurrent
+    writers without lock coordination are out of scope.
+
+    Returns True on success, False if all retries hit a CAS conflict
+    OR (in fallback mode) the read-back never shows our sha.
+    """
+    for attempt in range(_POINTER_FLIP_RETRIES):
+        pointer_body = json.dumps({
+            "version": 1,
+            "active_sha256_prefix": new_sha_prefix,
+            "active_archive_key": new_archive_key,
+            "active_manifest_key": new_manifest_key,
+            "flipped_at_ms": int(time.time() * 1000),
+            "flipped_from_sha256_prefix": predecessor_sha_prefix,
+        }, indent=2).encode("utf-8")
+        kwargs: dict[str, Any] = {
+            "Bucket": self._bucket,
+            "Key": pointer_key,
+            "Body": pointer_body,
+            "ContentType": "application/json",
+        }
+        # boto3 forwards IfMatch / IfNoneMatch as request headers.
+        # ``expected_etag=""`` means we expect the key not to exist
+        # yet (first snapshot).
+        use_conditional = self._conditional_put_supported is not False
+        if use_conditional:
+            if expected_etag:
+                kwargs["IfMatch"] = expected_etag
+            else:
+                kwargs["IfNoneMatch"] = "*"
+        try:
+            self._s3.put_object(**kwargs)
+            if self._conditional_put_supported is None and use_conditional:
+                self._conditional_put_supported = True
+            # Fallback mode: read-back verify.
+            if not use_conditional:
+                if not self._readback_matches(pointer_key, new_sha_prefix):
+                    logger.warning(
+                        "profile snapshot: pointer read-back mismatch "
+                        "attempt=%d/%d key=%s — racing writer won",
+                        attempt + 1, _POINTER_FLIP_RETRIES, pointer_key,
+                    )
+                    # Race — re-read to pick up the latest predecessor
+                    # and retry (in case we want to overwrite the
+                    # winner).
+                    refreshed = self._refresh_predecessor(pointer_key)
+                    if refreshed is not None:
+                        predecessor_sha_prefix = refreshed
+                    continue
+            return True
+        except Exception as exc:  # noqa: BLE001
+            if (
+                use_conditional
+                and _is_conditional_put_not_implemented(exc)
+            ):
+                # Backend doesn't support conditional PUT. Flip the
+                # flag and retry without conditional headers (this
+                # iteration counts toward the retry budget).
+                logger.warning(
+                    "profile snapshot: backend rejected conditional "
+                    "PUT (NotImplemented) — falling back to read-then-"
+                    "write for pointer key=%s",
+                    pointer_key,
+                )
+                self._conditional_put_supported = False
+                continue
+            if not _is_cas_conflict(exc):
+                logger.warning(
+                    "profile snapshot: pointer PUT raised non-CAS "
+                    "error attempt=%d/%d (%s)",
+                    attempt + 1, _POINTER_FLIP_RETRIES, exc,
+                )
+                return False
+        # CAS conflict — re-read the pointer to pick up the new ETag,
+        # then retry. If the re-read shows the predecessor sha already
+        # matches ours, treat as deduplicated success.
+        try:
+            existing = self._s3.get_object(
+                Bucket=self._bucket, Key=pointer_key,
+            )
+            expected_etag = (existing.get("ETag") or "").strip('"')
+            try:
+                cur = LatestPointer.model_validate_json(
+                    existing["Body"].read()
+                )
+                if cur.active_sha256_prefix == new_sha_prefix:
+                    return True  # someone else won the race with the same sha
+                predecessor_sha_prefix = cur.active_sha256_prefix
+            except Exception:  # noqa: BLE001 — fall through to retry
+                pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "profile snapshot: pointer re-read failed during retry "
+                "attempt=%d (%s)", attempt + 1, exc,
+            )
+            return False
+    return False
+
+
+def _readback_matches(self, pointer_key: str, expected_sha_prefix: str) -> bool:
+    """Read ``pointer_key`` and return True iff its active sha matches.
+
+    Used by :func:`_flip_pointer` in fallback mode (no conditional PUT
+    support). Returns False on read errors so the caller treats as a
+    failed race."""
+    try:
+        existing = self._s3.get_object(
+            Bucket=self._bucket, Key=pointer_key,
+        )
+        cur = LatestPointer.model_validate_json(existing["Body"].read())
+        return cur.active_sha256_prefix == expected_sha_prefix
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "profile snapshot: pointer read-back failed key=%s (%s)",
+            pointer_key, exc,
+        )
+        return False
+
+
+def _refresh_predecessor(self, pointer_key: str) -> Optional[str]:
+    """Return the current pointer's active sha, or None on read error.
+
+    Used by :func:`_flip_pointer` in fallback mode to refresh the
+    ``flipped_from_sha256_prefix`` field after a lost race."""
+    try:
+        existing = self._s3.get_object(
+            Bucket=self._bucket, Key=pointer_key,
+        )
+        cur = LatestPointer.model_validate_json(existing["Body"].read())
+        return cur.active_sha256_prefix
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# Bind the new methods onto ``ProfileSnapshotter``. Defining them at
+# module scope (rather than inline in the class body) keeps the
+# loader-only PR #865 diff small AND keeps M2's writer concerns
+# visually grouped under the # ── Capture (M2 writer) ── banner.
+ProfileSnapshotter.capture = _capture  # type: ignore[attr-defined]
+ProfileSnapshotter._flip_pointer = _flip_pointer  # type: ignore[attr-defined]
+ProfileSnapshotter._readback_matches = _readback_matches  # type: ignore[attr-defined]
+ProfileSnapshotter._refresh_predecessor = _refresh_predecessor  # type: ignore[attr-defined]
+
+
+def _is_cas_conflict(exc: Exception) -> bool:
+    """True iff the S3 exception is a CAS conflict (PreconditionFailed
+    or 412)."""
+    err = getattr(exc, "response", {}) or {}
+    code = (err.get("Error") or {}).get("Code", "")
+    if code in {"PreconditionFailed", "412"}:
+        return True
+    msg = str(exc).lower()
+    if "preconditionfailed" in msg or "412" in msg:
+        return True
+    return False
+
+
+def _is_conditional_put_not_implemented(exc: Exception) -> bool:
+    """True iff the S3 exception is "NotImplemented" — which Backblaze
+    B2 returns for ``If-None-Match`` / ``If-Match`` on PutObject.
+
+    The flag we set on the snapshotter then suppresses the conditional
+    headers on subsequent calls, falling back to read-then-write."""
+    err = getattr(exc, "response", {}) or {}
+    code = (err.get("Error") or {}).get("Code", "")
+    if code in {"NotImplemented", "501"}:
+        return True
+    msg = str(exc).lower()
+    if "notimplemented" in msg or "not implemented" in msg:
+        return True
+    return False
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -710,9 +1182,11 @@ def capture_and_upload_for_testing(
 
 
 __all__ = [
-    "LoadResult",
-    "LoadOutcome",
+    "CaptureOutcome",
+    "CaptureResult",
     "LatestPointer",
+    "LoadOutcome",
+    "LoadResult",
     "ProfileSnapshotter",
     "SnapshotManifest",
     "capture_and_upload_for_testing",
