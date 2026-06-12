@@ -80,7 +80,7 @@ class _FakeDaytonaClient:
 
 
 class _FakeDaytonaConfig:
-    def __init__(self, *, api_key: str, server_url: str) -> None:
+    def __init__(self, *, api_key: str, server_url: str = "") -> None:
         self.api_key = api_key
         self.server_url = server_url
 

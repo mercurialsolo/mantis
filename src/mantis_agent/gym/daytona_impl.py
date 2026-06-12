@@ -48,7 +48,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PORT = 8000
 _DEFAULT_STARTUP_TIMEOUT = 120.0
-_DEFAULT_SERVER_URL = "https://app.daytona.io"
 _DAYTONA_SKIP_PREVIEW_HEADER = "X-Daytona-Skip-Preview-Warning"
 # Preview URLs on daytonaproxy01.net are auth0-gated. The skip-warning
 # header bypasses the cookie consent interstitial; the preview token
@@ -102,13 +101,17 @@ class DaytonaComputerImpl(RemoteComputerImpl):
                 "MANTIS_DAYTONA_SNAPSHOT) or sandbox_id= (or "
                 "MANTIS_DAYTONA_SANDBOX_ID) — neither was provided"
             )
-        server_url = server_url or _DEFAULT_SERVER_URL
+        # Don't override server_url when the caller didn't pass one —
+        # the SDK's default chooses the right API endpoint
+        # (forcing https://app.daytona.io routes the SDK at the
+        # dashboard's auth0 wall instead of the API).
+        config_kwargs = {"api_key": api_key}
+        if server_url:
+            config_kwargs["server_url"] = server_url
 
         try:
             client = sdk.Daytona(
-                config=sdk.DaytonaConfig(
-                    api_key=api_key, server_url=server_url,
-                )
+                config=sdk.DaytonaConfig(**config_kwargs),
             )
         except Exception as exc:
             raise RuntimeError(
