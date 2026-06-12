@@ -1,0 +1,221 @@
+"""Daytona sandbox backend for the computer plane (#699 Phase 2).
+
+Daytona (https://daytona.io/) provides on-demand workspace sandboxes
+with a public preview URL. Same shape as :class:`E2BComputerImpl`:
+provision sandbox → wait for ``/health`` → delegate the wire
+contract to :class:`RemoteComputerImpl`.
+
+The operator-side image preconditions are the same as E2B's
+(``xvfb`` + ``xdotool`` + Chrome + the ``mantis_agent`` package + a
+boot-time ``uvicorn`` for ``computer_agent:app``). See
+``deploy/sim_envs/`` for an existing Daytona-based image pattern;
+the computer-plane image extends the same recipe with the wire
+server.
+
+Configuration
+=============
+
+* ``api_key`` — passed in, or ``DAYTONA_API_KEY`` env var. Required.
+* ``server_url`` — Daytona control-plane URL; defaults to
+  ``https://app.daytona.io`` matching the public SaaS.
+* ``snapshot`` — Daytona snapshot id (their term for a pre-baked
+  image) for the computer-plane container. Defaults to
+  ``MANTIS_DAYTONA_SNAPSHOT`` env var.
+* ``port`` — port the computer-plane HTTP server listens on inside
+  the sandbox. Defaults to 8000.
+* ``startup_timeout_seconds`` — how long to wait for ``/health``
+  after sandbox boot. Daytona cold-builds can take 60s+, so default
+  is 120s.
+
+The Daytona preview URL has an interstitial that needs to be bypassed
+via the ``X-Daytona-Skip-Preview-Warning: true`` header
+(``feedback_daytona_preview_warning_bypass.md``). This impl injects
+that header on every wire call via the inherited
+``extra_http_headers`` kwarg.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from typing import Any
+
+from .remote_computer_impl import RemoteComputerImpl
+
+logger = logging.getLogger(__name__)
+
+
+_DEFAULT_PORT = 8000
+_DEFAULT_STARTUP_TIMEOUT = 120.0
+_DEFAULT_SERVER_URL = "https://app.daytona.io"
+_DAYTONA_SKIP_PREVIEW_HEADER = "X-Daytona-Skip-Preview-Warning"
+
+
+class DaytonaComputerImpl(RemoteComputerImpl):
+    """Daytona-sandbox-backed computer plane.
+
+    Provisions the sandbox at construction; tears it down at
+    ``close()``. The rest of the wire contract delegates to
+    :class:`RemoteComputerImpl` over the sandbox's preview URL.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        server_url: str = "",
+        snapshot: str = "",
+        startup_timeout_seconds: float = _DEFAULT_STARTUP_TIMEOUT,
+        port: int = _DEFAULT_PORT,
+        sdk_module: Any = None,
+        extra_http_headers: dict[str, str] | None = None,
+        **remote_kwargs: Any,
+    ) -> None:
+        self._sandbox = None
+        sdk = sdk_module or self._import_sdk()
+        api_key = api_key or os.environ.get("DAYTONA_API_KEY") or ""
+        if not api_key:
+            raise ValueError(
+                "DaytonaComputerImpl requires a Daytona API key — "
+                "pass api_key=..., or set DAYTONA_API_KEY in the env"
+            )
+        snapshot = snapshot or os.environ.get("MANTIS_DAYTONA_SNAPSHOT") or ""
+        if not snapshot:
+            raise ValueError(
+                "DaytonaComputerImpl requires a snapshot id — pass "
+                "snapshot=..., or set MANTIS_DAYTONA_SNAPSHOT in the env"
+            )
+        server_url = server_url or _DEFAULT_SERVER_URL
+
+        logger.warning(
+            "DaytonaComputerImpl: provisioning sandbox snapshot=%s port=%d",
+            snapshot, port,
+        )
+        try:
+            client = sdk.Daytona(
+                config=sdk.DaytonaConfig(
+                    api_key=api_key, server_url=server_url,
+                )
+            )
+            self._sandbox = client.create(snapshot=snapshot)
+        except Exception as exc:
+            raise RuntimeError(
+                f"DaytonaComputerImpl: sandbox provisioning failed: {exc}"
+            ) from exc
+
+        # Daytona's preview URLs require a skip-preview header to
+        # bypass the interstitial (see feedback_daytona_preview_warning_bypass).
+        merged_headers = dict(extra_http_headers or {})
+        merged_headers.setdefault(_DAYTONA_SKIP_PREVIEW_HEADER, "true")
+
+        try:
+            base_url = self._resolve_base_url(self._sandbox, port)
+            self._await_ready(
+                base_url, startup_timeout_seconds, merged_headers,
+            )
+        except Exception:
+            self._teardown_quietly()
+            raise
+
+        logger.warning(
+            "DaytonaComputerImpl: sandbox ready base_url=%s", base_url,
+        )
+        super().__init__(
+            base_url=base_url,
+            extra_http_headers=merged_headers,
+            **remote_kwargs,
+        )
+
+    # ── lifecycle ──
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            self._teardown_quietly()
+
+    def shutdown(self) -> None:
+        """Parity with the Phase 1 computer_session contract."""
+        self.close()
+
+    # ── helpers ──
+
+    @staticmethod
+    def _import_sdk() -> Any:
+        try:
+            import daytona  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise ImportError(
+                "DaytonaComputerImpl requires the daytona SDK — "
+                "`pip install mantis-agent[daytona]` (or "
+                "`pip install daytona`)"
+            ) from exc
+        return daytona
+
+    @staticmethod
+    def _resolve_base_url(sandbox: Any, port: int) -> str:
+        """Resolve the sandbox's preview URL for ``port``.
+
+        Daytona's SDK exposes ``get_preview_link(port)`` returning a
+        ``PreviewLink`` with ``.url``. Tests inject a fake sandbox
+        with the same method.
+        """
+        link = sandbox.get_preview_link(port)
+        url = getattr(link, "url", "") or ""
+        if not url:
+            raise RuntimeError(
+                f"DaytonaComputerImpl: sandbox returned no preview URL "
+                f"for port {port}"
+            )
+        return url.rstrip("/")
+
+    def _await_ready(
+        self,
+        base_url: str,
+        deadline_seconds: float,
+        headers: dict[str, str],
+    ) -> None:
+        """Poll ``GET {base_url}/health`` until 200 or deadline.
+
+        Forwards the skip-preview header so Daytona's interstitial
+        doesn't masquerade as a server-not-ready response.
+        """
+        import requests
+
+        deadline = time.monotonic() + deadline_seconds
+        last_exc: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                resp = requests.get(
+                    f"{base_url}/health", timeout=5, headers=headers,
+                )
+                if resp.status_code == 200:
+                    return
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+            time.sleep(2.0)
+        raise TimeoutError(
+            f"DaytonaComputerImpl: sandbox /health not ready within "
+            f"{deadline_seconds:.0f}s (last_exc={last_exc!r})"
+        )
+
+    def _teardown_quietly(self) -> None:
+        if self._sandbox is None:
+            return
+        try:
+            # Daytona SDK exposes ``.delete()`` on the Sandbox.
+            delete = getattr(self._sandbox, "delete", None) or getattr(
+                self._sandbox, "stop", None,
+            )
+            if delete is not None:
+                delete()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "DaytonaComputerImpl: teardown raised: %s", exc,
+            )
+        finally:
+            self._sandbox = None
+
+
+__all__ = ["DaytonaComputerImpl"]

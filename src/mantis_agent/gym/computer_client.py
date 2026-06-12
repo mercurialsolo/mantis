@@ -152,9 +152,20 @@ def make_computer_client(
             **env_kwargs,
         )
 
-    if backend in ("e2b", "daytona"):
-        raise NotImplementedError(
-            f"ComputerPlaneConfig.backend={backend!r} lands in Phase 2 (#699)"
+    if backend == "e2b":
+        from .e2b_impl import E2BComputerImpl
+
+        return E2BComputerImpl(
+            enable_cdp=cfg.enable_cdp,
+            **env_kwargs,
+        )
+
+    if backend == "daytona":
+        from .daytona_impl import DaytonaComputerImpl
+
+        return DaytonaComputerImpl(
+            enable_cdp=cfg.enable_cdp,
+            **env_kwargs,
         )
 
     raise ValueError(f"unknown ComputerPlaneConfig.backend: {backend!r}")
