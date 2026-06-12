@@ -535,3 +535,122 @@ def test_run_path_falls_back_to_legacy_unscoped_layout(
     p = runtime._run_path("r-legacy")
     assert p == legacy_dir
     assert (p / "status.json").exists()
+
+
+# ── E. Runtime concurrency limiter ────────────────────────────────────
+#
+# Pre-fix, ``self.lock`` was a ``threading.Lock`` and the detached
+# worker held it across the entire run. The replica could only run
+# ONE detached run at a time, regardless of ``max_concurrent_runs``.
+# A trivial 3-min run could sit queued for 30+ minutes behind a slow
+# active run. Fix: counting Semaphore sized via
+# ``MANTIS_RUNTIME_CONCURRENCY`` (default 1 preserves legacy
+# behaviour, operator bumps to enable parallelism).
+
+
+def test_runtime_lock_defaults_to_serialized_single_slot(
+    runtime,
+) -> None:
+    """Default lock is a 1-slot semaphore — preserves legacy behaviour
+    where the operator hasn't explicitly opted into parallelism."""
+    import threading
+    assert isinstance(runtime.lock, type(threading.Semaphore()))
+    assert runtime._runtime_concurrency == 1
+
+
+def test_runtime_lock_honours_env_concurrency(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """``MANTIS_RUNTIME_CONCURRENCY=4`` → semaphore allows 4 concurrent
+    holders. Demonstrates the limiter actually unblocks queued runs
+    when slots are free."""
+    monkeypatch.setenv("MANTIS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MANTIS_BRAIN", "holo3")
+    monkeypatch.setenv("MANTIS_SKIP_BRAIN_LOAD", "1")
+    monkeypatch.setenv("MANTIS_RUNTIME_CONCURRENCY", "4")
+    from mantis_agent.baseten_server.runtime import BasetenCUARuntime
+    rt = BasetenCUARuntime()
+    assert rt._runtime_concurrency == 4
+    # Acquire 4 in a row — each must succeed without blocking.
+    held = []
+    for _ in range(4):
+        ok = rt.lock.acquire(blocking=False)
+        assert ok is True
+        held.append(ok)
+    # The 5th must be refused — limiter respects the cap.
+    assert rt.lock.acquire(blocking=False) is False
+    # Release one and the 6th attempt succeeds again.
+    rt.lock.release()
+    assert rt.lock.acquire(blocking=False) is True
+
+
+def test_runtime_lock_invalid_env_falls_back_to_one(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """A non-int value in MANTIS_RUNTIME_CONCURRENCY doesn't crash the
+    runtime — falls back to the safe default of 1."""
+    monkeypatch.setenv("MANTIS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MANTIS_BRAIN", "holo3")
+    monkeypatch.setenv("MANTIS_SKIP_BRAIN_LOAD", "1")
+    monkeypatch.setenv("MANTIS_RUNTIME_CONCURRENCY", "not-an-int")
+    from mantis_agent.baseten_server.runtime import BasetenCUARuntime
+    rt = BasetenCUARuntime()
+    assert rt._runtime_concurrency == 1
+
+
+def test_runtime_lock_zero_or_negative_clamped_to_one(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """0 or -5 in the env shouldn't deadlock the runtime — clamp to 1."""
+    monkeypatch.setenv("MANTIS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MANTIS_BRAIN", "holo3")
+    monkeypatch.setenv("MANTIS_SKIP_BRAIN_LOAD", "1")
+    monkeypatch.setenv("MANTIS_RUNTIME_CONCURRENCY", "-3")
+    from mantis_agent.baseten_server.runtime import BasetenCUARuntime
+    rt = BasetenCUARuntime()
+    assert rt._runtime_concurrency == 1
+
+
+def test_runtime_lock_doesnt_serialize_when_two_runs_overlap(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Regression for the user-reported wedge: a fast run shouldn't
+    sit behind a slow one when ``MANTIS_RUNTIME_CONCURRENCY=2``."""
+    import threading
+    import time
+    monkeypatch.setenv("MANTIS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MANTIS_BRAIN", "holo3")
+    monkeypatch.setenv("MANTIS_SKIP_BRAIN_LOAD", "1")
+    monkeypatch.setenv("MANTIS_RUNTIME_CONCURRENCY", "2")
+    from mantis_agent.baseten_server.runtime import BasetenCUARuntime
+    rt = BasetenCUARuntime()
+
+    started: dict[str, float] = {}
+    finished: dict[str, float] = {}
+
+    def _slow():
+        with rt.lock:
+            started["slow"] = time.monotonic()
+            time.sleep(0.5)
+            finished["slow"] = time.monotonic()
+
+    def _fast():
+        # Tiny stagger so we measure the slow run's hold, not start order.
+        time.sleep(0.05)
+        with rt.lock:
+            started["fast"] = time.monotonic()
+            time.sleep(0.05)
+            finished["fast"] = time.monotonic()
+
+    t_slow = threading.Thread(target=_slow)
+    t_fast = threading.Thread(target=_fast)
+    t_slow.start()
+    t_fast.start()
+    t_slow.join()
+    t_fast.join()
+
+    # The fast run must start BEFORE the slow run finishes — proving
+    # the two slots run concurrently rather than serializing on a
+    # single global mutex (the pre-fix behaviour).
+    assert "fast" in started and "slow" in started
+    assert started["fast"] < finished["slow"]

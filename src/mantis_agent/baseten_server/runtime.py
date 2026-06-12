@@ -181,7 +181,25 @@ class BasetenCUARuntime:
         self.llama_proc: subprocess.Popen | None = None
         self._llama_log_fh: Any = None
         self.brain: Any = None
-        self.lock = threading.Lock()
+        # Replica-wide concurrency limiter. Pre-fix this was a single
+        # ``threading.Lock`` that every run path acquired — so
+        # ``max_concurrent_runs=N`` allowed N submits but only ONE
+        # actually ran (the others sat queued for the full duration of
+        # the active run). Replaced with a counting semaphore that
+        # honours per-tenant ``max_concurrent_runs`` by allowing
+        # ``MANTIS_RUNTIME_CONCURRENCY`` concurrent runs server-wide.
+        # Default 1 preserves the legacy serialized behaviour; the
+        # operator bumps it to match GPU / RAM capacity. ``with
+        # self.lock:`` continues to work because Semaphore is a
+        # context manager (acquire on __enter__, release on __exit__).
+        try:
+            _runtime_concurrency = max(
+                1, int(os.environ.get("MANTIS_RUNTIME_CONCURRENCY") or "1")
+            )
+        except ValueError:
+            _runtime_concurrency = 1
+        self.lock: threading.Semaphore = threading.Semaphore(_runtime_concurrency)
+        self._runtime_concurrency = _runtime_concurrency
         self.detached_threads: dict[str, threading.Thread] = {}
         self.loaded = False
         # #117: process-level shared grounding cache. Listing-card layouts
