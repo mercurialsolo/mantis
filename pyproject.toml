@@ -204,6 +204,11 @@ dev = [
     "jinja2>=3.0",  # fastapi.templating.Jinja2Templates — sim_envs/mantis_boattrader detail-page render tests
     "boto3>=1.34",  # Phase 2 (#699) profile snapshot loader/writer tests
     "zstandard>=0.22",  # Phase 2 (#699) — capture_and_upload_for_testing transport
+    # Phase 2 (#699) — moto's S3 mock replaces the skip-gated real-B2
+    # integration tests in CI. Strict-CAS path (moto implements
+    # conditional PUT correctly); real-B2 tests still gate the
+    # NotImplemented-fallback path.
+    "moto[s3]>=5.0",
 ]
 # MkDocs site builder + plugins.
 docs = [
