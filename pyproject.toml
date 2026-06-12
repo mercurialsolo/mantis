@@ -202,6 +202,8 @@ dev = [
     "python-multipart>=0.0.9",  # FastAPI Form() params — sim_envs/mantis_crm TestClient flows
     "starlette<1.0",  # see note under [project.optional-dependencies].server
     "jinja2>=3.0",  # fastapi.templating.Jinja2Templates — sim_envs/mantis_boattrader detail-page render tests
+    "boto3>=1.34",  # Phase 2 (#699) profile snapshot loader/writer tests
+    "zstandard>=0.22",  # Phase 2 (#699) — capture_and_upload_for_testing transport
 ]
 # MkDocs site builder + plugins.
 docs = [
