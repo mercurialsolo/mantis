@@ -633,15 +633,23 @@ def _capture(self, *, tenant_id: str, profile_id: str,
              mode: Literal["cold", "hot"] = "cold",
              chrome_uptime_seconds_at_capture: int = 0,
              notes: str = "",
-             captured_in: Optional[dict[str, Any]] = None) -> "CaptureResult":
+             captured_in: Optional[dict[str, Any]] = None,
+             chrome_pid: int = 0) -> "CaptureResult":
     """Production writer — spec § 1 + § 2.
 
     Tars + zstd-9 compresses ``source_profile_dir`` into an in-memory
     archive, uploads the archive + sibling manifest, then flips
     ``latest.json`` via S3 conditional PUT (compare-and-swap on ETag).
 
-    Hot mode raises ``NotImplementedError`` until the cold-mode test
-    harness lands — spec § 3 deliberately defers hot mode.
+    Hot mode (spec § 3, opt-in): SIGSTOP the Chrome process tree
+    around the tar step so writes in flight freeze. SQLite WAL files
+    are captured AS-IS — the loader's normal SQLite startup replays
+    the WAL into the main DB on next boot. Hot mode carries inherent
+    risk: a write transaction in flight at SIGSTOP time may be
+    rolled back by the WAL replay on load. The bracket is a no-op
+    safety fallback when ``chrome_pid <= 0`` (caller hasn't told us
+    which process to freeze); capture proceeds as cold mode in that
+    case and logs the demotion at WARNING.
 
     Idempotency:
 
@@ -670,12 +678,18 @@ def _capture(self, *, tenant_id: str, profile_id: str,
     """
     import zstandard as zstd
 
-    if mode == "hot":
+    if mode == "hot" and not self._allow_hot_mode:
+        # Hot mode is opt-in at the snapshotter level — the operator
+        # has to flip ``allow_hot_mode=True`` (or set
+        # ``MANTIS_ALLOW_HOT_SNAPSHOT=1``) before any caller can run
+        # the hot path. Default off until the WAL-replay correctness
+        # harness lands.
         raise NotImplementedError(
-            "hot-mode capture is deferred — see "
-            "docs/reference/computer-plane-profile-snapshots.md § 3. "
-            "Use cold mode (the default) until the WAL-checkpoint "
-            "test harness lands."
+            "hot-mode capture requires allow_hot_mode=True on "
+            "ProfileSnapshotter, or MANTIS_ALLOW_HOT_SNAPSHOT=1 in "
+            "the env. See docs/reference/"
+            "computer-plane-profile-snapshots.md § 3 for the "
+            "correctness tradeoff."
         )
 
     t0 = self._clock()
@@ -687,6 +701,42 @@ def _capture(self, *, tenant_id: str, profile_id: str,
             elapsed_seconds=self._clock() - t0,
         )
 
+    # Hot mode: SIGSTOP Chrome's process tree around the tar step
+    # so writes in flight freeze. SQLite WAL files are captured AS-IS
+    # — the loader's normal SQLite startup replays the WAL into the
+    # main DB on next boot.
+    if mode == "hot":
+        from .chrome_hot_snapshot import freeze_chrome, fsync_profile_dir
+        with freeze_chrome(chrome_pid):
+            fsync_profile_dir(source)
+            return _capture_archive_and_upload(
+                self, t0=t0, tenant_id=tenant_id,
+                profile_id=profile_id, source=source, mode=mode,
+                notes=notes, captured_in=captured_in,
+                chrome_uptime_seconds_at_capture=chrome_uptime_seconds_at_capture,
+                zstd=zstd,
+            )
+
+    return _capture_archive_and_upload(
+        self, t0=t0, tenant_id=tenant_id, profile_id=profile_id,
+        source=source, mode=mode, notes=notes,
+        captured_in=captured_in,
+        chrome_uptime_seconds_at_capture=chrome_uptime_seconds_at_capture,
+        zstd=zstd,
+    )
+
+
+def _capture_archive_and_upload(self, *, t0: float, tenant_id: str,
+                                 profile_id: str, source: Path,
+                                 mode: str, notes: str,
+                                 captured_in: Optional[dict],
+                                 chrome_uptime_seconds_at_capture: int,
+                                 zstd: Any) -> "CaptureResult":
+    """Shared archive + upload path used by both cold and hot mode.
+
+    Factored out so the hot-mode branch can wrap the tar step in a
+    freeze context manager without duplicating the entire writer.
+    """
     # 1. Tar the directory contents into an in-memory buffer.
     buf = io.BytesIO()
     file_count = 0
