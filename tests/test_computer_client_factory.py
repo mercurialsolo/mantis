@@ -75,13 +75,21 @@ def test_modal_backend_requires_remote_base_url() -> None:
         make_computer_client(cfg)
 
 
-def test_e2b_backend_not_yet_implemented() -> None:
-    with pytest.raises(NotImplementedError, match="Phase 2"):
+def test_e2b_backend_routes_to_impl_not_notimplemented() -> None:
+    """Phase 2 (#699) wired ``backend='e2b'`` to ``E2BComputerImpl``.
+    Construction needs the SDK + an API key + a network probe, so
+    raises ``ImportError`` (no SDK) or ``ValueError`` (no API key)
+    here — what matters is it is NOT the old ``NotImplementedError``
+    stub. Detailed behaviour matrix lives in
+    ``tests/test_e2b_daytona_impls.py``."""
+    with pytest.raises((ImportError, ValueError)):
         make_computer_client(ComputerPlaneConfig(backend="e2b"))
 
 
-def test_daytona_backend_not_yet_implemented() -> None:
-    with pytest.raises(NotImplementedError, match="Phase 2"):
+def test_daytona_backend_routes_to_impl_not_notimplemented() -> None:
+    """Same shape as the E2B case — see
+    ``tests/test_e2b_daytona_impls.py`` for the full behavior matrix."""
+    with pytest.raises((ImportError, ValueError)):
         make_computer_client(ComputerPlaneConfig(backend="daytona"))
 
 
