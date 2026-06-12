@@ -168,6 +168,16 @@ gpu = [
     "accelerate>=0.30",
     "bitsandbytes>=0.43",
 ]
+# Phase 2 (#699) profile-snapshot pipeline — S3-compatible store
+# (Backblaze B2 / R2 / S3 / MinIO) + zstd archive transport.
+# Required only when a Phase 2 host backend (E2B Desktop, Daytona)
+# replaces Modal Volume reuse; safe to leave uninstalled for Modal-
+# only deployments.
+snapshots = [
+    "boto3>=1.34",
+    "zstandard>=0.22",
+    "pydantic>=2",
+]
 # HUD evaluation harness.
 hud = [
     "hud-python>=0.5.34",
@@ -192,6 +202,8 @@ dev = [
     "python-multipart>=0.0.9",  # FastAPI Form() params — sim_envs/mantis_crm TestClient flows
     "starlette<1.0",  # see note under [project.optional-dependencies].server
     "jinja2>=3.0",  # fastapi.templating.Jinja2Templates — sim_envs/mantis_boattrader detail-page render tests
+    "boto3>=1.34",  # Phase 2 (#699) profile snapshot loader/writer tests
+    "zstandard>=0.22",  # Phase 2 (#699) — capture_and_upload_for_testing transport
 ]
 # MkDocs site builder + plugins.
 docs = [
