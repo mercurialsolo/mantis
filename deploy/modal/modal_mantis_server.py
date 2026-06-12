@@ -120,6 +120,8 @@ image = (
         "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' > /etc/apt/sources.list.d/google-chrome.list",
         "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y google-chrome-stable",
     )
+    # ── Heavy / stable deps go BEFORE llama.cpp — keep this layer
+    #    untouched so the 25-min CUDA compile below stays cached.
     .pip_install(
         "openai", "requests", "pillow", "mss", "huggingface-hub",
         "fastapi>=0.100", "uvicorn>=0.20", "pydantic>=2",
@@ -140,6 +142,19 @@ image = (
         "-DCMAKE_CUDA_ARCHITECTURES=\"80;90\" "
         "-DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON "
         "&& cmake --build build --target llama-server --config Release -j$(nproc)",
+    )
+    # ── Light/iterating deps go AFTER llama.cpp so adding/bumping
+    #    them doesn't invalidate the 25-minute CUDA-compile layer
+    #    above (feedback_modal_image_pin_drift). Anything that's
+    #    a pure-Python pip install belongs here.
+    .pip_install(
+        # #509: Augur observability — when ``AUGUR_DSN`` is set in
+        # the Modal secret, every gym run streams events to that
+        # Augur workspace. Without this pip-install the runtime
+        # logs ``sdk_available=False dsn_set=True`` and silently
+        # falls back to on-disk-only persistence (no streaming).
+        # Must match pyproject.toml (``augur-sdk>=0.6.0,<0.7``).
+        "augur-sdk>=0.6.0,<0.7",
     )
     .add_local_python_source("mantis_agent")
     # add_local_python_source only ships .py files, but mantis_agent.prompts
