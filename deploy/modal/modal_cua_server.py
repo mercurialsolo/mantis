@@ -1944,6 +1944,13 @@ api_image = (
         # drop the new fields — adapter swallows the TypeError and the
         # bundle ships without RL-training metadata.
         "augur-sdk>=0.6.0,<0.7",
+        # Phase 2 M1 (#699): the profile-snapshot loader runs on the
+        # API path inside _chrome_profile_dir. boto3 + zstandard are
+        # only needed when MANTIS_PROFILE_SNAPSHOT_BUCKET is set, but
+        # we need the imports to succeed regardless so the gating
+        # check doesn't blow up.
+        "boto3>=1.34",
+        "zstandard>=0.22",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -2063,13 +2070,95 @@ def _chrome_profile_dir(tenant_id: str, profile_id: str) -> str:
     IndexedDB from one run leaked into the next regardless of the
     API-side ``profile_id``. Returns a stringified path the executor
     forwards to ``setup_env(profile_dir=...)``.
+
+    Phase 2 M1 (#699): when ``MANTIS_PROFILE_SNAPSHOT_BUCKET`` is set
+    in the deploy env, the loader is consulted AFTER the dir is
+    created. If B2 has a snapshot for ``(tenant_id, profile_id,
+    chrome_major)``, the dir is populated from it; otherwise Chrome
+    boots empty as before. The load is best-effort: any failure
+    leaves the dir empty + logs WARNING so observability sees it.
     """
     from pathlib import Path as _Path
     from mantis_agent.server_utils import safe_state_key as _safe
     root = _Path(os.environ.get("MANTIS_DATA_DIR", "/data"))
     path = root / "tenants" / _safe(tenant_id) / "chrome-profile" / _safe(profile_id)
     path.mkdir(parents=True, exist_ok=True)
+    _maybe_load_profile_snapshot(tenant_id, profile_id, path)
     return str(path)
+
+
+def _maybe_load_profile_snapshot(
+    tenant_id: str, profile_id: str, target_dir,
+) -> None:
+    """Phase 2 M1 wire-up — populate ``target_dir`` from a B2 snapshot
+    if one is available.
+
+    Gated on the env block being set. Best-effort: no-op when not
+    configured, WARNING log on any failure, fresh-Chrome fallback on
+    sha mismatch / integrity check failure. The brain proceeds with
+    whatever state ``target_dir`` ends up holding.
+
+    Constructs a fresh ``ProfileSnapshotter`` per call — boto3
+    client construction is fast and the load takes seconds; not
+    worth a module-level cache today. Once M2 lands, this becomes
+    the load arm of a load/capture pair around the run.
+    """
+    if not os.environ.get("MANTIS_PROFILE_SNAPSHOT_BUCKET"):
+        return  # Phase 2 not configured — preserve pre-M1 behavior.
+    try:
+        from mantis_agent.observability.profile_snapshotter import (
+            ProfileSnapshotter,
+        )
+    except ImportError as exc:
+        # boto3 / zstandard not installed in this image. Don't crash
+        # the API path on it — degrade silently to pre-M1 behavior.
+        print(
+            f"WARNING: profile snapshotter import failed, "
+            f"skipping load: {exc}"
+        )
+        return
+    try:
+        snap = ProfileSnapshotter.from_env()
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"WARNING: profile snapshotter init failed, "
+            f"skipping load tenant={tenant_id} profile={profile_id} ({exc})"
+        )
+        return
+    try:
+        result = snap.load(
+            tenant_id=tenant_id,
+            profile_id=profile_id,
+            local_profile_dir=target_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 — loader is supposed to
+        # never raise, but if it does we still don't want to brick the
+        # plan submit. Log WARNING + leave the dir alone.
+        print(
+            f"WARNING: profile snapshot load raised "
+            f"tenant={tenant_id} profile={profile_id} ({exc})"
+        )
+        return
+    # Persist outcome to a small log file on the Modal Volume so
+    # operators can verify the wire-up without depending on Modal's
+    # stderr capture (which buffers / drops asgi-app stderr writes).
+    # Tee to stderr too — operators with the streaming log open
+    # see it as soon as it lands.
+    summary = (
+        f"profile_snapshot tenant={tenant_id} profile={profile_id} "
+        f"outcome={result.outcome} reason={result.reason!r} "
+        f"bytes={result.bytes_downloaded} elapsed={result.elapsed_seconds:.2f}s"
+    )
+    import sys as _sys
+    _sys.stderr.write(f"WARNING: {summary}\n")
+    _sys.stderr.flush()
+    try:
+        from pathlib import Path as _Path_log
+        _log_root = _Path_log(os.environ.get("MANTIS_DATA_DIR", "/data"))
+        with open(_log_root / "profile_snapshot_outcomes.log", "a") as _f:
+            _f.write(summary + "\n")
+    except Exception as _exc:  # noqa: BLE001 — best-effort observability
+        _sys.stderr.write(f"profile_snapshot outcome-log write failed: {_exc}\n")
 
 
 def _commit_volume() -> None:
