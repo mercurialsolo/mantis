@@ -953,6 +953,42 @@ class BasetenCUARuntime:
             result["artifacts"] = list(result.get("artifacts") or []) + file_artifacts
         self._write_json_atomic(run_result_path, result)
 
+        # Phase 2 M3 (#699) — capture the post-run Chrome profile dir
+        # into the snapshot bucket. Env-gated; no-op when
+        # MANTIS_PROFILE_SNAPSHOT_BUCKET is unset. Best-effort.
+        try:
+            from ..observability.snapshot_lifecycle import (
+                maybe_capture_snapshot,
+            )
+            profile_id_raw = str(
+                result.get("profile_id") or ""
+            )
+            tenant_id_raw = (
+                os.environ.get("MANTIS_TENANT_ID")
+                or DEFAULT_TENANT.tenant_id
+            )
+            # Chrome profile dir on Baseten is keyed on the raw
+            # profile_id (see chrome_profile_dir() at line 150).
+            from ..server_utils import safe_state_key as _ssk
+            profile_dir = (
+                _data_root() / "chrome-profile" / _ssk(profile_id_raw)
+            )
+            maybe_capture_snapshot(
+                tenant_id=str(tenant_id_raw),
+                profile_id=profile_id_raw,
+                source_profile_dir=profile_dir,
+                notes=f"executor=baseten terminal={result.get('terminal_status', '')}",
+                captured_in={
+                    "executor": "baseten_runtime",
+                    "run_id": run_id,
+                    "workflow_id": str(result.get("workflow_id") or ""),
+                },
+            )
+        except Exception as _capture_exc:  # noqa: BLE001 — paranoia
+            logger.warning(
+                "snapshot capture wrapper raised: %s", _capture_exc,
+            )
+
     def _result_summary(self, result: dict[str, Any]) -> dict[str, Any]:
         return result_summary(result)
 

@@ -1338,6 +1338,40 @@ def _run_holo3_executor(
                 viewer_ctx.__exit__(None, None, None)
             except Exception:
                 pass
+
+        # Phase 2 M3 (#699) — capture the post-run Chrome profile dir
+        # into the snapshot bucket. Env-gated; no-op when
+        # MANTIS_PROFILE_SNAPSHOT_BUCKET isn't set so production
+        # behaviour stays unchanged. Best-effort — capture never
+        # raises, so a failure here can't block envelope return.
+        try:
+            from mantis_agent.observability.snapshot_lifecycle import (
+                maybe_capture_snapshot as _capture_snap,
+            )
+            _resolved_tenant = (
+                api_tenant_id
+                or str(task_suite.get("_profile_id", "") or "").split("__", 1)[0]
+                or "default"
+            )
+            _resolved_profile = (
+                str(task_suite.get("_profile_id", "") or "").split("__", 1)[-1]
+                or profile_id
+            )
+            _capture_snap(
+                tenant_id=_resolved_tenant,
+                profile_id=_resolved_profile,
+                source_profile_dir=profile_dir or getattr(env, "_profile_dir", ""),
+                notes=f"executor=holo3 terminal={result.get('terminal_status', '')}",
+                captured_in={
+                    "executor": "run_holo3",
+                    "modal_call_id": getattr(env, "_modal_call_id", ""),
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                },
+            )
+        except Exception as _capture_exc:  # noqa: BLE001 — paranoia
+            print(f"WARNING: snapshot capture wrapper raised: {_capture_exc}")
+
         envelope = {
             "mode": "micro",
             "viable": viable,
@@ -2538,13 +2572,35 @@ def build_api_app(executor_resolver=None, function_call_lookup=None,
     from fastapi import Depends, FastAPI, HTTPException, Request
 
     from mantis_agent.baseten_server.middleware import require_run_scope
+    from mantis_agent.observability.snapshot_lifecycle import (
+        maybe_acquire_snapshot_lock,
+        maybe_force_release_lock_by_keys,
+    )
+    from mantis_agent.observability.profile_lock import LockConflictError
     from mantis_agent.server.run_dispatch import (
         DispatchError,
         acquire_profile_lock,
         prepare_predict_payload,
         read_profile_lock,
-        release_profile_lock,
+        release_profile_lock as _release_phase1_profile_lock,
     )
+
+    def release_profile_lock(tenant, profile_id):  # type: ignore[no-redef]
+        """Release Phase 1 file lock + Phase 2 snapshot lock together.
+
+        Wraps the original ``run_dispatch.release_profile_lock`` so
+        every site that releases the file lock also clears the
+        cross-host snapshot lock. Phase 2 release is env-gated +
+        best-effort (a missed release falls into the reaper's TTL
+        sweep) so a single helper is safe at every call site.
+        """
+        _release_phase1_profile_lock(tenant, profile_id)
+        try:
+            maybe_force_release_lock_by_keys(
+                tenant_id=tenant.tenant_id, profile_id=profile_id,
+            )
+        except Exception:  # noqa: BLE001 — release never breaks the API
+            pass
     from mantis_agent.server_utils import new_run_id as _mint_run_id
     from mantis_agent.tenant_auth import TenantConfig
 
@@ -2628,6 +2684,26 @@ def build_api_app(executor_resolver=None, function_call_lookup=None,
                 f"profile_id {profile_id!r} is busy; held by run_id={existing!r}. "
                 "Use a different profile_id or wait for the existing run to finish.",
             )
+
+        # Phase 2 M3 (#699): also acquire the cross-host snapshot lock.
+        # Env-gated — no-op when MANTIS_PROFILE_SNAPSHOT_BUCKET is unset
+        # so production behaviour stays unchanged until the bucket is
+        # configured. Conflict here means another host (E2B / Daytona)
+        # holds the profile; release the Phase 1 lock + return 409.
+        try:
+            maybe_acquire_snapshot_lock(
+                tenant_id=tenant.tenant_id, profile_id=profile_id,
+                run_id=run_id,
+            )
+        except LockConflictError as exc:
+            release_profile_lock(tenant, profile_id)
+            raise HTTPException(
+                409,
+                f"profile_id {profile_id!r} is busy on another host; "
+                f"held by run_id={exc.blob.holder_run_id!r} "
+                f"host={exc.blob.holder_host!r}. "
+                "Use a different profile_id or wait for the existing run to finish.",
+            ) from exc
 
         model = payload.get("cua_model") or payload.get("model") or "holo3"
         executor_fn = resolve_executor(model)
@@ -3691,8 +3767,10 @@ def build_api_app(executor_resolver=None, function_call_lookup=None,
         from mantis_agent.server.run_dispatch import (
             DispatchError,
             acquire_profile_lock,
-            release_profile_lock,
         )
+        # Note: ``release_profile_lock`` deliberately not imported here
+        # so the route picks up ``build_api_app``'s wrapper (which also
+        # clears the Phase 2 snapshot lock).
 
         body = body or {}
         target_url = str(body.get("target_url") or "https://bot.sannysoft.com/").strip()
