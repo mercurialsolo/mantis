@@ -198,3 +198,159 @@ def test_b2_no_snapshot_yet_returns_no_snapshot(tmp_path: Path) -> None:
     )
     assert result.outcome == "no_snapshot"
     assert result.reason == ""
+
+
+# ── M2 — capture writer + lock manager live against real B2 ───────────
+
+
+def _make_s3_from_env():
+    import boto3
+    s3_kwargs: dict = {}
+    endpoint_url = os.environ.get("MANTIS_PROFILE_SNAPSHOT_S3_ENDPOINT") or None
+    region = os.environ.get("MANTIS_PROFILE_SNAPSHOT_S3_REGION") or None
+    if endpoint_url:
+        s3_kwargs["endpoint_url"] = endpoint_url
+    if region:
+        s3_kwargs["region_name"] = region
+    return boto3.client("s3", **s3_kwargs)
+
+
+def _cleanup_prefix(s3, bucket: str, prefix: str) -> None:
+    try:
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []) or []:
+                s3.delete_object(Bucket=bucket, Key=obj["Key"])
+    except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
+        print(f"  ! cleanup failed: {exc}")
+
+
+def test_b2_capture_writes_archive_manifest_pointer(tmp_path: Path) -> None:
+    """M2 acceptance: capture() against real B2 lands archive +
+    manifest + pointer, then a second capture deduplicates."""
+    ProfileSnapshotter, _ = _import_or_skip()
+
+    bucket = os.environ["MANTIS_PROFILE_SNAPSHOT_BUCKET"]
+    s3 = _make_s3_from_env()
+
+    test_run_id = f"int-cap-{int(time.time())}"
+    tenant_id = f"itest-{test_run_id}"
+    profile_id = "alice"
+    chrome_major = 131
+    src = _make_chrome_shaped_profile(tmp_path)
+    snap = ProfileSnapshotter(
+        bucket=bucket, chrome_major=chrome_major, s3_client=s3,
+    )
+    prefix = f"snapshots/itest-{test_run_id}/"
+
+    try:
+        first = snap.capture(
+            tenant_id=tenant_id, profile_id=profile_id,
+            source_profile_dir=src,
+        )
+        assert first.outcome == "captured", f"{first.outcome}: {first.reason}"
+        assert first.archive_sha256
+        assert first.predecessor_sha256 == ""
+        print(
+            f"  ✓ first capture: sha={first.archive_sha256[:12]} "
+            f"size={first.archive_size_bytes}B "
+            f"elapsed={first.elapsed_seconds:.2f}s"
+        )
+
+        # Round-trip via load(): the pointer should now resolve.
+        target = tmp_path / "loaded-profile"
+        loaded = snap.load(
+            tenant_id=tenant_id, profile_id=profile_id,
+            local_profile_dir=target,
+        )
+        assert loaded.outcome == "loaded", (
+            f"{loaded.outcome}: {loaded.reason}"
+        )
+        assert loaded.manifest is not None
+        assert loaded.manifest.archive_sha256 == first.archive_sha256
+        assert (target / "Default" / "Cookies").exists()
+
+        # Re-capture with identical source dedups.
+        second = snap.capture(
+            tenant_id=tenant_id, profile_id=profile_id,
+            source_profile_dir=src,
+        )
+        assert second.outcome == "deduplicated", (
+            f"{second.outcome}: {second.reason}"
+        )
+        assert second.archive_sha256 == first.archive_sha256
+        print(
+            f"  ✓ dedup capture: outcome={second.outcome} "
+            f"elapsed={second.elapsed_seconds:.2f}s"
+        )
+
+    finally:
+        _cleanup_prefix(s3, bucket, prefix)
+
+
+def test_b2_profile_lock_acquire_renew_release(tmp_path: Path) -> None:
+    """M2 acceptance: acquire/renew/release a lock against real B2 with
+    CAS semantics intact (second acquire conflicts; release frees)."""
+    _import_or_skip()  # makes sure boto3 + zstandard installed
+    from mantis_agent.observability.profile_lock import (
+        LockConflictError,
+        ProfileLockManager,
+    )
+
+    bucket = os.environ["MANTIS_PROFILE_SNAPSHOT_BUCKET"]
+    s3 = _make_s3_from_env()
+
+    test_run_id = f"int-lock-{int(time.time())}"
+    tenant_id = f"itest-{test_run_id}"
+    profile_id = "alice"
+    prefix = f"snapshots/itest-{test_run_id}/"
+
+    mgr_a = ProfileLockManager(
+        bucket=bucket, chrome_major=131, s3_client=s3,
+        ttl_seconds=120,
+    )
+
+    try:
+        held_a = mgr_a.acquire(
+            tenant_id=tenant_id, profile_id=profile_id,
+            holder_run_id="run-a", holder_host="pytest",
+        )
+        assert held_a.blob.holder_run_id == "run-a"
+        assert held_a.etag
+        print(f"  ✓ acquired etag={held_a.etag}")
+
+        # Second holder conflicts.
+        mgr_b = ProfileLockManager(
+            bucket=bucket, chrome_major=131, s3_client=s3,
+            ttl_seconds=120,
+        )
+        with pytest.raises(LockConflictError) as exc_info:
+            mgr_b.acquire(
+                tenant_id=tenant_id, profile_id=profile_id,
+                holder_run_id="run-b",
+            )
+        assert exc_info.value.blob.holder_run_id == "run-a"
+        print("  ✓ second acquire conflicted as expected")
+
+        # Renew bumps count + extends TTL.
+        renewed = mgr_a.renew(held_a)
+        assert renewed.blob.renewal_count == 1
+        assert renewed.etag != held_a.etag
+        print(
+            f"  ✓ renewed count={renewed.blob.renewal_count} "
+            f"etag={renewed.etag}"
+        )
+
+        # Release frees the lock.
+        assert mgr_a.release(renewed) is True
+        # Now mgr_b can acquire.
+        held_b = mgr_b.acquire(
+            tenant_id=tenant_id, profile_id=profile_id,
+            holder_run_id="run-b",
+        )
+        assert held_b.blob.holder_run_id == "run-b"
+        mgr_b.release(held_b)
+        print("  ✓ released + reacquired by second holder")
+
+    finally:
+        _cleanup_prefix(s3, bucket, prefix)
