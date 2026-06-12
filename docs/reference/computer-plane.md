@@ -35,7 +35,7 @@ The split is delivered in three phases. Phase 0 introduces the seam in-process (
 ## Non-goals
 
 - Moving the brain. Brain stays on Modal in all phases.
-- Profile snapshotting / S3 / `ProfileSnapshotter`. Only required when leaving Modal Volume; deferred to a follow-up doc gated on Phase 2 actually shipping a non-Modal backend.
+- Profile snapshotting / S3 / `ProfileSnapshotter`. Only required when leaving Modal Volume — fully specified in [`computer-plane-profile-snapshots.md`](computer-plane-profile-snapshots.md). The snapshot doc is the gating doc that has to land before any Phase 2 host backend can ship.
 - Replacing the GPU executor pool. Holo3 / OpenCUA / Fara stay on their current Modal GPU tiers.
 - Multi-region, geo-pinning, sandbox identity management. Out of scope here.
 
@@ -273,7 +273,7 @@ Roll back is a config flip; no redeploy required.
 | `src/mantis_agent/gym/remote_e2b_impl.py` | **NEW.** `ComputerClient` impl that drives an E2B Desktop sandbox. Wraps the E2B SDK's mouse/keyboard/screenshot primitives. ~200 LOC. |
 | `src/mantis_agent/gym/remote_daytona_impl.py` | **NEW.** `ComputerClient` impl that talks HTTPS to a `ComputerAgent` running inside a Daytona workspace. Mostly the Phase 1 client with a different provisioning path. |
 | `src/mantis_agent/observability/profile_snapshotter.py` | **NEW** (gated on Phase 2 actually shipping). Implements tar.zst snapshot + S3 canonical store, with the per-profile lock TTL/renewal semantics. **Only relevant for non-Modal backends.** |
-| `docs/reference/computer-plane-profile-snapshots.md` | **NEW.** Dedicated spec for the snapshot pipeline (deferred until Phase 2 starts). |
+| [`docs/reference/computer-plane-profile-snapshots.md`](computer-plane-profile-snapshots.md) | **LANDED.** Dedicated spec for the snapshot pipeline — gating doc for any Phase 2 host backend that can't mount `osworld-data`. |
 
 ### Acceptance
 
