@@ -149,6 +149,10 @@ class ProfileLockManager:
         self._ttl_seconds = int(ttl_seconds)
         self._renewal_seconds = int(renewal_interval_seconds)
         self._clock = clock or time.time
+        # Lazy probe: Backblaze B2 doesn't implement conditional PUT.
+        # First NotImplemented response flips this to False; subsequent
+        # writes fall back to read-then-write + read-back verification.
+        self._conditional_put_supported: Optional[bool] = None
 
     # ── lifecycle ──
 
@@ -187,9 +191,6 @@ class ProfileLockManager:
             # Re-read to surface the holder.
             current, _ = self._read(key)
             if current is None or current.expires_at_ms <= now_ms:
-                # The lock disappeared / expired by the time we re-read.
-                # Don't loop forever — surface as conflict with a
-                # synthetic blob so the caller knows it has to retry.
                 raise LockConflictError(
                     ProfileLockBlob(
                         version=1, holder_run_id="<unknown>",
@@ -198,12 +199,45 @@ class ProfileLockManager:
                     )
                 )
             raise LockConflictError(current)
+
+        # Backends without conditional PUT need a post-write read-back
+        # check: the write succeeded but a concurrent writer may have
+        # overwritten us in the window between PUT and now. Verify our
+        # holder_run_id is what's stored; otherwise treat as conflict.
+        if self._conditional_put_supported is False:
+            stored, stored_etag = self._read(key)
+            if (stored is None
+                or stored.holder_run_id != holder_run_id
+                or stored.acquired_at_ms != blob.acquired_at_ms):
+                if stored is not None:
+                    raise LockConflictError(stored)
+                raise LockConflictError(
+                    ProfileLockBlob(
+                        version=1, holder_run_id="<unknown>",
+                        acquired_at_ms=0, renewed_at_ms=0,
+                        expires_at_ms=0, renewal_count=0,
+                    )
+                )
+            # Replace etag with the post-write value for renew/release.
+            new_etag = stored_etag or new_etag
+
         return _AcquiredLock(blob=blob, etag=new_etag, bucket=self._bucket, key=key)
 
     def renew(self, lock: _AcquiredLock) -> _AcquiredLock:
         """Extend the TTL. Raises :class:`LockLostError` if someone
         stole the lock between our last write and now."""
         now_ms = int(self._clock() * 1000)
+        # On fallback backends without conditional PUT, do a pre-write
+        # read to verify we still hold the lock. (Strict CAS backends
+        # rely on IfMatch to enforce this at the PUT layer.)
+        if self._conditional_put_supported is False:
+            pre, _ = self._read(lock.key)
+            if pre is None or pre.holder_run_id != lock.blob.holder_run_id:
+                raise LockLostError(
+                    f"renewal pre-check failed for lock key={lock.key}; "
+                    f"holder_run_id={lock.blob.holder_run_id} "
+                    f"stored={pre.holder_run_id if pre else 'None'}"
+                )
         new_blob = ProfileLockBlob(
             **{
                 **lock.blob.model_dump(),
@@ -221,6 +255,18 @@ class ProfileLockManager:
                 f"holder_run_id={lock.blob.holder_run_id} renewal_count="
                 f"{lock.blob.renewal_count}"
             )
+        # Post-write verify for fallback path — same rationale as in
+        # acquire().
+        if self._conditional_put_supported is False:
+            stored, stored_etag = self._read(lock.key)
+            if (stored is None
+                or stored.holder_run_id != lock.blob.holder_run_id):
+                raise LockLostError(
+                    f"renewal read-back mismatch for lock key={lock.key}; "
+                    f"holder_run_id={lock.blob.holder_run_id} "
+                    f"stored={stored.holder_run_id if stored else 'None'}"
+                )
+            new_etag = stored_etag or new_etag
         return _AcquiredLock(
             blob=new_blob, etag=new_etag,
             bucket=lock.bucket, key=lock.key,
@@ -283,28 +329,63 @@ class ProfileLockManager:
     ) -> Optional[str]:
         """Conditional PUT. Returns the new ETag on success; None on
         CAS conflict OR transient failure (caller treats as
-        conflict)."""
+        conflict).
+
+        On backends that don't implement conditional PUT (Backblaze
+        B2), the first attempt sets ``_conditional_put_supported=False``
+        and we retry once without the header — see module docstring
+        for the read-back compensation that follows in acquire/renew.
+        """
+        from .profile_snapshotter import (
+            _is_cas_conflict,
+            _is_conditional_put_not_implemented,
+        )
+
+        body = blob.model_dump_json(indent=2).encode("utf-8")
+        use_conditional = self._conditional_put_supported is not False
         kwargs: dict[str, Any] = {
             "Bucket": self._bucket,
             "Key": key,
-            "Body": blob.model_dump_json(indent=2).encode("utf-8"),
+            "Body": body,
             "ContentType": "application/json",
         }
-        if expected_etag:
-            kwargs["IfMatch"] = expected_etag
-        else:
-            kwargs["IfNoneMatch"] = "*"
+        if use_conditional:
+            if expected_etag:
+                kwargs["IfMatch"] = expected_etag
+            else:
+                kwargs["IfNoneMatch"] = "*"
         try:
             resp = self._s3.put_object(**kwargs)
         except Exception as exc:  # noqa: BLE001
-            from .profile_snapshotter import _is_cas_conflict
-            if _is_cas_conflict(exc):
+            if use_conditional and _is_conditional_put_not_implemented(exc):
+                logger.warning(
+                    "profile lock: backend rejected conditional PUT "
+                    "(NotImplemented) — falling back to read-then-"
+                    "write for lock key=%s", key,
+                )
+                self._conditional_put_supported = False
+                # Retry without conditional headers.
+                try:
+                    resp = self._s3.put_object(
+                        Bucket=self._bucket, Key=key,
+                        Body=body, ContentType="application/json",
+                    )
+                except Exception as exc2:  # noqa: BLE001
+                    logger.warning(
+                        "profile lock: fallback write failed key=%s (%s)",
+                        key, exc2,
+                    )
+                    return None
+            elif _is_cas_conflict(exc):
                 return None
-            logger.warning(
-                "profile lock: write raised non-CAS error key=%s (%s)",
-                key, exc,
-            )
-            return None
+            else:
+                logger.warning(
+                    "profile lock: write raised non-CAS error key=%s (%s)",
+                    key, exc,
+                )
+                return None
+        if self._conditional_put_supported is None and use_conditional:
+            self._conditional_put_supported = True
         return (resp.get("ETag") or "").strip('"')
 
 

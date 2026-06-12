@@ -212,6 +212,12 @@ class ProfileSnapshotter:
         self._allow_hot_mode = bool(allow_hot_mode)
         self._max_archive_bytes = int(max_archive_bytes)
         self._clock = clock or time.monotonic
+        # Backblaze B2 (and possibly other S3-compatible stores) rejects
+        # the ``If-None-Match`` / ``If-Match`` headers on PutObject with
+        # "NotImplemented". We detect this lazily on the first attempt
+        # and fall back to read-then-write with post-write read-back
+        # verification. ``None`` = not probed yet.
+        self._conditional_put_supported: Optional[bool] = None
 
     @classmethod
     def from_env(cls) -> "ProfileSnapshotter":
@@ -867,7 +873,19 @@ def _flip_pointer(self, *,
                   predecessor_sha_prefix: str) -> bool:
     """Conditional PUT of ``latest.json`` with ETag CAS.
 
-    Returns True on success, False if all retries hit a CAS conflict.
+    On backends that support ``If-Match`` / ``If-None-Match`` on
+    PutObject (AWS S3, Cloudflare R2, MinIO), the flip is a true CAS.
+
+    On backends that return ``NotImplemented`` for those headers
+    (notably Backblaze B2), we fall back to "read-then-write + post-
+    write read-back verify": write unconditionally, then re-read; if
+    the stored body matches what we wrote, we won the race. The race
+    window is bounded by the per-profile lock's mutual exclusion (the
+    brain holds the lock for the full plan duration), so concurrent
+    writers without lock coordination are out of scope.
+
+    Returns True on success, False if all retries hit a CAS conflict
+    OR (in fallback mode) the read-back never shows our sha.
     """
     for attempt in range(_POINTER_FLIP_RETRIES):
         pointer_body = json.dumps({
@@ -884,17 +902,51 @@ def _flip_pointer(self, *,
             "Body": pointer_body,
             "ContentType": "application/json",
         }
-        # B2 + S3 both support IfMatch/IfNoneMatch on PutObject. boto3
-        # forwards these as request headers. ``expected_etag=""`` means
-        # we expect the key not to exist yet (first snapshot).
-        if expected_etag:
-            kwargs["IfMatch"] = expected_etag
-        else:
-            kwargs["IfNoneMatch"] = "*"
+        # boto3 forwards IfMatch / IfNoneMatch as request headers.
+        # ``expected_etag=""`` means we expect the key not to exist
+        # yet (first snapshot).
+        use_conditional = self._conditional_put_supported is not False
+        if use_conditional:
+            if expected_etag:
+                kwargs["IfMatch"] = expected_etag
+            else:
+                kwargs["IfNoneMatch"] = "*"
         try:
             self._s3.put_object(**kwargs)
+            if self._conditional_put_supported is None and use_conditional:
+                self._conditional_put_supported = True
+            # Fallback mode: read-back verify.
+            if not use_conditional:
+                if not self._readback_matches(pointer_key, new_sha_prefix):
+                    logger.warning(
+                        "profile snapshot: pointer read-back mismatch "
+                        "attempt=%d/%d key=%s — racing writer won",
+                        attempt + 1, _POINTER_FLIP_RETRIES, pointer_key,
+                    )
+                    # Race — re-read to pick up the latest predecessor
+                    # and retry (in case we want to overwrite the
+                    # winner).
+                    refreshed = self._refresh_predecessor(pointer_key)
+                    if refreshed is not None:
+                        predecessor_sha_prefix = refreshed
+                    continue
             return True
         except Exception as exc:  # noqa: BLE001
+            if (
+                use_conditional
+                and _is_conditional_put_not_implemented(exc)
+            ):
+                # Backend doesn't support conditional PUT. Flip the
+                # flag and retry without conditional headers (this
+                # iteration counts toward the retry budget).
+                logger.warning(
+                    "profile snapshot: backend rejected conditional "
+                    "PUT (NotImplemented) — falling back to read-then-"
+                    "write for pointer key=%s",
+                    pointer_key,
+                )
+                self._conditional_put_supported = False
+                continue
             if not _is_cas_conflict(exc):
                 logger.warning(
                     "profile snapshot: pointer PUT raised non-CAS "
@@ -928,12 +980,49 @@ def _flip_pointer(self, *,
     return False
 
 
+def _readback_matches(self, pointer_key: str, expected_sha_prefix: str) -> bool:
+    """Read ``pointer_key`` and return True iff its active sha matches.
+
+    Used by :func:`_flip_pointer` in fallback mode (no conditional PUT
+    support). Returns False on read errors so the caller treats as a
+    failed race."""
+    try:
+        existing = self._s3.get_object(
+            Bucket=self._bucket, Key=pointer_key,
+        )
+        cur = LatestPointer.model_validate_json(existing["Body"].read())
+        return cur.active_sha256_prefix == expected_sha_prefix
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "profile snapshot: pointer read-back failed key=%s (%s)",
+            pointer_key, exc,
+        )
+        return False
+
+
+def _refresh_predecessor(self, pointer_key: str) -> Optional[str]:
+    """Return the current pointer's active sha, or None on read error.
+
+    Used by :func:`_flip_pointer` in fallback mode to refresh the
+    ``flipped_from_sha256_prefix`` field after a lost race."""
+    try:
+        existing = self._s3.get_object(
+            Bucket=self._bucket, Key=pointer_key,
+        )
+        cur = LatestPointer.model_validate_json(existing["Body"].read())
+        return cur.active_sha256_prefix
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # Bind the new methods onto ``ProfileSnapshotter``. Defining them at
 # module scope (rather than inline in the class body) keeps the
 # loader-only PR #865 diff small AND keeps M2's writer concerns
 # visually grouped under the # ── Capture (M2 writer) ── banner.
 ProfileSnapshotter.capture = _capture  # type: ignore[attr-defined]
 ProfileSnapshotter._flip_pointer = _flip_pointer  # type: ignore[attr-defined]
+ProfileSnapshotter._readback_matches = _readback_matches  # type: ignore[attr-defined]
+ProfileSnapshotter._refresh_predecessor = _refresh_predecessor  # type: ignore[attr-defined]
 
 
 def _is_cas_conflict(exc: Exception) -> bool:
@@ -945,6 +1034,22 @@ def _is_cas_conflict(exc: Exception) -> bool:
         return True
     msg = str(exc).lower()
     if "preconditionfailed" in msg or "412" in msg:
+        return True
+    return False
+
+
+def _is_conditional_put_not_implemented(exc: Exception) -> bool:
+    """True iff the S3 exception is "NotImplemented" — which Backblaze
+    B2 returns for ``If-None-Match`` / ``If-Match`` on PutObject.
+
+    The flag we set on the snapshotter then suppresses the conditional
+    headers on subsequent calls, falling back to read-then-write."""
+    err = getattr(exc, "response", {}) or {}
+    code = (err.get("Error") or {}).get("Code", "")
+    if code in {"NotImplemented", "501"}:
+        return True
+    msg = str(exc).lower()
+    if "notimplemented" in msg or "not implemented" in msg:
         return True
     return False
 
