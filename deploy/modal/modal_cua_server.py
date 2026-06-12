@@ -1785,6 +1785,11 @@ claude_executor_image = (
         # drop the new fields — adapter swallows the TypeError and the
         # bundle ships without RL-training metadata.
         "augur-sdk>=0.6.0,<0.7",
+        # Phase 2 (#699) — needed when MANTIS_COMPUTER_PLANE_BACKEND
+        # flips to "daytona" so DaytonaComputerImpl can provision the
+        # sandbox. Safe to leave installed when local backend is
+        # active; the impl is only constructed on the modal path.
+        "daytona>=0.183",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
