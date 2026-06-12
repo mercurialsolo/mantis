@@ -48,8 +48,11 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PORT = 8000
 _DEFAULT_STARTUP_TIMEOUT = 120.0
-_DEFAULT_SERVER_URL = "https://app.daytona.io"
 _DAYTONA_SKIP_PREVIEW_HEADER = "X-Daytona-Skip-Preview-Warning"
+# Preview URLs on daytonaproxy01.net are auth0-gated. The skip-warning
+# header bypasses the cookie consent interstitial; the preview token
+# header is the real auth bypass — every wire call needs it.
+_DAYTONA_PREVIEW_TOKEN_HEADER = "X-Daytona-Preview-Token"
 
 
 class DaytonaComputerImpl(RemoteComputerImpl):
@@ -66,13 +69,19 @@ class DaytonaComputerImpl(RemoteComputerImpl):
         api_key: str | None = None,
         server_url: str = "",
         snapshot: str = "",
+        sandbox_id: str = "",
         startup_timeout_seconds: float = _DEFAULT_STARTUP_TIMEOUT,
         port: int = _DEFAULT_PORT,
         sdk_module: Any = None,
         extra_http_headers: dict[str, str] | None = None,
         **remote_kwargs: Any,
     ) -> None:
+        # ``self._owns_sandbox`` controls whether close() tears the
+        # sandbox down. We own the sandbox iff we created it; picking
+        # up an existing one (sandbox_id= / MANTIS_DAYTONA_SANDBOX_ID)
+        # leaves teardown to the operator who provisioned it.
         self._sandbox = None
+        self._owns_sandbox = False
         sdk = sdk_module or self._import_sdk()
         api_key = api_key or os.environ.get("DAYTONA_API_KEY") or ""
         if not api_key:
@@ -81,36 +90,90 @@ class DaytonaComputerImpl(RemoteComputerImpl):
                 "pass api_key=..., or set DAYTONA_API_KEY in the env"
             )
         snapshot = snapshot or os.environ.get("MANTIS_DAYTONA_SNAPSHOT") or ""
-        if not snapshot:
-            raise ValueError(
-                "DaytonaComputerImpl requires a snapshot id — pass "
-                "snapshot=..., or set MANTIS_DAYTONA_SNAPSHOT in the env"
-            )
-        server_url = server_url or _DEFAULT_SERVER_URL
-
-        logger.warning(
-            "DaytonaComputerImpl: provisioning sandbox snapshot=%s port=%d",
-            snapshot, port,
+        sandbox_id = (
+            sandbox_id
+            or os.environ.get("MANTIS_DAYTONA_SANDBOX_ID")
+            or ""
         )
+        if not snapshot and not sandbox_id:
+            raise ValueError(
+                "DaytonaComputerImpl requires either snapshot= (or "
+                "MANTIS_DAYTONA_SNAPSHOT) or sandbox_id= (or "
+                "MANTIS_DAYTONA_SANDBOX_ID) — neither was provided"
+            )
+        # Don't override server_url when the caller didn't pass one —
+        # the SDK's default chooses the right API endpoint
+        # (forcing https://app.daytona.io routes the SDK at the
+        # dashboard's auth0 wall instead of the API).
+        config_kwargs = {"api_key": api_key}
+        if server_url:
+            config_kwargs["server_url"] = server_url
+
         try:
             client = sdk.Daytona(
-                config=sdk.DaytonaConfig(
-                    api_key=api_key, server_url=server_url,
-                )
+                config=sdk.DaytonaConfig(**config_kwargs),
             )
-            self._sandbox = client.create(snapshot=snapshot)
         except Exception as exc:
             raise RuntimeError(
-                f"DaytonaComputerImpl: sandbox provisioning failed: {exc}"
+                f"DaytonaComputerImpl: Daytona client init failed: {exc}"
             ) from exc
 
+        if sandbox_id:
+            # Fast path — pick up an existing running sandbox by id.
+            # Skips the 5-minute cold provision; the operator is
+            # responsible for keeping the sandbox alive and tearing
+            # it down later.
+            logger.warning(
+                "DaytonaComputerImpl: picking up existing sandbox id=%s "
+                "port=%d (operator owns lifecycle)",
+                sandbox_id, port,
+            )
+            try:
+                self._sandbox = client.get(sandbox_id)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"DaytonaComputerImpl: sandbox lookup failed "
+                    f"id={sandbox_id!r}: {exc}"
+                ) from exc
+            # Don't tear it down on close() — we didn't create it.
+            self._owns_sandbox = False
+        else:
+            # Slow path — provision a fresh sandbox from a saved
+            # snapshot. ``CreateSandboxFromSnapshotParams`` is the
+            # Daytona SDK shape for snapshot-based create; raw
+            # ``snapshot=`` kwarg on ``client.create()`` is rejected.
+            logger.warning(
+                "DaytonaComputerImpl: provisioning sandbox "
+                "snapshot=%s port=%d (we own lifecycle)",
+                snapshot, port,
+            )
+            try:
+                self._sandbox = client.create(
+                    sdk.CreateSandboxFromSnapshotParams(snapshot=snapshot),
+                    timeout=startup_timeout_seconds,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"DaytonaComputerImpl: sandbox provisioning "
+                    f"failed: {exc}"
+                ) from exc
+            self._owns_sandbox = True
+
         # Daytona's preview URLs require a skip-preview header to
-        # bypass the interstitial (see feedback_daytona_preview_warning_bypass).
+        # bypass the interstitial (see feedback_daytona_preview_warning_bypass)
+        # AND a per-sandbox token header for the auth0 wall on
+        # daytonaproxy01.net.
         merged_headers = dict(extra_http_headers or {})
         merged_headers.setdefault(_DAYTONA_SKIP_PREVIEW_HEADER, "true")
 
         try:
-            base_url = self._resolve_base_url(self._sandbox, port)
+            base_url, preview_token = self._resolve_base_url(
+                self._sandbox, port,
+            )
+            if preview_token:
+                merged_headers.setdefault(
+                    _DAYTONA_PREVIEW_TOKEN_HEADER, preview_token,
+                )
             self._await_ready(
                 base_url, startup_timeout_seconds, merged_headers,
             )
@@ -119,7 +182,9 @@ class DaytonaComputerImpl(RemoteComputerImpl):
             raise
 
         logger.warning(
-            "DaytonaComputerImpl: sandbox ready base_url=%s", base_url,
+            "DaytonaComputerImpl: sandbox ready base_url=%s "
+            "preview_token_present=%s",
+            base_url, bool(preview_token),
         )
         super().__init__(
             base_url=base_url,
@@ -154,21 +219,23 @@ class DaytonaComputerImpl(RemoteComputerImpl):
         return daytona
 
     @staticmethod
-    def _resolve_base_url(sandbox: Any, port: int) -> str:
-        """Resolve the sandbox's preview URL for ``port``.
+    def _resolve_base_url(sandbox: Any, port: int) -> tuple[str, str]:
+        """Resolve the sandbox's preview URL + auth token for ``port``.
 
         Daytona's SDK exposes ``get_preview_link(port)`` returning a
-        ``PreviewLink`` with ``.url``. Tests inject a fake sandbox
-        with the same method.
+        ``PreviewLink`` with ``.url`` AND ``.token`` — the token is the
+        auth0 bypass for the preview proxy and must be sent on every
+        request as ``X-Daytona-Preview-Token``.
         """
         link = sandbox.get_preview_link(port)
         url = getattr(link, "url", "") or ""
+        token = getattr(link, "token", "") or ""
         if not url:
             raise RuntimeError(
                 f"DaytonaComputerImpl: sandbox returned no preview URL "
                 f"for port {port}"
             )
-        return url.rstrip("/")
+        return url.rstrip("/"), token
 
     def _await_ready(
         self,
@@ -202,6 +269,14 @@ class DaytonaComputerImpl(RemoteComputerImpl):
 
     def _teardown_quietly(self) -> None:
         if self._sandbox is None:
+            return
+        if not self._owns_sandbox:
+            # Picked up an existing sandbox; the operator owns its
+            # lifecycle. Just drop our handle.
+            logger.warning(
+                "DaytonaComputerImpl: dropping non-owned sandbox handle"
+            )
+            self._sandbox = None
             return
         try:
             # Daytona SDK exposes ``.delete()`` on the Sandbox.

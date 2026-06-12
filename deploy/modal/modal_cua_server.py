@@ -1785,6 +1785,11 @@ claude_executor_image = (
         # drop the new fields — adapter swallows the TypeError and the
         # bundle ships without RL-training metadata.
         "augur-sdk>=0.6.0,<0.7",
+        # Phase 2 (#699) — needed when MANTIS_COMPUTER_PLANE_BACKEND
+        # flips to "daytona" so DaytonaComputerImpl can provision the
+        # sandbox. Safe to leave installed when local backend is
+        # active; the impl is only constructed on the modal path.
+        "daytona>=0.183",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -1985,6 +1990,11 @@ api_image = (
         # check doesn't blow up.
         "boto3>=1.34",
         "zstandard>=0.22",
+        # Phase 2 (#699) — needed when MANTIS_COMPUTER_PLANE_BACKEND
+        # is set to "daytona". The env-var flip is global (not
+        # per-executor) so every executor image needs the SDK
+        # available even if it normally runs on the local backend.
+        "daytona>=0.183",
     )
     .add_local_python_source("mantis_agent")
     .add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE)
@@ -4451,6 +4461,11 @@ def computer_plane():
         # drop the new fields — adapter swallows the TypeError and the
         # bundle ships without RL-training metadata.
         "augur-sdk>=0.6.0,<0.7",
+        # Phase 2 (#699) — needed when MANTIS_COMPUTER_PLANE_BACKEND
+        # is set to "daytona". The env-var flip is global; every CUA
+        # executor image needs the SDK available, even if it runs the
+        # local backend by default.
+        "daytona>=0.183",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE).add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE),
     volumes={"/data": vol},
     secrets=[modal.Secret.from_dotenv()],

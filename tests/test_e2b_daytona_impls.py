@@ -43,8 +43,9 @@ class _FakeE2BModule:
 
 
 class _FakeDaytonaPreviewLink:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, token: str = "fake-token") -> None:
         self.url = url
+        self.token = token
 
 
 class _FakeDaytonaSandbox:
@@ -60,16 +61,26 @@ class _FakeDaytonaSandbox:
         self.deleted = True
 
 
+class _FakeCreateSandboxFromSnapshotParams:
+    def __init__(self, *, snapshot: str) -> None:
+        self.snapshot = snapshot
+
+
 class _FakeDaytonaClient:
     def __init__(self, config: Any) -> None:
         self.config = config
 
-    def create(self, snapshot: str) -> _FakeDaytonaSandbox:
-        return _FakeDaytonaSandbox(snapshot=snapshot)
+    def create(self, params: Any, **_kw: Any) -> _FakeDaytonaSandbox:
+        return _FakeDaytonaSandbox(snapshot=params.snapshot)
+
+    def get(self, sandbox_id: str) -> _FakeDaytonaSandbox:
+        return _FakeDaytonaSandbox(
+            snapshot="picked-up", host=f"existing-{sandbox_id}.daytona.io",
+        )
 
 
 class _FakeDaytonaConfig:
-    def __init__(self, *, api_key: str, server_url: str) -> None:
+    def __init__(self, *, api_key: str, server_url: str = "") -> None:
         self.api_key = api_key
         self.server_url = server_url
 
@@ -77,6 +88,7 @@ class _FakeDaytonaConfig:
 class _FakeDaytonaModule:
     Daytona = _FakeDaytonaClient
     DaytonaConfig = _FakeDaytonaConfig
+    CreateSandboxFromSnapshotParams = _FakeCreateSandboxFromSnapshotParams
 
 
 # ── Fake HTTP that the /health probe hits ────────────────────────────
@@ -220,12 +232,17 @@ def test_daytona_constructs_with_fake_sdk_and_skip_preview_header(
         tenant_id="acme", profile_id="p", run_id="r",
     )
     assert impl._base_url == "https://fake-host.daytona.io"
-    # The skip-preview header should be injected on the extra headers
-    # so every wire call carries it.
+    # Both bypass headers should be on every wire call:
+    # - skip-preview defeats the consent interstitial
+    # - preview-token defeats the auth0 wall on the preview URL
     assert impl._extra_http_headers is not None
     assert (
         impl._extra_http_headers.get("X-Daytona-Skip-Preview-Warning")
         == "true"
+    )
+    assert (
+        impl._extra_http_headers.get("X-Daytona-Preview-Token")
+        == "fake-token"
     )
 
 
@@ -238,7 +255,7 @@ def test_daytona_health_timeout_tears_down(monkeypatch) -> None:
 
     sandbox = _FakeDaytonaSandbox(snapshot="snap-1")
     client = _FakeDaytonaClient(config=None)
-    client.create = lambda snapshot: sandbox  # type: ignore[assignment]
+    client.create = lambda params, **_kw: sandbox  # type: ignore[assignment]
 
     class _CapturingModule:
         @staticmethod
@@ -246,6 +263,7 @@ def test_daytona_health_timeout_tears_down(monkeypatch) -> None:
             return client
 
         DaytonaConfig = _FakeDaytonaConfig
+        CreateSandboxFromSnapshotParams = _FakeCreateSandboxFromSnapshotParams
 
     with pytest.raises(TimeoutError):
         DaytonaComputerImpl(
@@ -256,16 +274,20 @@ def test_daytona_health_timeout_tears_down(monkeypatch) -> None:
     assert sandbox.deleted is True
 
 
-def test_daytona_missing_snapshot_raises_value_error(monkeypatch) -> None:
+def test_daytona_missing_snapshot_and_sandbox_id_raises_value_error(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("MANTIS_DAYTONA_SNAPSHOT", raising=False)
+    monkeypatch.delenv("MANTIS_DAYTONA_SANDBOX_ID", raising=False)
     from mantis_agent.gym.daytona_impl import DaytonaComputerImpl
 
-    with pytest.raises(ValueError, match="snapshot id"):
+    with pytest.raises(ValueError, match="snapshot"):
         DaytonaComputerImpl(api_key="x", sdk_module=_FakeDaytonaModule)
 
 
 def test_daytona_uses_env_snapshot_when_unset(monkeypatch) -> None:
     monkeypatch.setenv("MANTIS_DAYTONA_SNAPSHOT", "env-snap")
+    monkeypatch.delenv("MANTIS_DAYTONA_SANDBOX_ID", raising=False)
     _install_fake_requests(monkeypatch, ok=True)
     from mantis_agent.gym.daytona_impl import DaytonaComputerImpl
 
@@ -276,20 +298,49 @@ def test_daytona_uses_env_snapshot_when_unset(monkeypatch) -> None:
         def Daytona(config: Any) -> _FakeDaytonaClient:
             client = _FakeDaytonaClient(config=config)
 
-            def _create(snapshot: str) -> _FakeDaytonaSandbox:
-                captured["v"] = snapshot
-                return _FakeDaytonaSandbox(snapshot=snapshot)
+            def _create(params: Any, **_kw: Any) -> _FakeDaytonaSandbox:
+                captured["v"] = params.snapshot
+                return _FakeDaytonaSandbox(snapshot=params.snapshot)
 
             client.create = _create  # type: ignore[assignment]
             return client
 
         DaytonaConfig = _FakeDaytonaConfig
+        CreateSandboxFromSnapshotParams = _FakeCreateSandboxFromSnapshotParams
 
     DaytonaComputerImpl(
         api_key="x", sdk_module=_CapturingModule,
         startup_timeout_seconds=2.0,
     )
     assert captured["v"] == "env-snap"
+
+
+def test_daytona_pick_up_existing_sandbox_skips_create(monkeypatch) -> None:
+    """``sandbox_id=`` picks up an existing running sandbox via
+    ``client.get(id)`` instead of provisioning a fresh one. Operator
+    owns the lifecycle, so close() must NOT delete the sandbox."""
+    from mantis_agent.gym.daytona_impl import DaytonaComputerImpl
+
+    _install_fake_requests(monkeypatch, ok=True)
+    monkeypatch.delenv("MANTIS_DAYTONA_SNAPSHOT", raising=False)
+
+    impl = DaytonaComputerImpl(
+        api_key="x", sandbox_id="existing-sb-123",
+        sdk_module=_FakeDaytonaModule,
+        startup_timeout_seconds=2.0,
+    )
+    # The host comes from the fake ``client.get(id)`` path.
+    assert "existing-sb-123" in impl._base_url
+    # We don't own the sandbox — close() must NOT call delete.
+    monkeypatch.setattr(
+        "mantis_agent.gym.remote_computer_impl.RemoteComputerImpl.close",
+        lambda self: None,
+    )
+    sandbox = impl._sandbox
+    impl.close()
+    assert sandbox.deleted is False, (
+        "close() must not delete a sandbox the impl didn't create"
+    )
 
 
 def test_daytona_close_tears_down(monkeypatch) -> None:
