@@ -445,3 +445,93 @@ def test_events_endpoint_honors_since_cursor(client) -> None:
     ).json()
     assert body["count"] == 1
     assert body["events"][0]["i"] == 2
+
+
+# ── D. Artifact path parity with Modal ────────────────────────────────
+#
+# Pre-fix, ``_run_path`` returned ``<root>/runs/<id>/`` but the
+# ``/v1/runs/{id}/artifacts/{name}`` reader at
+# ``routes.get_run_artifact`` looked under
+# ``<root>/tenants/<tenant>/runs/<id>/`` — every artifact request 404'd
+# even when ``persist_run_artifacts`` had materialized the file. The
+# fix aligns ``_run_path`` to the tenant-scoped shape that Modal's
+# ``_run_dir`` already uses; legacy un-scoped runs still resolve via a
+# read-side fallback.
+
+
+def test_run_path_is_tenant_scoped(runtime, tmp_path: Path) -> None:
+    """``_run_path(create=True)`` lands under ``tenants/<tenant>/runs/<id>/``."""
+    p = runtime._run_path("r-scoped", create=True)
+    # The path under tmp_path must include the tenant segment.
+    rel = p.relative_to(tmp_path)
+    parts = rel.parts
+    assert parts[0] == "tenants", f"missing tenants segment in {parts}"
+    # MANTIS_TENANT_ID isn't set in the fixture → defaults to DEFAULT_TENANT.
+    from mantis_agent.tenant_auth import DEFAULT_TENANT
+    assert parts[1] == DEFAULT_TENANT.tenant_id
+    assert parts[2] == "runs"
+    assert parts[3] == "r-scoped"
+
+
+def test_extracted_rows_artifact_served_when_runtime_persisted_it(
+    client, tmp_path: Path, monkeypatch,
+) -> None:
+    """End-to-end: rows persisted by ``_save_detached_result`` show up
+    at ``GET /v1/runs/{id}/artifacts/extracted_rows.json``."""
+    api, rt = client
+    # The fixture stubs the tenant to "test-tenant"; mirror that here so
+    # the writer (which reads MANTIS_TENANT_ID via os.environ) lands the
+    # files in the same dir the reader scans.
+    monkeypatch.setenv("MANTIS_TENANT_ID", "test-tenant")
+    # The artifact endpoint takes the unscoped ``require_mantis_token``
+    # dep directly; the fixture only overrides ``require_run_scope``,
+    # so wire the token dep through too.
+    from mantis_agent.baseten_server.routes import app
+    from mantis_agent.baseten_server.middleware import require_mantis_token
+    from mantis_agent.tenant_auth import TenantConfig
+    tenant = TenantConfig(tenant_id="test-tenant", scopes=("run",))
+    app.dependency_overrides[require_mantis_token] = lambda: tenant
+    try:
+        run_id = "r-rows-parity"
+        # Seed a status so the lifecycle endpoints don't 404 the run.
+        _client_seed(rt, run_id, "succeeded")
+        # Drive the same write path the worker uses post-completion.
+        rt._save_detached_result(run_id, {
+            "run_id": run_id,
+            "artifacts": [
+                {
+                    "kind": "structured_data",
+                    "name": "extracted_rows",
+                    "schema": {"fields": ["rank", "title"]},
+                    "data": [
+                        {"rank": "1", "title": "first"},
+                        {"rank": "2", "title": "second"},
+                    ],
+                },
+            ],
+        })
+        # GET the artifact via the public endpoint.
+        resp = api.get(f"/v1/runs/{run_id}/artifacts/extracted_rows.json")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert isinstance(body, list)
+        assert len(body) == 2
+        assert body[0]["rank"] == "1"
+    finally:
+        app.dependency_overrides.pop(require_mantis_token, None)
+
+
+def test_run_path_falls_back_to_legacy_unscoped_layout(
+    runtime, tmp_path: Path,
+) -> None:
+    """Runs persisted before the fix landed (un-scoped
+    ``<root>/runs/<id>/``) remain readable via the fallback branch
+    until the container restarts."""
+    legacy_dir = tmp_path / "runs" / "r-legacy"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "status.json").write_text(json.dumps({"status": "succeeded"}))
+    # Read-path (create=False): no scoped dir exists, so the fallback
+    # returns the legacy un-scoped one.
+    p = runtime._run_path("r-legacy")
+    assert p == legacy_dir
+    assert (p / "status.json").exists()

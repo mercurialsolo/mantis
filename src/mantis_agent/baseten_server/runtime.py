@@ -458,13 +458,41 @@ class BasetenCUARuntime:
         }
 
     def _run_path(self, run_id: str, *, create: bool = False) -> Path:
+        """Resolve the on-disk run directory.
+
+        Tenant-scoped (``<root>/tenants/<tenant>/runs/<run_id>/``) to
+        match Modal's ``_run_dir`` and the Baseten artifact reader at
+        ``routes.get_run_artifact``. Pre-fix this method returned the
+        un-scoped ``<root>/runs/<run_id>/`` so writes from
+        ``_save_detached_result`` (``leads.csv`` / ``extracted_rows.json``
+        / ``result.json``) landed in a directory the artifact endpoint
+        never read — every artifact request 404'd.
+
+        On a read, we fall back to the legacy un-scoped location when
+        the scoped dir doesn't exist, so runs persisted before this fix
+        stay reachable until the next container restart.
+
+        ``MANTIS_TENANT_ID`` env var feeds the tenant — single-tenant
+        container model (each replica binds one tenant).
+        """
         safe_run_id = _safe_state_key(run_id)
         if not safe_run_id or safe_run_id != run_id:
             raise ValueError(f"invalid run_id: {run_id!r}")
-        path = _data_root() / "runs" / run_id
+        tenant_id = _safe_state_key(
+            os.environ.get("MANTIS_TENANT_ID") or DEFAULT_TENANT.tenant_id
+        )
+        scoped = _data_root() / "tenants" / tenant_id / "runs" / run_id
         if create:
-            path.mkdir(parents=True, exist_ok=True)
-        return path
+            scoped.mkdir(parents=True, exist_ok=True)
+            return scoped
+        # Read path: prefer the scoped location; fall back to the legacy
+        # un-scoped layout for runs persisted before this fix landed.
+        if scoped.exists():
+            return scoped
+        legacy = _data_root() / "runs" / run_id
+        if legacy.exists():
+            return legacy
+        return scoped
 
     def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
