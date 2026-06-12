@@ -616,6 +616,33 @@ class BasetenCUARuntime:
                 except (OSError, ValueError, json.JSONDecodeError):
                     pass
 
+        # Identity-field surface for Modal parity. Modal exposes these
+        # at top-level on status.json so callers can switch endpoints
+        # without re-reading task_suite. The fields live inside
+        # ``status['payload']['task_suite']`` on Baseten today; lift
+        # them when they aren't already at top-level.
+        payload = status.get("payload") if isinstance(status.get("payload"), dict) else {}
+        suite = payload.get("task_suite") if isinstance(payload.get("task_suite"), dict) else {}
+        for field, source_keys in (
+            ("profile_id", ("_profile_id", "profile_id")),
+            ("workflow_id", ("_workflow_id", "workflow_id")),
+            ("state_key", ("_state_key", "state_key")),
+            ("tenant_id", ("_tenant_id", "tenant_id")),
+        ):
+            if not status.get(field):
+                for source in source_keys:
+                    if suite.get(source):
+                        status[field] = str(suite[source])
+                        break
+                    if payload.get(source):
+                        status[field] = str(payload[source])
+                        break
+        if not status.get("max_steps"):
+            for src in (payload, suite):
+                if isinstance(src.get("max_steps"), (int, float)):
+                    status["max_steps"] = int(src["max_steps"])
+                    break
+
         cur_phase = str(status.get("status", "")).lower()
         if cur_phase in self._TERMINAL_STATUSES and not status.get("failure_help"):
             halt_class = str(status.get("halt_class") or "").strip()
@@ -1057,11 +1084,23 @@ class BasetenCUARuntime:
             return {**status, "events": events, "count": len(events)}
 
         if action == "result":
+            # Modal parity (#862 follow-up): wrap the executor result
+            # under a ``result`` key on the same envelope the status
+            # response uses, so callers can switch endpoints without
+            # re-keying. Previously Baseten returned the raw
+            # ``result.json`` body at top-level, conflating the status
+            # envelope with the executor payload.
+            status = self._read_json_file(run_dir / "status.json")
+            status = self._enrich_status(run_id, status)
             result_path = run_dir / "result.json"
             if result_path.exists():
-                return self._read_json_file(result_path)
-            status = self._read_json_file(run_dir / "status.json")
-            return {"run_id": run_id, "status": status.get("status", "unknown"), "result_ready": False}
+                result_blob = self._read_json_file(result_path)
+                return {**status, "result": result_blob}
+            return {
+                **status,
+                "result": None,
+                "result_ready": False,
+            }
 
         if action == "resume":
             # #344: rehydrate a paused detached run.
