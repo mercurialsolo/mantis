@@ -50,6 +50,10 @@ _DEFAULT_PORT = 8000
 _DEFAULT_STARTUP_TIMEOUT = 120.0
 _DEFAULT_SERVER_URL = "https://app.daytona.io"
 _DAYTONA_SKIP_PREVIEW_HEADER = "X-Daytona-Skip-Preview-Warning"
+# Preview URLs on daytonaproxy01.net are auth0-gated. The skip-warning
+# header bypasses the cookie consent interstitial; the preview token
+# header is the real auth bypass — every wire call needs it.
+_DAYTONA_PREVIEW_TOKEN_HEADER = "X-Daytona-Preview-Token"
 
 
 class DaytonaComputerImpl(RemoteComputerImpl):
@@ -105,12 +109,20 @@ class DaytonaComputerImpl(RemoteComputerImpl):
             ) from exc
 
         # Daytona's preview URLs require a skip-preview header to
-        # bypass the interstitial (see feedback_daytona_preview_warning_bypass).
+        # bypass the interstitial (see feedback_daytona_preview_warning_bypass)
+        # AND a per-sandbox token header for the auth0 wall on
+        # daytonaproxy01.net.
         merged_headers = dict(extra_http_headers or {})
         merged_headers.setdefault(_DAYTONA_SKIP_PREVIEW_HEADER, "true")
 
         try:
-            base_url = self._resolve_base_url(self._sandbox, port)
+            base_url, preview_token = self._resolve_base_url(
+                self._sandbox, port,
+            )
+            if preview_token:
+                merged_headers.setdefault(
+                    _DAYTONA_PREVIEW_TOKEN_HEADER, preview_token,
+                )
             self._await_ready(
                 base_url, startup_timeout_seconds, merged_headers,
             )
@@ -119,7 +131,9 @@ class DaytonaComputerImpl(RemoteComputerImpl):
             raise
 
         logger.warning(
-            "DaytonaComputerImpl: sandbox ready base_url=%s", base_url,
+            "DaytonaComputerImpl: sandbox ready base_url=%s "
+            "preview_token_present=%s",
+            base_url, bool(preview_token),
         )
         super().__init__(
             base_url=base_url,
@@ -154,21 +168,23 @@ class DaytonaComputerImpl(RemoteComputerImpl):
         return daytona
 
     @staticmethod
-    def _resolve_base_url(sandbox: Any, port: int) -> str:
-        """Resolve the sandbox's preview URL for ``port``.
+    def _resolve_base_url(sandbox: Any, port: int) -> tuple[str, str]:
+        """Resolve the sandbox's preview URL + auth token for ``port``.
 
         Daytona's SDK exposes ``get_preview_link(port)`` returning a
-        ``PreviewLink`` with ``.url``. Tests inject a fake sandbox
-        with the same method.
+        ``PreviewLink`` with ``.url`` AND ``.token`` — the token is the
+        auth0 bypass for the preview proxy and must be sent on every
+        request as ``X-Daytona-Preview-Token``.
         """
         link = sandbox.get_preview_link(port)
         url = getattr(link, "url", "") or ""
+        token = getattr(link, "token", "") or ""
         if not url:
             raise RuntimeError(
                 f"DaytonaComputerImpl: sandbox returned no preview URL "
                 f"for port {port}"
             )
-        return url.rstrip("/")
+        return url.rstrip("/"), token
 
     def _await_ready(
         self,

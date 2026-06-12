@@ -43,8 +43,9 @@ class _FakeE2BModule:
 
 
 class _FakeDaytonaPreviewLink:
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, token: str = "fake-token") -> None:
         self.url = url
+        self.token = token
 
 
 class _FakeDaytonaSandbox:
@@ -220,12 +221,17 @@ def test_daytona_constructs_with_fake_sdk_and_skip_preview_header(
         tenant_id="acme", profile_id="p", run_id="r",
     )
     assert impl._base_url == "https://fake-host.daytona.io"
-    # The skip-preview header should be injected on the extra headers
-    # so every wire call carries it.
+    # Both bypass headers should be on every wire call:
+    # - skip-preview defeats the consent interstitial
+    # - preview-token defeats the auth0 wall on the preview URL
     assert impl._extra_http_headers is not None
     assert (
         impl._extra_http_headers.get("X-Daytona-Skip-Preview-Warning")
         == "true"
+    )
+    assert (
+        impl._extra_http_headers.get("X-Daytona-Preview-Token")
+        == "fake-token"
     )
 
 
