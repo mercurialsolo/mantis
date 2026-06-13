@@ -122,16 +122,31 @@ def _pick_dedup_key(schema) -> str:
     return ""
 
 
+# Vision placeholders a multi-row extract emits when it can't read a
+# row's identity field (#882-followup: a YC W26 run returned a row with
+# name="unknown"). These are non-empty so they survive the empty-key
+# guard and inflate the final count with junk rows. Treat them as
+# unusable identity values and drop the row.
+_PLACEHOLDER_KEY_VALUES = frozenset({
+    "unknown", "n/a", "na", "none", "null", "nil", "-", "--", "—",
+    "?", "??", "tbd", "untitled", "no name", "unnamed",
+})
+
+
 def _filter_new_rows(
     rows, seen_keys: set, dedup_key: str,
 ) -> list:
-    """Return only rows whose ``dedup_key`` value hasn't been seen."""
+    """Return only rows whose ``dedup_key`` value is usable and unseen.
+
+    Drops rows whose key is empty, a known vision placeholder
+    (``unknown`` / ``n/a`` / ...), or already accumulated this run.
+    """
     if not dedup_key:
         return [dict(r) for r in rows]
     fresh = []
     for r in rows:
         key = str(r.get(dedup_key, "") or "").strip().lower()
-        if not key or key in seen_keys:
+        if not key or key in _PLACEHOLDER_KEY_VALUES or key in seen_keys:
             continue
         seen_keys.add(key)
         fresh.append(dict(r))
