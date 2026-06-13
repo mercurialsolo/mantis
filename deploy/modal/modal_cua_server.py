@@ -3328,6 +3328,11 @@ def build_api_app(executor_resolver=None, function_call_lookup=None,
         "extracted_rows.csv": "text/csv",
         "extracted_rows.json": "application/json",
         "result.json": "application/json",
+        # Epic #847 / Issue #853 — per-source Claude cost + cache
+        # hit-rate breakdown. ClaudeCostMeter writes one of these
+        # per run; mirrors live at both the un-scoped and tenant-
+        # scoped layouts after the cost_meter mirror fix.
+        "claude_cost_by_path.json": "application/json",
     }
 
     @fastapi_app.get("/v1/runs/{run_id}/artifacts/{name}")
