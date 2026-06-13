@@ -384,6 +384,45 @@ def test_resume_rejects_mismatched_plan_signature():
         r.resume(state, user_input="x", plan=plan)
 
 
+def test_resume_accepts_embedded_signature_when_recompute_differs(monkeypatch):
+    """#882-followup regression — the live-discovered resume blocker.
+
+    The PauseState stores the EMBEDDED ``_plan_signature``
+    (``plan_signature_from_steps`` over full step dicts). resume() used
+    to recompute via ``_compute_plan_signature`` (CheckpointManager — a
+    different 14-field subset over MicroIntent objects), which never
+    matched, so EVERY Modal micro-path resume raised a spurious
+    mismatch. resume() must compare against the embedded
+    ``self.plan_signature`` when the runner has one."""
+    env = _FakeEnv()
+    r = _runner(env)
+    plan = _trivial_plan()
+    recompute_sig = r._compute_plan_signature(plan)
+    embedded_sig = "embedded-" + recompute_sig  # deliberately DIFFERENT
+    assert embedded_sig != recompute_sig
+    # The runner was constructed from a suite whose _plan_signature is
+    # the embedded value — same as what the PauseState stored at pause.
+    r.plan_signature = embedded_sig
+    state = PauseState(plan_signature=embedded_sig)
+    monkeypatch.setattr(r, "run", lambda *a, **kw: [])
+    # Must NOT raise — the embedded signatures match even though the
+    # CheckpointManager recompute would not.
+    r.resume(state, user_input="x", plan=plan)
+
+
+def test_resume_still_rejects_genuine_mismatch_with_embedded_sig(monkeypatch):
+    """The embedded-signature preference must NOT defeat the real guard:
+    a PauseState from a genuinely different plan still fails."""
+    env = _FakeEnv()
+    r = _runner(env)
+    plan = _trivial_plan()
+    r.plan_signature = "sig-for-the-plan-actually-running"
+    state = PauseState(plan_signature="sig-from-a-totally-different-plan")
+    monkeypatch.setattr(r, "run", lambda *a, **kw: [])
+    with pytest.raises(ValueError):
+        r.resume(state, user_input="x", plan=plan)
+
+
 def test_pause_state_is_json_serializable():
     """PauseState lives in a Postgres JSONB column on host — keep it pure."""
     import json
