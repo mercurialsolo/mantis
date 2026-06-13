@@ -156,6 +156,19 @@ def test_filter_new_rows_drops_empty_keys() -> None:
     assert [r["name"] for r in fresh] == ["Cardinal"]
 
 
+def test_filter_new_rows_drops_placeholder_keys() -> None:
+    """#882-followup: vision placeholders (``unknown``/``n/a``/...) are
+    non-empty so they slip past the empty-key guard and inflate the row
+    count with junk. Drop them by identity value (case-insensitive)."""
+    seen: set = set()
+    fresh = _filter_new_rows(
+        [{"name": "unknown"}, {"name": "Unifold"}, {"name": "N/A"},
+         {"name": "—"}, {"name": "Untitled"}, {"name": "Carrot Labs"}],
+        seen, "name",
+    )
+    assert [r["name"] for r in fresh] == ["Unifold", "Carrot Labs"]
+
+
 # ── loop end-to-end ────────────────────────────────────────────────────
 
 
