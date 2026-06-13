@@ -68,22 +68,57 @@ logger = logging.getLogger(__name__)
 _MAX_SCROLL_PASSES = 8
 
 
-def _pick_dedup_key(schema) -> str:
-    """Pick the schema's primary key for cross-pass dedup.
+# Positional / ordinal field names a vision extractor RE-DERIVES per
+# screenshot (it numbers the visible rows 1..N by position), so they
+# COLLIDE across scroll passes and are actively harmful as a cross-pass
+# dedup key. #880-followup root cause: YC W26 capped at 6/10 because
+# dedup-by-"rank" flagged every scrolled-in card (re-numbered 1..6 on
+# the next screenshot) as already-seen → new=0 → loop bailed. Skip these
+# and dedup on a STABLE identity field instead.
+_POSITIONAL_FIELD_NAMES = frozenset({
+    "rank", "index", "position", "pos", "row", "rownum", "row_num",
+    "number", "num", "no", "order", "ordinal", "seq", "sequence", "#",
+})
 
-    Heuristic — use the FIRST ``required=True`` field. For most
-    listings shapes that's the natural identifier: ``rank`` for HN,
-    ``name`` for YC, ``id`` / ``url`` for marketplaces. Falls back to
-    the first field name if no required fields are declared (which
-    would surface in unit tests as a misconfig).
+
+def _field_name(f) -> str:
+    if isinstance(f, dict):
+        return str(f.get("name") or "")
+    if isinstance(f, str):
+        return f
+    return str(getattr(f, "name", "") or "")
+
+
+def _pick_dedup_key(schema) -> str:
+    """Pick a STABLE primary key for cross-pass dedup.
+
+    The accumulate loop dedups scroll passes by one field's value. A
+    positional field (``rank``/``index``/...) is re-derived by the
+    vision extractor on every screenshot, so it collides across passes
+    and collapses the loop to a single viewport (#880-followup: YC W26
+    capped at 6/10). So: prefer the first NON-positional field —
+    required first (``name``/``title``/``id``/``url``...), then any
+    declared field. Only if EVERY candidate is positional do we fall
+    back to one (a single-viewport extract like HN top-5 still dedups
+    fine on ``rank`` because it never scrolls).
     """
     fields = getattr(schema, "fields", None) or []
     required = getattr(schema, "required_fields", None) or []
-    if required:
-        return str(required[0])
-    if fields:
-        return str(fields[0].get("name") if isinstance(fields[0], dict)
-                   else getattr(fields[0], "name", ""))
+    required_names = [n for n in (_field_name(f) for f in required) if n]
+    field_names = [n for n in (_field_name(f) for f in fields) if n]
+
+    for n in required_names:
+        if n.strip().lower() not in _POSITIONAL_FIELD_NAMES:
+            return n
+    for n in field_names:
+        if n.strip().lower() not in _POSITIONAL_FIELD_NAMES:
+            return n
+    # Everything is positional — preserve the legacy first-required /
+    # first-field behaviour.
+    if required_names:
+        return required_names[0]
+    if field_names:
+        return field_names[0]
     return ""
 
 
@@ -103,32 +138,78 @@ def _filter_new_rows(
     return fresh
 
 
+# #880: advance the ACTIVE scroll container by ~0.85 viewport. The plain
+# ``window.scrollBy`` the loop used pre-#880 is a no-op on pages whose
+# results live in an inner ``overflow:auto`` container — YC's virtualized
+# Algolia directory, SPA results panels — so the extract loop saw the same
+# viewport every pass and bailed at the first fold (observed: YC W26 run
+# captured 5/10, then 6th pass onward ``new=0``). This payload tries the
+# window / document scroller first; when that doesn't move, it finds the
+# largest scrollable element and advances it, firing a synthetic ``scroll``
+# event so virtualized lists re-render. It returns whether anything
+# actually advanced so the loop can detect true exhaustion instead of
+# burning two empty passes. Reading ``scrollHeight``/``scrollTop`` here is
+# action-mechanics (which scroller to drive + did it move), NOT extraction-
+# content derivation — same provenance the mechanical scroll handler's
+# ``scrollY`` readback already relies on (feedback_cua_cdp_post_action_verify).
+_INNER_SCROLLER_JS = (
+    "(function(){"
+    "  var frac=0.85;"
+    "  function wy(){return window.scrollY||document.documentElement.scrollTop||0;}"
+    "  var amt=Math.round(window.innerHeight*frac);"
+    "  var before=wy();"
+    "  window.scrollBy(0,amt);"
+    "  if(document.scrollingElement)document.scrollingElement.scrollBy(0,amt);"
+    "  if(Math.abs(wy()-before)>=2)return true;"
+    "  var best=null,bestArea=0;"
+    "  var els=document.querySelectorAll("
+    "    'div,main,section,ul,ol,[role=list],[role=feed],[role=main]');"
+    "  for(var i=0;i<els.length;i++){"
+    "    var e=els[i];"
+    "    if(e.scrollHeight-e.clientHeight<=40)continue;"
+    "    var cs=getComputedStyle(e);"
+    "    if(cs.overflowY!=='auto'&&cs.overflowY!=='scroll')continue;"
+    "    var area=e.clientWidth*e.clientHeight;"
+    "    if(area>bestArea){bestArea=area;best=e;}"
+    "  }"
+    "  if(best){"
+    "    var t=best.scrollTop;"
+    "    best.scrollTop=t+Math.round(best.clientHeight*frac);"
+    "    best.dispatchEvent(new Event('scroll',{bubbles:true}));"
+    "    return (best.scrollTop-t)>=2;"
+    "  }"
+    "  return false;"
+    "})()"
+)
+
+
 def _cdp_scroll_once(env) -> bool:
-    """Issue ``window.scrollBy(0, viewport_height)`` via CDP.
+    """Advance the active scroll container by ~0.85 viewport via CDP.
 
     Returns False when the env doesn't expose ``cdp_evaluate`` (test
-    envs, replay envs) so the caller can stop the loop cleanly.
-    Vision-driven scroll is deliberately NOT a fallback — the whole
-    point of this path is to skip the Holo3 ``brain_loop_exhausted``
-    failure mode.
+    envs, replay envs) OR when no scroller actually moved (page at the
+    bottom / nothing scrollable) so the caller can stop the loop
+    cleanly. Vision-driven scroll is deliberately NOT a fallback — the
+    whole point of this path is to skip the Holo3
+    ``brain_loop_exhausted`` failure mode.
+
+    #880: drives the dominant inner ``overflow:auto`` container when the
+    window scroller is pinned (virtualized lists / SPA panels). See
+    :data:`_INNER_SCROLLER_JS`.
     """
     cdp_evaluate = getattr(env, "cdp_evaluate", None)
     if cdp_evaluate is None:
         return False
     try:
-        cdp_evaluate(
-            "(function(){"
-            "  const h = Math.round(window.innerHeight * 0.85);"
-            "  window.scrollBy(0, h);"
-            "  if (document.scrollingElement) {"
-            "    document.scrollingElement.scrollBy(0, h);"
-            "  }"
-            "  return true;"
-            "})()"
-        )
+        moved = cdp_evaluate(_INNER_SCROLLER_JS)
         # Brief settle so the next screenshot reflects the scroll.
         time.sleep(0.7)
-        return True
+        # Real envs return an explicit bool: False means no scroller
+        # advanced (genuinely exhausted) → stop now instead of wasting
+        # two empty extract passes. Test/replay envs and older CDP shims
+        # return None — preserve the legacy "scroll issued" contract so
+        # they keep looping until the empty-pass guard fires.
+        return moved is not False
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "[claude_step] CDP scroll raised: %s — stopping the "
