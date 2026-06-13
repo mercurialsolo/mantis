@@ -68,22 +68,57 @@ logger = logging.getLogger(__name__)
 _MAX_SCROLL_PASSES = 8
 
 
-def _pick_dedup_key(schema) -> str:
-    """Pick the schema's primary key for cross-pass dedup.
+# Positional / ordinal field names a vision extractor RE-DERIVES per
+# screenshot (it numbers the visible rows 1..N by position), so they
+# COLLIDE across scroll passes and are actively harmful as a cross-pass
+# dedup key. #880-followup root cause: YC W26 capped at 6/10 because
+# dedup-by-"rank" flagged every scrolled-in card (re-numbered 1..6 on
+# the next screenshot) as already-seen → new=0 → loop bailed. Skip these
+# and dedup on a STABLE identity field instead.
+_POSITIONAL_FIELD_NAMES = frozenset({
+    "rank", "index", "position", "pos", "row", "rownum", "row_num",
+    "number", "num", "no", "order", "ordinal", "seq", "sequence", "#",
+})
 
-    Heuristic — use the FIRST ``required=True`` field. For most
-    listings shapes that's the natural identifier: ``rank`` for HN,
-    ``name`` for YC, ``id`` / ``url`` for marketplaces. Falls back to
-    the first field name if no required fields are declared (which
-    would surface in unit tests as a misconfig).
+
+def _field_name(f) -> str:
+    if isinstance(f, dict):
+        return str(f.get("name") or "")
+    if isinstance(f, str):
+        return f
+    return str(getattr(f, "name", "") or "")
+
+
+def _pick_dedup_key(schema) -> str:
+    """Pick a STABLE primary key for cross-pass dedup.
+
+    The accumulate loop dedups scroll passes by one field's value. A
+    positional field (``rank``/``index``/...) is re-derived by the
+    vision extractor on every screenshot, so it collides across passes
+    and collapses the loop to a single viewport (#880-followup: YC W26
+    capped at 6/10). So: prefer the first NON-positional field —
+    required first (``name``/``title``/``id``/``url``...), then any
+    declared field. Only if EVERY candidate is positional do we fall
+    back to one (a single-viewport extract like HN top-5 still dedups
+    fine on ``rank`` because it never scrolls).
     """
     fields = getattr(schema, "fields", None) or []
     required = getattr(schema, "required_fields", None) or []
-    if required:
-        return str(required[0])
-    if fields:
-        return str(fields[0].get("name") if isinstance(fields[0], dict)
-                   else getattr(fields[0], "name", ""))
+    required_names = [n for n in (_field_name(f) for f in required) if n]
+    field_names = [n for n in (_field_name(f) for f in fields) if n]
+
+    for n in required_names:
+        if n.strip().lower() not in _POSITIONAL_FIELD_NAMES:
+            return n
+    for n in field_names:
+        if n.strip().lower() not in _POSITIONAL_FIELD_NAMES:
+            return n
+    # Everything is positional — preserve the legacy first-required /
+    # first-field behaviour.
+    if required_names:
+        return required_names[0]
+    if field_names:
+        return field_names[0]
     return ""
 
 

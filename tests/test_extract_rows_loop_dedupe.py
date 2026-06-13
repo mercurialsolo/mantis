@@ -74,6 +74,63 @@ def test_pick_dedup_key_falls_back_to_first_field_when_no_required() -> None:
     assert _pick_dedup_key(schema) == "foo"
 
 
+def test_pick_dedup_key_skips_positional_rank() -> None:
+    """#880-followup: ``rank`` is positional — a vision extractor
+    re-derives it per screenshot, so it collides across scroll passes.
+    The dedup key must be the first STABLE field (``name``)."""
+    schema = ExtractionSchema(
+        entity_name="yc_company", fields=[],
+        required_fields=["rank", "name", "batch"],
+    )
+    assert _pick_dedup_key(schema) == "name"
+
+
+def test_pick_dedup_key_all_positional_falls_back() -> None:
+    """A schema whose only fields are positional still gets a key (a
+    single-viewport extract dedups fine on it because it never scrolls)."""
+    schema = ExtractionSchema(
+        entity_name="x", fields=[], required_fields=["rank"],
+    )
+    assert _pick_dedup_key(schema) == "rank"
+
+
+def test_loop_accumulates_when_rank_resets_each_pass() -> None:
+    """#880-followup regression — the YC W26 cap. A vision extractor
+    re-numbers ``rank`` 1..N on every screenshot, so dedup-by-rank
+    flagged every scrolled-in card as already-seen and the loop capped
+    at one viewport (6/10). Dedup now keys on the stable ``name``, so
+    distinct scrolled-in cards accumulate to ``max_items``."""
+    schema = ExtractionSchema(
+        entity_name="yc_company",
+        fields=[
+            {"name": "rank", "type": "int", "required": True},
+            {"name": "name", "type": "str", "required": True},
+        ],
+        required_fields=["rank", "name"],
+        max_items=10,
+    )
+    extractor = MagicMock()
+    extractor.schema = schema
+    # Each pass: rank RESETS to 1.. by visual position; names are unique.
+    extractor.extract_rows.side_effect = [
+        [{"rank": "1", "name": "Unifold"}, {"rank": "2", "name": "Carrot"},
+         {"rank": "3", "name": "Aurorin"}],
+        [{"rank": "1", "name": "Fixture"}, {"rank": "2", "name": "DAIVIN"},
+         {"rank": "3", "name": "GrazeMate"}],
+        [{"rank": "1", "name": "Voxel"}, {"rank": "2", "name": "Sequence"},
+         {"rank": "3", "name": "Ditto"}, {"rank": "4", "name": "Servo"}],
+    ]
+    runner = _runner_with_costs()
+    handler = ClaudeStepHandler(runner)
+    step = MicroIntent(intent="x", type="extract_data", claude_only=True)
+    ctx = _ctx(extractor, env_with_cdp=True)
+    result = handler._execute_rows(step, ctx, schema)
+    names = [r["name"] for r in result.extracted_rows]
+    # All 10 distinct names accumulate (3+3+4) despite rank collisions.
+    assert len(names) == 10
+    assert "Voxel" in names  # a pass-3 card with rank=1 — NOT deduped
+
+
 def test_filter_new_rows_dedupes_case_insensitively() -> None:
     seen: set = set()
     first = _filter_new_rows(
