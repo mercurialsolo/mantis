@@ -472,6 +472,36 @@ def test_resume_calls_restore_browser_state(monkeypatch):
     assert bs.scroll_y == 1800
 
 
+def test_resume_stages_user_input_for_substitution(monkeypatch):
+    """#882-followup: on resume the run starts AFTER the paused
+    request_user_input step, so its handler never re-runs to stage the
+    value. resume() must stage it itself onto ``_staged_user_input`` so
+    ``_build_effective_step`` can substitute ``{{user_input}}`` into
+    downstream fill_field steps (else the literal placeholder is typed)."""
+    env = _FakeEnv()
+    r = _runner(env)
+    plan = _trivial_plan()
+    sig = r._compute_plan_signature(plan)
+    state = PauseState(plan_signature=sig)
+    monkeypatch.setattr(r, "run", lambda *a, **kw: [])
+
+    r.resume(state, user_input="tomsmith", plan=plan)
+    assert getattr(r, "_staged_user_input", None) == "tomsmith"
+
+
+def test_resume_without_user_input_leaves_substitution_noop(monkeypatch):
+    """A resume with no value must not stage a junk substitution source."""
+    env = _FakeEnv()
+    r = _runner(env)
+    plan = _trivial_plan()
+    sig = r._compute_plan_signature(plan)
+    state = PauseState(plan_signature=sig)
+    monkeypatch.setattr(r, "run", lambda *a, **kw: [])
+
+    r.resume(state, user_input=None, plan=plan)
+    assert getattr(r, "_staged_user_input", None) is None
+
+
 def test_resume_works_when_env_lacks_restore_method(monkeypatch):
     """Legacy envs without ``restore_browser_state`` must not crash —
     resume should proceed and run the step loop as before."""

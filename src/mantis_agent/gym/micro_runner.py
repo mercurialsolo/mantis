@@ -762,6 +762,18 @@ class MicroPlanRunner:
         self.session_name = state.session_name or self.session_name
         self.plan_signature, self.resume_state = signature, True
         self._pause_input = user_input
+        # #882-followup: stage the resumed value for ``{{user_input}}``
+        # substitution (RunExecutor._build_effective_step reads
+        # ``runner._staged_user_input``). The request_user_input STEP
+        # handler also stages it — but on resume the run starts at the
+        # step AFTER the paused one (the pause is snapshotted post-success
+        # with step_index already advanced), so that handler never
+        # re-executes and the only place the value can be staged is here.
+        # Without this, downstream fill_field steps typed the literal
+        # ``{{user_input}}`` (live repro: the-internet/login → "username
+        # invalid"). ``None`` user_input leaves substitution a no-op.
+        if user_input is not None:
+            self._staged_user_input = user_input
         # Epic #358 Phase A: replay browser state (URL + scroll +
         # viewport) before resuming the step loop, so the agent
         # picks up at the exact pixel rather than a fresh page-top.
