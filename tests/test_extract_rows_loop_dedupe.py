@@ -23,7 +23,9 @@ from unittest.mock import MagicMock
 
 from mantis_agent.extraction import ExtractionSchema
 from mantis_agent.gym.step_handlers.claude_step import (
+    _INNER_SCROLLER_JS,
     ClaudeStepHandler,
+    _cdp_scroll_once,
     _filter_new_rows,
     _pick_dedup_key,
 )
@@ -228,3 +230,73 @@ def test_loop_zero_rows_returns_no_visible_rows_failure() -> None:
     result = handler._execute_rows(step, ctx, schema)
     assert result.success is False
     assert "no_visible_rows" in result.data
+
+
+# ── #880: inner-overflow-container scroll ──────────────────────────────
+
+
+def test_cdp_scroll_js_drives_inner_overflow_container() -> None:
+    """The scroll payload must fall back to an inner scroll container
+    (YC virtualized directory) when the window scroller is pinned —
+    the pre-#880 ``window.scrollBy``-only payload was a no-op there."""
+    # window scroller
+    assert "window.scrollBy" in _INNER_SCROLLER_JS
+    assert "document.scrollingElement" in _INNER_SCROLLER_JS
+    # inner overflow scroller fallback
+    assert "overflowY" in _INNER_SCROLLER_JS
+    assert "scrollTop" in _INNER_SCROLLER_JS
+    # virtualized lists re-render off a scroll event
+    assert "new Event('scroll'" in _INNER_SCROLLER_JS
+
+
+def test_cdp_scroll_once_returns_false_on_explicit_no_movement() -> None:
+    """A real env returns the JS bool: False ⇒ nothing scrolled (page
+    at the bottom / nothing scrollable) ⇒ stop the loop now."""
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(return_value=False)
+    assert _cdp_scroll_once(env) is False
+    env.cdp_evaluate.assert_called_once_with(_INNER_SCROLLER_JS)
+
+
+def test_cdp_scroll_once_returns_true_on_movement() -> None:
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(return_value=True)
+    assert _cdp_scroll_once(env) is True
+
+
+def test_cdp_scroll_once_back_compat_none_keeps_looping() -> None:
+    """Test/replay envs (and older CDP shims) return None — preserve the
+    legacy 'scroll issued' contract so they keep looping to the empty-
+    pass guard rather than stopping after one pass."""
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(return_value=None)
+    assert _cdp_scroll_once(env) is True
+
+
+def test_cdp_scroll_once_false_when_no_cdp() -> None:
+    env = MagicMock()
+    delattr(env, "cdp_evaluate")
+    assert _cdp_scroll_once(env) is False
+
+
+def test_loop_stops_when_scroll_reports_no_movement() -> None:
+    """New #880 path: when the scroller is genuinely exhausted (JS
+    returns False), the loop stops after the current pass instead of
+    burning two empty extract passes."""
+    schema = ExtractionSchema(
+        entity_name="yc", fields=[], required_fields=["name"],
+        max_items=10,
+    )
+    extractor = MagicMock()
+    extractor.schema = schema
+    extractor.extract_rows.return_value = [{"name": "A"}, {"name": "B"}]
+    runner = _runner_with_costs()
+    handler = ClaudeStepHandler(runner)
+    step = MicroIntent(intent="x", type="extract_data", claude_only=True)
+    ctx = _ctx(extractor, env_with_cdp=True)
+    ctx.env.cdp_evaluate = MagicMock(return_value=False)  # nothing scrolled
+    result = handler._execute_rows(step, ctx, schema)
+    assert result.success is True
+    # One extract pass, then the no-movement scroll stopped the loop.
+    assert runner.costs["claude_extract"] == 1
+    assert [r["name"] for r in result.extracted_rows] == ["A", "B"]
