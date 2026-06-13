@@ -306,28 +306,66 @@ def finalize_to_disk(
         with open(tmp_path, "w") as f:
             json.dump(snapshot, f, indent=2, sort_keys=True)
         os.replace(tmp_path, path)
+        # Epic #847 / Issue #853 — surface per-source cache hit rate
+        # alongside the cost summary so the prompt-cache audit doesn't
+        # need to pull files off the volume. Format mirrors the
+        # per-call ``[cache]`` lines that already exist in the
+        # _anthropic/client.py + brain_claude.py emitters.
+        totals = snapshot["totals"]
+        tot_input = int(totals.get("input_tokens", 0))
+        tot_read = int(totals.get("cache_read_tokens", 0))
+        tot_creation = int(totals.get("cache_creation_tokens", 0))
+        # Hit rate denominator: bytes that COULD have been cached =
+        # cache_read + cache_creation + uncached_input. Cache reads
+        # are pure savings; creations are paid-for first-time cache
+        # population. We report all three so operators can see if
+        # the cache is being populated but never replayed (drift) vs
+        # populated AND hit (healthy).
+        denom = tot_input + tot_read + tot_creation
+        hit_pct = (tot_read / denom * 100) if denom else 0.0
         logger.warning(
-            "  [cost-meter] wrote %s: %d calls, $%.4f total",
-            path, snapshot["totals"]["calls"],
-            snapshot["totals"]["cost_usd"],
+            "  [cost-meter] wrote %s: %d calls, $%.4f total, "
+            "cache_read=%d cache_creation=%d input=%d hit_rate=%.1f%%",
+            path, totals["calls"], totals["cost_usd"],
+            tot_read, tot_creation, tot_input, hit_pct,
         )
+        for label, stats in snapshot["by_path"].items():
+            sub_input = int(stats.get("input_tokens", 0))
+            sub_read = int(stats.get("cache_read_tokens", 0))
+            sub_creation = int(stats.get("cache_creation_tokens", 0))
+            sub_denom = sub_input + sub_read + sub_creation
+            sub_hit = (sub_read / sub_denom * 100) if sub_denom else 0.0
+            logger.warning(
+                "  [cost-meter]   %s: calls=%d cache_read=%d "
+                "cache_creation=%d input=%d hit_rate=%.1f%%",
+                label, stats.get("calls", 0),
+                sub_read, sub_creation, sub_input, sub_hit,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.debug("claude_cost_meter finalize failed: %s", exc)
         return ""
-    # Mirror to the run_dir layout the Baseten/Modal artifact server
-    # uses (``<MANTIS_DATA_DIR>/runs/<run_id>/claude_cost_by_path.json``)
-    # so ``persist_run_artifacts`` can expose it via /v1/runs/<id>/
-    # artifacts/<name>. Without this, the only on-disk copy lives under
-    # the tenant-prefixed path (``<root>/<tenant>/<run_id>/``) which the
-    # artifact endpoint doesn't search. Best-effort: failure to mirror
-    # doesn't fail finalization.
+    # Mirror to BOTH artifact-reader layouts: the legacy un-scoped
+    # ``<root>/runs/<run_id>/`` (Modal's artifact reader) and the
+    # tenant-scoped ``<root>/tenants/<tenant>/runs/<run_id>/``
+    # (Baseten reader post-PR #868). Pre-fix only the un-scoped path
+    # was mirrored, so Baseten's allowlisted ``claude_cost_by_path.
+    # json`` always 404'd. Best-effort — failure to mirror doesn't
+    # fail finalization.
     try:
         root = os.environ.get("MANTIS_DATA_DIR", os.environ.get("MANTIS_RUN_ARTIFACTS_DIR", "/data"))
         safe_run = _sanitize(run_id) or "unknown"
-        mirror_dir = os.path.join(root, "runs", safe_run)
-        os.makedirs(mirror_dir, exist_ok=True)
-        mirror_path = os.path.join(mirror_dir, "claude_cost_by_path.json")
-        if os.path.abspath(mirror_path) != os.path.abspath(path):
+        safe_tenant = _sanitize(tenant_id) or "default"
+        mirror_targets = [
+            os.path.join(root, "runs", safe_run, "claude_cost_by_path.json"),
+            os.path.join(
+                root, "tenants", safe_tenant, "runs", safe_run,
+                "claude_cost_by_path.json",
+            ),
+        ]
+        for mirror_path in mirror_targets:
+            if os.path.abspath(mirror_path) == os.path.abspath(path):
+                continue
+            os.makedirs(os.path.dirname(mirror_path), exist_ok=True)
             tmp_mirror = f"{mirror_path}.tmp.{os.getpid()}"
             with open(tmp_mirror, "w") as f:
                 json.dump(snapshot, f, indent=2, sort_keys=True)
