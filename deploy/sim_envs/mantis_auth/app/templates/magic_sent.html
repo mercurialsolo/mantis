@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Check your inbox — {{ config.app_name }}</title>
+  <link rel="stylesheet" href="/static/auth.css" />
+</head>
+<body class="layout-centered">
+  <div class="auth-wrap">
+    <div class="auth-card" data-testid="magic-sent-card">
+      <h1>Check your inbox</h1>
+      <p class="sub">If <strong>{{ email }}</strong> has an account, a sign-in
+         link is on its way.</p>
+      <a class="btn" href="/inbox" data-testid="open-inbox">Open inbox</a>
+      <p class="hint">The link lands in the mock mailbox at
+         <code>/inbox</code>. Open it and click the link to finish signing in.</p>
+      <p class="hint"><a href="/login">← Back to all sign-in options</a></p>
+    </div>
+  </div>
+</body>
+</html>

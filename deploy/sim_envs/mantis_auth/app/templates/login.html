@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in — {{ config.app_name }}</title>
+  <link rel="stylesheet" href="/static/auth.css" />
+</head>
+<body class="layout-{{ layout }}">
+
+{# Reusable sign-in card, rendered inside whichever layout shell. #}
+{% macro signin_card() %}
+<div class="auth-card" data-testid="login-card">
+  <h1>Sign in</h1>
+  <p class="sub">to continue to {{ config.app_name }}</p>
+
+  {% if error %}
+    <div class="error" data-testid="login-error">{{ error }}</div>
+  {% endif %}
+  {% if current_user %}
+    <div class="notice" data-testid="already-logged-in">
+      Already signed in as <strong>{{ current_user.email }}</strong>.
+    </div>
+  {% endif %}
+
+  {% if config.method_enabled('password') %}
+  <form method="post" action="/login" class="login-form" data-testid="login-form">
+    <input type="hidden" name="next" value="{{ next }}"/>
+    <label for="email">Email</label>
+    <input id="email" type="email" name="email" required autocomplete="email"
+           placeholder="ada@mantis.example" data-testid="login-email"/>
+    <label for="password">Password</label>
+    <input id="password" type="password" name="password" required
+           autocomplete="current-password" data-testid="login-password"/>
+    <button class="btn" type="submit" data-testid="login-submit">Sign in</button>
+  </form>
+  {% endif %}
+
+  {% if config.enabled_providers and config.method_enabled('oauth') %}
+  <div class="divider" id="oauth">or continue with</div>
+  <div class="provider-list" data-testid="provider-list">
+    {% for p in providers %}
+      <a class="provider-btn" data-testid="oauth-{{ p.slug }}"
+         href="/auth/oauth/{{ p.slug }}/authorize?state=login">
+        <span class="provider-ico" style="background:{{ p.accent }}">{{ p.display_name[0] }}</span>
+        Continue with {{ p.display_name }}
+      </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% set alts = [] %}
+  {% if config.method_enabled('magic_link') %}{% set _ = alts.append(('/auth/magic', 'Email me a magic link', 'magic')) %}{% endif %}
+  {% if config.method_enabled('email_otp') %}{% set _ = alts.append(('/auth/otp', 'Email me a one-time code', 'otp')) %}{% endif %}
+  {% if config.method_enabled('passkey') %}{% set _ = alts.append(('/auth/passkey', 'Use a passkey', 'passkey')) %}{% endif %}
+  {% if alts %}
+  <div class="divider">other ways</div>
+  <div class="method-list" data-testid="method-list">
+    {% for href, label, key in alts %}
+      <a class="method-btn" href="{{ href }}" data-testid="method-{{ key }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <details class="hint">
+    <summary>Demo credentials</summary>
+    <ul>
+      <li><code>ada@mantis.example</code> / <code>hunter2</code> — enrolled in every method</li>
+      <li><code>grace@mantis.example</code> / <code>compiler1</code> — admin</li>
+    </ul>
+  </details>
+</div>
+{% endmacro %}
+
+{% if layout == 'split' %}
+  <div class="auth-wrap">
+    <div class="split">
+      <section class="hero" data-testid="login-hero">
+        <div class="brand"><span class="logo">M</span> {{ config.app_name }}</div>
+        <h2>Every door, one console.</h2>
+        <p>Password, SSO, magic link, OTP, or passkey — this environment
+           exercises them all. Sign in on the right.</p>
+      </section>
+      <div class="pane">{{ signin_card() }}</div>
+    </div>
+  </div>
+{% else %}
+  <div class="auth-wrap">{{ signin_card() }}</div>
+{% endif %}
+
+</body>
+</html>

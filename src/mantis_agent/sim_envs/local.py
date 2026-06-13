@@ -74,6 +74,7 @@ def _image_for_env(env_name: str) -> str | None:
         return override
     # Canonical per-env images. Child env PRs append to this table.
     registry = {
+        "mantis-auth": "mantis/sim-env-mantis-auth:latest",
         "mantis-crm": "mantis/sim-env-mantis-crm:latest",
         "mantis-helpdesk": "mantis/sim-env-mantis-helpdesk:latest",
         "mantis-shop": "mantis/sim-env-mantis-shop:latest",

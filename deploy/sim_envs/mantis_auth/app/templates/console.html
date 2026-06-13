@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Console — {{ config.app_name }}</title>
+  <link rel="stylesheet" href="/static/auth.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">M</span> {{ config.app_name }}</div>
+    <div class="who">
+      <span class="email" data-testid="current-email">{{ current_user.email }}</span>
+      <form method="post" action="/logout" style="display:inline">
+        <button class="link-button" type="submit" data-testid="logout">Sign out</button>
+      </form>
+    </div>
+  </header>
+  <main class="page" data-testid="console">
+    <p class="welcome">Welcome back, {{ current_user.name.split(' ')[0] }} 👋</p>
+    <p class="sub">You're signed in to {{ config.app_name }} as
+       <strong data-testid="console-email">{{ current_user.email }}</strong>
+       ({{ current_user.role }}).</p>
+
+    <div class="cards">
+      <div class="card">
+        <h3>Account</h3>
+        <div>{{ current_user.name }}</div>
+        <div class="msg-to">{{ current_user.email }}</div>
+      </div>
+      <div class="card">
+        <h3>Sign-in methods</h3>
+        <span class="pill {{ 'on' if enrolled.password else 'off' }}">password</span>
+        {% for p in enrolled.oauth_providers %}<span class="pill on">{{ p }}</span>{% endfor %}
+        {% for pk in enrolled.passkeys %}<span class="pill on">passkey: {{ pk }}</span>{% endfor %}
+      </div>
+      <a class="card" href="/account" data-testid="go-account">
+        <h3>Security →</h3>Review enrolled methods.
+      </a>
+    </div>
+  </main>
+</body>
+</html>

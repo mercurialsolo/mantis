@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Inbox — {{ config.app_name }}</title>
+  <link rel="stylesheet" href="/static/auth.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">M</span> Mailbox</div>
+    <div class="who"><a href="/login">Back to sign in</a></div>
+  </header>
+  <main class="page" data-testid="inbox">
+    <h1>Inbox</h1>
+    <p class="sub">Mock mailbox — magic links and one-time codes arrive here.</p>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    {% if messages %}
+    <ul class="msg-list">
+      {% for m in messages %}
+      <a class="msg-row" href="/inbox/{{ m.id }}" data-testid="msg-{{ loop.index }}">
+        <span class="msg-kind">{{ m.kind.replace('_',' ') }}</span>
+        <span class="msg-meta">
+          <div class="msg-subject">{{ m.subject }}</div>
+          <div class="msg-to">to {{ m.to_email }} · {{ m.created_at }}</div>
+        </span>
+        {% if m.consumed_at %}<span class="msg-consumed">✓ used</span>{% endif %}
+      </a>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty" data-testid="inbox-empty">No messages yet. Request a magic
+       link or a one-time code, then refresh.</div>
+    {% endif %}
+  </main>
+</body>
+</html>

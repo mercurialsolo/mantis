@@ -1,0 +1,59 @@
+{
+  "task_id": "T02_oauth_google",
+  "source_plan": "Sign in to Mantis Console using 'Continue with Google' for ada@mantis.example, approving the consent screen.",
+  "domain": "mantis-auth",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the sign-in page at {{ENV_URL}}/login",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/login"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Click 'Continue with Google' to start the OAuth flow.",
+      "section": "navigate",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "On the Google account picker, choose the account for ada@mantis.example.",
+      "section": "navigate",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "On the consent screen, click 'Allow' to authorize Mantis Console and return to the app.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

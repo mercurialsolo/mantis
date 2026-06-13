@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Redirecting…</title>
+  <link rel="stylesheet" href="/static/idp.css" />
+  <style>:root { --idp-accent: {{ provider.accent }}; }</style>
+  <meta http-equiv="refresh" content="1;url={{ target }}" />
+</head>
+<body class="idp">
+<div class="idp-shell">
+  <main class="idp-card idp-redirect-card" data-testid="oauth-redirect-card">
+    <div class="idp-spinner" aria-hidden="true"></div>
+    <h1 style="font-size:18px">Redirecting back to {{ config.app_name }}…</h1>
+    <p class="idp-fineprint" style="margin-top:12px">
+      If you're not redirected automatically,
+      <a href="{{ target }}" data-testid="oauth-redirect-link">click here</a>.
+    </p>
+  </main>
+</div>
+</body>
+</html>

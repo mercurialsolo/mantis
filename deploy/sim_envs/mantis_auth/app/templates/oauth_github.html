@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in to GitHub</title>
+  <link rel="stylesheet" href="/static/idp.css" />
+  <style>:root { --idp-accent: {{ provider.accent }}; }</style>
+</head>
+<body class="idp idp-dark">
+<div class="idp-shell" data-testid="oauth-github-{{ stage }}">
+  <header class="idp-topbar">
+    <div class="idp-wordmark">&#9670; GitHub</div>
+    {% if stage == 'consent' %}
+      <div class="idp-chip"><span class="idp-avatar idp-avatar-sm">{{ account.email[0]|upper }}</span>{{ account.email }}</div>
+    {% endif %}
+  </header>
+
+  <main class="idp-card">
+    {% if stage == 'picker' %}
+      <h1>Authorize {{ config.app_name }}</h1>
+      <p class="idp-sub">Choose which account to authorize.</p>
+      {% if error %}<div class="idp-error" data-testid="oauth-error">{{ error }}</div>{% endif %}
+      <ul class="idp-account-list" data-testid="oauth-account-list">
+        {% for a in accounts %}
+        <li>
+          <form method="post" action="/auth/oauth/{{ provider.slug }}/consent">
+            <input type="hidden" name="subject" value="{{ a.subject }}"/>
+            <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
+            <input type="hidden" name="state" value="{{ state }}"/>
+            <button class="idp-account-row" type="submit" data-testid="oauth-account-{{ loop.index }}">
+              <span class="idp-avatar">{{ a.email[0]|upper }}</span>
+              <span class="idp-account-meta">
+                <span class="idp-account-name">{{ a.name }}</span>
+                <span class="idp-account-email">{{ a.email }}</span>
+              </span>
+              <span class="idp-chevron">›</span>
+            </button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <h1>Authorize {{ config.app_name }}</h1>
+      <div class="idp-account-line"><span class="idp-avatar idp-avatar-sm">{{ account.email[0]|upper }}</span>{{ account.email }}</div>
+      <p class="idp-permits">{{ config.app_name }} is requesting access to:</p>
+      <ul class="idp-scope-list">
+        {% for s in provider.scopes %}
+          <li><span class="idp-scope-ico">✓</span><span>{{ s }}</span></li>
+        {% endfor %}
+      </ul>
+      <p class="idp-fineprint">Authorizing will redirect to {{ config.app_name }}.
+         You can revoke access in your GitHub settings.</p>
+      <div class="idp-actions">
+        <form method="get" action="/auth/oauth/{{ provider.slug }}/authorize">
+          <input type="hidden" name="state" value="{{ state }}"/>
+          <button class="idp-btn idp-btn-secondary" type="submit" data-testid="oauth-cancel">Cancel</button>
+        </form>
+        <form method="post" action="/auth/oauth/{{ provider.slug }}/grant">
+          <input type="hidden" name="subject" value="{{ subject }}"/>
+          <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
+          <input type="hidden" name="state" value="{{ state }}"/>
+          <button class="idp-btn idp-btn-primary" type="submit" data-testid="oauth-allow">Authorize</button>
+        </form>
+      </div>
+    {% endif %}
+  </main>
+
+  <footer class="idp-footer">
+    <span>&copy; GitHub, Inc.</span>
+    <span><a href="#">Terms</a><a href="#">Privacy</a><a href="#">Docs</a></span>
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,59 @@
+{
+  "task_id": "T06_magic_link_email",
+  "source_plan": "Sign in to Mantis Console with an email magic link for ada@mantis.example: request the link, open the inbox, and click it.",
+  "domain": "mantis-auth",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the magic-link request page at {{ENV_URL}}/auth/magic",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/auth/magic"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Enter 'ada@mantis.example' and submit to send the sign-in link.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Open the mailbox at {{ENV_URL}}/inbox and open the newest 'sign-in link' message.",
+      "section": "navigate",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/inbox"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Click the 'Sign in via this link' button in the message to complete sign-in.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

@@ -193,6 +193,51 @@ region locks, coupon stacking, ZIP validation) are all enforced in
 FastAPI handlers — the agent cannot bypass them via JS-only checks
 or DOM manipulation.
 
+## mantis-auth (multi-method authentication wall)
+
+**mantis-auth** is a focused env whose whole surface is *getting in*: a
+minimal SaaS console ("Mantis Console") behind an auth wall that exercises
+every common sign-in method. One deployable artifact, eight graded
+scenarios:
+
+| Task | Method |
+|------|--------|
+| `T01_password_login` | email + password |
+| `T02_oauth_google` / `T03_oauth_github` / `T04_oauth_microsoft` / `T05_oauth_okta` | OAuth, one per provider (each with its own IdP chrome) |
+| `T06_magic_link_email` | emailed magic link (read it in the mock `/inbox`) |
+| `T07_email_otp` | emailed 6-digit code (read it in `/inbox`) |
+| `T08_passkey` | simulated WebAuthn passkey assertion |
+
+The password screen ships three swappable layouts (`AUTH_LAYOUT=centered`
+| `split` | `minimal`, or `?layout=` per request). The canonical demo
+account `ada@mantis.example` is enrolled in every method.
+
+Each oracle grades on the audit log the flow writes: a terminal
+`login_succeeded` row tagged with `via` (+ `provider` for OAuth), plus a
+proof-of-ceremony check for the email/passkey flows (token consumed, code
+verified, passkey asserted) so a session minted by any other means still
+fails.
+
+```bash
+# Local Docker
+docker build -t mantis/sim-env-mantis-auth:latest deploy/sim_envs/mantis_auth
+uv run mantis plan run examples/sim_envs/mantis_auth/T01_password_login.json \
+    --env mantis-auth --runtime local --endpoint <BRAIN_URL>
+
+# Modal
+modal secret create mantis-sim-env-mantis-auth-secrets \
+    ENV_ADMIN_TOKEN=$(python -c 'import secrets;print(secrets.token_urlsafe(32))') \
+    AUTH_SESSION_SECRET=$(python -c 'import secrets;print(secrets.token_urlsafe(32))')
+uv run modal deploy deploy/sim_envs/modal_mantis_auth.py
+uv run mantis plan run examples/sim_envs/mantis_auth/T02_oauth_google.json \
+    --env mantis-auth --runtime modal --endpoint <BRAIN_URL>
+```
+
+The login surface is the **embeddable `app.authflow` package** — a
+storage-free FastAPI router (`build_auth_router(AuthConfig(...))`) any
+other sim env can mount to gain the full method matrix. See
+`deploy/sim_envs/mantis_auth/README.md` for the drop-in recipe.
+
 ## Modal deploy of the stub
 
 ```bash
