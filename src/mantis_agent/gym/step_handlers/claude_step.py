@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...actions import Action, ActionType
 from ..checkpoint import StepResult
@@ -59,6 +59,82 @@ if TYPE_CHECKING:
     from ...plan_decomposer import MicroIntent
 
 logger = logging.getLogger(__name__)
+
+
+# Loop-extract-dedupe knobs. 8 passes is enough to cover ~70 cards
+# on a 1280x720 viewport at YC's grid density without burning Claude
+# budget on infinite-scroll feeds. The runner's max_cost still
+# bounds spend; this is a sanity ceiling.
+_MAX_SCROLL_PASSES = 8
+
+
+def _pick_dedup_key(schema) -> str:
+    """Pick the schema's primary key for cross-pass dedup.
+
+    Heuristic — use the FIRST ``required=True`` field. For most
+    listings shapes that's the natural identifier: ``rank`` for HN,
+    ``name`` for YC, ``id`` / ``url`` for marketplaces. Falls back to
+    the first field name if no required fields are declared (which
+    would surface in unit tests as a misconfig).
+    """
+    fields = getattr(schema, "fields", None) or []
+    required = getattr(schema, "required_fields", None) or []
+    if required:
+        return str(required[0])
+    if fields:
+        return str(fields[0].get("name") if isinstance(fields[0], dict)
+                   else getattr(fields[0], "name", ""))
+    return ""
+
+
+def _filter_new_rows(
+    rows, seen_keys: set, dedup_key: str,
+) -> list:
+    """Return only rows whose ``dedup_key`` value hasn't been seen."""
+    if not dedup_key:
+        return [dict(r) for r in rows]
+    fresh = []
+    for r in rows:
+        key = str(r.get(dedup_key, "") or "").strip().lower()
+        if not key or key in seen_keys:
+            continue
+        seen_keys.add(key)
+        fresh.append(dict(r))
+    return fresh
+
+
+def _cdp_scroll_once(env) -> bool:
+    """Issue ``window.scrollBy(0, viewport_height)`` via CDP.
+
+    Returns False when the env doesn't expose ``cdp_evaluate`` (test
+    envs, replay envs) so the caller can stop the loop cleanly.
+    Vision-driven scroll is deliberately NOT a fallback — the whole
+    point of this path is to skip the Holo3 ``brain_loop_exhausted``
+    failure mode.
+    """
+    cdp_evaluate = getattr(env, "cdp_evaluate", None)
+    if cdp_evaluate is None:
+        return False
+    try:
+        cdp_evaluate(
+            "(function(){"
+            "  const h = Math.round(window.innerHeight * 0.85);"
+            "  window.scrollBy(0, h);"
+            "  if (document.scrollingElement) {"
+            "    document.scrollingElement.scrollBy(0, h);"
+            "  }"
+            "  return true;"
+            "})()"
+        )
+        # Brief settle so the next screenshot reflects the scroll.
+        time.sleep(0.7)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[claude_step] CDP scroll raised: %s — stopping the "
+            "extract-loop", exc,
+        )
+        return False
 
 
 def _resolve_extraction_context(runner: "MicroPlanRunner", data: object | None):
@@ -286,12 +362,23 @@ class ClaudeStepHandler:
     def _execute_rows(
         self, step: "MicroIntent", ctx: StepContext, schema,
     ) -> StepResult:
-        """Multi-row extraction (#785 follow-up).
+        """Multi-row extraction with loop-extract-dedupe (#785 follow-up).
 
-        One Claude vision call returns up to ``schema.max_items`` rows
-        from the current screenshot. Each row lands on the synthesized
-        ``StepResult.extracted_rows`` list; the artifact aggregator
-        unpacks them into ``leads.csv`` / ``extracted_rows.csv`` /
+        Strategy: extract → if collected < ``max_items``, CDP-scroll →
+        extract again → dedupe by the schema's first required field
+        (typically the primary key — ``rank`` / ``name`` / ``id``).
+        Loop until collected reaches ``max_items``, OR ``_MAX_SCROLL_
+        PASSES`` (8) iterations, OR two consecutive passes yield zero
+        new rows (page exhausted).
+
+        Pre-fix the handler did a single extract pass and returned
+        whatever Claude saw on the initial viewport — for the YC
+        directory grid that's typically 5/10, missing the cards below
+        the fold. The loop bridges the gap.
+
+        Each row still lands on the synthesized ``StepResult.
+        extracted_rows`` list; the artifact aggregator unpacks them
+        into ``leads.csv`` / ``extracted_rows.csv`` /
         ``extracted_rows.json`` automatically.
         """
         runner = self.parent
@@ -305,16 +392,56 @@ class ClaudeStepHandler:
                 data="extract_rows:no_env_or_extractor",
             )
 
-        screenshot = env.screenshot()
         max_items = max(int(getattr(schema, "max_items", 0) or 0), 1)
-        rows = extractor.extract_rows(screenshot, max_items)
-        runner.costs["claude_extract"] = runner.costs.get("claude_extract", 0) + 1
-
-        if not rows:
+        dedup_key = _pick_dedup_key(schema)
+        seen_keys: set[str] = set()
+        all_rows: list[dict[str, Any]] = []
+        consecutive_empty_passes = 0
+        for pass_idx in range(_MAX_SCROLL_PASSES):
+            screenshot = env.screenshot()
+            rows = extractor.extract_rows(screenshot, max_items)
+            runner.costs["claude_extract"] = (
+                runner.costs.get("claude_extract", 0) + 1
+            )
+            new_rows = _filter_new_rows(rows, seen_keys, dedup_key)
             logger.warning(
-                "[claude_step] extract_rows returned 0 rows "
-                "(schema=%s, max_items=%d) — page may not have been "
-                "loaded yet, or vision couldn't parse the list shape",
+                "[claude_step] extract_rows pass=%d: %d/%d captured "
+                "(new=%d, total=%d/%d)",
+                pass_idx + 1, len(rows), max_items,
+                len(new_rows), len(all_rows) + len(new_rows), max_items,
+            )
+            all_rows.extend(new_rows)
+            if len(all_rows) >= max_items:
+                all_rows = all_rows[:max_items]
+                break
+            if not new_rows:
+                consecutive_empty_passes += 1
+                if consecutive_empty_passes >= 2:
+                    logger.warning(
+                        "[claude_step] extract_rows: 2 consecutive "
+                        "empty passes — page exhausted at "
+                        "%d/%d", len(all_rows), max_items,
+                    )
+                    break
+            else:
+                consecutive_empty_passes = 0
+            # CDP scroll for the next pass. Vision-driven scroll
+            # would re-introduce the brain_loop_exhausted footgun
+            # the loop-extract pattern is designed to avoid.
+            if not _cdp_scroll_once(env):
+                logger.warning(
+                    "[claude_step] extract_rows: CDP scroll "
+                    "unavailable — stopping at %d/%d",
+                    len(all_rows), max_items,
+                )
+                break
+
+        if not all_rows:
+            logger.warning(
+                "[claude_step] extract_rows returned 0 rows after "
+                "%d passes (schema=%s, max_items=%d) — page may not "
+                "have loaded, or vision couldn't parse the list shape",
+                pass_idx + 1,
                 getattr(schema, "entity_name", "?"), max_items,
             )
             return StepResult(
@@ -322,18 +449,14 @@ class ClaudeStepHandler:
                 data=f"extract_rows:0/{max_items}:no_visible_rows",
             )
 
-        logger.warning(
-            "[claude_step] extract_rows: %d/%d rows captured",
-            len(rows), max_items,
-        )
         # Legacy single-row consumers see the first row via
         # ``extracted_fields``; the full list is the new
         # ``extracted_rows`` field.
         return StepResult(
             step_index=index, intent=step.intent, success=True,
-            data=f"extract_rows:{len(rows)}/{max_items}",
-            extracted_fields=dict(rows[0]),
-            extracted_rows=[dict(r) for r in rows],
+            data=f"extract_rows:{len(all_rows)}/{max_items}",
+            extracted_fields=dict(all_rows[0]),
+            extracted_rows=[dict(r) for r in all_rows],
         )
 
     def _execute(self, step: "MicroIntent", ctx: StepContext) -> StepResult:

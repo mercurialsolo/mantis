@@ -135,6 +135,25 @@ class DaytonaComputerImpl(RemoteComputerImpl):
                     f"DaytonaComputerImpl: sandbox lookup failed "
                     f"id={sandbox_id!r}: {exc}"
                 ) from exc
+            # Auto-restart STOPPED sandboxes. Daytona auto-stops idle
+            # sandboxes (15-min default —
+            # feedback_daytona_autostop_default_15min). Without this
+            # the /health probe below would hang for the full
+            # startup_timeout_seconds against a never-booting URL.
+            state = str(getattr(self._sandbox, "state", "") or "")
+            if "STOPPED" in state or "ARCHIVED" in state:
+                logger.warning(
+                    "DaytonaComputerImpl: sandbox id=%s state=%s — "
+                    "calling start() before /health probe",
+                    sandbox_id, state,
+                )
+                try:
+                    self._sandbox.start(timeout=startup_timeout_seconds)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"DaytonaComputerImpl: sandbox.start() failed "
+                        f"id={sandbox_id!r}: {exc}"
+                    ) from exc
             # Don't tear it down on close() — we didn't create it.
             self._owns_sandbox = False
         else:

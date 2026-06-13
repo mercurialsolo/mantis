@@ -415,6 +415,16 @@ Plans MUST be organized into sections. Each section has a purpose and a gate:
    - For form-only flows, end with an extract_data step that verifies the right
      page/state was reached (URL, header, and any read-back of the values just set)
    - If the gate FAILS, the entire pipeline HALTS — do not proceed
+   - WHEN TO OMIT THE GATE (important): for extraction-only plans that
+     navigate directly to a public URL with no filters / login / form
+     interaction in setup ("Extract top N from <url>"), do NOT emit a
+     required verify gate. The page either returns rows (extract works)
+     or doesn't (extract returns 0 rows with a structured failure
+     class) — adding a vision verify gate in front of it forces the
+     brain to look at an SPA mid-render and routinely halts the run
+     with a stale-screenshot FAIL before extraction can run. Skip the
+     gate when SETUP is exactly ``navigate``; emit it as usual when
+     SETUP contains filter / fill_field / submit / login steps.
    - GATE INTENTS MUST ASSERT POSITIVE EVIDENCE OF PROGRESS (not absence of error
      text). A 404 page, an empty-results page, a CF challenge, a paywall, and an
      expired-login redirect all share one trait: the thing the plan came here for
@@ -828,6 +838,15 @@ STEP TYPES:
 - filter: Click a filter option (budget=8, grounding=true, required=true, section="setup")
 - click: Click an element on a listings/results page (budget=8, grounding=true)
 - scroll: Scroll until target content visible (budget=10, section="extraction")
+            Default to CDP-driven scroll (not vision-driven) to avoid the
+            Holo3 ``brain_loop_exhausted`` failure on visually-similar
+            card grids (YC directory, Reddit feed, LinkedIn job list).
+            Emit ``params.backend: "cdp"`` AND ``hints.prefer_cdp_scroll:
+            true`` whenever the SHAPE HINT is ``listings`` OR the source
+            plan mentions cards / rows / a results page. Override to
+            vision scroll only when the source explicitly says "wait
+            for X to become visible while scrolling" — anything that
+            needs the brain to read the page mid-scroll.
 - extract_url: Read URL from address bar (claude_only=true, budget=0, section="extraction")
 - extract_data: Inspect page and read structured data OR verify state.
                 CRITICAL — these are TWO DISTINCT MODES (issue #244):
@@ -880,6 +899,17 @@ ADD an `extract` block to the step. The runtime uses this to validate
 each row Claude returns — without it the validator falls through to the
 recipe schema if one is registered for the domain, or rejects every row
 with `no_schema_configured` for ad-hoc plans.
+
+MANDATORY ``max_items`` EXTRACTION:
+Whenever the source plan names an explicit count — "top 10", "first 5",
+"5 best", "list 20", "the top N rows" — the ``extract`` block MUST
+include ``max_items: <N>`` set to that count. Without it the
+extractor falls through to single-row mode and returns exactly ONE row
+even when N cards are visible. Recognise count patterns like
+``top NN``, ``first NN``, ``NN best/stories/results/companies/items/
+rows/listings/startups/products``, ``list NN`` (where NN is any
+positive integer). Pick the smallest N if multiple counts are
+present.
 
 Shape:
 
@@ -1086,7 +1116,7 @@ class PlanDecomposer:
             logger.info("plan_text expresses read-only intent — enforcing #831 constraint")
 
         # Check cache — include prompt version in hash to invalidate on schema changes
-        prompt_version = "v37_request_user_input"  # Bump this when DECOMPOSE_PROMPT changes
+        prompt_version = "v38_cdp_scroll_default_no_verify_gate_for_extract_only"  # Bump this when DECOMPOSE_PROMPT changes
         cache_key_text = (
             f"READONLY:{plan_text}" if read_only else plan_text
         )
