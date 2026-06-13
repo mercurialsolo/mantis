@@ -62,6 +62,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger("mantis_agent.gym.micro_runner")
 
 
+# #882: token a plan author writes in a downstream step (e.g.
+# ``fill_field`` label/value) to splice in the value captured by an
+# earlier ``request_user_input`` pause/resume. Without substitution the
+# literal placeholder is typed into the field and the form fails.
+_USER_INPUT_TOKEN = "{{user_input}}"
+
+
+def _substitute_user_input(text: Any, staged: Any) -> Any:
+    """Replace ``{{user_input}}`` in ``text`` with the staged resume value.
+
+    No-op (returns ``text`` unchanged) when nothing was staged, when
+    ``text`` isn't a string, or when the token is absent — so it's safe
+    to run over every step's intent and string params.
+    """
+    if staged is None or not isinstance(text, str) or _USER_INPUT_TOKEN not in text:
+        return text
+    return text.replace(_USER_INPUT_TOKEN, str(staged))
+
+
 def _pending_form_labels(plan: "MicroPlan", current_step_index: int) -> list[str]:
     """Audit item 2 — collect ``params.label`` from every ``fill_field``
     step in the plan at or after ``current_step_index``.
@@ -906,13 +925,23 @@ class RunExecutor:
             )
             if scanner_directive:
                 dynamic_intent = scanner_directive
+        # #882: splice the resumed request_user_input value into
+        # ``{{user_input}}`` tokens on this step's intent + string params.
+        # ``_staged_user_input`` is set by RequestUserInputHandler on the
+        # resume pass; None (the common case) makes every call a no-op.
+        staged_input = getattr(runner, "_staged_user_input", None)
+        dynamic_intent = _substitute_user_input(dynamic_intent, staged_input)
+        eff_params = {
+            k: _substitute_user_input(v, staged_input)
+            for k, v in (step.params or {}).items()
+        }
         return MicroIntent(
             intent=dynamic_intent, type=step.type, verify=step.verify,
             budget=step.budget, reverse=step.reverse, grounding=step.grounding,
             claude_only=step.claude_only, loop_target=step.loop_target,
             loop_count=step.loop_count,
             section=step.section, required=step.required, gate=step.gate,
-            params=dict(step.params or {}),
+            params=eff_params,
             hints=dict(getattr(step, "hints", {}) or {}),
             # #643 stage 2 fields — vision-only conditional steps. The
             # executor's outer loop reads ``guard`` (in

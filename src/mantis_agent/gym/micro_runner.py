@@ -737,7 +737,20 @@ class MicroPlanRunner:
             state = PauseState.from_dict(state)
         if plan is None:
             raise ValueError("resume() requires the original plan; pass plan=...")
-        signature = self._compute_plan_signature(plan)
+        # #882-followup: the PauseState stores the signature the suite was
+        # BUILT with — ``runner.plan_signature`` / the embedded
+        # ``_plan_signature`` from ``plan_signature_from_steps`` (a hash of
+        # the full raw step dicts). ``_compute_plan_signature``
+        # (CheckpointManager) hashes a DIFFERENT 14-field subset over
+        # MicroIntent objects, so recomputing here NEVER matched the stored
+        # value → every Modal micro-path resume failed with a spurious
+        # mismatch (latent until request_user_input actually paused a run).
+        # Prefer the embedded signature the runner was constructed with —
+        # it's reconstructed identically from the stored suite at both
+        # submit and resume. Fall back to the recompute only for callers
+        # with no embedded signature (pure-local resume), where pause-time
+        # and resume-time both use ``_compute_plan_signature`` and so agree.
+        signature = self.plan_signature or self._compute_plan_signature(plan)
         if state.plan_signature and state.plan_signature != signature:
             raise ValueError(
                 "PauseState plan_signature mismatch — can't resume a different plan"
