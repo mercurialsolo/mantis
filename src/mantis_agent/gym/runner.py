@@ -479,6 +479,18 @@ class GymRunner:
         cancel_event: Any = None,
         routing_policy: RoutingPolicy | None = None,
     ):
+        # #848: opt-in speculative think — wrap the inner brain so
+        # consecutive ``think()`` calls can overlap with each step's
+        # post-action settle window. The wrapper satisfies the Brain
+        # protocol so nothing downstream changes; when ``MANTIS_
+        # SPECULATIVE_THINK`` is unset (default) the bare brain is used.
+        # Counters land on ``self.brain.hits / .misses / .synchronous_
+        # starts`` for ad-hoc observability.
+        if os.environ.get("MANTIS_SPECULATIVE_THINK", "").lower() in (
+            "1", "true", "yes", "on",
+        ):
+            from ..speculative_brain import SpeculativeBrain
+            brain = SpeculativeBrain(brain)
         self.brain = brain
         self.env = env
         self.max_steps = max_steps
@@ -673,6 +685,16 @@ class GymRunner:
         """
         logger.info(f"Starting task: {task!r} (id={task_id})")
         t0 = time.time()
+
+        # #848: clear any stale speculation from a prior task so per-task
+        # hit-rate counters are clean and we don't validate against
+        # frames from a different episode.
+        _reset_brain = getattr(self.brain, "reset", None)
+        if callable(_reset_brain):
+            try:
+                _reset_brain()
+            except Exception:
+                pass
 
         # ── Pause/resume bootstrap (#285) ───────────────────────────────
         # ``resume()`` stages a snapshot on ``_resume_state`` then
@@ -1866,6 +1888,21 @@ class GymRunner:
             else (termination_reason == "env_done" and total_reward > 0)
         )
         logger.info(f"Task finished: {termination_reason}, {len(trajectory)} steps, {total_time:.1f}s")
+
+        # #848: surface speculative-think hit rate when the wrapper is in
+        # use. WARNING level so the line survives Modal's INFO filter.
+        _hit_rate = getattr(self.brain, "hit_rate", None)
+        if callable(_hit_rate):
+            try:
+                hits = int(getattr(self.brain, "hits", 0))
+                misses = int(getattr(self.brain, "misses", 0))
+                sync = int(getattr(self.brain, "synchronous_starts", 0))
+                logger.warning(
+                    "[spec-brain] hits=%d misses=%d sync=%d hit_rate=%.1f%%",
+                    hits, misses, sync, _hit_rate() * 100.0,
+                )
+            except Exception:
+                pass
 
         self._emit(
             "done", success=success, summary=termination_reason,
