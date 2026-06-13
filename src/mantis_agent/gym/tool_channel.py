@@ -86,12 +86,7 @@ class ToolChannel:
         except _PauseRequested as exc:
             # Tool requested pause (#73) — propagate so the run() loop can
             # snapshot and return a PauseState. Don't treat as failure.
-            self.pending_pause = {
-                "tool": name,
-                "arguments": dict(arguments),
-                "reason": exc.reason,
-                "prompt": exc.prompt,
-            }
+            self.stage_pause(name, arguments, exc.reason, exc.prompt)
             return True, f"tool:{name}:pause"
         except KeyError as exc:
             return False, f"tool:{name}:not_registered:{exc}"
@@ -102,6 +97,25 @@ class ToolChannel:
         return True, f"tool:{name}:ok:{rendered[:200]}"
 
     # ── Pause lifecycle ─────────────────────────────────────────────────
+
+    def stage_pause(
+        self, name: str, arguments: dict[str, Any] | None = None,
+        reason: str = "", prompt: str = "",
+    ) -> None:
+        """Record a pending pause so the run loop snapshots ``status=paused``.
+
+        Both entry points converge here: :meth:`invoke` (brain
+        ``TOOL_CALL`` path) catches :class:`PauseRequested` and stages
+        it; the ``request_user_input`` *step* handler stages it directly
+        when it catches the same exception from :meth:`call` (so the raw
+        resume value survives instead of being str-rendered by invoke).
+        """
+        self.pending_pause = {
+            "tool": name,
+            "arguments": dict(arguments or {}),
+            "reason": reason,
+            "prompt": prompt,
+        }
 
     def is_paused(self) -> bool:
         return self.pending_pause is not None

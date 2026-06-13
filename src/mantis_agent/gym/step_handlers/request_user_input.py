@@ -6,19 +6,30 @@ operator-supplied value (OTP, password, paste-target) by emitting a
 the same name in ``plan_decomposer``). The handler bridges that step
 to the host-tool mechanism the SDK pause/resume flow already uses:
 
-* Look up the ``request_user_input`` host tool the runner registered
-  in ``baseten_server.runtime`` (``runtime.py:1579``). The tool consumes
-  any staged ``user_input`` (set by ``action=resume``) and either:
-    - returns the staged value on first-resume → handler types it back
-      into ``StepResult.data`` so any downstream ``{{user_input}}`` token
+* Look up the ``request_user_input`` host tool via the runner's
+  :class:`~..tool_channel.ToolChannel` — the SAME registry both the
+  Baseten (``runtime.py``, #344) and Modal (``modal_cua_server.py``,
+  #347) executors register the default tool into through
+  ``runner.register_tool(...)``. The tool consumes any staged
+  ``user_input`` (set by ``action=resume``) and either:
+    - returns the staged value on first-resume → handler stashes it on
+      the runner so any downstream ``{{user_input}}`` token
       substitution can pick it up; or
     - raises ``PauseRequested`` if no value is staged → the runner
       catches it and snapshots the run as ``status=paused``.
 
-* When the host tool isn't registered (off-Baseten contexts), the
-  handler degrades to a non-fatal skip so a plan that ran fine on
-  Baseten doesn't suddenly crash on a deployment that hasn't wired
-  the host tool yet.
+* When the tool isn't registered (off-executor contexts: bare CLI,
+  unit harnesses), the handler degrades to a non-fatal skip so a plan
+  that pauses fine in production doesn't crash on a deployment that
+  hasn't wired the host tool yet.
+
+.. note:: #882 — the handler originally read a phantom
+   ``runner._host_tools`` dict that NOTHING in production ever
+   populated (the only writer was a test stub), so every
+   ``request_user_input`` step on every backend hit the "no host tool"
+   skip — it never paused, ``{{user_input}}`` was typed literally, and
+   the run burned its budget to ``time_cap``. The real tool lives in
+   ``runner.tool_channel``; the lookup now goes there.
 
 Wire shape — the decomposer emits::
 
@@ -48,7 +59,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ..checkpoint import StepResult
+from ..checkpoint import PauseRequested, StepResult
 from ..step_context import StepContext, StepHandler
 
 if TYPE_CHECKING:
@@ -81,12 +92,21 @@ class RequestUserInputHandler:
         # plumb the index in still construct a sane StepResult.
         index = int(ctx.state.get("index", 0)) if hasattr(ctx, "state") else 0
 
-        host_tools = getattr(runner, "_host_tools", None) or {}
-        tool_fn = host_tools.get("request_user_input")
-        if tool_fn is None:
-            # No tool registered — surface a non-fatal skip so a
-            # plan that ran fine on Baseten doesn't crash on a
-            # deployment that hasn't wired the host tool.
+        tool_channel = getattr(runner, "tool_channel", None)
+        registered = False
+        if tool_channel is not None:
+            try:
+                registered = any(
+                    t.get("name") == "request_user_input"
+                    for t in tool_channel.list()
+                )
+            except Exception:  # noqa: BLE001 — treat a broken channel as absent
+                registered = False
+        if not registered:
+            # No tool registered on this deployment (bare CLI / unit
+            # harness) — surface a non-fatal skip so a plan that pauses
+            # fine in production doesn't crash where the host tool
+            # isn't wired.
             logger.warning(
                 "request_user_input step %d: no host tool registered; "
                 "downgrade to skip (reason=%s)",
@@ -101,12 +121,35 @@ class RequestUserInputHandler:
                 skip_reason="request_user_input_no_host_tool",
             )
 
-        # First entry: ``tool_fn`` raises PauseRequested → the runner
-        # catches it in its execute loop. Resume entry: ``tool_fn``
-        # returns the staged value. Either way the handler doesn't
-        # try to suppress — exceptions bubble through the runner's
-        # standard recovery machinery.
-        staged = tool_fn({"prompt": prompt, "reason": reason})
+        # First entry: the tool raises PauseRequested (no value staged
+        # yet). We catch it and stage the pending pause on the channel —
+        # the SAME slot ``ToolChannel.invoke`` sets — so the executor's
+        # ``_tick_preamble`` ``tool_channel.is_paused()`` check snapshots
+        # ``status=paused`` on the next iteration. We use ``call`` rather
+        # than ``invoke`` so the resume value comes back raw (invoke
+        # str-renders + truncates it, which would corrupt a multi-line
+        # or structured ``{{user_input}}`` substitution).
+        try:
+            staged = tool_channel.call(
+                "request_user_input", {"prompt": prompt, "reason": reason},
+            )
+        except PauseRequested as exc:
+            tool_channel.stage_pause(
+                "request_user_input",
+                {"prompt": prompt, "reason": reason},
+                getattr(exc, "reason", reason),
+                getattr(exc, "prompt", prompt),
+            )
+            logger.warning(
+                "request_user_input step %d: pausing for operator input "
+                "(reason=%s)", index, reason,
+            )
+            return StepResult(
+                step_index=index,
+                intent=step.intent,
+                success=True,
+                data="request_user_input:paused",
+            )
 
         # Resume path — stash the value so any downstream step that
         # references ``{{user_input}}`` in its params or intent can
