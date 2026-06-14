@@ -64,7 +64,8 @@ def test_seed_sweep_rejects_zero_siblings():
 
 
 def test_seed_sweep_deterministic():
-    mk = lambda: SeedSweepGenerator(templates=[_tmpl("a")], seeds=[1, 2])
+    def mk():
+        return SeedSweepGenerator(templates=[_tmpl("a")], seeds=[1, 2])
     assert [s.spec_id for s in mk().generate()] == [s.spec_id for s in mk().generate()]
 
 
@@ -117,9 +118,10 @@ def test_failure_bias_empty_when_no_failures_or_budget():
 
 
 def test_failure_bias_deterministic_with_rng_seed():
-    mk = lambda: FailureBiasedGenerator(
-        templates_by_cluster={"a": [_tmpl("a", "a")]},
-        cluster_failure_counts={"a": 5}, seeds=[1, 2, 3, 4],
-        total_instances=8, rng_seed=42,
-    )
+    def mk():
+        return FailureBiasedGenerator(
+            templates_by_cluster={"a": [_tmpl("a", "a")]},
+            cluster_failure_counts={"a": 5}, seeds=[1, 2, 3, 4],
+            total_instances=8, rng_seed=42,
+        )
     assert [s.env_seed for s in mk().generate()] == [s.env_seed for s in mk().generate()]

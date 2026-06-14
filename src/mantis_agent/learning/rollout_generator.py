@@ -17,7 +17,7 @@ the caller). Execution wiring (Daytona reset → run → oracle reward) is a sep
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Iterator, Protocol, runtime_checkable
 
 
