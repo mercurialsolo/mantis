@@ -502,6 +502,58 @@ def test_resume_without_user_input_leaves_substitution_noop(monkeypatch):
     assert getattr(r, "_staged_user_input", None) is None
 
 
+def test_run_stages_initial_user_input_for_substitution(monkeypatch):
+    """#885-followup: a "natural" (no-pause) run carrying an up-front
+    user_input must stage it on ``_staged_user_input`` BEFORE the step
+    loop, so ``_build_effective_step`` substitutes ``{{user_input}}`` into
+    downstream fill_field steps (else the literal placeholder is typed —
+    live repro: ptrig-A-natural-login → no_state_change)."""
+    env = _FakeEnv()
+    r = _runner(env)
+    plan = _trivial_plan()
+
+    # Capture what was staged at the moment the executor runs — proves
+    # the value is staged before the step loop, not merely afterward.
+    seen: dict[str, Any] = {}
+
+    def _capture_execute(*_a, **_kw):
+        seen["staged"] = getattr(r, "_staged_user_input", None)
+
+    monkeypatch.setattr(r._executor, "execute", _capture_execute)
+    monkeypatch.setattr(r, "_final_summary", lambda *_a, **_kw: None)
+
+    r.run(plan, user_input="tomsmith")
+    assert seen["staged"] == "tomsmith"
+    assert getattr(r, "_staged_user_input", None) == "tomsmith"
+
+
+def test_run_without_initial_user_input_leaves_substitution_noop(monkeypatch):
+    """No up-front value must not stage a junk substitution source."""
+    env = _FakeEnv()
+    r = _runner(env)
+    plan = _trivial_plan()
+    monkeypatch.setattr(r._executor, "execute", lambda *_a, **_kw: None)
+    monkeypatch.setattr(r, "_final_summary", lambda *_a, **_kw: None)
+
+    r.run(plan)
+    assert getattr(r, "_staged_user_input", None) is None
+
+
+def test_run_resume_pass_does_not_clobber_staged_user_input(monkeypatch):
+    """resume() stages the value then calls run(..., resume=True) with no
+    user_input. The initial-path staging must be guarded on ``not resume``
+    so it never overwrites the resume-staged value with ``None``."""
+    env = _FakeEnv()
+    r = _runner(env)
+    plan = _trivial_plan()
+    r._staged_user_input = "tomsmith"  # as resume() would have set it
+    monkeypatch.setattr(r._executor, "execute", lambda *_a, **_kw: None)
+    monkeypatch.setattr(r, "_final_summary", lambda *_a, **_kw: None)
+
+    r.run(plan, resume=True)  # the call resume() makes internally
+    assert getattr(r, "_staged_user_input", None) == "tomsmith"
+
+
 def test_resume_works_when_env_lacks_restore_method(monkeypatch):
     """Legacy envs without ``restore_browser_state`` must not crash —
     resume should proceed and run the step loop as before."""

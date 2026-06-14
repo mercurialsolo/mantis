@@ -398,7 +398,9 @@ class MicroPlanRunner:
 
     # ── Public API ────────────────────────────────────────────────────
 
-    def run(self, plan: MicroPlan, resume: bool = False) -> list[StepResult]:
+    def run(
+        self, plan: MicroPlan, resume: bool = False, user_input: Any = None,
+    ) -> list[StepResult]:
         from .run_executor import RunState
 
         # Issue #254: per-context sub-goal budget gate. Check BEFORE
@@ -410,6 +412,19 @@ class MicroPlanRunner:
             envelope = self._check_and_emit_context_budget(plan)
             if envelope is not None:
                 return envelope
+
+        # #885-followup: stage an up-front ``user_input`` on the INITIAL
+        # (non-resume) path so ``{{user_input}}`` tokens substitute without
+        # a pause/resume round-trip. ``resume()`` already stages its value
+        # before calling ``run(..., resume=True)`` — guard on ``not resume``
+        # so we never clobber that staged value with the ``None`` this arm
+        # is called with on the resume pass. Symmetric with the resume
+        # staging at the ``self._staged_user_input`` read in
+        # ``RunExecutor._build_effective_step``. Without this a "natural"
+        # (no-pause) login plan types the literal ``{{user_input}}`` into
+        # the form (live repro: ptrig-A-natural-login → no_state_change).
+        if not resume and user_input is not None:
+            self._staged_user_input = user_input
 
         if not self.plan_signature:
             self.plan_signature = self._compute_plan_signature(plan)
@@ -602,9 +617,11 @@ class MicroPlanRunner:
         return "_no_anchor_"
 
     def run_with_status(
-        self, plan: MicroPlan, resume: bool = False,
+        self, plan: MicroPlan, resume: bool = False, user_input: Any = None,
     ) -> RunnerResult:
-        return self._build_runner_result(plan, self.run(plan, resume=resume))
+        return self._build_runner_result(
+            plan, self.run(plan, resume=resume, user_input=user_input),
+        )
 
     def run_with_exploration(
         self,

@@ -2053,8 +2053,13 @@ class BasetenCUARuntime:
                         plan=micro_plan,
                     )
                 else:
+                    # #885-followup: stage an up-front ``user_input`` on
+                    # the initial submit (no pause/resume round-trip) for
+                    # ``{{user_input}}`` substitution — the "natural" login
+                    # path. ``None`` (the common case) is a no-op.
                     runner_result = runner.run_with_status(
                         micro_plan, resume=resume_state,
+                        user_input=payload.get("user_input"),
                     )
             finally:
                 # ``micro_runner.run`` itself calls finalize_to_disk via
