@@ -305,6 +305,58 @@ def _extract_openai_response(
     return text, tool_calls, finish_reason
 
 
+def _extract_openai_logprobs(
+    response_json: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """Map an OpenAI / vLLM ``choices[0].logprobs.content`` block onto
+    modelio.schema.json's ``response.logprobs`` shape.
+
+    Needed for RL pipelines (PPO / GRPO importance weighting, DPO) that
+    consume the behaviour-policy token logprobs. We map explicitly
+    rather than passing the vendor block through because the schema's
+    item is ``{token?, token_id?, logprob, top_alternatives?}`` with
+    ``additionalProperties: false`` — the vendor ships ``bytes`` and
+    ``top_logprobs`` (not ``top_alternatives``), which would fail
+    validation verbatim.
+
+    Returns ``None`` when the response carries no logprobs (the vendor
+    wasn't asked, or returned a tool-only turn with no token logprobs)
+    so the caller leaves the field unset.
+    """
+    choices = response_json.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return None
+    block = choices[0].get("logprobs") or {}
+    content = block.get("content")
+    if not isinstance(content, list):
+        return None
+
+    def _alt(a: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(a, dict) or a.get("logprob") is None:
+            return None
+        out: dict[str, Any] = {"logprob": float(a["logprob"])}
+        if isinstance(a.get("token"), str):
+            out["token"] = a["token"]
+        if a.get("token_id") is not None:
+            out["token_id"] = int(a["token_id"])
+        return out
+
+    entries: list[dict[str, Any]] = []
+    for tok in content:
+        if not isinstance(tok, dict) or tok.get("logprob") is None:
+            continue
+        entry: dict[str, Any] = {"logprob": float(tok["logprob"])}
+        if isinstance(tok.get("token"), str):
+            entry["token"] = tok["token"]
+        if tok.get("token_id") is not None:
+            entry["token_id"] = int(tok["token_id"])
+        alts = [m for a in (tok.get("top_logprobs") or []) if (m := _alt(a))]
+        if alts:
+            entry["top_alternatives"] = alts
+        entries.append(entry)
+    return entries or None
+
+
 def record_openai_modelio(
     *,
     request_payload: dict[str, Any],
@@ -353,13 +405,14 @@ def record_openai_modelio(
         response_block["stop_reason"] = finish_reason
     if usage:
         response_block["usage"] = usage
-    try:
-        from augur_sdk import ModelApiAdapterBase
-        logprobs = ModelApiAdapterBase.extract_logprobs_from_response(response_json)
-        if logprobs is not None:
-            response_block["logprobs"] = logprobs
-    except Exception:  # noqa: BLE001 — observability never fatal
-        pass
+    # The OpenAI path knows its own response shape — map logprobs
+    # directly to the schema (verified against modelio.schema.json)
+    # rather than via the vendor-agnostic SDK extractor, which would
+    # have to guess the provider. ``None`` when the vendor wasn't asked
+    # for logprobs (the default) → field stays unset.
+    logprobs = _extract_openai_logprobs(response_json)
+    if logprobs is not None:
+        response_block["logprobs"] = logprobs
 
     record: dict[str, Any] = {
         "schema_version": "0.1",
