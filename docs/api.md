@@ -571,6 +571,50 @@ When a plan hits an auth wall the agent can't get past on its own — an OTP cod
 
 A default `request_user_input` host tool is registered on every detached `/v1/predict` run. Brains that emit `Action(TOOL_CALL, name="request_user_input", params={"prompt": "..."})` will pause the run on the first call and receive the caller's `user_input` on the second (after resume).
 
+### The `plan_text` hand-over pattern (ask the user mid-run)
+
+You don't drive steps yourself — submit a single `plan_text` (detached) and the decomposer breaks it into a `MicroPlan` and runs it step by step. To get a human hand-over, **write the hand-over into the plan in plain English** — phrase it as "ask the user … and wait for the answer, then use that answer to …". The decomposer emits a `request_user_input` step followed by a step that references the answer through the `{{user_input}}` token.
+
+Example plan:
+
+> "Go to news.ycombinator.com, read the top 3 story titles, ask the user which story title to open and wait for the answer, then open that story and report its title."
+
+Decomposes to a 5-step plan:
+
+```
+[0] navigate           → news.ycombinator.com
+[1] extract_data       → top 3 story titles
+[2] request_user_input → pauses; prompt shown to you
+[3] click {{user_input}}  → the answer is substituted in verbatim
+[4] extract_data       → the opened story title
+```
+
+Step `[2]` is the hand-over: the run flips to `status=paused` and surfaces a `prompt`. You resume with `action=resume` + `user_input`, and the value is **substituted verbatim into every `{{user_input}}` token** on the remaining steps (intent + string params) before they execute. End to end:
+
+```bash
+# 1. submit (detached) — note the answer is used as a CLICK TARGET, so the
+#    prompt should ask for something usable as one (a title/label, not "1/2/3").
+RUN_ID=$(curl -s "$ENDPOINT/v1/predict" -H "X-Mantis-Token: $TOKEN" \
+  -d '{"plan_text":"Go to news.ycombinator.com, read the top 3 story titles, ask the user which story title to open and wait for the answer, then open that story and report its title.","detached":true}' \
+  | jq -r .run_id)
+
+# 2. poll until paused, read the prompt
+curl -s "$ENDPOINT/v1/predict" -H "X-Mantis-Token: $TOKEN" \
+  -d "{\"action\":\"status\",\"run_id\":\"$RUN_ID\"}" | jq '{status, prompt, reason}'
+# → { "status": "paused", "prompt": "Which story title should I open?", "reason": "user_input" }
+
+# 3. resume with the human's answer → substituted into {{user_input}} on step [3]
+curl -s "$ENDPOINT/v1/predict" -H "X-Mantis-Token: $TOKEN" \
+  -d "{\"action\":\"resume\",\"run_id\":\"$RUN_ID\",\"user_input\":\"Show HN: my side project\"}"
+# → { "status": "running", ... }
+
+# 4. keep polling until terminal (succeeded / failed)
+```
+
+**Use the answer verbatim.** Whatever string you send as `user_input` is what replaces `{{user_input}}` — so phrase the plan's question so the answer is directly usable by the next step (a concrete title or on-screen label for a `click`, a code for an OTP field, etc.). An ordinal like "2" will be clicked literally as the text "2".
+
+> **Troubleshooting — run never pauses, logs say `request_user_input step N: no host tool registered; downgrade to skip`.** This means the deployment is running **code older than [#883](https://github.com/mercurialsolo/mantis/issues/883)** — the `request_user_input` step is downgraded to a skip, `{{user_input}}` is never filled, the run finishes `completed_with_failures`, and `action=resume` is rejected with `requires a paused run`. The log line is byte-identical between the old and fixed handlers, so it does **not** tell you which code is live. Fix: redeploy the app from current `main` (`modal app stop <app>` then `modal deploy deploy/modal/modal_mantis_server.py` for the `mantis-server` endpoint). Pause/resume + `{{user_input}}` substitution require #883 (wiring), #885 (resume staging), and #887 (initial-path staging) — all on `main` as of 2026-06-13.
+
 ### Status poll on a paused run
 
 ```jsonc
@@ -625,8 +669,9 @@ The server rehydrates the stored `PauseState`, calls `runner.resume(state, user_
 | Deployment | Pause / resume |
 |---|---|
 | **Baseten** (`/v1/predict` via `BasetenCUARuntime`) | ✅ All brains — Holo3, Claude, EvoCUA, OpenCUA, Gemma4-CUA. Default `request_user_input` tool registered on every detached run ([#344](https://github.com/mercurialsolo/mantis/issues/344)). |
-| **Modal HTTP endpoint** (`@modal.asgi_app()` at `<workspace>--mantis-cua-server-api.modal.run`) | ✅ Holo3 micro path only — that's the only Modal executor that constructs `MicroPlanRunner` directly. Claude / EvoCUA / OpenCUA / Gemma4-CUA on Modal go through `task_loop.run_executor_lifecycle` and don't currently surface paused state ([#347](https://github.com/mercurialsolo/mantis/issues/347)). |
-| **Modal `local_entrypoint`** (CLI: `modal run ...`) | ❌ Not wired. Use HTTP endpoint or embed the library. |
+| **Modal `mantis-server`** (`<workspace>--mantis-server-api.modal.run`, `deploy/modal/modal_mantis_server.py`) | ✅ Serves the **same** `baseten_server` FastAPI app as Baseten, so the `plan_text` / `micro` / `task_suite` paths all register the default `request_user_input` tool and pause/resume identically. This is the endpoint to use for the `plan_text` hand-over pattern above. **Must be deployed from `main` ≥ #883** — older deploys skip the step (see the troubleshooting note above). |
+| **Modal `mantis-cua-server`** (`<workspace>--mantis-cua-server-api.modal.run`, `deploy/modal/modal_cua_server.py`) | ✅ Holo3 micro path — constructs `MicroPlanRunner` directly. Claude / EvoCUA / OpenCUA / Gemma4-CUA on this app go through `task_loop.run_executor_lifecycle` and don't currently surface paused state ([#347](https://github.com/mercurialsolo/mantis/issues/347)). |
+| **Modal `local_entrypoint`** (CLI: `modal run ...`) | ❌ Not wired. Use an HTTP endpoint or embed the library. |
 | **Library-embedded** (`MicroPlanRunner` / `GymRunner` direct) | ✅ Always — pause/resume is a property of the runner. The HTTP surfaces above are wrappers on top. |
 
 ### Library-embedded integrations
