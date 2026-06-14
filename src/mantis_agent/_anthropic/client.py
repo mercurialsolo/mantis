@@ -338,6 +338,7 @@ class AnthropicToolUseClient:
         }
         last_response = None
         self.last_retries_spent = 0
+        _t0 = time.monotonic()
         for attempt in range(max_attempts):
             try:
                 resp = requests.post(
@@ -361,6 +362,25 @@ class AnthropicToolUseClient:
                 continue
             if resp.status_code not in _TRANSIENT_STATUS_CODES:
                 self.last_retries_spent = attempt
+                # #892 item 2: capture the modelio record at the single HTTP
+                # chokepoint so EVERY caller is covered uniformly — including
+                # ``brain_claude`` / ``plan_decomposer`` / grounding, which
+                # call this method directly and so never hit the per-wrapper
+                # capture that used to live in ``call_with_tool_schema*``.
+                # Cheap context probe first so we don't parse JSON when no
+                # layer is published (the common case).
+                if resp.status_code == 200:
+                    try:
+                        from ..observability.modelio import (
+                            current_modelio_context,
+                        )
+                        if current_modelio_context() is not None:
+                            _record_modelio_if_active(
+                                payload, resp.json(),
+                                int((time.monotonic() - _t0) * 1000),
+                            )
+                    except Exception:  # noqa: BLE001 — telemetry never blocks
+                        pass
                 return resp
             last_response = resp
             if attempt == max_attempts - 1:
@@ -488,12 +508,9 @@ class AnthropicToolUseClient:
                 source=time_bucket or "extract_tool",
                 model=self.model, response_json=payload_json,
             )
-            # #523 — capture the modelio record when an upstream caller
-            # has published a layer context (planner / grounding /
-            # verifier / step_recovery / judge). No-op otherwise.
-            _record_modelio_if_active(
-                payload, payload_json, int((time.monotonic() - t0) * 1000),
-            )
+            # #523 modelio capture now happens centrally in
+            # ``post_messages_with_retry`` (#892 item 2) — which this method
+            # calls — so every caller is covered once, with no double-record.
             for block in payload_json.get("content", []):
                 if block.get("type") == "tool_use" and block.get("name") == tool_name:
                     tool_input = block.get("input")
@@ -609,9 +626,7 @@ class AnthropicToolUseClient:
                 source=time_bucket or "extract_tool_multi",
                 model=self.model, response_json=payload_json,
             )
-            _record_modelio_if_active(
-                payload, payload_json, int((time.monotonic() - t0) * 1000),
-            )
+            # #523 modelio capture is centralized in post_messages_with_retry.
             for block in payload_json.get("content", []):
                 if block.get("type") == "tool_use" and block.get("name") == tool_name:
                     tool_input = block.get("input")
