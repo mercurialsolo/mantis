@@ -29,7 +29,13 @@ from mantis_agent.observability.modelio import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_PATH = REPO_ROOT / "data/augur/test/schema/modelio.schema.json"
+# Tracked fixture copy of the Augur modelio schema. The runtime path
+# ``data/augur/test/schema/modelio.schema.json`` is gitignored + only present
+# after an Augur run, so it's absent on a fresh CI checkout — read the vendored
+# fixture instead (falling back to the runtime copy for local convenience).
+_FIXTURE_SCHEMA = REPO_ROOT / "tests/fixtures/modelio.schema.json"
+_RUNTIME_SCHEMA = REPO_ROOT / "data/augur/test/schema/modelio.schema.json"
+SCHEMA_PATH = _FIXTURE_SCHEMA if _FIXTURE_SCHEMA.exists() else _RUNTIME_SCHEMA
 
 
 def _vendor_logprobs_response():
