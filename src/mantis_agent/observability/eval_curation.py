@@ -27,18 +27,18 @@ from typing import Any
 def emit_success_conditions() -> bool:
     """Whether to include ``success_conditions`` on the emitted TaskSpec.
 
-    OFF by default: the deployed augur-sdk **0.6.1 server rejects the field**
-    on TaskSpec — including it stalls run finalization (live-verified: a run
-    whose task_spec carried ``success_conditions`` never left ``running``;
-    the same task_spec without it finalized ``succeeded``). The consumer
-    (mantis-trainer gate ``EvalTask.from_dict``) already defaults criteria to
-    ``[{"type":"task_success"}]`` when absent, so omitting it loses nothing
-    functional. Flip ``MANTIS_EVAL_SUCCESS_CONDITIONS=1`` once the deployed
-    Augur schema supports it (the #901 parallel data-plane ask).
+    **ON by default** now that augur#179 landed — the server accepts
+    ``success_conditions`` on TaskSpec and runs finalize cleanly (live-verified
+    against the workspace). Set ``MANTIS_EVAL_SUCCESS_CONDITIONS=0`` to disable
+    (e.g. against an older Augur deployment that predates #179, where the field
+    stalls run finalization). Background: before #179, augur 0.6.1 rejected the
+    field and a run whose task_spec carried it never left ``running`` — hence
+    the original opt-in gate; the gate is kept as an escape hatch.
     """
-    return os.environ.get("MANTIS_EVAL_SUCCESS_CONDITIONS", "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
+    v = os.environ.get("MANTIS_EVAL_SUCCESS_CONDITIONS", "").strip().lower()
+    if v in ("0", "false", "no", "off"):
+        return False
+    return True
 
 
 def default_success_conditions() -> list[dict[str, Any]]:
