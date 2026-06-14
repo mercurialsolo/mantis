@@ -1358,6 +1358,25 @@ class AugurAdapter:
         except Exception as exc:  # noqa: BLE001
             logger.debug("AugurAdapter.record_reasoning failed: %s", exc)
 
+    def mark_for_eval(self, *, step_index: int = 0, reason: str = "") -> None:
+        """#901: flag this run/step as an eval candidate so an operator can
+        later freeze it into an immutable Augur eval-version — the frozen
+        holdout the slow-loop trainer's champion/challenger gate runs on.
+
+        Only Mantis (the producer) knows which runs are keep-worthy, so the
+        runtime emits this signal; Augur merges + freezes downstream. No-op
+        when the adapter is inactive or the SDK predates the API. Never raises.
+        """
+        if not self.active:
+            return
+        fn = getattr(self._session, "mark_for_eval", None)
+        if not callable(fn):
+            return
+        try:
+            fn(step_index=step_index, reason=reason)
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug("AugurAdapter.mark_for_eval failed: %s", exc)
+
     def close(self, status: str | None = None) -> Any:
         """Flush the bundle. Returns the BundleManifest or None.
 

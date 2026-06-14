@@ -1876,6 +1876,18 @@ def _build_task_spec_from_suite(
             "parent_subgoal_id": "url_collection",
         },
     ]
+    # #901: declare success_conditions so the trainer's champion/challenger
+    # gate can apply deterministic criteria, not just the oracle's
+    # task_success. GATED OFF by default — the deployed augur 0.6.1 server
+    # rejects the field on TaskSpec (stalls finalization); the consumer
+    # defaults to task_success anyway. Enable via MANTIS_EVAL_SUCCESS_CONDITIONS
+    # once Augur supports it.
+    from ..observability.eval_curation import (
+        default_success_conditions,
+        emit_success_conditions,
+    )
+    if emit_success_conditions():
+        spec["success_conditions"] = default_success_conditions()
     return spec
 
 

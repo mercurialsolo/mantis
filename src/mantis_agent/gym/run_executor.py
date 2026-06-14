@@ -277,6 +277,18 @@ class RunExecutor:
         # etc.); blank string when the brain doesn't expose one.
         brain = getattr(runner, "brain", None)
         model_name = str(getattr(brain, "model_name", "") or "") if brain is not None else ""
+        # #901: eval curation. Fan-out runs carry an explicit ``_fanout_task_spec``;
+        # general/micro/prod runs open WITHOUT one (the gap), so compose a
+        # fallback TaskSpec (incl. ``success_conditions``) from the runner+plan
+        # so any run with a canonical task identity can become a holdout task.
+        # ``None`` for health/trigger/ad-hoc runs (no plan_name) → no task_spec,
+        # not eval-eligible. Stash the id for the terminal ``mark_for_eval``.
+        from ..observability.eval_curation import task_spec_from_runner
+        _eval_task_spec = (
+            getattr(runner, "_fanout_task_spec", None)
+            or task_spec_from_runner(runner, plan)
+        )
+        runner._eval_task_spec_id = str((_eval_task_spec or {}).get("task_spec_id", "") or "")
         runner._augur = AugurAdapter(
             # #649: prefer the per-session ``augur_run_id`` minted by
             # the executor (workflow_id-prefixed for searchability,
@@ -333,9 +345,10 @@ class RunExecutor:
             # child session so the trajectory buffer's task_spec_ids
             # filter matches against child bundles too. Orchestrator
             # composes the spec from suite metadata; the Modal worker
-            # entrypoint plumbs it onto ``_fanout_task_spec``. ``None``
-            # for non-fanout runs — AugurAdapter omits the kwarg.
-            task_spec=getattr(runner, "_fanout_task_spec", None),
+            # entrypoint plumbs it onto ``_fanout_task_spec``. #901: for
+            # non-fanout runs this is the composed fallback (or None for
+            # runs with no canonical task identity).
+            task_spec=_eval_task_spec,
             # #684 (augur-sdk 0.6.0): brain model name for the
             # per-step ``captured_versions.model`` stamp. The session
             # tag still carries it (existing #542 behaviour); this is
@@ -2206,6 +2219,18 @@ class RunExecutor:
             # cost meter; task_class falls back to session_name when
             # the plan doesn't carry an explicit task identifier.
             self._emit_augur_finalize_outcome(state.results)
+            # #901: flag keep-worthy successes as eval candidates so an
+            # operator can freeze them into an Augur eval-version (the
+            # trainer's holdout). Gated on a canonical task_spec_id + a
+            # successful terminal status so health / trigger / failed runs
+            # never pollute the candidate pool. One representative per run;
+            # Augur merges candidates per task downstream.
+            ts_id = str(getattr(runner, "_eval_task_spec_id", "") or "")
+            if ts_id and str(runner._final_status or "") in ("succeeded", "completed"):
+                augur.mark_for_eval(
+                    step_index=max(0, len(state.results) - 1),
+                    reason=f"representative_success:{ts_id}",
+                )
             augur.close(status=runner._final_status or None)
             runner._augur = None
 
