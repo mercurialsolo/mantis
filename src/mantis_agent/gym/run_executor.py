@@ -2890,9 +2890,26 @@ def _stamp_verdict(step_result: StepResult) -> None:
     already stamped a verdict explicitly (e.g. a future verifier
     layer with richer evidence) wins — we only fill in when the
     field is None.
+
+    Gap 3 — stale-optimistic backfill: some handlers pre-stamp an
+    *optimistic* ``OK`` verdict (``reason=""``) before the step's
+    outcome is known (request_user_input, shadow). When the step then
+    fails, that empty-reason verdict masks the real ``failure_class``:
+    the run-level ``failure_reason`` Augur derives from the verdict
+    shows ``null``/``unknown`` even though ``failure_class`` is set.
+    So when the existing verdict is ``OK`` but the step ultimately
+    failed, re-project from ``failure_class``. A handler that stamped
+    a real *failure* verdict (RECOVERABLE / NON_RECOVERABLE) still
+    wins — only the optimistic-OK-on-a-failed-step case is corrected.
     """
-    if step_result.verdict is not None:
-        return
+    existing = step_result.verdict
+    if existing is not None:
+        stale_optimistic = (
+            not step_result.success
+            and getattr(existing.kind, "value", existing.kind) == "ok"
+        )
+        if not stale_optimistic:
+            return
     try:
         from ..cua_contracts.adapters import verdict_from_step_result
         step_result.verdict = verdict_from_step_result(step_result)
