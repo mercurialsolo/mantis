@@ -49,6 +49,36 @@ from .prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
+
+# RL-prep (logprobs capture). vLLM only returns per-token logprobs when
+# the request asks for them; without this the modelio record's
+# ``response.logprobs`` is always empty, blocking PPO / GRPO (no
+# behaviour-policy logprob → no importance ratio / KL). Gated by the
+# SAME env flag that opens the Augur DebugSession with
+# ``capture_logprobs`` (``observability.augur.should_capture_logprobs``)
+# so one switch turns the whole path on. Read directly here — importing
+# ``observability.augur`` would pull in ``augur_sdk`` at module import,
+# which isn't present in every environment (e.g. local test runs).
+_CAPTURE_LOGPROBS_ENV = "MANTIS_CAPTURE_LOGPROBS"
+_LOGPROBS_TOP_K_ENV = "MANTIS_LOGPROBS_TOP_K"
+
+
+def _capture_logprobs_enabled() -> bool:
+    return os.environ.get(_CAPTURE_LOGPROBS_ENV, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _logprobs_top_k() -> int:
+    """Number of top alternatives per token (``top_logprobs``). 0 (the
+    default) asks only for the sampled token's logprob — all PPO/GRPO
+    needs and the smallest payload. Higher k adds alternatives for
+    analysis at the cost of response size."""
+    try:
+        return max(0, int(os.environ.get(_LOGPROBS_TOP_K_ENV, "0") or "0"))
+    except ValueError:
+        return 0
+
 # ── System prompt (tool-calling style, adapted from LlamaCppBrain) ──────────
 # Sourced from mantis_agent.prompts.HOLO3_SYSTEM. Override per-tenant via
 # MANTIS_PROMPTS_DIR/holo3_system.txt.
@@ -331,6 +361,16 @@ class Holo3Brain:
         # Holo3 native thinking toggle (H Company API format)
         if not self.enable_thinking:
             payload["thinking"] = False
+
+        # RL-prep — ask vLLM for per-token logprobs on the planner call
+        # when training-data capture is enabled. Off by default (roughly
+        # doubles the response payload); the modelio mapper turns the
+        # returned block into ``response.logprobs``.
+        if _capture_logprobs_enabled():
+            payload["logprobs"] = True
+            top_k = _logprobs_top_k()
+            if top_k > 0:
+                payload["top_logprobs"] = top_k
 
         # Retry with backoff for rate limiting (429)
         data = None

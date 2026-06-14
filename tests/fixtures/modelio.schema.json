@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://augur.dev/schemas/0.1/modelio.schema.json",
+  "title": "ModelIORecord",
+  "description": "One model call's full input + output (closes #56). Stored at `modelio/<step_index:04d>-<layer>-<seq>.json` so multiple calls per step (planner + grounding + verifier) each get a file. Required only when capture_mode is `model_io` or `full`; producers running at lower capture modes MAY omit modelio/ entirely. This is the canonical training-data shape — pinned so downstream SFT/DPO pipelines don't need adapter-specific parsers.",
+  "type": "object",
+  "required": ["schema_version", "layer", "ts", "request", "response"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$",
+      "description": "Modelio record schema version. Independent of the bundle schema_version so this shape can evolve without forcing a full bundle bump."
+    },
+    "step_index": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Step this call belongs to, or null for run-scoped calls (e.g. an initial plan that precedes any step)."
+    },
+    "layer": {
+      "type": "string",
+      "enum": ["planner", "grounding", "model", "verifier", "step_recovery", "judge"],
+      "description": "Which agent layer produced this call. `model` is the catch-all for adapters whose architecture doesn't split into planner/grounding."
+    },
+    "ts": {"type": "string", "format": "date-time"},
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "Vendor model identifier exactly as sent (e.g. `claude-sonnet-4-7-20260120`, `gpt-5-2026-04`)."
+        },
+        "system": {
+          "type": ["string", "null"],
+          "description": "System prompt. May be null when the vendor API has no separate system slot."
+        },
+        "messages": {
+          "type": "array",
+          "description": "OpenAI/Anthropic-style message log. `content` is provider-shaped (text blocks, image_url, tool_result, etc.) — schema-free so we can store any vendor's encoding verbatim.",
+          "items": {
+            "type": "object",
+            "required": ["role"],
+            "additionalProperties": true,
+            "properties": {
+              "role": {"type": "string"},
+              "content": {}
+            }
+          }
+        },
+        "tools": {
+          "type": "array",
+          "description": "Tool / function definitions sent with the request. Provider-shaped.",
+          "items": {"type": "object", "additionalProperties": true}
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Sampling + generation parameters (temperature, top_p, max_tokens, stop, …). Provider-shaped."
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {"type": ["string", "null"]},
+        "tool_calls": {
+          "type": "array",
+          "description": "Tool / function calls the model emitted. Provider-shaped.",
+          "items": {"type": "object", "additionalProperties": true}
+        },
+        "stop_reason": {"type": "string"},
+        "usage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prompt_tokens":      {"type": "integer", "minimum": 0},
+            "completion_tokens":  {"type": "integer", "minimum": 0},
+            "cache_hit_tokens":   {"type": "integer", "minimum": 0},
+            "cache_creation_tokens": {"type": "integer", "minimum": 0}
+          }
+        },
+        "logprobs": {
+          "type": ["array", "null"],
+          "description": "Per-output-token log probabilities, when the vendor was asked to return them. Required by RL pipelines that need behavior-policy probabilities for importance weighting (PPO, GRPO) or efficient DPO/preference learning that doesn't recompute logprobs from the trajectory. Order is the linear output sequence — alignment with `tool_calls` and `text` is positional. Null when the producer didn't request logprobs or the vendor doesn't surface them. Empty array MAY be used to record \"requested but no tokens emitted\" (e.g., a tool-only response on a provider that only returns text-token logprobs).",
+          "items": {
+            "type": "object",
+            "required": ["logprob"],
+            "additionalProperties": false,
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "Decoded token text. Producers SHOULD decode UTF-8 when stable; non-decodable byte sequences MAY be left as the vendor's escape encoding (e.g., `bytes:e2 80 99`) so the original bytes survive a round-trip."
+              },
+              "token_id": {
+                "type": ["integer", "null"],
+                "description": "Vendor token id when exposed. Null when the provider doesn't surface it (e.g., Anthropic). Pair with `token` when feeding into a tokenizer-aware loss; pair with `token_id` for provider-native off-policy correction."
+              },
+              "logprob": {
+                "type": "number",
+                "description": "Natural log of the chosen token's probability under the sampling distribution at this position. Note: this reflects the SAMPLING distribution (post-temperature/top_p), not the unsampled model logits — importance-weighting consumers should pair this with the `request.params` (temperature, top_p, …) carried elsewhere on the same record."
+              },
+              "top_alternatives": {
+                "type": "array",
+                "description": "Top-k alternative tokens with their logprobs at this position. Order: descending logprob. May be empty when the provider returned only the chosen-token logprob (e.g., OpenAI with `top_logprobs=0`).",
+                "items": {
+                  "type": "object",
+                  "required": ["logprob"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "token":    {"type": "string"},
+                    "token_id": {"type": ["integer", "null"]},
+                    "logprob":  {"type": "number"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "prompt_hash": {
+      "type": "string",
+      "description": "SHA-256 hex digest of the request blob (canonical-JSON-serialized). Used for de-duplication across runs that share a common prompt template."
+    },
+    "redaction_applied": {
+      "type": "boolean",
+      "description": "Whether the redaction policy was applied to this record before persistence. When true, fields the policy marks sensitive (passwords, tokens, etc.) MAY have been replaced with masks."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Wall-clock latency from request send to response receive."
+    }
+  }
+}
