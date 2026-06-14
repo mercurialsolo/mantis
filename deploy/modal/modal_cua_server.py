@@ -1297,8 +1297,13 @@ def _run_holo3_executor(
                 plan=micro_plan,
             )
         else:
+            # #885-followup: an up-front ``user_input`` on the initial
+            # submit (no pause/resume round-trip) is staged for
+            # ``{{user_input}}`` substitution — the "natural" login path.
+            # ``None`` (the common case) leaves substitution a no-op.
             runner_result = micro_runner.run_with_status(
                 micro_plan, resume=resume_state,
+                user_input=task_suite.get("user_input"),
             )
         step_results = runner_result.steps
 
