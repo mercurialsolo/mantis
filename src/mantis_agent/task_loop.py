@@ -547,8 +547,27 @@ def _standard_task_max_steps(task_config: dict[str, Any], config: TaskLoopConfig
 # (adapter inactive) and never raises into the run.
 
 
+_AUGUR_DONE_REASONS = frozenset({"done", "env_done"})
+
+
+def _run_status_from_result(result: Any) -> str:
+    """Map a :class:`gym.runner.RunResult` to an Augur close status.
+
+    Issue #892 (3): the close status was derived from ``result.success``
+    alone, so a run where the agent deliberately called ``done`` but the
+    (often absent) grader didn't mark success showed ``halted``. Treat
+    ``termination_reason`` in {done, env_done} as a deliberate completion.
+    """
+    if getattr(result, "paused", False):
+        return "paused"
+    reason = str(getattr(result, "termination_reason", "") or "")
+    if bool(getattr(result, "success", False)) or reason in _AUGUR_DONE_REASONS:
+        return "succeeded"
+    return "halted"
+
+
 def _gym_trajectory_to_step_shims(
-    trajectory: list[Any], run_success: bool,
+    trajectory: list[Any], run_success: bool, termination_reason: str = "",
 ) -> list[Any]:
     """Map GymRunner ``TrajectoryStep`` objects to duck-typed step-result
     shims that ``AugurAdapter.record_step`` / ``_build_step_trace`` consume.
@@ -558,19 +577,19 @@ def _gym_trajectory_to_step_shims(
     ``TrajectoryStep.action`` is already a real :class:`actions.Action`, so
     action type + coords flow through for free.
 
-    Per-step success is coarse: GymRunner has no per-step verdict like the
-    micro runner, so a step with a positive reward — or the final step of a
-    successful run — maps to ``passed``; everything else ``failed``. Refine
-    if/when brains stamp per-step verdicts.
+    Per-step success is coarse (GymRunner has no per-step verdict): a step
+    with positive reward — or the final step of a run that succeeded or
+    terminated via a deliberate ``done`` — maps to ``passed``; else ``failed``.
     """
     from types import SimpleNamespace
 
+    final_ok = bool(run_success) or str(termination_reason) in _AUGUR_DONE_REASONS
     shims: list[Any] = []
     n = len(trajectory)
     for i, ts in enumerate(trajectory):
         is_last = i == n - 1
         reward = float(getattr(ts, "reward", 0.0) or 0.0)
-        success = reward > 0.0 or (is_last and run_success)
+        success = reward > 0.0 or (is_last and final_ok)
         shims.append(
             SimpleNamespace(
                 step_index=int(getattr(ts, "step", i)),
@@ -586,64 +605,131 @@ def _gym_trajectory_to_step_shims(
     return shims
 
 
-def emit_augur_run(
-    config: "TaskLoopConfig",
-    task_id: str,
-    intent: str,
-    result: Any,
-) -> None:
-    """Replay a completed GymRunner run into an Augur bundle so task_loop
-    brains get the observability the Holo3 micro path gets via RunExecutor.
+def _augur_path_safe(s: Any) -> str:
+    """Sanitize an id into a single path segment for the frame capture dir."""
+    out = "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(s))
+    return out[:80] or "x"
 
-    No-op when Augur isn't configured (adapter inactive). Never raises.
-    Screenshots are not yet plumbed through (TrajectoryStep carries no PNG);
-    the bundle has full step traces / actions / sparks / status but
-    ``shots:false`` for now — screenshot capture is a follow-up.
+
+def open_augur_handle(config: "TaskLoopConfig", task_id: str) -> Any:
+    """Open a live ``AugurAdapter`` + a per-task screenshot capture dir.
+
+    Opened BEFORE the GymRunner run so a modelio context (issue #892 item 2 —
+    Claude ``think()`` capture) can be live during inference, and so
+    ``GymRunner.run(capture_dir=...)`` writes per-step PNGs the replay reads
+    back (item 1). Returns a handle (``adapter`` + ``capture_dir``) or
+    ``None`` when Augur is unconfigured. ``emit_augur_run`` closes it.
     """
     try:
+        import tempfile
+        from types import SimpleNamespace
+
         from .observability.augur import AugurAdapter
 
         brain = getattr(config, "brain", None)
-        model_name = str(
-            getattr(brain, "model_name", "") or config.model_name or ""
-        )
-        trajectory = list(getattr(result, "trajectory", []) or [])
+        model_name = str(getattr(brain, "model_name", "") or config.model_name or "")
+        run_id = str(config.run_id or config.session_name or "run")
         adapter = AugurAdapter(
-            run_id=str(config.run_id or config.session_name or "run"),
+            run_id=run_id,
             tenant_id=str(getattr(config, "session_name", "") or ""),
             session_name=str(getattr(config, "session_name", "") or ""),
             extra_tags={
                 "plan_name": str(task_id or ""),
                 "workflow_id": str(config.run_id or ""),
                 "model": model_name,
-                "plan_step_count": str(len(trajectory)),
                 "executor": str(getattr(config, "results_prefix", "") or ""),
             },
             brain_model_name=model_name,
         )
         if not adapter.active:
+            return None
+        capture_dir = os.path.join(
+            tempfile.gettempdir(), "mantis_augur_frames",
+            _augur_path_safe(run_id), _augur_path_safe(task_id),
+        )
+        return SimpleNamespace(
+            adapter=adapter, capture_dir=capture_dir, model_name=model_name,
+        )
+    except Exception as exc:  # noqa: BLE001 — telemetry never breaks a run
+        logger.debug("open_augur_handle failed: %s", exc)
+        return None
+
+
+def augur_modelio_ctx(handle: Any):
+    """Context manager that activates modelio capture for the wrapped LLM
+    calls (issue #892 item 2). No-op when ``handle`` is None. Whole-run
+    ``planner`` context — per-step attribution is a tracked sub-follow-up."""
+    from contextlib import nullcontext
+
+    if handle is None:
+        return nullcontext()
+    try:
+        from .observability.modelio import publish_modelio_context
+
+        return publish_modelio_context(handle.adapter, "planner")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("augur_modelio_ctx failed: %s", exc)
+        return nullcontext()
+
+
+def emit_augur_run(
+    config: "TaskLoopConfig",
+    task_id: str,
+    intent: str,
+    result: Any,
+    handle: Any = None,
+) -> None:
+    """Replay a completed GymRunner run into the Augur bundle opened by
+    :func:`open_augur_handle`, then close it. No-op (and nothing to close)
+    when ``handle`` is None. Never raises — telemetry never breaks a run.
+
+    Screenshots (issue #892 item 1) are read back from the handle's
+    ``capture_dir`` (``GymRunner`` wrote ``<NNNN>.png`` per step). Skipped
+    when a fallback/resume run produced the final result, since the on-disk
+    frames belong to the standard run and would mismatch.
+    """
+    if handle is None:
+        return
+    adapter = getattr(handle, "adapter", None)
+    capture_dir = getattr(handle, "capture_dir", None)
+    try:
+        if adapter is None:
             return
+        trajectory = list(getattr(result, "trajectory", []) or [])
         run_success = bool(getattr(result, "success", False))
-        for sr in _gym_trajectory_to_step_shims(trajectory, run_success):
+        reason = str(getattr(result, "termination_reason", "") or "")
+        use_frames = bool(
+            capture_dir
+            and not getattr(result, "fallback_used", None)
+            and os.path.isdir(capture_dir)
+        )
+        shims = _gym_trajectory_to_step_shims(trajectory, run_success, reason)
+        for sr in shims:
+            png = None
+            if use_frames:
+                fp = os.path.join(capture_dir, f"{sr.step_index:04d}.png")
+                if os.path.isfile(fp):
+                    try:
+                        with open(fp, "rb") as fh:
+                            png = fh.read()
+                    except Exception:  # noqa: BLE001
+                        png = None
             obs = adapter.attach_observation(
-                step_index=sr.step_index, kind="post", png=sr.screenshot_png,
+                step_index=sr.step_index, kind="post", png=png,
             )
             at = getattr(getattr(sr, "last_action", None), "action_type", None)
             step_type = at.value if hasattr(at, "value") else (str(at) if at else "")
             adapter.record_step(
-                step_result=sr,
-                observation_post=obs,
-                step_type=step_type,
+                step_result=sr, observation_post=obs, step_type=step_type,
             )
-        if getattr(result, "paused", False):
-            status = "paused"
-        elif run_success:
-            status = "succeeded"
-        else:
-            status = "halted"
-        adapter.close(status=status)
+        adapter.close(status=_run_status_from_result(result))
     except Exception as exc:  # noqa: BLE001 — telemetry never breaks a run
         logger.debug("emit_augur_run failed: %s", exc)
+    finally:
+        if capture_dir and os.path.isdir(capture_dir):
+            import shutil
+
+            shutil.rmtree(capture_dir, ignore_errors=True)
 
 
 # ── Main task loop ────────────────────────────────────────────────
@@ -826,6 +912,7 @@ def run_task_loop(
                 continue
 
             # ── Standard task ──
+            augur_handle = None  # closed in emit_augur_run / the except below
             runner = GymRunner(
                 brain=config.brain,
                 env=config.env,
@@ -834,11 +921,20 @@ def run_task_loop(
                 grounding=config.grounding,
                 on_step=on_step,
             )
-            result = runner.run(
-                task=intent,
-                task_id=task_id,
-                start_url=task_config.get("start_url", ""),
-            )
+            # Augur (issue #892): open a live adapter + frame capture dir so
+            # Claude/EvoCUA/OpenCUA/Gemma4-CUA runs get bundles with modelio
+            # (LLM-call capture during inference) and screenshots. No-op when
+            # Augur is unconfigured. Closed in emit_augur_run below.
+            augur_handle = open_augur_handle(config, task_id)
+            with augur_modelio_ctx(augur_handle):
+                result = runner.run(
+                    task=intent,
+                    task_id=task_id,
+                    start_url=task_config.get("start_url", ""),
+                    capture_dir=(
+                        augur_handle.capture_dir if augur_handle else None
+                    ),
+                )
             _merge_runner_costs(runner)
 
             if not result.success and config.fallback_brain is not None:
@@ -974,12 +1070,21 @@ def run_task_loop(
             # Augur observability for the task_loop path (Claude / EvoCUA /
             # OpenCUA / Gemma4-CUA). The Holo3 micro path already emits via
             # RunExecutor; this closes the gap so non-Holo3 brains also show
-            # up in the Runs list. No-op when Augur is unconfigured.
-            emit_augur_run(config, task_id, intent, result)
+            # up in the Runs list. Replays the trajectory + screenshots and
+            # closes the adapter opened above. No-op when Augur unconfigured.
+            emit_augur_run(config, task_id, intent, result, handle=augur_handle)
 
         except Exception as e:
             traceback.print_exc()
             print(f"  ERROR: {e}")
+            # Close a leaked Augur adapter if the run threw before emit ran
+            # (emit_augur_run closes it on the normal path). Best-effort.
+            _leaked = locals().get("augur_handle")
+            if _leaked is not None:
+                try:
+                    _leaked.adapter.close(status="failed")
+                except Exception:  # noqa: BLE001
+                    pass
             scores.append(0.0)
             error_detail: dict[str, Any] = {
                 "task_id": task_id,

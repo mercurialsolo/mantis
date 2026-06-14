@@ -75,6 +75,46 @@ def test_post_messages_recovers_from_529() -> None:
     assert post.call_count == 2
 
 
+def test_post_messages_captures_modelio_when_context_active() -> None:
+    """#892 item 2: modelio capture is centralized in
+    ``post_messages_with_retry``, so a DIRECT caller (brain_claude /
+    plan_decomposer / grounding) captures when a layer context is published —
+    previously the hook lived only in ``call_with_tool_schema*``, so these
+    callers never captured."""
+    from mantis_agent.observability.modelio import publish_modelio_context
+
+    class _FakeAugur:
+        def __init__(self):
+            self.active = True
+            self.records: list = []
+
+        def record_modelio(self, *args, **kwargs):
+            self.records.append((args, kwargs))
+
+    augur = _FakeAugur()
+    body = {
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"input_tokens": 5, "output_tokens": 3},
+        "model": "m", "stop_reason": "end_turn",
+    }
+    client = AnthropicToolUseClient(api_key="k", model="m")
+    payload = {"messages": [{"role": "user", "content": "hi"}]}
+    with patch("requests.post", return_value=_fake_response(200, body=body)):
+        with publish_modelio_context(augur, "planner"):
+            client.post_messages_with_retry(payload, timeout=30)
+    assert augur.records, "central capture did not fire for a direct caller"
+
+
+def test_post_messages_no_capture_without_context() -> None:
+    """No published layer → no capture (and no JSON parse cost)."""
+    body = {"content": [], "usage": {}}
+    resp = _fake_response(200, body=body)
+    client = AnthropicToolUseClient(api_key="k", model="m")
+    with patch("requests.post", return_value=resp):
+        client.post_messages_with_retry({"messages": []}, timeout=30)
+    resp.json.assert_not_called()  # cheap context probe short-circuits
+
+
 def test_post_messages_honours_log_prefix(caplog) -> None:
     """When the client is constructed with a custom ``log_prefix``,
     transient-error log lines carry that prefix — keeps the existing
