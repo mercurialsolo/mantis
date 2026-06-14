@@ -38,47 +38,52 @@ execution or training.
 
 ## 3. System architecture (big picture)
 
-```
-                         ┌──────────────────────────────────────────────┐
-                         │                  MANTIS                       │
-                         │                                              │
-   ┌─────────────┐       │  RolloutGenerator ──► executors (Holo3 /     │
-   │  Daytona    │◄──────┤   (template × seed,    Claude / …) on the    │
-   │  sim envs   │ reset  │   failure-biased)      Daytona env URL       │
-   │ /__env__/   │ {seed} │        │                    │               │
-   │  reset      │───────►│        │                    ▼               │
-   │  oracle     │ score  │        │            graded run + traces     │
-   │  mutations  │◄───────┤        │                    │               │
-   └─────────────┘        │        │                    ▼               │
-                          │        │            ┌───────────────┐       │
-                          │        │            │  AUGUR (SDK)  │ data  │
-                          │        │            │ traces·modelio│ plane │
-                          │        │            │ logprobs·group│       │
-                          │        │            │ reward·dataset│       │
-                          │        │            └──────┬─────┬──┘       │
-                          │        │                   │     │          │
-                          │   ┌────▼─────────┐         │     │          │
-                          │   │ FAST LOOP    │◄────────┘     │          │
-                          │   │ recipes/hints│ (failure       │          │
-                          │   │ curriculum   │  clusters,     │          │
-                          │   │ plan-rewrites│  rollouts)     │          │
-                          │   └────┬─────────┘                │          │
-                          │        │ updated artifacts        │          │
-                          │        ▼                          │          │
-                          │   ┌──────────────────────┐        │          │
-                          │   │ champion/challenger   │        │          │
-                          │   │ PromotionGate         │        │          │
-                          │   └────┬─────────────┬────┘        │          │
-                          │  promote│      reject │            │          │
-                          └────────┼─────────────┼────────────┼──────────┘
-                                   │             │            │ datasets
-                                   ▼             ▼            ▼ (group_id)
-                           deploy (Baseten/Modal)      ┌─────────────────┐
-                                   ▲                    │ MANTIS-TRAINER  │
-                                   │   new champion     │ SLOW LOOP       │
-                                   └────────────────────┤ GRPO/DPO/SFT    │
-                                       checkpoint        │ → checkpoint    │
-                                                         └─────────────────┘
+```mermaid
+flowchart TB
+  subgraph ENV["🖥️ Environment — Daytona sim envs"]
+    direction TB
+    RESET["POST /__env__/reset {seed}<br/>mint instance"]
+    ORACLE["GET /__env__/oracle<br/>R = score − λ·cost"]
+  end
+
+  subgraph MANTIS["🤖 Mantis — agent + control plane"]
+    direction TB
+    GEN["RolloutGenerator<br/>template × seed-sweep · failure-biased"]
+    EXEC["Executors<br/>Holo3 · Claude / task_loop"]
+    FAST["FAST LOOP<br/>recipes · hints · curriculum · plan-rewrites"]
+    GATE{"Champion / Challenger<br/>PromotionGate"}
+    DEPLOY["Deploy<br/>Baseten / Modal"]
+  end
+
+  subgraph AUGUR["📊 Augur — data plane"]
+    DATA[("traces · modelio · logprobs<br/>group_id · reward · datasets")]
+  end
+
+  subgraph TRAINER["🧠 mantis-trainer — slow loop"]
+    TRAIN["GRPO / DPO / SFT<br/>→ candidate checkpoint"]
+  end
+
+  GEN --> EXEC
+  EXEC <-->|reset seed / load| RESET
+  EXEC -->|graded run + traces| DATA
+  ORACLE -->|reward| DATA
+  DATA -->|failure clusters| GEN
+  DATA -->|rollouts| FAST
+  DATA -->|datasets by group_id| TRAIN
+  FAST -->|updated config| GATE
+  TRAIN -->|candidate weights| GATE
+  GATE -->|promote| DEPLOY
+  GATE -.->|reject| DATA
+  DEPLOY ==>|new champion| EXEC
+
+  classDef env fill:#eef7ff,stroke:#4a90d9;
+  classDef mantis fill:#eafaf1,stroke:#27ae60;
+  classDef augur fill:#fef9e7,stroke:#d4ac0d;
+  classDef trainer fill:#f5eef8,stroke:#8e44ad;
+  class ENV,RESET,ORACLE env;
+  class MANTIS,GEN,EXEC,FAST,GATE,DEPLOY mantis;
+  class AUGUR,DATA augur;
+  class TRAINER,TRAIN trainer;
 ```
 
 Both loops feed the **same** PromotionGate; both promotions deploy the same way
@@ -112,10 +117,20 @@ plan-rewrites. **Not** model weights. **Cadence:** minutes–hours, CPU.
 **Reversibility:** high (config/data, instantly revertible). **Where:** entirely
 in `mantis`.
 
-```
-run ──► graded outcome (oracle) ──► curate ──► update memory ──► next run uses it
- ▲                                              (recipes / hints /        │
- └──────────────────────────────────────────────  curriculum / rewrites)─┘
+```mermaid
+flowchart LR
+  RUN["Run on sim env"] --> OUT["Graded outcome<br/>(oracle reward)"]
+  OUT --> REC["Recovery proposes<br/>plan-rewrite — candidate"]
+  REC --> PROMO["3 consecutive wins<br/>→ promoted"]
+  PROMO --> APPLY["apply_plan_overlay<br/>pre-flight, next run"]
+  OUT --> MEM["Update memory<br/>hints · exemplars · curriculum"]
+  APPLY --> RUN
+  MEM --> RUN
+  RUN -. config beats champion? .-> GATE{"PromotionGate"}
+  GATE -. promote .-> RUN
+
+  classDef m fill:#eafaf1,stroke:#27ae60;
+  class RUN,OUT,REC,PROMO,APPLY,MEM,GATE m;
 ```
 
 ### How it works
@@ -142,12 +157,18 @@ trustworthy-reward + benchmark substrate the slow loop needs anyway.
 hours–days, **GPU**. **Reversibility:** low (a worse policy) → must clear the
 gate. **Where:** `mantis-trainer` (separate repo; torch/trl/vllm footprint).
 
-```
-graded rollouts (Augur, by group_id) ──► trainer (GRPO/DPO/SFT) ──► candidate ckpt
-        modelio + reward + logprobs                                       │
-                                                                          ▼
-                                              champion/challenger gate (mantis)
-                                                 promote? → deploy → new champion
+```mermaid
+flowchart LR
+  ROLL["Graded rollouts<br/>Augur · by group_id"] --> DC["Data contract<br/>group-relative advantages<br/>+ modelio + logprobs"]
+  DC --> TR["Train<br/>GRPO / DPO / SFT"]
+  TR --> CKPT["Candidate checkpoint"]
+  CKPT --> GATE{"Champion / Challenger<br/>gate (Mantis)"}
+  GATE -->|promote| DEP["Deploy → new champion"]
+  GATE -.->|reject| ROLL
+  DEP --> ROLL
+
+  classDef t fill:#f5eef8,stroke:#8e44ad;
+  class ROLL,DC,TR,CKPT,GATE,DEP t;
 ```
 
 ### How it works
