@@ -22,7 +22,6 @@ Calling :func:`seed` again hard-resets every table, so it doubles as the
 
 from __future__ import annotations
 
-import random
 import sqlite3
 from typing import Any
 
@@ -71,7 +70,6 @@ def seed(conn: sqlite3.Connection, *, seed_val: int,
     """Populate ``conn`` deterministically from ``seed_val``."""
     from .authflow import hash_password  # local import avoids cycle at load
 
-    rng = random.Random(seed_val)
     cur = conn.cursor()
 
     for table in ("mutations", "emails", "passkey_credentials",
