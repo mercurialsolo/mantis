@@ -1876,6 +1876,12 @@ def _build_task_spec_from_suite(
             "parent_subgoal_id": "url_collection",
         },
     ]
+    # #901: declare success_conditions so the trainer's champion/challenger
+    # gate can apply deterministic criteria, not just the oracle's
+    # task_success. Baseline is task_success (the env oracle decides);
+    # richer criteria layer on from the task/oracle definition.
+    from ..observability.eval_curation import default_success_conditions
+    spec["success_conditions"] = default_success_conditions()
     return spec
 
 
