@@ -1467,11 +1467,19 @@ class AugurAdapter:
                 )
                 if v_kind == "recoverable":
                     v_status_mapped = "recoverable"
-        v_reason = (
-            getattr(v_obj, "reason", "") or ""
-            if v_obj is not None
-            else (getattr(sr, "failure_class", "") or "")
-        )
+        # Gap 3 (emit side) — derive the reason the same way status is
+        # derived above: from the runner's canonical ``failure_class``,
+        # not solely the (possibly stale-optimistic) verdict. A handler
+        # that pre-stamps ``Verdict(kind=OK, reason="")`` before failure
+        # is detected leaves ``v_obj.reason`` empty on a step the runner
+        # later marks ``success=False``; trusting it verbatim is exactly
+        # why the run-level ``failure_reason`` showed null/unknown while
+        # ``failure_class`` was populated. Prefer a non-empty verdict
+        # reason (a real verifier rationale wins) and fall back to
+        # ``failure_class`` whenever the verdict reason is empty.
+        v_reason = (getattr(v_obj, "reason", "") or "") if v_obj is not None else ""
+        if not v_reason:
+            v_reason = getattr(sr, "failure_class", "") or ""
         # #530 — surface the verifier's textual evidence as a
         # reference when set. ``evidence`` is a free-form string on
         # the Verdict; record it as a single evidence_ref so

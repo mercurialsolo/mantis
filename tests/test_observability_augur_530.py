@@ -210,6 +210,42 @@ def test_verdict_reason_threads_from_verdict_reason_when_present(
     assert step["verdict"]["reason"] == "cf_challenge"
 
 
+def test_empty_verdict_reason_on_failed_step_falls_back_to_failure_class(
+    monkeypatch, tmp_path: Path,
+):
+    """Gap 3 (emit side): a pre-stamped optimistic Verdict(kind=OK,
+    reason="") on a step the runner later marks success=False must NOT
+    leave verdict.reason empty — it falls back to failure_class so the
+    run-level failure_reason populates (was null/unknown live)."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    sr = _make_step_result(
+        success=False, kind_value="ok", confidence=1.0,
+        failure_class="no_state_change", step_index=7,
+    )
+    # The optimistic verdict carries no reason of its own.
+    sr.verdict.reason = ""
+    step = _emit_and_read(tmp_path, sr)
+    assert step["verdict"]["reason"] == "no_state_change", (
+        f"empty verdict reason on a failed step must fall back to "
+        f"failure_class (got {step['verdict']['reason']!r})"
+    )
+
+
+def test_nonempty_verdict_reason_still_wins_over_failure_class(
+    monkeypatch, tmp_path: Path,
+):
+    """A real verifier rationale on the verdict is preferred over the
+    coarse failure_class — the fallback only fills the empty case."""
+    monkeypatch.delenv("MANTIS_AUGUR_DISABLED", raising=False)
+    sr = _make_step_result(
+        success=False, kind_value="recoverable", confidence=0.5,
+        failure_class="no_state_change", step_index=8,
+    )
+    sr.verdict.reason = "verifier_specific_reason"
+    step = _emit_and_read(tmp_path, sr)
+    assert step["verdict"]["reason"] == "verifier_specific_reason"
+
+
 # ── set_score wire (run_executor) ────────────────────────────────────────
 
 
