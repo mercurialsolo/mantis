@@ -258,9 +258,138 @@ def record_anthropic_modelio(
         )
 
 
+def _map_openai_usage(usage: dict[str, Any] | None) -> dict[str, int]:
+    """OpenAI / vLLM ``response.usage`` → schema ``usage`` block.
+
+    The chat-completions usage block is already the schema's native
+    shape (``prompt_tokens`` / ``completion_tokens``), so this is mostly
+    a whitelist — ``additionalProperties: false`` means we MUST drop
+    anything else (vLLM adds ``total_tokens`` and a
+    ``prompt_tokens_details`` sub-object we don't carry). The cached-
+    prompt count, when present, maps to ``cache_hit_tokens``.
+    """
+    if not isinstance(usage, dict):
+        return {}
+    out: dict[str, int] = {}
+    if (v := usage.get("prompt_tokens")) is not None:
+        out["prompt_tokens"] = int(v)
+    if (v := usage.get("completion_tokens")) is not None:
+        out["completion_tokens"] = int(v)
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict) and (v := details.get("cached_tokens")) is not None:
+        out["cache_hit_tokens"] = int(v)
+    return out
+
+
+def _extract_openai_response(
+    response_json: dict[str, Any],
+) -> tuple[str | None, list[dict[str, Any]], str | None]:
+    """Pull ``text`` + ``tool_calls`` + ``finish_reason`` off the first
+    choice of an OpenAI / vLLM chat-completions response.
+
+    Mirrors :func:`_extract_response_text_and_tools` for the Anthropic
+    shape: text is the message content (null when only tool calls were
+    returned), tool_calls is the verbatim provider-shaped list."""
+    choices = response_json.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return None, [], None
+    choice = choices[0]
+    message = choice.get("message") or {}
+    content = message.get("content")
+    text = content if isinstance(content, str) and content else None
+    tool_calls = message.get("tool_calls") or []
+    if not isinstance(tool_calls, list):
+        tool_calls = []
+    finish = choice.get("finish_reason")
+    finish_reason = finish if isinstance(finish, str) and finish else None
+    return text, tool_calls, finish_reason
+
+
+def record_openai_modelio(
+    *,
+    request_payload: dict[str, Any],
+    response_json: dict[str, Any],
+    duration_ms: int,
+    ctx: ModelIOContext | None = None,
+) -> None:
+    """Build a modelio record from an OpenAI / vLLM chat-completions call
+    (the Holo3 brain client) and stage it via
+    :meth:`AugurAdapter.record_modelio`.
+
+    Sibling of :func:`record_anthropic_modelio` for the
+    ``/chat/completions`` shape — needed because the Holo3 brain talks
+    to a vLLM OpenAI server, not the instrumented Anthropic client, so
+    the brain's own ``planner`` decision is otherwise never captured.
+    No-op when no context is published or the adapter is inactive;
+    failures are swallowed (Augur spec §4.3).
+    """
+    ctx = ctx if ctx is not None else current_modelio_context()
+    if ctx is None or ctx.augur is None or not getattr(ctx.augur, "active", False):
+        return
+
+    text, tool_calls, finish_reason = _extract_openai_response(response_json)
+    usage = _map_openai_usage(response_json.get("usage"))
+
+    request_block: dict[str, Any] = {
+        "model": str(request_payload.get("model", "")),
+    }
+    if "messages" in request_payload:
+        request_block["messages"] = request_payload["messages"]
+    if "tools" in request_payload:
+        request_block["tools"] = request_payload["tools"]
+    params = {
+        k: v for k, v in request_payload.items()
+        if k in {"max_tokens", "temperature", "top_p", "top_k", "stop", "tool_choice"}
+    }
+    if params:
+        request_block["params"] = params
+
+    response_block: dict[str, Any] = {}
+    if text is not None:
+        response_block["text"] = text
+    if tool_calls:
+        response_block["tool_calls"] = tool_calls
+    if finish_reason is not None:
+        response_block["stop_reason"] = finish_reason
+    if usage:
+        response_block["usage"] = usage
+    try:
+        from augur_sdk import ModelApiAdapterBase
+        logprobs = ModelApiAdapterBase.extract_logprobs_from_response(response_json)
+        if logprobs is not None:
+            response_block["logprobs"] = logprobs
+    except Exception:  # noqa: BLE001 — observability never fatal
+        pass
+
+    record: dict[str, Any] = {
+        "schema_version": "0.1",
+        "layer": ctx.layer,
+        "ts": _utc_now_iso(),
+        "request": request_block,
+        "response": response_block,
+    }
+    if ctx.step_index is not None:
+        record["step_index"] = int(ctx.step_index)
+    if duration_ms > 0:
+        record["duration_ms"] = int(duration_ms)
+
+    try:
+        ctx.augur.record_modelio(
+            record,
+            step_index=ctx.step_index,
+            layer=ctx.layer,
+        )
+    except Exception as exc:  # noqa: BLE001 — Augur spec §4.3
+        logger.warning(
+            "record_openai_modelio: capture failed layer=%s step=%s: %s",
+            ctx.layer, ctx.step_index, exc,
+        )
+
+
 __all__ = [
     "ModelIOContext",
     "current_modelio_context",
     "publish_modelio_context",
     "record_anthropic_modelio",
+    "record_openai_modelio",
 ]
