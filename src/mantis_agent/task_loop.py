@@ -536,6 +536,116 @@ def _standard_task_max_steps(task_config: dict[str, Any], config: TaskLoopConfig
     return min(int(config.max_steps), int(config.standard_task_max_steps))
 
 
+# ── Augur instrumentation for the task_loop path ──────────────────
+#
+# The Holo3 micro path gets Augur bundles for free because RunExecutor
+# opens an AugurAdapter (run_executor.py). The task_loop path (Claude /
+# EvoCUA / OpenCUA / Gemma4-CUA via GymRunner) had NO Augur wiring, so
+# those runs never appeared in the Runs list. These two helpers replay a
+# completed GymRunner run into a bundle so every task_loop brain gets the
+# same observability. Best-effort: a no-op when Augur isn't configured
+# (adapter inactive) and never raises into the run.
+
+
+def _gym_trajectory_to_step_shims(
+    trajectory: list[Any], run_success: bool,
+) -> list[Any]:
+    """Map GymRunner ``TrajectoryStep`` objects to duck-typed step-result
+    shims that ``AugurAdapter.record_step`` / ``_build_step_trace`` consume.
+
+    The wedge reads every field via ``getattr``-with-default, so a
+    ``SimpleNamespace`` carrying the handful of fields it inspects suffices.
+    ``TrajectoryStep.action`` is already a real :class:`actions.Action`, so
+    action type + coords flow through for free.
+
+    Per-step success is coarse: GymRunner has no per-step verdict like the
+    micro runner, so a step with a positive reward — or the final step of a
+    successful run — maps to ``passed``; everything else ``failed``. Refine
+    if/when brains stamp per-step verdicts.
+    """
+    from types import SimpleNamespace
+
+    shims: list[Any] = []
+    n = len(trajectory)
+    for i, ts in enumerate(trajectory):
+        is_last = i == n - 1
+        reward = float(getattr(ts, "reward", 0.0) or 0.0)
+        success = reward > 0.0 or (is_last and run_success)
+        shims.append(
+            SimpleNamespace(
+                step_index=int(getattr(ts, "step", i)),
+                success=success,
+                skip=False,
+                last_action=getattr(ts, "action", None),
+                intent=str(getattr(ts, "thinking", "") or ""),
+                verdict=None,
+                screenshot_png=None,
+                executor_backend=str(getattr(ts, "executor_backend", "") or ""),
+            )
+        )
+    return shims
+
+
+def emit_augur_run(
+    config: "TaskLoopConfig",
+    task_id: str,
+    intent: str,
+    result: Any,
+) -> None:
+    """Replay a completed GymRunner run into an Augur bundle so task_loop
+    brains get the observability the Holo3 micro path gets via RunExecutor.
+
+    No-op when Augur isn't configured (adapter inactive). Never raises.
+    Screenshots are not yet plumbed through (TrajectoryStep carries no PNG);
+    the bundle has full step traces / actions / sparks / status but
+    ``shots:false`` for now — screenshot capture is a follow-up.
+    """
+    try:
+        from .observability.augur import AugurAdapter
+
+        brain = getattr(config, "brain", None)
+        model_name = str(
+            getattr(brain, "model_name", "") or config.model_name or ""
+        )
+        trajectory = list(getattr(result, "trajectory", []) or [])
+        adapter = AugurAdapter(
+            run_id=str(config.run_id or config.session_name or "run"),
+            tenant_id=str(getattr(config, "session_name", "") or ""),
+            session_name=str(getattr(config, "session_name", "") or ""),
+            extra_tags={
+                "plan_name": str(task_id or ""),
+                "workflow_id": str(config.run_id or ""),
+                "model": model_name,
+                "plan_step_count": str(len(trajectory)),
+                "executor": str(getattr(config, "results_prefix", "") or ""),
+            },
+            brain_model_name=model_name,
+        )
+        if not adapter.active:
+            return
+        run_success = bool(getattr(result, "success", False))
+        for sr in _gym_trajectory_to_step_shims(trajectory, run_success):
+            obs = adapter.attach_observation(
+                step_index=sr.step_index, kind="post", png=sr.screenshot_png,
+            )
+            at = getattr(getattr(sr, "last_action", None), "action_type", None)
+            step_type = at.value if hasattr(at, "value") else (str(at) if at else "")
+            adapter.record_step(
+                step_result=sr,
+                observation_post=obs,
+                step_type=step_type,
+            )
+        if getattr(result, "paused", False):
+            status = "paused"
+        elif run_success:
+            status = "succeeded"
+        else:
+            status = "halted"
+        adapter.close(status=status)
+    except Exception as exc:  # noqa: BLE001 — telemetry never breaks a run
+        logger.debug("emit_augur_run failed: %s", exc)
+
+
 # ── Main task loop ────────────────────────────────────────────────
 
 
@@ -860,6 +970,12 @@ def run_task_loop(
             # Executor-specific side effects (trajectory saving, etc.)
             if config.on_task_complete:
                 config.on_task_complete(task_id, intent, result)
+
+            # Augur observability for the task_loop path (Claude / EvoCUA /
+            # OpenCUA / Gemma4-CUA). The Holo3 micro path already emits via
+            # RunExecutor; this closes the gap so non-Holo3 brains also show
+            # up in the Runs list. No-op when Augur is unconfigured.
+            emit_augur_run(config, task_id, intent, result)
 
         except Exception as e:
             traceback.print_exc()
