@@ -536,7 +536,6 @@ class MicroPlanRunner:
                     step_results=state.results,
                 )
             except Exception as exc:  # noqa: BLE001 — never block run terminal
-                logger = __import__("logging").getLogger(__name__)
                 logger.debug(
                     "plan_evolution: finalize_run_outcomes raised: %s", exc,
                 )
