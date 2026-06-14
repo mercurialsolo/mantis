@@ -231,6 +231,13 @@ class RunExecutor:
         augur = getattr(runner, "_augur", None)
         if augur is None:
             return
+        # Gap 2 — detach the log bridge before closing so the handler
+        # never appends to a finalized session.
+        try:
+            from ..observability.log_bridge import detach_augur_log_bridge
+            detach_augur_log_bridge(runner)
+        except Exception as exc:  # noqa: BLE001 — never break cleanup
+            logger.debug("detach_augur_log_bridge (abnormal) failed: %s", exc)
         try:
             augur.close(status="halted")
         except Exception as exc:  # noqa: BLE001 — never re-raise in cleanup
@@ -337,6 +344,18 @@ class RunExecutor:
             # snapshot a swapped brain mid-run.
             brain_model_name=model_name,
         )
+
+        # Gap 2 — attach the WARNING+ log bridge so the diagnostics
+        # already emitted by step_recovery / critic / the runner stream
+        # into the bundle's ``logs/`` panel (previously ``logs:false``
+        # on every run). Detached before ``augur.close()`` in
+        # ``_finalize`` and on the abnormal-exit path. No-op when the
+        # adapter is inactive.
+        try:
+            from ..observability.log_bridge import attach_augur_log_bridge
+            attach_augur_log_bridge(runner, runner._augur)
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug("attach_augur_log_bridge failed: %s", exc)
 
         if not runner._results_base_url and plan.steps:
             runner._results_base_url = runner._extract_url_from_intent(
@@ -1163,6 +1182,14 @@ class RunExecutor:
         # no-op when the adapter is inactive (Augur disabled / SDK
         # missing), so this wrapper is free in those cases.
         from ..observability.modelio import publish_modelio_context
+        # Gap 2 — structured per-step lifecycle lines into the bundle log.
+        try:
+            from ..observability.log_bridge import log_step_start
+            log_step_start(
+                getattr(runner, "_augur", None), effective_step, state.step_index,
+            )
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug("log_step_start failed: %s", exc)
         try:
             with publish_modelio_context(
                 getattr(runner, "_augur", None),
@@ -1189,6 +1216,17 @@ class RunExecutor:
         # invariant ``every committed step carries a verdict`` holds
         # at the runner boundary.
         _stamp_verdict(step_result)
+        # Gap 2 — emit the per-step outcome line AFTER _stamp_verdict so
+        # a failed step's line carries the (now backfilled) verdict
+        # reason alongside failure_class — the signal a no_state_change
+        # diagnostics rule reads off the bundle log.
+        try:
+            from ..observability.log_bridge import log_step_outcome
+            log_step_outcome(
+                getattr(runner, "_augur", None), step_result, state.step_index,
+            )
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            logger.debug("log_step_outcome failed: %s", exc)
         # #483: derive the typed recovery decision from the verdict +
         # attempt history + step.required so result.json / canonical
         # events / metrics see a normalised next-action signal. Does
@@ -2149,6 +2187,13 @@ class RunExecutor:
         # as ``status.json``. Adapter swallows internal errors.
         augur: AugurAdapter | None = getattr(runner, "_augur", None)
         if augur is not None:
+            # Gap 2 — detach the log bridge before close so the handler
+            # never appends to a finalized session.
+            try:
+                from ..observability.log_bridge import detach_augur_log_bridge
+                detach_augur_log_bridge(runner)
+            except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+                logger.debug("detach_augur_log_bridge failed: %s", exc)
             # Surface run-aggregate fields the per-step PUTs don't carry
             # so the Runs-list columns populate: cost metrics + the
             # canonical failure class for the first failing step (Augur
