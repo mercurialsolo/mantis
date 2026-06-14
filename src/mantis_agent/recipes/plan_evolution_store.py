@@ -227,13 +227,21 @@ def apply_plan_overlay(
     *,
     plan_hash: str,
     workflow_id: str,
+    include_candidates: bool = False,
 ) -> tuple["MicroPlan", list[StepRewrite]]:
-    """Return the plan with all `promoted` rewrites applied + the list
-    of rewrites that were applied.
+    """Return the plan with learned rewrites applied + the list of
+    rewrites that were applied.
 
-    Pre-flight: called by the dispatcher BEFORE ``build_micro_suite`` so
-    the rewritten URLs land in the suite the executor receives. Idempotent
-    + no-op when no store exists or no rewrites are promoted.
+    Pre-flight: called BEFORE the executor runs so the rewritten URLs land
+    in the steps the executor receives. Idempotent + no-op when no store
+    exists or nothing is applicable.
+
+    ``promoted`` rewrites are always applied. With ``include_candidates``
+    (exploration, #894), not-yet-promoted ``candidate`` rewrites are ALSO
+    applied so they accumulate the consecutive wins promotion requires —
+    at the cost of applying an unproven rewrite to a live run. The
+    cold-idle demotion applies to ``promoted`` rewrites only (candidates
+    have no "promoted-but-stale" state to expire).
 
     Phase 2 ships ``scope='workflow'`` only — tenant + site scopes added
     in Phase 3.
@@ -245,19 +253,22 @@ def apply_plan_overlay(
     if not evo.rewrites:
         return plan, []
 
+    applicable = {"promoted", "candidate"} if include_candidates else {"promoted"}
     applied: list[StepRewrite] = []
     now_ts = time.time()
     for rewrite in evo.rewrites:
-        if rewrite.status != "promoted":
+        if rewrite.status not in applicable:
             continue
         # Cold-transition gate: promoted rewrites unused for ≥ COLD_AGE
         # demote to `cold` and skip application. Re-promotion requires
-        # 3 fresh successful runs.
-        last_ts = _parse_iso(rewrite.last_seen)
-        if last_ts and (now_ts - last_ts) > COLD_AGE_SECONDS:
-            rewrite.status = "cold"
-            rewrite.demotion_reason = "idle_30d"
-            continue
+        # 3 fresh successful runs. (Candidates are exempt — they're being
+        # explored toward promotion, not expired.)
+        if rewrite.status == "promoted":
+            last_ts = _parse_iso(rewrite.last_seen)
+            if last_ts and (now_ts - last_ts) > COLD_AGE_SECONDS:
+                rewrite.status = "cold"
+                rewrite.demotion_reason = "idle_30d"
+                continue
         if rewrite.step_index >= len(plan.steps):
             continue
         step = plan.steps[rewrite.step_index]
@@ -265,9 +276,9 @@ def apply_plan_overlay(
         applied.append(rewrite)
         logger.warning(
             "  [plan-overlay] step %d rewritten via %s "
-            "(confidence=%.2f, %d/%d successes)",
-            rewrite.step_index, rewrite.source, rewrite.confidence,
-            rewrite.successful_runs, PROMOTION_THRESHOLD,
+            "(%s, confidence=%.2f, %d/%d successes)",
+            rewrite.step_index, rewrite.source, rewrite.status,
+            rewrite.confidence, rewrite.successful_runs, PROMOTION_THRESHOLD,
         )
 
     # Persist any cold-transition demotions.

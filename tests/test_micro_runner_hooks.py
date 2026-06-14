@@ -539,6 +539,43 @@ def test_run_without_initial_user_input_leaves_substitution_noop(monkeypatch):
     assert getattr(r, "_staged_user_input", None) is None
 
 
+def test_run_applies_promoted_plan_rewrite_preflight(monkeypatch, tmp_path):
+    """#894 keystone: run() applies learned (promoted) plan rewrites
+    pre-flight and records them on _applied_plan_rewrites so the terminal
+    promotion gate can score them — closing the plan-evolution loop."""
+    monkeypatch.setenv("MANTIS_PLAN_EVOLUTION_DIR", str(tmp_path))
+    from mantis_agent.recipes.plan_evolution_store import (
+        PROMOTION_THRESHOLD,
+        record_rewrite_candidate,
+        record_run_outcome,
+    )
+
+    rw = record_rewrite_candidate(
+        plan_hash="ph", workflow_id="wf", step_index=0,
+        original_step={"intent": "Step 0: navigate to https://example.test/0",
+                       "type": "navigate", "params": {}},
+        rewritten_step={"intent": "REWRITTEN BY EVOLUTION",
+                        "type": "navigate", "params": {}},
+        source="pattern_transform", confidence=0.7,
+    )
+    for _ in range(PROMOTION_THRESHOLD):
+        record_run_outcome(plan_hash="ph", workflow_id="wf",
+                           applied_rewrites=[rw], outcome="success")
+
+    env = _FakeEnv()
+    r = _runner(env)
+    r._plan_hash = "ph"
+    r._workflow_id = "wf"
+    plan = _trivial_plan()
+    monkeypatch.setattr(r._executor, "execute", lambda *_a, **_kw: None)
+    monkeypatch.setattr(r, "_final_summary", lambda *_a, **_kw: None)
+
+    r.run(plan)
+    assert plan.steps[0].intent == "REWRITTEN BY EVOLUTION"
+    applied = getattr(r, "_applied_plan_rewrites", None) or []
+    assert any(a.step_index == 0 for a in applied)
+
+
 def test_run_resume_pass_does_not_clobber_staged_user_input(monkeypatch):
     """resume() stages the value then calls run(..., resume=True) with no
     user_input. The initial-path staging must be guarded on ``not resume``
