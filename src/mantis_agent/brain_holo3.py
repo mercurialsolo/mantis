@@ -334,6 +334,7 @@ class Holo3Brain:
 
         # Retry with backoff for rate limiting (429)
         data = None
+        _modelio_t0 = time.time()
         for attempt in range(4):
             try:
                 resp = requests.post(
@@ -369,7 +370,45 @@ class Holo3Brain:
                 raw_output="429 rate limited after retries",
             )
 
+        # Gap 1 — capture the brain's own decision as a modelio record.
+        # The Holo3 client talks to a vLLM OpenAI server, so the
+        # Anthropic client's capture hook never sees this call; without
+        # this the highest-fidelity prompt->response pair (tagged
+        # ``planner`` by the runner wrap) is lost for the production
+        # model. No-op when no modelio context is published / Augur is
+        # inactive; never raises (Augur spec §4.3).
+        self._record_modelio_if_active(
+            payload, data, int((time.time() - _modelio_t0) * 1000),
+        )
+
         return self._parse_response(data, screen_size)
+
+    @staticmethod
+    def _record_modelio_if_active(
+        request_payload: dict, response_json: dict, duration_ms: int,
+    ) -> None:
+        """Forward a Holo3 chat-completions call to the modelio capture
+        layer when a context is active. Mirrors
+        ``_anthropic.client._record_modelio_if_active`` for the OpenAI
+        response shape; local import keeps observability off the hot
+        path until a layer is published."""
+        try:
+            from .observability.modelio import (
+                current_modelio_context,
+                record_openai_modelio,
+            )
+        except Exception:  # noqa: BLE001 — import issues never block calls
+            return
+        if current_modelio_context() is None:
+            return
+        try:
+            record_openai_modelio(
+                request_payload=request_payload,
+                response_json=response_json,
+                duration_ms=duration_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 — Augur spec §4.3
+            logger.debug("Holo3 modelio capture failed: %s", exc)
 
     def _build_messages(
         self,
