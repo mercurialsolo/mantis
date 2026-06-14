@@ -1,0 +1,108 @@
+/* OAuth IdP chrome — shared skeleton for the provider authorize/consent
+ * screens. Deliberately light/neutral (not the dark product theme) so
+ * the agent perceives a different origin. Each provider template sets
+ * ``--idp-accent`` inline + adds its own wordmark.
+ */
+:root { --idp-accent: #1a73e8; }
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; min-height: 100%;
+  background: #fff; color: #202124;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+}
+.idp-shell { display: flex; flex-direction: column; min-height: 100vh; }
+.idp-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 24px;
+}
+.idp-wordmark { font-size: 20px; font-weight: 600; letter-spacing: 0.2px; }
+.idp-chip {
+  display: inline-flex; align-items: center; gap: 8px; font-size: 13px;
+  color: #5f6368; border: 1px solid #dadce0; border-radius: 999px; padding: 4px 12px;
+}
+.idp-card {
+  margin: 12px auto 24px; width: min(460px, 94vw);
+  background: #fff; border: 1px solid #dadce0; border-radius: 10px;
+  padding: 36px 40px 30px; box-shadow: 0 1px 3px rgba(60,64,67,0.15);
+}
+.idp-card h1 { font-size: 22px; font-weight: 500; margin: 0 0 6px; }
+.idp-sub { color: #5f6368; margin: 0 0 22px; }
+.idp-app { font-weight: 600; color: #202124; }
+.idp-error {
+  background: #fce8e6; color: #c5221f; padding: 10px 12px;
+  border-radius: 6px; margin-bottom: 16px; font-size: 13px;
+}
+
+.idp-account-list { list-style: none; padding: 0; margin: 0 -16px 12px; }
+.idp-account-list li { border-top: 1px solid #eceef1; }
+.idp-account-list li:last-child { border-bottom: 1px solid #eceef1; }
+.idp-account-row {
+  width: 100%; background: none; border: 0; cursor: pointer;
+  display: flex; align-items: center; gap: 14px; padding: 13px 16px;
+  text-align: left; font: inherit; color: inherit;
+}
+.idp-account-row:hover { background: #f6f8fa; }
+.idp-avatar {
+  width: 32px; height: 32px; border-radius: 999px; flex: 0 0 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--idp-accent); color: #fff; font-weight: 600; font-size: 13px;
+}
+.idp-avatar-sm { width: 24px; height: 24px; font-size: 11px; }
+.idp-account-meta { display: flex; flex-direction: column; line-height: 1.3; min-width: 0; }
+.idp-account-name { font-size: 14px; }
+.idp-account-email { font-size: 12px; color: #5f6368; }
+.idp-chevron { margin-left: auto; color: #5f6368; font-size: 18px; }
+
+.idp-account-line {
+  display: inline-flex; align-items: center; gap: 8px; background: #f1f3f4;
+  padding: 6px 12px; border-radius: 999px; margin: 0 0 20px; font-size: 13px;
+}
+.idp-permits { margin: 22px 0 8px; font-weight: 600; }
+.idp-scope-list { list-style: none; padding: 0; margin: 0 0 20px; }
+.idp-scope-list li {
+  display: flex; align-items: center; gap: 12px; padding: 11px 0;
+  border-top: 1px solid #eceef1;
+}
+.idp-scope-list li:last-child { border-bottom: 1px solid #eceef1; }
+.idp-scope-ico {
+  width: 26px; height: 26px; border-radius: 999px; flex: 0 0 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #f1f3f4; color: #5f6368; font-weight: 600;
+}
+.idp-fineprint { font-size: 11px; color: #5f6368; line-height: 1.6; }
+.idp-fineprint a { color: var(--idp-accent); text-decoration: none; }
+
+.idp-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.idp-btn {
+  border: 0; cursor: pointer; font: inherit; font-weight: 600;
+  padding: 10px 22px; border-radius: 6px; font-size: 14px;
+}
+.idp-btn-primary { background: var(--idp-accent); color: #fff; }
+.idp-btn-primary:hover { filter: brightness(0.95); }
+.idp-btn-secondary { background: transparent; color: var(--idp-accent); }
+
+.idp-footer {
+  margin-top: auto; display: flex; justify-content: space-between;
+  padding: 14px 28px; border-top: 1px solid #eceef1;
+  font-size: 12px; color: #5f6368;
+}
+.idp-footer a { color: #5f6368; text-decoration: none; margin-left: 20px; }
+
+/* Provider-specific dark chrome (GitHub) override. */
+body.idp-dark { background: #0d1117; color: #e6edf3; }
+body.idp-dark .idp-card { background: #161b22; border-color: #30363d; box-shadow: none; }
+body.idp-dark .idp-sub, body.idp-dark .idp-account-email,
+body.idp-dark .idp-fineprint, body.idp-dark .idp-footer { color: #8b949e; }
+body.idp-dark .idp-account-row:hover { background: #1c2128; }
+body.idp-dark .idp-account-list li,
+body.idp-dark .idp-scope-list li { border-color: #21262d; }
+body.idp-dark .idp-app { color: #e6edf3; }
+
+.idp-redirect-card { margin: 80px auto; width: min(420px, 94vw); text-align: center; }
+.idp-spinner {
+  display: inline-block; width: 34px; height: 34px; margin-bottom: 14px;
+  border: 3px solid #dadce0; border-top-color: var(--idp-accent);
+  border-radius: 999px; animation: idp-spin 0.8s linear infinite;
+}
+@keyframes idp-spin { to { transform: rotate(360deg); } }

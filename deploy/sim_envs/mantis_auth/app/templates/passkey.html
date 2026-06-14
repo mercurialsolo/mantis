@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Passkey — {{ config.app_name }}</title>
+  <link rel="stylesheet" href="/static/auth.css" />
+</head>
+<body class="layout-centered">
+  <div class="auth-wrap">
+    <div class="auth-card" data-testid="passkey-card">
+      <div class="passkey-ico" aria-hidden="true">🔑</div>
+      <h1>Sign in with a passkey</h1>
+      <p class="sub">Use a passkey registered on this device. This simulates a
+         WebAuthn assertion — selecting one signs you in.</p>
+      {% if error %}<div class="error" data-testid="passkey-error">{{ error }}</div>{% endif %}
+
+      {% if passkeys %}
+      <div class="passkey-list" data-testid="passkey-list">
+        {% for pk in passkeys %}
+        <form method="post" action="/auth/passkey/assert"
+              data-testid="passkey-form-{{ loop.index }}">
+          <input type="hidden" name="cred_id" value="{{ pk.cred_id }}"/>
+          <input type="hidden" name="challenge" value="{{ challenge }}"/>
+          <button class="provider-btn" type="submit"
+                  data-testid="passkey-{{ loop.index }}">
+            <span class="provider-ico" style="background:var(--accent)">🔑</span>
+            <span>
+              <div>{{ pk.label }}</div>
+              <div class="method-sub">{{ pk.email }}</div>
+            </span>
+          </button>
+        </form>
+        {% endfor %}
+      </div>
+      {% else %}
+        <div class="empty" data-testid="passkey-empty">No passkeys registered.</div>
+      {% endif %}
+
+      <p class="hint"><a href="/login" data-testid="back-to-login">← Back to all sign-in options</a></p>
+    </div>
+  </div>
+
+  <script>
+    // Progressive enhancement: a real deployment would call
+    // navigator.credentials.get() here and submit the assertion. In this
+    // simulated env the form POST IS the assertion, so we leave the
+    // buttons as plain submits for agent + test robustness.
+  </script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+{
+  "task_id": "T03_oauth_github",
+  "source_plan": "Sign in to Mantis Console using 'Continue with GitHub' for ada@mantis.example, authorizing the app.",
+  "domain": "mantis-auth",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the sign-in page at {{ENV_URL}}/login",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/login"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Click 'Continue with GitHub' to start the OAuth flow.",
+      "section": "navigate",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Choose the GitHub account for ada@mantis.example, then click 'Authorize' on the consent screen to return to the app.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

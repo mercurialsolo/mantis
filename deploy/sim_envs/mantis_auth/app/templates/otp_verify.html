@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enter your code — {{ config.app_name }}</title>
+  <link rel="stylesheet" href="/static/auth.css" />
+</head>
+<body class="layout-centered">
+  <div class="auth-wrap">
+    <div class="auth-card" data-testid="otp-verify-card">
+      <h1>Enter your code</h1>
+      <p class="sub">We sent a 6-digit code to <strong>{{ email }}</strong>.
+         Read it in your <a href="/inbox" data-testid="open-inbox">inbox</a>.</p>
+      {% if error %}<div class="error" data-testid="otp-verify-error">{{ error }}</div>{% endif %}
+      <form method="post" action="/auth/otp/verify" data-testid="otp-verify-form">
+        <input type="hidden" name="email" value="{{ email }}"/>
+        <label for="code">6-digit code</label>
+        <input id="code" type="text" name="code" required inputmode="numeric"
+               pattern="[0-9]*" maxlength="6" autocomplete="one-time-code"
+               placeholder="000000" data-testid="otp-code"/>
+        <button class="btn" type="submit" data-testid="otp-verify">Verify &amp; sign in</button>
+      </form>
+      <p class="hint"><a href="/auth/otp">← Use a different email</a></p>
+    </div>
+  </div>
+</body>
+</html>

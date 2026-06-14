@@ -1,0 +1,33 @@
+{
+  "task_id": "T08_passkey",
+  "source_plan": "Sign in to Mantis Console with a passkey: open the passkey page and select Ada's registered passkey ('MacBook Touch ID').",
+  "domain": "mantis-auth",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the passkey sign-in page at {{ENV_URL}}/auth/passkey",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/auth/passkey"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Select the registered passkey 'MacBook Touch ID' (ada@mantis.example) to complete the assertion and sign in.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

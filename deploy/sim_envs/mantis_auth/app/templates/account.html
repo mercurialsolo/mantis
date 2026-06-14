@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Security — {{ config.app_name }}</title>
+  <link rel="stylesheet" href="/static/auth.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">M</span> {{ config.app_name }}</div>
+    <div class="who">
+      <span class="email">{{ current_user.email }}</span>
+      <form method="post" action="/logout" style="display:inline">
+        <button class="link-button" type="submit" data-testid="logout">Sign out</button>
+      </form>
+    </div>
+  </header>
+  <main class="page" data-testid="account">
+    <h1>Security</h1>
+    <p class="sub">Sign-in methods enrolled for {{ current_user.email }}.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>Password</h3>
+        <span class="pill {{ 'on' if enrolled.password else 'off' }}"
+              data-testid="sec-password">{{ 'enabled' if enrolled.password else 'not set' }}</span>
+      </div>
+      <div class="card">
+        <h3>Connected providers</h3>
+        {% if enrolled.oauth_providers %}
+          {% for p in enrolled.oauth_providers %}<span class="pill on" data-testid="sec-oauth-{{ p }}">{{ p }}</span>{% endfor %}
+        {% else %}<span class="pill off">none</span>{% endif %}
+      </div>
+      <div class="card">
+        <h3>Passkeys</h3>
+        {% if enrolled.passkeys %}
+          {% for pk in enrolled.passkeys %}<span class="pill on" data-testid="sec-passkey">{{ pk }}</span>{% endfor %}
+        {% else %}<span class="pill off">none</span>{% endif %}
+      </div>
+    </div>
+    <p class="hint"><a href="/console" data-testid="back-console">← Back to console</a></p>
+  </main>
+</body>
+</html>

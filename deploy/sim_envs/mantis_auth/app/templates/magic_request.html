@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Magic link — {{ config.app_name }}</title>
+  <link rel="stylesheet" href="/static/auth.css" />
+</head>
+<body class="layout-centered">
+  <div class="auth-wrap">
+    <div class="auth-card" data-testid="magic-card">
+      <h1>Email a sign-in link</h1>
+      <p class="sub">We'll send a one-time link to your inbox.</p>
+      {% if error %}<div class="error" data-testid="magic-error">{{ error }}</div>{% endif %}
+      <form method="post" action="/auth/magic" data-testid="magic-form">
+        <label for="email">Email</label>
+        <input id="email" type="email" name="email" required autocomplete="email"
+               placeholder="ada@mantis.example" data-testid="magic-email"/>
+        <button class="btn" type="submit" data-testid="magic-submit">Send link</button>
+      </form>
+      <p class="hint"><a href="/login" data-testid="back-to-login">← Back to all sign-in options</a></p>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in to your account</title>
+  <link rel="stylesheet" href="/static/idp.css" />
+  <style>
+    :root { --idp-accent: {{ provider.accent }}; }
+    .ms-logo span { display:inline-block; width:9px; height:9px; }
+  </style>
+</head>
+<body class="idp">
+<div class="idp-shell" data-testid="oauth-microsoft-{{ stage }}">
+  <header class="idp-topbar">
+    <div class="idp-wordmark ms-logo">
+      <span style="background:#f25022"></span><span style="background:#7fba00"></span><span style="background:#00a4ef"></span><span style="background:#ffb900"></span>
+      &nbsp;Microsoft
+    </div>
+    {% if stage == 'consent' %}
+      <div class="idp-chip"><span class="idp-avatar idp-avatar-sm">{{ account.email[0]|upper }}</span>{{ account.email }}</div>
+    {% endif %}
+  </header>
+
+  <main class="idp-card">
+    {% if stage == 'picker' %}
+      <h1>Pick an account</h1>
+      <p class="idp-sub">to sign in to <span class="idp-app">{{ config.app_name }}</span></p>
+      {% if error %}<div class="idp-error" data-testid="oauth-error">{{ error }}</div>{% endif %}
+      <ul class="idp-account-list" data-testid="oauth-account-list">
+        {% for a in accounts %}
+        <li>
+          <form method="post" action="/auth/oauth/{{ provider.slug }}/consent">
+            <input type="hidden" name="subject" value="{{ a.subject }}"/>
+            <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
+            <input type="hidden" name="state" value="{{ state }}"/>
+            <button class="idp-account-row" type="submit" data-testid="oauth-account-{{ loop.index }}">
+              <span class="idp-avatar">{{ a.email[0]|upper }}</span>
+              <span class="idp-account-meta">
+                <span class="idp-account-name">{{ a.name }}</span>
+                <span class="idp-account-email">{{ a.email }}</span>
+              </span>
+              <span class="idp-chevron">›</span>
+            </button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <h1>Permissions requested</h1>
+      <div class="idp-account-line"><span class="idp-avatar idp-avatar-sm">{{ account.email[0]|upper }}</span>{{ account.email }}</div>
+      <p class="idp-permits"><span class="idp-app">{{ config.app_name }}</span> needs your permission to:</p>
+      <ul class="idp-scope-list">
+        {% for s in provider.scopes %}
+          <li><span class="idp-scope-ico">✓</span><span>{{ s }}</span></li>
+        {% endfor %}
+      </ul>
+      <p class="idp-fineprint">Accepting these permissions means you allow this app
+         to use your data per their terms and privacy statement.</p>
+      <div class="idp-actions">
+        <form method="get" action="/auth/oauth/{{ provider.slug }}/authorize">
+          <input type="hidden" name="state" value="{{ state }}"/>
+          <button class="idp-btn idp-btn-secondary" type="submit" data-testid="oauth-cancel">No</button>
+        </form>
+        <form method="post" action="/auth/oauth/{{ provider.slug }}/grant">
+          <input type="hidden" name="subject" value="{{ subject }}"/>
+          <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
+          <input type="hidden" name="state" value="{{ state }}"/>
+          <button class="idp-btn idp-btn-primary" type="submit" data-testid="oauth-allow">Accept</button>
+        </form>
+      </div>
+    {% endif %}
+  </main>
+
+  <footer class="idp-footer">
+    <span></span>
+    <span><a href="#">Terms of use</a><a href="#">Privacy &amp; cookies</a></span>
+  </footer>
+</div>
+</body>
+</html>

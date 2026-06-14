@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ msg.subject }} — Inbox</title>
+  <link rel="stylesheet" href="/static/auth.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">M</span> Mailbox</div>
+    <div class="who"><a href="/inbox" data-testid="back-to-inbox">← Inbox</a></div>
+  </header>
+  <main class="page" data-testid="message">
+    <h1>{{ msg.subject }}</h1>
+    <p class="sub">to {{ msg.to_email }} · {{ msg.created_at }}
+       {% if msg.consumed_at %}· <span class="msg-consumed">already used</span>{% endif %}</p>
+
+    {% if msg.kind == 'otp' and msg.code %}
+      <div class="otp-code" data-testid="otp-value">{{ msg.code }}</div>
+      <a class="btn" href="/auth/otp" data-testid="go-enter-code">Enter this code →</a>
+    {% endif %}
+
+    {% if magic_link %}
+      <a class="btn" href="{{ magic_link }}" data-testid="magic-link">Sign in via this link</a>
+    {% endif %}
+
+    <div class="msg-body" data-testid="message-body">{{ msg.body }}</div>
+  </main>
+</body>
+</html>

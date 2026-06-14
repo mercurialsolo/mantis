@@ -1,0 +1,59 @@
+{
+  "task_id": "T07_email_otp",
+  "source_plan": "Sign in to Mantis Console with an email one-time code for ada@mantis.example: request the code, read it in the inbox, and enter it.",
+  "domain": "mantis-auth",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the one-time-code request page at {{ENV_URL}}/auth/otp",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/auth/otp"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Enter 'ada@mantis.example' and submit to send the 6-digit code.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "extract_data",
+      "intent": "Open the mailbox at {{ENV_URL}}/inbox, open the newest verification-code message, and read the 6-digit code.",
+      "section": "navigate",
+      "required": true,
+      "gate": false,
+      "claude_only": true,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/inbox"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Return to the code-entry screen, type the 6-digit code, and submit to complete sign-in.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}

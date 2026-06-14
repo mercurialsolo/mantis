@@ -1,0 +1,46 @@
+{
+  "task_id": "T05_oauth_okta",
+  "source_plan": "Sign in to Mantis Console using 'Continue with Okta' for ada@mantis.example, allowing access.",
+  "domain": "mantis-auth",
+  "steps": [
+    {
+      "type": "navigate",
+      "intent": "Open the sign-in page at {{ENV_URL}}/login",
+      "section": "setup",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {"url": "{{ENV_URL}}/login"},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Click 'Continue with Okta' to start the OAuth flow.",
+      "section": "navigate",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    },
+    {
+      "type": "navigate",
+      "intent": "Pick the Okta account for ada@mantis.example, then click 'Allow' on the grant screen to return to the app.",
+      "section": "act",
+      "required": true,
+      "gate": false,
+      "claude_only": false,
+      "loop_target": -1,
+      "loop_count": 0,
+      "verify": "",
+      "params": {},
+      "hints": {}
+    }
+  ]
+}
