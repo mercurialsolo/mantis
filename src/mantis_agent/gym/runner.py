@@ -1103,7 +1103,32 @@ class GymRunner:
                 # their prompts.
                 if retry_attempts:
                     think_kwargs["retry_attempts"] = retry_attempts
-                result = self.brain.think(**think_kwargs)
+                # Gap 1 — highest-fidelity modelio: re-tag the brain's
+                # own decision call as ``planner`` for just this block.
+                # The executor publishes a catch-all ``model`` context
+                # around the whole step (run_executor.py:1167) that also
+                # covers the extractor + form-targeting Claude calls;
+                # nesting a ``planner`` context here separates the raw
+                # prompt→response pair we want for fine-tuning. We grab
+                # the active context's adapter (set by the executor) so
+                # records land on the right session even when this inner
+                # GymRunner instance carries no ``_augur`` of its own;
+                # fall back to ``self._augur`` for the legacy /v1/cua
+                # path. ``publish_modelio_context`` no-ops when the
+                # adapter is None / inactive, so this is free off-Augur.
+                from ..observability.modelio import (
+                    current_modelio_context,
+                    publish_modelio_context,
+                )
+                _mio = current_modelio_context()
+                _planner_augur = (
+                    _mio.augur if _mio is not None
+                    else getattr(self, "_augur", None)
+                )
+                with publish_modelio_context(
+                    _planner_augur, layer="planner", step_index=step_num - 1,
+                ):
+                    result = self.brain.think(**think_kwargs)
                 inference_time = time.time() - t_infer
                 # Epic #362: credit brain inference to the ``think``
                 # bucket on the runner's TimeMeter. Reads the current
