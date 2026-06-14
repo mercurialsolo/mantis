@@ -300,6 +300,34 @@ def test_apply_overlay_no_op_when_no_store_file(temp_store: str) -> None:
     assert out.steps[0].params["url"] == "https://x.com/a"
 
 
+def test_apply_overlay_include_candidates_applies_candidate(temp_store: str) -> None:
+    """#894 exploration: with include_candidates, a not-yet-promoted
+    candidate is ALSO applied (so it can accumulate wins toward promotion);
+    the default path still leaves it untouched."""
+    record_rewrite_candidate(
+        plan_hash="plan-1", workflow_id="wf1", step_index=0,
+        original_step=_step_body("nav", "https://x.com/a"),
+        rewritten_step=_step_body("nav", "https://x.com/A"),
+        source="pattern_transform", confidence=0.6,
+    )
+    # Default (promoted-only): candidate untouched.
+    plan = _make_plan_with_steps("https://x.com/a")
+    _, applied_default = apply_plan_overlay(
+        plan, plan_hash="plan-1", workflow_id="wf1",
+    )
+    assert applied_default == []
+    assert plan.steps[0].params["url"] == "https://x.com/a"
+
+    # Exploration: candidate applied.
+    plan2 = _make_plan_with_steps("https://x.com/a")
+    new_plan, applied = apply_plan_overlay(
+        plan2, plan_hash="plan-1", workflow_id="wf1", include_candidates=True,
+    )
+    assert len(applied) == 1
+    assert applied[0].status == "candidate"
+    assert new_plan.steps[0].params["url"] == "https://x.com/A"
+
+
 def test_apply_overlay_handles_out_of_range_step_index(temp_store: str) -> None:
     """A stored rewrite for step 10 on a 3-step plan should be skipped
     silently (plan structure may have changed since the rewrite was

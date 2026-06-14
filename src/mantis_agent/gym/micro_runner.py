@@ -428,6 +428,38 @@ class MicroPlanRunner:
 
         if not self.plan_signature:
             self.plan_signature = self._compute_plan_signature(plan)
+
+        # Plan-evolution Phase 2 (#894): apply learned rewrites PRE-FLIGHT so
+        # the self-improvement loop is closed — ``promoted`` rewrites (3+
+        # consecutive wins) are used, and ``candidate`` rewrites are re-applied
+        # as exploration so they accumulate the wins promotion needs. Sets
+        # ``_applied_plan_rewrites`` (extended, since step_recovery may append
+        # live rewrites during the run) so ``finalize_run_outcomes`` records
+        # per-rewrite outcomes at terminal and drives the promotion gate.
+        # Applied AFTER plan_signature is computed so the signature reflects
+        # the ORIGINAL plan (matching the evolution-store key + hint/exemplar
+        # stores). No-op without _plan_hash/_workflow_id, on resume, or when
+        # nothing is applicable. ``_plan_overlay_explore_candidates`` (default
+        # True) gates the riskier candidate-exploration arm.
+        if not resume:
+            ph = str(getattr(self, "_plan_hash", "") or "")
+            wf = str(getattr(self, "_workflow_id", "") or "")
+            if ph and wf:
+                try:
+                    from ..recipes.plan_evolution_store import apply_plan_overlay
+                    explore = bool(
+                        getattr(self, "_plan_overlay_explore_candidates", True)
+                    )
+                    plan, applied = apply_plan_overlay(
+                        plan, plan_hash=ph, workflow_id=wf,
+                        include_candidates=explore,
+                    )
+                    if applied:
+                        prior = list(getattr(self, "_applied_plan_rewrites", None) or [])
+                        self._applied_plan_rewrites = prior + applied
+                except Exception as exc:  # noqa: BLE001 — never block the run
+                    logger.debug("plan_evolution: apply_plan_overlay raised: %s", exc)
+
         state = RunState.fresh(
             run_key=self.run_key, session_name=self.session_name,
             plan_signature=self.plan_signature,
