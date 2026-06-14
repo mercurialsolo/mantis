@@ -20,7 +20,25 @@ via :meth:`observability.augur.AugurAdapter.mark_for_eval`.
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+
+def emit_success_conditions() -> bool:
+    """Whether to include ``success_conditions`` on the emitted TaskSpec.
+
+    OFF by default: the deployed augur-sdk **0.6.1 server rejects the field**
+    on TaskSpec — including it stalls run finalization (live-verified: a run
+    whose task_spec carried ``success_conditions`` never left ``running``;
+    the same task_spec without it finalized ``succeeded``). The consumer
+    (mantis-trainer gate ``EvalTask.from_dict``) already defaults criteria to
+    ``[{"type":"task_success"}]`` when absent, so omitting it loses nothing
+    functional. Flip ``MANTIS_EVAL_SUCCESS_CONDITIONS=1`` once the deployed
+    Augur schema supports it (the #901 parallel data-plane ask).
+    """
+    return os.environ.get("MANTIS_EVAL_SUCCESS_CONDITIONS", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def default_success_conditions() -> list[dict[str, Any]]:
@@ -56,9 +74,12 @@ def compose_task_spec(
         spec["env_id"] = env_id
     if max_steps and max_steps > 0:
         spec["max_steps"] = int(max_steps)
-    sc = success_conditions if success_conditions is not None else default_success_conditions()
-    if sc:
-        spec["success_conditions"] = sc
+    # success_conditions only when explicitly provided AND emission is enabled —
+    # the deployed augur 0.6.1 server rejects the field (see
+    # ``emit_success_conditions``). Default: omit (consumer falls back to
+    # task_success).
+    if success_conditions and emit_success_conditions():
+        spec["success_conditions"] = success_conditions
     if subgoals:
         spec["subgoals"] = subgoals
     return spec

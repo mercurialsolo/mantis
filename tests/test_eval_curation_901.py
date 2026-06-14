@@ -37,18 +37,25 @@ def test_default_success_conditions():
     assert default_success_conditions() == [{"type": "task_success"}]
 
 
-def test_compose_drops_empty_keys_and_defaults_success():
+def test_compose_drops_empty_keys_and_omits_success_by_default():
+    # success_conditions OMITTED by default — augur 0.6.1 server rejects it.
     spec = compose_task_spec(task_spec_id="d.p.v1")
-    assert spec == {
-        "task_spec_id": "d.p.v1",
-        "success_conditions": [{"type": "task_success"}],
-    }
+    assert spec == {"task_spec_id": "d.p.v1"}
 
 
-def test_compose_includes_provided_fields():
+def test_compose_omits_success_conditions_even_when_provided(monkeypatch):
+    monkeypatch.delenv("MANTIS_EVAL_SUCCESS_CONDITIONS", raising=False)
     spec = compose_task_spec(
-        task_spec_id="d.p.v1", instruction="do it", task_class="d",
-        env_id="mantis:s", max_steps=12,
+        task_spec_id="d.p.v1",
+        success_conditions=[{"type": "url_contains", "value": "/secure"}],
+    )
+    assert "success_conditions" not in spec  # gated off
+
+
+def test_compose_includes_success_conditions_when_flag_on(monkeypatch):
+    monkeypatch.setenv("MANTIS_EVAL_SUCCESS_CONDITIONS", "1")
+    spec = compose_task_spec(
+        task_spec_id="d.p.v1", instruction="do it", max_steps=12,
         success_conditions=[{"type": "url_contains", "value": "/secure"}],
     )
     assert spec["instruction"] == "do it"
@@ -75,7 +82,7 @@ def test_runner_spec_with_domain_and_plan_name():
     assert spec["task_class"] == "herokuapp.com"
     assert spec["env_id"] == "mantis:sess"
     assert spec["max_steps"] == 4
-    assert spec["success_conditions"] == [{"type": "task_success"}]
+    assert "success_conditions" not in spec  # gated off by default (augur 0.6.1)
 
 
 def test_runner_spec_without_domain():
@@ -92,7 +99,17 @@ def test_runner_spec_none_without_plan_name():
 # ── fanout builder now carries success_conditions (gap 2) ──────────
 
 
-def test_fanout_task_spec_includes_success_conditions():
+def test_fanout_task_spec_omits_success_conditions_by_default(monkeypatch):
+    monkeypatch.delenv("MANTIS_EVAL_SUCCESS_CONDITIONS", raising=False)
+    spec = _build_task_spec_from_suite(
+        {"_plan_name": "p", "_site_config": {"domain": "x.com"}},
+        phase1_workers=2, phase1_max_pages=2, phase2_workers=2, max_steps=50,
+    )
+    assert "success_conditions" not in spec  # augur 0.6.1 rejects it
+
+
+def test_fanout_task_spec_includes_success_conditions_when_flag_on(monkeypatch):
+    monkeypatch.setenv("MANTIS_EVAL_SUCCESS_CONDITIONS", "1")
     spec = _build_task_spec_from_suite(
         {"_plan_name": "p", "_site_config": {"domain": "x.com"}},
         phase1_workers=2, phase1_max_pages=2, phase2_workers=2, max_steps=50,
