@@ -56,6 +56,19 @@ from mantis_agent.server_utils import (
 app = modal.App("mantis-cua-server")
 vol = modal.Volume.from_name("osworld-data", create_if_missing=True)
 
+# #911: the slow-loop trainer writes LoRA adapter checkpoints to its own Modal
+# Volume. Mount it (read-only) on the GPU executors so a run can serve
+# ``base + adapter`` as a promotion-gate challenger via ``/v1/predict`` — the
+# adapter is selected per-request via the suite's ``_lora_adapter`` ref
+# (``mantis-trainer-vol:/checkpoints/<algo>``). See
+# ``mantis_agent.serving.lora_serving``.
+TRAINER_VOL_NAME = "mantis-trainer-vol"
+TRAINER_MOUNT = "/trainer"
+trainer_vol = modal.Volume.from_name(TRAINER_VOL_NAME, create_if_missing=True)
+TRAINER_MOUNTS = {TRAINER_VOL_NAME: TRAINER_MOUNT}
+# Converted-GGUF LoRA adapters (llama.cpp bases) are cached here on /data.
+LORA_GGUF_CACHE_ROOT = "/data/models/lora_cache"
+
 
 # #346: ``add_local_python_source`` only copies ``.py`` files. Every brain
 # imports ``mantis_agent.prompts``, which reads ``prompts/files/*.txt`` at
@@ -291,7 +304,7 @@ def _resolve_gemma4_model() -> str:
 @app.function(
     gpu="A100-80GB",
     image=planner_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     timeout=86400,
     memory=16384,
     cpu=4,
@@ -456,6 +469,68 @@ def _start_vllm(model_dir: str, port: int, tp: int,
     raise RuntimeError("vLLM startup timeout")
 
 
+def _prepare_lora_serving(
+    suite: dict,
+    cua_model: str,
+    *,
+    base_served_name: str = "model",
+    llamacpp_base_model: str | None = None,
+):
+    """Resolve (and, for a raw PEFT dir, materialize) a LoRA challenger (#911).
+
+    Returns a :class:`ServingPlan`. When the suite carries no ``_lora_adapter``
+    the plan is base-only (no extra args, base served-name) and the production
+    path is unchanged. For a llama.cpp base whose ref is a raw PEFT dir (not a
+    pre-converted ``.gguf``), runs the convert step once and caches the GGUF on
+    ``/data`` — but the recommended path is for the trainer to emit a ``.gguf``
+    adapter so the serving image needs no torch/transformers deps.
+    """
+    from mantis_agent.serving.lora_serving import ServingPlan, plan_serving
+
+    # No challenger → base-only. Short-circuit (don't call serving_backend, which
+    # fail-fasts on unknown bases) so the common production path is untouched.
+    if not str(suite.get("_lora_adapter") or "").strip():
+        return ServingPlan(
+            backend="base", lora_active=False, served_model_name=base_served_name
+        )
+
+    plan = plan_serving(
+        cua_model=cua_model,
+        suite=suite,
+        mounts=TRAINER_MOUNTS,
+        gguf_cache_root=LORA_GGUF_CACHE_ROOT,
+        base_served_name=base_served_name,
+        llamacpp_base_model=llamacpp_base_model,
+    )
+
+    print(
+        f"[#911] serving challenger adapter tag={plan.challenger_tag} "
+        f"backend={plan.backend} served_model={plan.served_model_name} "
+        f"args={plan.extra_server_args}"
+    )
+    if not os.path.exists(plan.adapter_local_dir):
+        raise RuntimeError(
+            f"[#911] adapter not found at {plan.adapter_local_dir!r} — is "
+            f"{TRAINER_VOL_NAME} populated and the ref correct? ({suite.get('_lora_adapter')!r})"
+        )
+    # llama.cpp + raw PEFT dir → convert to GGUF once (cached).
+    if plan.backend == "llamacpp" and plan.convert_cmd:
+        if not os.path.exists(plan.adapter_gguf_path):
+            os.makedirs(os.path.dirname(plan.adapter_gguf_path), exist_ok=True)
+            print(f"[#911] converting PEFT adapter → GGUF: {' '.join(plan.convert_cmd)}")
+            r = subprocess.run(plan.convert_cmd, capture_output=True, text=True)
+            if r.returncode != 0 or not os.path.exists(plan.adapter_gguf_path):
+                raise RuntimeError(
+                    "[#911] LoRA GGUF conversion failed. Pre-convert the adapter in "
+                    "the trainer (llama.cpp convert_lora_to_gguf.py) and point "
+                    f"_lora_adapter at the resulting .gguf instead.\n{r.stderr[-1500:]}"
+                )
+            vol.commit()
+        else:
+            print(f"[#911] reusing cached GGUF adapter {plan.adapter_gguf_path}")
+    return plan
+
+
 def _run_executor(
     task_file_contents: str,
     cua_model: str,
@@ -508,30 +583,37 @@ def _run_executor(
     vllm_extra: list[str] = []
     if cua_model == "fara":
         vllm_extra = ["--enable-auto-tool-choice", "--tool-call-parser", "hermes"]
-    vllm_proc = _start_vllm(model_dir, port=8000, tp=tp, extra_args=vllm_extra)
 
     # ── Brain (model-dependent) ──
     task_suite = json.loads(task_file_contents)
     session_name = task_suite.get("session_name", "cua_run")
 
+    # #911: optional LoRA challenger. When the suite carries ``_lora_adapter``,
+    # serve the adapter via vLLM (--enable-lora) and request it by its served
+    # name (vLLM exposes the adapter under a distinct name, not the base).
+    lora_plan = _prepare_lora_serving(task_suite, cua_model)
+    vllm_extra = vllm_extra + lora_plan.extra_server_args
+    served_model = lora_plan.served_model_name
+    vllm_proc = _start_vllm(model_dir, port=8000, tp=tp, extra_args=vllm_extra)
+
     if cua_model == "holo3":
         from mantis_agent.brain_holo3 import Holo3Brain
         brain = Holo3Brain(
-            base_url="http://localhost:8000/v1", model="model",
+            base_url="http://localhost:8000/v1", model=served_model,
             max_tokens=2048, temperature=0.0,
             screen_size=(1280, 720), use_tool_calling=True,
         )
     elif cua_model == "fara":
         from mantis_agent.brain_fara import FaraBrain
         brain = FaraBrain(
-            base_url="http://localhost:8000/v1", model="model",
+            base_url="http://localhost:8000/v1", model=served_model,
             max_tokens=2048, temperature=0.0,
             screen_size=(1280, 720), use_tool_calling=True,
         )
     else:
         from mantis_agent.brain_opencua import OpenCUABrain
         brain = OpenCUABrain(
-            base_url="http://localhost:8000/v1", model="model",
+            base_url="http://localhost:8000/v1", model=served_model,
             max_tokens=2048, temperature=0.0, screen_size=(1280, 720),
         )
     brain.load()
@@ -574,7 +656,7 @@ def _run_executor(
 @app.function(
     gpu="A100-80GB",
     image=executor_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
     memory=65536,
@@ -588,7 +670,7 @@ def run_cua_1gpu(task_file_contents: str, cua_model: str = "evocua-8b", **kwargs
 @app.function(
     gpu="A100-80GB:2",
     image=executor_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
     memory=65536,
@@ -602,7 +684,7 @@ def run_cua_2gpu(task_file_contents: str, cua_model: str = "evocua-32b", **kwarg
 @app.function(
     gpu="A100-80GB:4",
     image=executor_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
     memory=65536,
@@ -616,7 +698,7 @@ def run_cua_4gpu(task_file_contents: str, cua_model: str = "opencua-32b", **kwar
 @app.function(
     gpu="A100-80GB:8",
     image=executor_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
     memory=131072,
@@ -738,6 +820,14 @@ def _run_holo3_executor(
     else:
         print(f"Holo3 GGUF cached at {HOLO3_MODEL_DIR}")
 
+    # #911: optional LoRA challenger. ``_lora_adapter`` in the suite → apply the
+    # adapter to the Holo3 GGUF base via ``--lora`` (served model name unchanged).
+    # The base model id is needed only if a raw PEFT dir must be converted; the
+    # recommended path is a trainer-emitted ``.gguf`` adapter (no conversion).
+    lora_plan = _prepare_lora_serving(
+        _suite_preview, "holo3", llamacpp_base_model=(os.environ.get("HOLO3_LORA_BASE") or None)
+    )
+
     # Start llama-server — no reasoning-budget (Holo3 overthinks with budget=512)
     cmd = [
         "/opt/llama.cpp/build/bin/llama-server",
@@ -748,6 +838,7 @@ def _run_holo3_executor(
         "--jinja",
         "--flash-attn", "on",
     ]
+    cmd += lora_plan.extra_server_args
     print(f"Starting Holo3 llama-server: {' '.join(cmd[-8:])}")
     llama_proc = subprocess.Popen(cmd, stdout=open("/tmp/llama.log", "w"), stderr=subprocess.STDOUT)
     wait_for_openai_server(8080, llama_proc, "llama-server")
@@ -1766,7 +1857,7 @@ def _run_gemma4_cua_executor(
         # bundle ships without RL-training metadata.
         "augur-sdk>=0.6.0,<0.7",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE),
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours — Gemma4 via llama.cpp is slower per step
     memory=65536,
@@ -1976,7 +2067,7 @@ def _run_claude_executor(
 
 @app.function(
     image=claude_executor_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
     memory=8192,
@@ -4165,7 +4256,7 @@ def build_api_app(executor_resolver=None, function_call_lookup=None,
 
 @app.function(
     image=api_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=300,
     memory=2048,
@@ -4245,7 +4336,7 @@ computer_plane_image = (
 
 @app.function(
     image=api_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=300,
     memory=1024,
@@ -4313,7 +4404,7 @@ def session_reaper() -> dict:
 
 @app.function(
     image=computer_plane_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours — caller-supplied TTL clamps this lower
     memory=8192,
@@ -4404,7 +4495,7 @@ def computer_session(
 
 @app.function(
     image=computer_plane_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours — match executor timeouts
     memory=8192,
@@ -4508,7 +4599,7 @@ def computer_plane():
         # local backend by default.
         "daytona>=0.183",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE).add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE),
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
     memory=65536,
@@ -4523,7 +4614,7 @@ def run_holo3(task_file_contents: str, **kwargs) -> dict:
 @app.function(
     gpu="A100-40GB",
     image=executor_image,
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours
     memory=65536,
@@ -4610,7 +4701,7 @@ def _gemma4_planner_url() -> str:
         "openai", "requests", "pillow", "mss",
         "fastapi>=0.100", "uvicorn>=0.20", "websocket-client",
     ).add_local_python_source("mantis_agent").add_local_dir(_PROMPTS_FILES_LOCAL, remote_path=_PROMPTS_FILES_REMOTE).add_local_dir(_WEBGL_SPOOF_LOCAL, remote_path=_WEBGL_SPOOF_REMOTE),
-    volumes={"/data": vol},
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
     timeout=14400,  # 4 hours per page worker
     memory=65536,

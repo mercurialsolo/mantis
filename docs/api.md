@@ -98,6 +98,14 @@ Plus the run options:
 | `video_fps` | `5` | Capture rate; clamped to `[1, 30]`. Higher fps = larger file + more CPU. |
 | `live_viewer` | `false` | ([#416](https://github.com/mercurialsolo/mantis/issues/416)) Stand up an MJPEG tunnel onto the Xvfb display and surface its URL as `viewer_url` on `action=status`. Open the URL in a browser to watch the run live. Currently only the `holo3` executor wires this through. |
 
+The following go **inside `task_suite`** (not top-level), alongside the plan:
+
+| Suite field | Description |
+|---|---|
+| `_lora_adapter` | ([#911](https://github.com/mercurialsolo/mantis/issues/911)) Serve **base + this LoRA adapter** (the promotion-gate *challenger*). A ref `"<volume>:/checkpoints/<algo>"` (the trainer volume `mantis-trainer-vol` is mounted read-only on the executors) or a mounted path. For llama.cpp bases (`holo3`) prefer a pre-converted `.gguf` adapter; vLLM bases serve the PEFT dir directly. Omit to serve the base (the *champion*). |
+| `_lora_name` | vLLM only — served-model-name for the adapter (default `challenger`). |
+| `_lora_scale` | llama.cpp only — adapter scale (default `1.0`; emits `--lora-scaled`). |
+
 #### Detached response
 
 ```jsonc

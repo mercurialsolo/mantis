@@ -413,10 +413,18 @@ def load_report(path: Path) -> EvalReport:
 # ── CLI ───────────────────────────────────────────────────────────────
 
 
-def _http_runner_factory(endpoint: str, token: str = "") -> RunnerFn:
+def _http_runner_factory(
+    endpoint: str, token: str = "", *, lora_adapter: str = "", cua_model: str = ""
+) -> RunnerFn:
     """Build a runner that submits each task through the production
     ``/v1/predict`` endpoint and polls until terminal. Used by the
     ``run`` subcommand. Lazy: only imported when the CLI actually fires.
+
+    #911: pass ``lora_adapter`` to evaluate a **challenger** — the server serves
+    ``base + adapter`` when the suite carries ``_lora_adapter``. The *champion*
+    run uses the same endpoint with ``lora_adapter=""`` (serves the base), so the
+    promotion gate can point both arms at one deployment. ``cua_model`` overrides
+    the base model (default server pick is ``holo3``).
     """
     import requests
 
@@ -426,6 +434,8 @@ def _http_runner_factory(endpoint: str, token: str = "") -> RunnerFn:
             "max_cost": task.max_cost,
             "max_time_minutes": max(1, task.max_steps),
         }
+        if cua_model:
+            body["cua_model"] = cua_model
         if task.micro_plan:
             body["task_suite"] = {
                 "session_name": task.task_id,
@@ -440,6 +450,10 @@ def _http_runner_factory(endpoint: str, token: str = "") -> RunnerFn:
                 {"intent": f"Navigate to {task.url}", "type": "navigate",
                  "section": "setup", "required": True},
             ])
+        # #911: attach the challenger adapter to the suite so the server serves
+        # base + adapter. Ensure a task_suite exists even on the plan_text path.
+        if lora_adapter:
+            body.setdefault("task_suite", {})["_lora_adapter"] = lora_adapter
         headers = {"Content-Type": "application/json"}
         if token:
             headers["X-Mantis-Token"] = token
@@ -471,7 +485,11 @@ def _http_runner_factory(endpoint: str, token: str = "") -> RunnerFn:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     tasks = load_tasks(Path(args.tasks))
-    runner = _http_runner_factory(args.runner, token=args.token)
+    runner = _http_runner_factory(
+        args.runner, token=args.token,
+        lora_adapter=getattr(args, "lora_adapter", ""),
+        cua_model=getattr(args, "cua_model", ""),
+    )
     report = run_eval(runner, tasks, name=args.name or Path(args.tasks).stem)
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -516,6 +534,12 @@ def main(argv: list[str] | None = None) -> int:
                      help="X-Mantis-Token (defaults to env MANTIS_API_TOKEN)")
     run.add_argument("--name", default="",
                      help="Report name (default: tasks file stem)")
+    run.add_argument("--lora-adapter", default="",
+                     help="#911: serve base + this LoRA adapter (challenger arm). "
+                          "Ref: '<volume>:/checkpoints/<algo>' or a mounted path. "
+                          "Omit for the champion arm (serves the base).")
+    run.add_argument("--cua-model", default="",
+                     help="Override the base model (default server pick: holo3)")
     run.set_defaults(func=_cmd_run)
 
     cmp = sub.add_parser(

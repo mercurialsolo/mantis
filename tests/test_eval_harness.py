@@ -23,6 +23,7 @@ from eval_harness import (  # noqa: E402
     EvalRunOutcome,
     EvalTask,
     EvalTaskResult,
+    _http_runner_factory,
     compare,
     load_report,
     load_tasks,
@@ -262,3 +263,62 @@ def test_end_to_end_pipeline(tmp_path):
     assert cmp_.candidate_wins == 1
     assert cmp_.candidate_losses == 1
     assert cmp_.delta == 0.0  # equal pass-rates
+
+
+# ── #911: LoRA challenger wiring in the HTTP runner ─────────────────────
+
+
+class _FakeResp:
+    status_code = 200
+
+    def json(self) -> dict[str, Any]:
+        return {"success": True, "status": "succeeded"}
+
+
+def _capture_post(monkeypatch) -> list[dict[str, Any]]:
+    """Patch requests.post (imported lazily inside _http_runner_factory) and
+    capture the JSON bodies submitted."""
+    bodies: list[dict[str, Any]] = []
+    import requests
+
+    def _fake_post(url, json=None, headers=None, timeout=None):  # noqa: A002
+        bodies.append(json)
+        return _FakeResp()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    return bodies
+
+
+def _micro_task(task_id="t1") -> EvalTask:
+    return EvalTask(task_id=task_id, micro_plan=[{"intent": "go", "type": "navigate"}])
+
+
+def test_http_runner_champion_arm_has_no_adapter(monkeypatch):
+    bodies = _capture_post(monkeypatch)
+    runner = _http_runner_factory("https://x.modal.run")  # no lora_adapter
+    runner(_micro_task())
+    assert "_lora_adapter" not in bodies[0].get("task_suite", {})
+
+
+def test_http_runner_challenger_arm_attaches_adapter(monkeypatch):
+    bodies = _capture_post(monkeypatch)
+    runner = _http_runner_factory(
+        "https://x.modal.run", lora_adapter="mantis-trainer-vol:/checkpoints/sft-c3e0d799"
+    )
+    runner(_micro_task())
+    assert bodies[0]["task_suite"]["_lora_adapter"] == "mantis-trainer-vol:/checkpoints/sft-c3e0d799"
+
+
+def test_http_runner_attaches_adapter_on_plan_text_path(monkeypatch):
+    bodies = _capture_post(monkeypatch)
+    runner = _http_runner_factory("https://x.modal.run", lora_adapter="/data/ckpt/x")
+    # plan_text task (no micro_plan) → a task_suite must still be created.
+    runner(EvalTask(task_id="t2", plan_text="do the thing"))
+    assert bodies[0]["task_suite"]["_lora_adapter"] == "/data/ckpt/x"
+
+
+def test_http_runner_forwards_cua_model(monkeypatch):
+    bodies = _capture_post(monkeypatch)
+    runner = _http_runner_factory("https://x.modal.run", cua_model="fara")
+    runner(_micro_task())
+    assert bodies[0]["cua_model"] == "fara"
