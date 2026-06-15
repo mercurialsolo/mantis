@@ -43,6 +43,7 @@ from sealed_plans import SANDBOXES, SEALED_TASKS  # noqa: E402
 import run_sealed_task as rst  # noqa: E402  (reuse env-resolve/submit/grade seams)
 
 from mantis_agent.learning.rollout_generator import (  # noqa: E402
+    RolloutSpec,
     SeedSweepGenerator,
     TaskTemplate,
 )
@@ -134,6 +135,26 @@ def _run_sibling(
     }
 
 
+def _classify_group(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Group-variance gate (mantis-trainer feedback): GRPO standardizes
+    ``(r − mean)/(std + eps)``, so an all-pass or all-fail group has only
+    step-cost "hair" variance → ±1 noise advantages. A group is GRPO-usable
+    only when its oracle OUTCOMES are mixed (real reward spread)."""
+    import statistics
+    outcomes = [bool(r.get("oracle_passed")) for r in results if "oracle_passed" in r]
+    rewards = [float(r["reward"]) for r in results if "reward" in r]
+    distinct = len(set(outcomes))
+    std = statistics.pstdev(rewards) if len(rewards) > 1 else 0.0
+    usable = distinct > 1  # mixed pass/fail → genuine variance
+    n_pass = sum(1 for o in outcomes if o)
+    reason = "" if usable else (
+        f"degenerate: all {'pass' if n_pass else 'fail'} ({n_pass}/{len(outcomes)})"
+        " — GRPO advantage would be noise; exclude or re-sample"
+    )
+    return {"n": len(outcomes), "n_pass": n_pass, "distinct_outcomes": distinct,
+            "reward_std": round(std, 4), "grpo_usable": usable, "reason": reason}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="#905 GRPO sibling rollout sweep")
     ap.add_argument("task_key", help=f"template from sealed_plans: {sorted(SEALED_TASKS)}")
@@ -146,6 +167,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="#906: also run the model-judge (rm_outcome + judge_ids)")
     ap.add_argument("--no-oracle", action="store_true",
                     help="#906: skip the env oracle (simulate an oracle-less task; judge is the signal)")
+    ap.add_argument("--variance-seek", action="store_true",
+                    help="keep adding siblings (to --max-siblings) until the group has mixed outcomes (real GRPO variance)")
+    ap.add_argument("--max-siblings", type=int, default=6,
+                    help="variance-seek cap on total siblings per group")
     args = ap.parse_args(argv)
 
     if args.task_key not in SEALED_TASKS:
@@ -175,24 +200,40 @@ def main(argv: list[str] | None = None) -> int:
     code, body = _seed_env(info["url"], args.seed, info["admin_token"], info["preview_token"])
     print(f"[seed={args.seed}] HTTP {code} {body[:60]}")
 
-    results = []
-    for spec in specs:
+    def _run(spec):
         print(f"  → sibling {spec.sibling_index} ({spec.spec_id})")
-        results.append(_run_sibling(spec, info, token, args.temperature,
-                                    max_steps=args.max_steps, poll_seconds=args.poll_seconds,
-                                    model_judge=args.model_judge,
-                                    task_text=spec_def.get("task_text", ""),
-                                    oracle_less=args.no_oracle))
+        return _run_sibling(spec, info, token, args.temperature,
+                            max_steps=args.max_steps, poll_seconds=args.poll_seconds,
+                            model_judge=args.model_judge,
+                            task_text=spec_def.get("task_text", ""),
+                            oracle_less=args.no_oracle)
 
-    rewards = [r.get("reward") for r in results if "reward" in r]
-    variance = len(set(rewards)) > 1 if rewards else False
+    results = [_run(spec) for spec in specs]
+
+    # Variance gate (mantis-trainer feedback): if the group is degenerate
+    # (all-pass / all-fail → noise advantages), keep adding siblings until it
+    # has mixed outcomes or we hit the cap.
+    gid = specs[0].group_id
+    while (args.variance_seek and not _classify_group(results)["grpo_usable"]
+           and len(results) < args.max_siblings):
+        idx = len(results)
+        print(f"  [variance-seek] group degenerate after {idx} siblings — adding sibling {idx}")
+        extra = RolloutSpec(
+            spec_id=f"{template.template_id}__seed{args.seed}__s{idx}",
+            template=template, env_seed=args.seed, group_id=gid, sibling_index=idx,
+        )
+        results.append(_run(extra))
+
+    gate = _classify_group(results)
     print("\n[sweep result]")
     print(json.dumps({
-        "group_id": specs[0].group_id,
+        "group_id": gid,
         "siblings": results,
-        "rewards": rewards,
-        "has_reward_variance": variance,
+        "rewards": [r.get("reward") for r in results if "reward" in r],
+        "variance_gate": gate,
     }, indent=2))
+    if not gate["grpo_usable"]:
+        print(f"\n⚠️  GROUP NOT GRPO-USABLE — {gate['reason']}", file=sys.stderr)
     return 0
 
 
