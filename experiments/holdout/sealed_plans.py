@@ -25,6 +25,7 @@ SANDBOXES: dict[str, str] = {
     "indeed": "a72a3ffc-f1c1-4628-89a6-1c560703441b",
     "mercor": "f0f3ffc9-4879-48a9-98db-b5b5224fe20f",
     "linkedin": "f43c50dd-0edb-4667-8b50-2ff2f697de24",
+    "fiverr": "d2c59f51-ca2e-48d2-b436-370b18673b79",
 }
 
 
@@ -146,6 +147,24 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
                 "Type a short update that includes a #hashtag into the post composer text box",
             ),
             _submit("Post", "Click the 'Post' button to publish the update", required=False),
+        ],
+    },
+    # fiverr t03 — leave a 5-star review on order_00007. The review form on the
+    # order page pre-checks the 5-star radio; filling the body + publishing
+    # records the reviews row (stars=5) + review_submitted audit the oracle reads.
+    "fiverr.t03_leave_5star_review": {
+        "env": "fiverr",
+        "plan_name": "t03_leave_5star_review",
+        "task_text": "Leave a 5-star review on order_00007 with a short positive comment.",
+        "oracle_task_id": "t03_leave_5star_review",
+        "steps": [
+            _nav("{env_url}/orders/order_00007", "Open the order page for order_00007 (it has a Leave a review form)"),
+            _fill(
+                "Share more about your experience...",
+                "Outstanding work — delivered exactly as described, fast and polished. Highly recommend!",
+                "Type a positive comment into the review body box (the 5-star rating is pre-selected)",
+            ),
+            _submit("Publish review", "Click 'Publish review' to submit the 5-star review", required=False),
         ],
     },
 }

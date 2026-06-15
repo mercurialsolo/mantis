@@ -186,6 +186,13 @@ def run(task_key: str, *, max_steps: int = 25, poll_seconds: int = 600) -> int:
     suite["_plan_name"] = spec["plan_name"]
     suite["_browser_extra_headers"] = _daytona_headers(info["preview_token"])
     suite["_proxy_disabled"] = True
+    # #906: let the server grade the env oracle at finalize so the verdict +
+    # reward reflect ground truth AND mark_for_eval is gated on an oracle pass
+    # (eval candidates become oracle-verified, not merely plan-complete).
+    suite["_oracle_url"] = info["url"]
+    suite["_oracle_task_id"] = spec["oracle_task_id"]
+    suite["_oracle_admin_token"] = info["admin_token"]
+    suite["_oracle_preview_token"] = info["preview_token"]
     expected_ts = f"{env_name}.{spec['plan_name']}.v1"
     print(f"[submit] plan_name={spec['plan_name']!r} → task_spec_id={expected_ts!r}")
 
