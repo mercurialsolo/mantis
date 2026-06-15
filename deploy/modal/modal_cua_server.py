@@ -765,12 +765,22 @@ def _run_holo3_executor(
     print(f"{'='*60}")
 
     # Create brain (local llama-server, not remote API)
+    # #905: GRPO sibling rollouts need sampling diversity. The suite may set
+    # ``_sampling_temperature`` > 0 so siblings of the same (template, seed)
+    # produce DIFFERENT trajectories → reward variance → non-zero GRPO
+    # advantage. Default 0.0 preserves deterministic single-run behaviour.
+    try:
+        _sampling_temp = float(task_suite.get("_sampling_temperature", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        _sampling_temp = 0.0
+    if _sampling_temp > 0:
+        print(f"  Sampling:  temperature={_sampling_temp} (#905 sibling diversity)")
     brain = Holo3Brain(
         base_url="http://localhost:8080/v1",
         model="holo3",
         api_key="",
         max_tokens=2048,
-        temperature=0.0,
+        temperature=_sampling_temp,
         screen_size=(1280, 720),
         use_tool_calling=True,
     )
@@ -1215,6 +1225,15 @@ def _run_holo3_executor(
         micro_runner._fanout_group_id = str(
             task_suite.get("_fanout_group_id", "") or ""
         ) or None
+
+        # #906: forward sim-env oracle config so _finalize can grade the run
+        # against ground truth and stamp the verdict on the terminal step
+        # (the reward signal GRPO needs). Opt-in via the suite's ``_oracle_*``
+        # keys; absent for non-eval runs (falls back to plan-completion).
+        micro_runner._oracle_url = str(task_suite.get("_oracle_url", "") or "")
+        micro_runner._oracle_task_id = str(task_suite.get("_oracle_task_id", "") or "")
+        micro_runner._oracle_admin_token = str(task_suite.get("_oracle_admin_token", "") or "")
+        micro_runner._oracle_preview_token = str(task_suite.get("_oracle_preview_token", "") or "")
 
         # #683: forward the orchestrator-composed ``task_spec`` so the
         # child Phase-1 / Phase-2 worker session opens with the same

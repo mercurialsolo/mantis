@@ -2225,14 +2225,79 @@ class RunExecutor:
             # successful terminal status so health / trigger / failed runs
             # never pollute the candidate pool. One representative per run;
             # Augur merges candidates per task downstream.
+            # #906: write the ground-truth env-oracle verdict onto the terminal
+            # step BEFORE close, correcting the runtime's self-verifier (which is
+            # a known false-negative for AJAX/JSON saves → no_state_change). This
+            # is what makes the Augur reward reflect ground truth — without it,
+            # GRPO siblings get identical reward (all "succeeded" plan-completion)
+            # and the group-relative advantage collapses to zero (#905).
+            oracle_passed = self._apply_oracle_reward(state.results)
+            # #901/#906: only flag oracle-VERIFIED successes as eval candidates.
+            # When no oracle is configured, fall back to plan-completion status
+            # (legacy behaviour). Gated on a canonical task_spec_id.
             ts_id = str(getattr(runner, "_eval_task_spec_id", "") or "")
-            if ts_id and str(runner._final_status or "") in ("succeeded", "completed"):
+            if oracle_passed is None:
+                eligible = str(runner._final_status or "") in ("succeeded", "completed")
+            else:
+                eligible = bool(oracle_passed)
+            if ts_id and eligible:
                 augur.mark_for_eval(
                     step_index=max(0, len(state.results) - 1),
                     reason=f"representative_success:{ts_id}",
                 )
             augur.close(status=runner._final_status or None)
             runner._augur = None
+
+    def _apply_oracle_reward(self, results: list) -> bool | None:
+        """Grade the env oracle and stamp its verdict on the terminal step (#906).
+
+        Opt-in: the runner must carry ``_oracle_url`` + ``_oracle_task_id``
+        (set by the server from the suite's ``_oracle_*`` keys for sim-env eval
+        runs). Returns ``True``/``False`` for the oracle verdict, or ``None``
+        when no oracle is configured (caller falls back to plan-completion).
+
+        The oracle is ground truth; we overwrite the terminal step's
+        ``verifier`` verdict so Augur's reward formula scores the run by what
+        actually happened, not the agent's self-assessment.
+        """
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        oracle_url = str(getattr(runner, "_oracle_url", "") or "").rstrip("/")
+        task_id = str(getattr(runner, "_oracle_task_id", "") or "")
+        if augur is None or not oracle_url or not task_id:
+            return None
+        admin = str(getattr(runner, "_oracle_admin_token", "") or "")
+        preview = str(getattr(runner, "_oracle_preview_token", "") or "")
+        headers = {"X-Daytona-Skip-Preview-Warning": "true"}
+        if admin:
+            headers["X-Env-Admin"] = admin
+        if preview:
+            headers["x-daytona-preview-token"] = preview
+        passed: bool | None = None
+        try:
+            import requests
+            resp = requests.get(
+                f"{oracle_url}/__env__/oracle", params={"task_id": task_id},
+                headers=headers, timeout=20,
+            )
+            passed = bool(resp.json().get("passed"))
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks the run
+            logger.warning("[#906] oracle grade failed (%s): %s", task_id, exc)
+            return None
+        score = 1.0 if passed else 0.0
+        term_idx = max(0, len(results) - 1)
+        try:
+            augur.set_score(
+                term_idx, score, comparator="verifier",
+                components={"oracle_pass": score},
+            )
+            logger.warning(
+                "[#906] oracle verdict stamped: task=%s passed=%s step=%s",
+                task_id, passed, term_idx,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[#906] set_score failed: %s", exc)
+        return passed
 
     def _emit_augur_env_fingerprint(self, step_index: int) -> None:
         """Stamp the current step's env fingerprint (#633 §4).
