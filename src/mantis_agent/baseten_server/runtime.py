@@ -181,6 +181,8 @@ class BasetenCUARuntime:
         self.llama_proc: subprocess.Popen | None = None
         self._llama_log_fh: Any = None
         self.brain: Any = None
+        # #911: served-model-name override set when a vLLM LoRA challenger boots.
+        self._lora_served_name: str | None = None
         # Replica-wide concurrency limiter. Pre-fix this was a single
         # ``threading.Lock`` that every run path acquired — so
         # ``max_concurrent_runs=N`` allowed N submits but only ONE
@@ -282,6 +284,52 @@ class BasetenCUARuntime:
 
         self.loaded = True
 
+    def _boot_lora_args(self, backend_model: str) -> tuple[list[str], str | None]:
+        """#911 parity: resolve a **deployment-level** LoRA challenger adapter.
+
+        Unlike Modal (which boots a fresh inference server per run and so can take
+        a per-request ``_lora_adapter``), the Baseten pod boots one shared
+        inference server at model-load. So the adapter is fixed for the
+        deployment via ``MANTIS_LORA_ADAPTER`` (+ optional ``MANTIS_LORA_SCALE`` /
+        ``MANTIS_LORA_NAME``): the *champion* deployment leaves it unset (serves
+        the base); a *challenger* deployment sets it (serves base + adapter). The
+        gate then points its two endpoints at the two deployments.
+
+        ``backend_model`` is a representative model for the boot path's runtime
+        (``"holo3"`` for llama.cpp, ``"fara"`` for vLLM) so the shared serving
+        logic picks the right flags. Returns ``(extra_server_args,
+        served_model_name)``; ``([], None)`` when no adapter is configured.
+        """
+        ref = (os.environ.get("MANTIS_LORA_ADAPTER") or "").strip()
+        if not ref:
+            return [], None
+        from mantis_agent.serving.lora_serving import plan_serving
+
+        suite: dict[str, Any] = {"_lora_adapter": ref}
+        if os.environ.get("MANTIS_LORA_SCALE"):
+            suite["_lora_scale"] = float(os.environ["MANTIS_LORA_SCALE"])
+        if os.environ.get("MANTIS_LORA_NAME"):
+            suite["_lora_name"] = os.environ["MANTIS_LORA_NAME"]
+        plan = plan_serving(
+            cua_model=backend_model,
+            suite=suite,
+            mounts={},  # Baseten adapters are mounted via the truss `weights:` block
+            gguf_cache_root=os.environ.get(
+                "MANTIS_LORA_CACHE", f"{os.environ.get('MANTIS_DATA_DIR', '/data')}/lora_cache"
+            ),
+        )
+        if plan.convert_cmd:
+            raise RuntimeError(
+                "[#911] Baseten LoRA needs a pre-converted .gguf adapter — point "
+                "MANTIS_LORA_ADAPTER at the .gguf (mounted via the truss weights: "
+                f"block), not a PEFT dir. got: {ref!r}"
+            )
+        logger.warning(
+            "[#911] Baseten serving challenger adapter tag=%s args=%s served=%s",
+            plan.challenger_tag, plan.extra_server_args, plan.served_model_name,
+        )
+        return plan.extra_server_args, plan.served_model_name
+
     def _start_llama(self, model_path: Path, mmproj_path: Path | None, extra_args: list[str]) -> None:
         cmd = [
             "/opt/llama.cpp/build/bin/llama-server",
@@ -296,6 +344,10 @@ class BasetenCUARuntime:
         if mmproj_path:
             cmd.extend(["--mmproj", str(mmproj_path)])
         cmd.extend(extra_args)
+        # #911: deployment-level LoRA challenger (llama.cpp --lora). No-op unless
+        # MANTIS_LORA_ADAPTER is set. Folds into the base → served name unchanged.
+        lora_args, _ = self._boot_lora_args("holo3")
+        cmd.extend(lora_args)
 
         logger.info("starting llama.cpp: %s", " ".join(cmd))
         # Open the log file via context-managed handle that survives the
@@ -358,6 +410,11 @@ class BasetenCUARuntime:
             "--dtype", os.environ.get("MANTIS_VLLM_DTYPE", "auto"),
         ]
         cmd.extend(extra_args)
+        # #911: deployment-level LoRA challenger (vLLM --enable-lora). vLLM serves
+        # the adapter under its own name, so stash it for the brain to request.
+        lora_args, served = self._boot_lora_args("fara")
+        cmd.extend(lora_args)
+        self._lora_served_name = served
 
         logger.info("starting vllm: %s", " ".join(cmd))
         self._llama_log_fh = open("/tmp/vllm.log", "w")
@@ -411,7 +468,9 @@ class BasetenCUARuntime:
 
         brain = FaraBrain(
             base_url=f"http://127.0.0.1:{self.port}/v1",
-            model="model",
+            # #911: when a LoRA challenger is active, vLLM serves it under a
+            # distinct name — request that, not the base "model".
+            model=getattr(self, "_lora_served_name", None) or "model",
             api_key="",
             max_tokens=2048,
             temperature=0.0,

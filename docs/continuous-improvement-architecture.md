@@ -206,6 +206,16 @@ challenger arm submits *with* it. Backend is auto-selected by base
 The gate drives both arms with `training/eval_harness.py run --lora-adapter <ref>`
 (challenger) vs no flag (champion) against one endpoint.
 
+**Host parity (Modal vs Baseten).** Modal boots a fresh inference server *per
+run*, so the adapter is chosen **per request** (`_lora_adapter` in the suite) and
+champion + challenger share one deployment. Baseten boots **one** shared
+inference server at model-load, so the adapter is fixed **per deployment** via the
+`MANTIS_LORA_ADAPTER` env (`baseten_server.runtime._boot_lora_args`): the champion
+deploy leaves it unset, a challenger deploy sets it (see
+`deploy/baseten/holo3_challenger/config.yaml`). Either way the gate compares two
+endpoints — on Modal they can be the same URL with/without the suite field; on
+Baseten they're two truss deployments.
+
 ### Generating the sibling rollouts (the sweep)
 
 `experiments/holdout/run_rollout_sweep.py` turns

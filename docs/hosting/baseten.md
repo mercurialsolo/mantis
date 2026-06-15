@@ -161,6 +161,41 @@ uvx truss push deploy/baseten/holo3 --no-cache \
 
 You'll get a non-production environment URL. Run smoke tests there, then promote via the Baseten dashboard.
 
+## Serving a LoRA challenger for the promotion gate (#911)
+
+The slow-loop gate evaluates a trained **challenger** (`base + LoRA adapter`)
+against the **champion** (`base`). Unlike Modal — which boots a fresh inference
+server per run and picks the adapter per request — the Baseten pod boots **one**
+shared inference server at model-load, so the adapter is a **deployment-level**
+choice via env:
+
+| Env | Effect |
+|---|---|
+| `MANTIS_LORA_ADAPTER` | Serve `base + this adapter`. A path to a **pre-converted GGUF** adapter (llama.cpp bases) or a PEFT dir (vLLM bases), mounted via the truss `weights:` block. Unset ⇒ serve the base (champion). |
+| `MANTIS_LORA_SCALE` | llama.cpp only — adapter scale (default `1.0`; emits `--lora-scaled`). |
+| `MANTIS_LORA_NAME` | vLLM only — served-model-name for the adapter (default `challenger`). |
+
+> The serving image has **no** torch/transformers, so it can't convert a raw PEFT
+> dir for llama.cpp bases — point `MANTIS_LORA_ADAPTER` at a `.gguf` (convert in
+> the trainer with `convert_lora_to_gguf.py`). A non-`.gguf` ref for `holo3`
+> fails fast at boot.
+
+Deploy a challenger from the ready-made config
+([`deploy/baseten/holo3_challenger/config.yaml`](https://github.com/mercurialsolo/mantis/blob/main/deploy/baseten/holo3_challenger/config.yaml)) —
+it mirrors `holo3` plus a `weights:` entry for the adapter and the
+`MANTIS_LORA_ADAPTER` env. **Swap the adapter `source` for your trained GGUF repo
+first**, then:
+
+```bash
+uvx truss push deploy/baseten/holo3_challenger --no-cache \
+  --deployment-name "holo3-challenger-$(git rev-parse --short HEAD)" \
+  --include-git-info
+```
+
+Point the gate's `MANTIS_CHAMPION_ENDPOINT` at the `holo3` deploy and
+`MANTIS_EVAL_ENDPOINT` at this one, then compare win-rate over the frozen holdout
+(`training/eval_harness.py` / `mantis_trainer.gate`).
+
 ## See also
 
 - [`deploy/baseten/README.md`](https://github.com/mercurialsolo/mantis/blob/main/deploy/baseten/README.md) — the source of truth for the Truss config
