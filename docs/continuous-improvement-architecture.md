@@ -185,6 +185,33 @@ flowchart LR
 5. **Promote**: on pass, publish weights to the model store; Baseten/Modal deploy
    it; the registry marks it champion. Rollback re-points at the prior champion.
 
+### Generating the sibling rollouts (the sweep)
+
+`experiments/holdout/run_rollout_sweep.py` turns
+[`SeedSweepGenerator`](proposals/rollout-generator.md) specs into real graded
+runs: for each `(template, env_seed)` it submits N siblings sharing a `group_id`
+at `temperature > 0` (so trajectories diverge → reward variance), forces Holo3
+grounding (per-token logprobs), and grades each via the env oracle (#906).
+
+Each sibling carries a **distinct** `state_key` (`sweep-<spec_id>` → its own
+Chrome profile + checkpoint), so they're *independent* under the per-state-key
+concurrency rule (see the [glossary](reference/glossary.md)) and fan out
+in **parallel** via `--max-parallel` (default 4; `1` = sequential). The fan-out is
+done by `StateKeyDispatcher` (`experiments/holdout/state_key_dispatcher.py`), a
+client-side dispatcher with a per-call collision policy:
+
+* **independent** (default) — auto-allocate a fresh unique `state_key`, run in
+  parallel up to the cap. The sweep's siblings use this.
+* **session** — reuse a caller-supplied `state_key` (a logged-in profile, a
+  resumable checkpoint); calls on that key are queued **FIFO** (one at a time),
+  while different session keys still run in parallel.
+
+A trainer-feedback **variance gate** (`_classify_group`) then marks a group
+GRPO-usable only when it has real reward spread — mixed oracle outcomes *or*
+meaningful Augur `episode_return` variance from the #906 process/progress shaping
+— so degenerate all-pass/all-fail groups (whose standardized advantages are
+noise) are excluded or re-sampled (`--variance-seek`).
+
 ### Algorithm phasing (de-risk before full GRPO)
 - **SFT** — rejection-sampling fine-tune on high-reward rollouts (no pairs, no
   logprobs). Proves the data→checkpoint→gate→deploy pipe.
