@@ -185,6 +185,27 @@ flowchart LR
 5. **Promote**: on pass, publish weights to the model store; Baseten/Modal deploy
    it; the registry marks it champion. Rollback re-points at the prior champion.
 
+### Serving the challenger for the gate (#911)
+
+The gate needs the *challenger* served at `/v1/predict`. Rather than redeploy a
+whole model per candidate, the CUA server serves **`base + LoRA adapter`** when a
+request's suite carries `_lora_adapter` (a ref like
+`mantis-trainer-vol:/checkpoints/<algo>` — the trainer's checkpoint volume is
+mounted read-only on the executors). So champion and challenger are the **same
+deployment**: the champion arm submits without `_lora_adapter` (base weights), the
+challenger arm submits *with* it. Backend is auto-selected by base
+(`mantis_agent.serving.lora_serving`):
+
+* **llama.cpp** bases (`holo3`, the first real challenger) apply a GGUF adapter via
+  `llama-server --lora`. The trainer should emit a pre-converted `.gguf` adapter so
+  the serving image needs no torch/transformers (a raw PEFT dir triggers an
+  in-server convert step instead).
+* **vLLM** bases (`fara`/`opencua`/`evocua`) serve the PEFT dir via
+  `--enable-lora`; the adapter is addressed by its served-model-name.
+
+The gate drives both arms with `training/eval_harness.py run --lora-adapter <ref>`
+(challenger) vs no flag (champion) against one endpoint.
+
 ### Generating the sibling rollouts (the sweep)
 
 `experiments/holdout/run_rollout_sweep.py` turns
@@ -264,6 +285,7 @@ generates the next rollouts. *Days.*
 | Rollout generator primitives (seed-sweep, failure-biased) | ✅ on main |
 | Closed plan-evolution fast loop (`apply_plan_overlay` wired) | ✅ on main |
 | Champion/challenger gate | ✅ on main |
+| Serve `base + LoRA adapter` challenger at `/v1/predict` (#911) | ✅ on main (GPU run deploy-gated) |
 | Logprob capture (GRPO prerequisite, #889) | ✅ on main |
 | `RolloutRunner` execution adapter (generator → Daytona → Augur) | ⏳ P1 (#894) |
 | `mantis-trainer` data contract | ✅ scaffold + dataset implemented |
