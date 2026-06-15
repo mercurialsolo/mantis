@@ -209,6 +209,34 @@ class BasetenCUARuntime:
         # cap; entries TTL out at 1 h by default.
         from ..grounding_cache import GroundingCache
         self.grounding_cache: GroundingCache = GroundingCache()
+        # Cross-replica run-state store (#866 pattern, ported to mantis-server).
+        # pause_state.json + payload.json live on the /data Modal Volume, whose
+        # cross-container visibility is eventually-consistent — a resume landing
+        # on a different replica can miss them (→ wedged-paused / re-decompose,
+        # or "pause_state missing"). Mirror them into a modal.Dict so resume
+        # reads are immediate and replica-independent; disk stays the durable
+        # backstop. Gated on Modal — ``modal.Dict.from_name`` BLOCKS off-Modal
+        # (no exception/timeout), so MODAL_TASK_ID is the only safe gate
+        # (feedback_modal_dict_blocks_off_modal).
+        self._run_state_store = self._build_run_state_store()
+
+    @staticmethod
+    def _build_run_state_store() -> Any:
+        from ..run_state_store import NullRunStateStore, RunStateStore
+        if not os.environ.get("MODAL_TASK_ID"):
+            return NullRunStateStore()
+        try:
+            name = os.environ.get("MANTIS_RUN_STATE_DICT", "mantis-server-run-state")
+            return RunStateStore.from_name(name)
+        except Exception as exc:  # noqa: BLE001 — store fault ≠ run fault; disk backstops
+            logger.warning("run-state store unavailable; disk-only resume: %s", exc)
+            return NullRunStateStore()
+
+    @staticmethod
+    def _store_tenant() -> str:
+        return _safe_state_key(
+            os.environ.get("MANTIS_TENANT_ID") or DEFAULT_TENANT.tenant_id
+        )
 
     def load(self) -> None:
         if self.loaded:
@@ -571,7 +599,28 @@ class BasetenCUARuntime:
             "events_path": str(run_dir / "events.log"),
         }
         self._write_json_atomic(status_path, merged)
+        # Mirror into the cross-replica store so a resume / poll landing on a
+        # different replica sees the current phase immediately (the resume
+        # handler's status=='paused' gate would otherwise 400 on an un-synced
+        # Volume read).
+        from ..run_state_store import KIND_STATUS
+        self._run_state_store.put(self._store_tenant(), run_id, KIND_STATUS, merged)
         return merged
+
+    def _read_detached_status(self, run_id: str) -> dict[str, Any]:
+        """Status read, cache-first (cross-replica) with disk fallback."""
+        from ..run_state_store import KIND_STATUS, read_with_store
+
+        def _disk() -> dict[str, Any] | None:
+            try:
+                return self._read_json_file(self._run_path(run_id) / "status.json")
+            except FileNotFoundError:
+                return None
+
+        return read_with_store(
+            self._run_state_store, tenant_id=self._store_tenant(),
+            run_id=run_id, kind=KIND_STATUS, disk_reader=_disk,
+        ) or {}
 
     def _append_detached_event(self, run_id: str, message: str) -> None:
         run_dir = self._run_path(run_id, create=True)
@@ -715,21 +764,34 @@ class BasetenCUARuntime:
         return status
 
     def _save_pause_state(self, run_id: str, pause_state: dict[str, Any]) -> Path:
-        """Persist a paused run's :class:`PauseState` blob (#344)."""
+        """Persist a paused run's :class:`PauseState` blob (#344).
+
+        Mirrors into the cross-replica store so a resume on a different replica
+        reads it immediately (disk is the durable backstop)."""
         run_dir = self._run_path(run_id, create=True)
         path = run_dir / "pause_state.json"
         self._write_json_atomic(path, pause_state)
+        from ..run_state_store import KIND_PAUSE_STATE
+        self._run_state_store.put(self._store_tenant(), run_id, KIND_PAUSE_STATE, pause_state)
         return path
 
     def _read_pause_state(self, run_id: str) -> dict[str, Any]:
-        """Read pause_state.json; returns ``{}`` when absent (#344)."""
-        path = self._run_path(run_id) / "pause_state.json"
-        if not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text())
-        except Exception:
-            return {}
+        """Read pause_state — cache-first (cross-replica), disk fallback (#344)."""
+        from ..run_state_store import KIND_PAUSE_STATE, read_with_store
+
+        def _disk() -> dict[str, Any] | None:
+            path = self._run_path(run_id) / "pause_state.json"
+            if not path.exists():
+                return None
+            try:
+                return json.loads(path.read_text())
+            except Exception:  # noqa: BLE001
+                return None
+
+        return read_with_store(
+            self._run_state_store, tenant_id=self._store_tenant(),
+            run_id=run_id, kind=KIND_PAUSE_STATE, disk_reader=_disk,
+        ) or {}
 
     def _save_resume_payload(self, run_id: str, payload: dict[str, Any]) -> Path:
         """Persist the original payload so resume can rebuild the run (#344)."""
@@ -738,16 +800,26 @@ class BasetenCUARuntime:
         # Skip transient fields that would be wrong to re-apply on resume.
         keep = {k: v for k, v in payload.items() if not k.startswith("_resume")}
         self._write_json_atomic(path, keep)
+        from ..run_state_store import KIND_RESUME_PAYLOAD
+        self._run_state_store.put(self._store_tenant(), run_id, KIND_RESUME_PAYLOAD, keep)
         return path
 
     def _read_resume_payload(self, run_id: str) -> dict[str, Any]:
-        path = self._run_path(run_id) / "payload.json"
-        if not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text())
-        except Exception:
-            return {}
+        from ..run_state_store import KIND_RESUME_PAYLOAD, read_with_store
+
+        def _disk() -> dict[str, Any] | None:
+            path = self._run_path(run_id) / "payload.json"
+            if not path.exists():
+                return None
+            try:
+                return json.loads(path.read_text())
+            except Exception:  # noqa: BLE001
+                return None
+
+        return read_with_store(
+            self._run_state_store, tenant_id=self._store_tenant(),
+            run_id=run_id, kind=KIND_RESUME_PAYLOAD, disk_reader=_disk,
+        ) or {}
 
     def _start_detached(self, payload: dict[str, Any]) -> dict[str, Any]:
         run_id = _safe_state_key(str(payload.get("run_id") or _new_run_id()))
@@ -1195,8 +1267,15 @@ class BasetenCUARuntime:
             }
 
         if action == "resume":
-            # #344: rehydrate a paused detached run.
-            status = self._read_json_file(run_dir / "status.json")
+            # #344: rehydrate a paused detached run. Read status cache-first so
+            # a resume landing on a different replica sees status=='paused'
+            # even before the /data Volume has propagated (#909-followup).
+            status = self._read_detached_status(run_id)
+            if not status:
+                # Empty in BOTH the cross-replica store and on disk → the
+                # run_id is genuinely unknown (→ 404), not merely a Volume that
+                # hasn't propagated to this replica.
+                raise FileNotFoundError(f"unknown run_id: {run_id}")
             if status.get("status") != "paused":
                 raise ValueError(
                     f"action='resume' requires a paused run; "

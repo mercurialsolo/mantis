@@ -336,6 +336,50 @@ def test_resume_restores_checkpoint_suite_ignoring_redecompose_drift(client, mon
     assert final["status"] == "succeeded"
 
 
+def test_resume_reads_run_state_from_store_when_disk_missing(client, monkeypatch):
+    """Cross-replica durability: pause mirrors status/pause_state/payload into
+    the shared run-state store. A resume landing on a DIFFERENT replica (disk
+    files absent) reads them from the store and resumes — no wedge, no
+    eventual-consistency miss."""
+    import shutil
+
+    from mantis_agent.run_state_store import RunStateStore
+
+    test_client, bs = client
+    # Inject a plain-dict store (stands in for the cross-replica modal.Dict).
+    bs.runtime._run_state_store = RunStateStore({})
+
+    call_count = {"n": 0}
+
+    def _switching_stub(self, task_suite, payload, run_id=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _stub_run_micro_first_call(self, task_suite, payload, run_id)
+        return _stub_run_micro_resume(self, task_suite, payload, run_id)
+
+    monkeypatch.setattr(BasetenCUARuntime, "_run_micro", _switching_stub, raising=True)
+
+    submit = test_client.post("/v1/predict", headers=_auth_headers(), json=_minimal_payload())
+    run_id = submit.json()["run_id"]
+    _wait_for_status(test_client, run_id, want={"paused"})
+
+    # Simulate the resume landing on a fresh replica whose Volume hasn't
+    # propagated: delete the on-disk run dir entirely. Only the shared store
+    # carries status + pause_state + payload now.
+    run_dir = Path(bs.runtime._run_path(run_id))
+    shutil.rmtree(run_dir, ignore_errors=True)
+    assert not run_dir.exists()
+
+    resume = test_client.post(
+        "/v1/predict",
+        headers=_auth_headers(),
+        json={"action": "resume", "run_id": run_id, "user_input": "123456"},
+    )
+    assert resume.status_code == 200, resume.text  # not 400/404 — store had it
+    final = _wait_for_status(test_client, run_id, want={"succeeded"})
+    assert final["status"] == "succeeded"
+
+
 def test_resume_unknown_run_returns_404(client):
     test_client, _bs = client
     r = test_client.post(
