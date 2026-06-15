@@ -86,7 +86,7 @@ Plus the run options:
 | Field | Default | Description |
 |---|---|---|
 | `detached` | `true` | Return a `run_id` immediately and continue work in the background. Set `false` to block until done (only useful for short plans — 5–10s). |
-| `profile_id` | `"default"` | (#341) Chrome user-data-dir identity. Server prefixes with `tenant_id`. Sticky across plan revisions — same id ⇒ same cookies / logged-in sessions. |
+| `profile_id` | `"default"` | (#341) Chrome user-data-dir identity. Server prefixes with `tenant_id`. Sticky across plan revisions — same id ⇒ same cookies / logged-in sessions (reuse a login by passing the same id; no `resume_state` needed). Two concurrent runs on one `profile_id` → **409** (Chrome user-data-dir lock); distinct ids run in parallel. Recommended convention `<user>:<platform>`. See [Profiles & login reuse](reference/profiles-and-login-reuse.md). |
 | `workflow_id` | `plan_signature[:12]` | (#341) Checkpoint identity. Server prefixes with `tenant_id`. Rotate when the plan definition changes; pair with `resume_state` to pick up where the last run with this id stopped. |
 | `state_key` | `""` | Legacy single-field identity. When set alone, the server routes it to both `profile_id` and `workflow_id` (back-compat). Prefer the split fields above in new code; see [#341](https://github.com/mercurialsolo/mantis/issues/341). |
 | `resume_state` | `false` | Reconstruct browser state from the latest checkpoint at `workflow_id` before starting. |
