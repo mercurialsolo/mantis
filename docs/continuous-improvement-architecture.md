@@ -204,7 +204,12 @@ challenger arm submits *with* it. Backend is auto-selected by base
   `--enable-lora`; the adapter is addressed by its served-model-name.
 
 The gate drives both arms with `training/eval_harness.py run --lora-adapter <ref>`
-(challenger) vs no flag (champion) against one endpoint.
+(challenger) vs no flag (champion) against one endpoint. Holdout tasks carry no
+plan, so `experiments/holdout/run_gate_eval.py` (#916) **generates** the
+`task_suite`/`_micro_plan` per task (via `build_micro_suite`), runs both arms
+(distinct `profile_id` per arm → parallel, #912), oracle-grades, and calls
+`promotion_gate.evaluate` → a `GateVerdict` — the sim-env execution link between
+the holdout set and the gate.
 
 **Host parity (Modal vs Baseten).** Modal boots a fresh inference server *per
 run*, so the adapter is chosen **per request** (`_lora_adapter` in the suite) and
@@ -295,7 +300,8 @@ generates the next rollouts. *Days.*
 | Rollout generator primitives (seed-sweep, failure-biased) | ✅ on main |
 | Closed plan-evolution fast loop (`apply_plan_overlay` wired) | ✅ on main |
 | Champion/challenger gate | ✅ on main |
-| Serve `base + LoRA adapter` challenger at `/v1/predict` (#911) | ✅ on main (GPU run deploy-gated) |
+| Serve `base + LoRA adapter` challenger at `/v1/predict` (#911) | ✅ on main + deployed (GPU run deploy-gated) |
+| Holdout-eval runner — generate sim-env suites + gate vs `/v1/predict` (#916) | ✅ on main (`experiments/holdout/run_gate_eval.py`; live run spend-gated) |
 | Logprob capture (GRPO prerequisite, #889) | ✅ on main |
 | `RolloutRunner` execution adapter (generator → Daytona → Augur) | ⏳ P1 (#894) |
 | `mantis-trainer` data contract | ✅ scaffold + dataset implemented |

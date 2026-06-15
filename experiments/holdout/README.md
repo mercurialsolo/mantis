@@ -105,6 +105,37 @@ in `tests/test_state_key_dispatcher.py`.
 > real parallelism comes from scale-out (`@modal.concurrent` min/max containers) —
 > size the autoscaler max to match your `--max-parallel`.
 
+## Running the promotion gate against a challenger (`run_gate_eval.py`, #916)
+
+The trainer's gate evaluates a **challenger** (`base + LoRA adapter`, #911) vs the
+**champion** (`base`) over the holdout. The catch: holdout tasks carry only
+`env` + `task_id` + oracle — **no plan** — while `/v1/predict` requires a built
+`task_suite`/`_micro_plan`. `run_gate_eval.py` is the missing execution link: it
+**generates** the suite for each task (from `sealed_plans`, via `build_micro_suite`
+— not raw steps, which silently score 0/0/0), runs both arms, oracle-grades, and
+feeds the per-arm results to `promotion_gate.evaluate` → a `GateVerdict`.
+
+```
+# champion (base) vs challenger (adapter) over the 3 mantis-holdout-v1 tasks
+python experiments/holdout/run_gate_eval.py \
+    --task indeed.t01_search_save_remote \
+    --task indeed.t03_employer_review_applicant \
+    --task linkedin.t02_post_text_update \
+    --lora-adapter mantis-trainer-vol:/checkpoints/sft-c3e0d799f432
+```
+
+Each (task, arm) gets a distinct `profile_id` (`gate-<arm>-<task>`), so the two
+arms never collide on one Chrome profile (the per-`profile_id` 409 rule) and all
+runs fan out in parallel via `StateKeyDispatcher` (`--max-parallel`, #912).
+Omitting `--lora-adapter` runs champion == challenger (a plumbing sanity run;
+expect `delta≈0`, `promote=False`). **This spends** — 2 × N Modal GPU runs.
+
+**Equivalent path:** `--emit-tasks <path>` writes an `eval_harness`-shaped
+`--tasks` JSON with the generated `micro_plan`s, so `training/eval_harness.py
+run --lora-adapter … / compare` can consume holdout tasks that otherwise have no
+plan. The suite-gen + result→`ArmResult` mapping are pure (unit-tested in
+`tests/test_gate_eval_916.py`); the live submit arm is spend-gated.
+
 ## Freezing into an Augur eval-version (the official holdout)
 
 The producer pipeline (mantis #901/#902) emits a `task_spec` + a `mark_for_eval`
