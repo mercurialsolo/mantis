@@ -83,6 +83,9 @@ def _run_sibling(
     suite["_proxy_disabled"] = True
     suite["_fanout_group_id"] = spec.group_id           # → Augur group_id (#905)
     suite["_sampling_temperature"] = temperature        # → sibling diversity (#905)
+    # #908: drive action steps with the Holo3 policy so planner modelio +
+    # per-token logprobs are captured (GRPO importance ratio requirement).
+    suite["_force_holo3_grounding"] = True
     # #906: server grades this oracle at finalize + stamps the verdict on the
     # terminal step so Augur reward reflects ground truth → GRPO reward variance.
     if not oracle_less:

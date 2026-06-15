@@ -1242,6 +1242,11 @@ def _run_holo3_executor(
         micro_runner._model_judge_model = str(task_suite.get("_model_judge_model", "") or "")
         micro_runner._task_instruction = str(task_suite.get("_task_instruction", "") or "")
 
+        # #908: force the Holo3 brain-grounded loop on action steps so RL
+        # rollouts exercise the policy → planner modelio + per-token logprobs
+        # (the GRPO importance-ratio requirement). Opt-in; off for normal runs.
+        micro_runner._force_holo3_grounding = bool(task_suite.get("_force_holo3_grounding", False))
+
         # #683: forward the orchestrator-composed ``task_spec`` so the
         # child Phase-1 / Phase-2 worker session opens with the same
         # canonical task definition. The trajectory buffer's
