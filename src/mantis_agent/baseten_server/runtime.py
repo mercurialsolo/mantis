@@ -1782,6 +1782,7 @@ class BasetenCUARuntime:
         """
         from mantis_agent import presentation
 
+        _ripples_tmp: Any = None
         try:
             tenant_id = os.environ.get("MANTIS_TENANT_ID", "default")
             run_id = result.get("run_id") or "unknown"
@@ -1828,7 +1829,14 @@ class BasetenCUARuntime:
             # composite into the same PNG sequence.
             ripples_dir: Any = None
             if click_log is not None and len(click_log) > 0:
-                ripples_dir = run_dir / "_ripples"
+                # Write the thousands of overlay frame PNGs to container-local
+                # temp, NOT the persistent /data Volume — they're consumed by
+                # the ffmpeg compositing below and then discarded. Dumping them
+                # on the Volume exhausted its 500k-inode budget and 500'd every
+                # submit (outage 2026-06-15); cleaned in the finally.
+                import tempfile
+                _ripples_tmp = tempfile.mkdtemp(prefix="mantis_ripples_")
+                ripples_dir = Path(_ripples_tmp)
                 duration = (
                     recorder.result.duration_seconds
                     if recorder.result and recorder.result.duration_seconds
@@ -1862,6 +1870,11 @@ class BasetenCUARuntime:
         except Exception as exc:  # noqa: BLE001 — polish is best-effort
             logger.warning("polished video compose failed: %s", exc)
             return None
+        finally:
+            # Always discard the ephemeral overlay frames (temp, off-Volume).
+            if _ripples_tmp:
+                import shutil
+                shutil.rmtree(_ripples_tmp, ignore_errors=True)
 
     @staticmethod
     def _collect_step_timings(

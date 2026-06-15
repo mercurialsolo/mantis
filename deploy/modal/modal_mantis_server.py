@@ -277,6 +277,57 @@ def api():
     return fastapi_app
 
 
+@app.function(volumes={"/data": vol}, schedule=modal.Period(hours=6), timeout=1800)
+def reap_run_state() -> str:
+    """Bound the run-state Volume's inode usage (hard cap 500k files).
+
+    The Volume accumulates per-run artifact dirs (screenshots, modelio, replay
+    frames) with no built-in GC; left unchecked it exhausts inodes and every
+    submit 500s with ENOSPC (outage 2026-06-15). Delete run-artifact entries
+    older than ``MANTIS_RUN_TTL_DAYS`` (default 7) + sweep any stray ``_ripples``
+    frame dirs (belt-and-suspenders until every replica runs the temp-dir code).
+    """
+    import shutil
+    import time
+
+    ttl_days = float(os.environ.get("MANTIS_RUN_TTL_DAYS", "7"))
+    cutoff = time.time() - ttl_days * 86400.0
+    # High-inode artifact roots; results/augur kept (smaller + observability).
+    roots = [
+        "/data/mantis-runs/tenants/default/runs",
+        "/data/mantis-runs/runs",
+        "/data/runs",
+        "/data/mantis-runs/screenshots",
+        "/data/mantis-runs/debug-dumps",
+    ]
+    removed = 0
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for name in os.listdir(root):
+            p = os.path.join(root, name)
+            try:
+                if os.path.getmtime(p) >= cutoff:
+                    continue
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    os.remove(p)
+                removed += 1
+            except Exception:  # noqa: BLE001 — best-effort GC
+                pass
+    # Always purge ephemeral overlay-frame dirs regardless of age.
+    subprocess.run(
+        "find /data/mantis-runs /data/runs -type d -name _ripples -prune "
+        "-exec rm -rf {} + 2>/dev/null", shell=True,
+    )
+    df = subprocess.run("df -i /data", shell=True, capture_output=True, text=True).stdout
+    vol.commit()
+    msg = f"reaper: removed {removed} entries older than {ttl_days}d\n{df}"
+    print(msg)
+    return msg
+
+
 @app.function(
     volumes={"/data": vol},
     timeout=3600,
