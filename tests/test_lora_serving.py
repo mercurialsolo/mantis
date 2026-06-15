@@ -259,6 +259,44 @@ def test_plan_claude_with_adapter_raises():
         )
 
 
+# ── #918 full-model-swap challenger ─────────────────────────────────────
+
+
+def test_plan_full_model_swap_llamacpp():
+    suite = {"_challenger_model": "mantis-trainer-vol:/checkpoints/sft-x/merged.Q8_0.gguf"}
+    plan = plan_serving(
+        cua_model="holo3", suite=suite, mounts=TRAINER_MOUNTS, gguf_cache_root="/data/lc"
+    )
+    assert plan.lora_active is False  # a model swap, not an adapter overlay
+    assert plan.model_path_override == "/trainer/checkpoints/sft-x/merged.Q8_0.gguf"
+    assert plan.extra_server_args == []  # no --lora; the executor swaps -m
+    assert plan.served_model_name == "model"
+    assert plan.challenger_tag.startswith("merged.Q8_0-") or plan.challenger_tag
+
+
+def test_plan_full_model_swap_requires_gguf():
+    suite = {"_challenger_model": "mantis-trainer-vol:/checkpoints/sft-x"}  # no .gguf
+    with pytest.raises(LoraServingError, match="must be a full .gguf"):
+        plan_serving(cua_model="holo3", suite=suite, mounts=TRAINER_MOUNTS, gguf_cache_root="/d")
+
+
+def test_plan_full_model_swap_rejected_for_vllm():
+    suite = {"_challenger_model": "/data/merged.gguf"}
+    with pytest.raises(LoraServingError, match="only for llama.cpp"):
+        plan_serving(cua_model="fara", suite=suite, mounts=TRAINER_MOUNTS, gguf_cache_root="/d")
+
+
+def test_plan_rejects_both_challenger_model_and_adapter():
+    suite = {"_challenger_model": "/data/m.gguf", "_lora_adapter": "/data/a.gguf"}
+    with pytest.raises(LoraServingError, match="only one of"):
+        plan_serving(cua_model="holo3", suite=suite, mounts=TRAINER_MOUNTS, gguf_cache_root="/d")
+
+
+def test_plan_base_only_has_no_model_override():
+    plan = plan_serving(cua_model="holo3", suite={}, mounts=TRAINER_MOUNTS, gguf_cache_root="/d")
+    assert plan.model_path_override is None
+
+
 def test_adapterref_is_frozen():
     ref = AdapterRef(path="/x", raw="/x")
     with pytest.raises(Exception):

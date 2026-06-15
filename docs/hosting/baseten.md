@@ -161,36 +161,42 @@ uvx truss push deploy/baseten/holo3 --no-cache \
 
 You'll get a non-production environment URL. Run smoke tests there, then promote via the Baseten dashboard.
 
-## Serving a LoRA challenger for the promotion gate (#911)
+## Serving a challenger for the promotion gate (#911/#918)
 
-The slow-loop gate evaluates a trained **challenger** (`base + LoRA adapter`)
-against the **champion** (`base`). Unlike Modal — which boots a fresh inference
-server per run and picks the adapter per request — the Baseten pod boots **one**
-shared inference server at model-load, so the adapter is a **deployment-level**
-choice via env:
+The slow-loop gate evaluates a trained **challenger** against the **champion**
+(`base`). Unlike Modal — which boots a fresh inference server per run and picks
+the challenger per request — the Baseten pod boots **one** shared inference server
+at model-load, so the challenger is a **deployment-level** choice.
 
-| Env | Effect |
-|---|---|
-| `MANTIS_LORA_ADAPTER` | Serve `base + this adapter`. A path to a **pre-converted GGUF** adapter (llama.cpp bases) or a PEFT dir (vLLM bases), mounted via the truss `weights:` block. Unset ⇒ serve the base (champion). |
-| `MANTIS_LORA_SCALE` | llama.cpp only — adapter scale (default `1.0`; emits `--lora-scaled`). |
-| `MANTIS_LORA_NAME` | vLLM only — served-model-name for the adapter (default `challenger`). |
-
-> The serving image has **no** torch/transformers, so it can't convert a raw PEFT
-> dir for llama.cpp bases — point `MANTIS_LORA_ADAPTER` at a `.gguf` (convert in
-> the trainer with `convert_lora_to_gguf.py`). A non-`.gguf` ref for `holo3`
-> fails fast at boot.
-
-Deploy a challenger from the ready-made config
-([`deploy/baseten/holo3_challenger/config.yaml`](https://github.com/mercurialsolo/mantis/blob/main/deploy/baseten/holo3_challenger/config.yaml)) —
-it mirrors `holo3` plus a `weights:` entry for the adapter and the
-`MANTIS_LORA_ADAPTER` env. **Swap the adapter `source` for your trained GGUF repo
-first**, then:
+**Holo3 (qwen3_5_moe) — full-model swap (#918).** Holo3's LoRA *adapter* can't be
+GGUF-converted (`convert_lora_to_gguf` lacks the MoE arch), but the *merged* model
+can. So the Holo3 challenger is a **full merged-GGUF model**, not a `--lora`
+overlay — point `MANTIS_HOLO3_MODEL_DIR` at the merged model (mounted via the
+truss `weights:` block, alongside the base mmproj). The ready-made config
+([`deploy/baseten/holo3_challenger/config.yaml`](https://github.com/mercurialsolo/mantis/blob/main/deploy/baseten/holo3_challenger/config.yaml))
+does this; **swap its `weights:` `source` for your merged-model repo**, then:
 
 ```bash
 uvx truss push deploy/baseten/holo3_challenger --no-cache \
   --deployment-name "holo3-challenger-$(git rev-parse --short HEAD)" \
   --include-git-info
 ```
+
+The trainer produces the artifact: peft `merge_and_unload` (adapter + base) →
+`convert_hf_to_gguf.py` → quantize Q8_0 → publish.
+
+**Other (non-MoE / vLLM) bases — `--lora` overlay.** For bases whose adapter
+*can* be converted/served, set instead (deployment-level env):
+
+| Env | Effect |
+|---|---|
+| `MANTIS_LORA_ADAPTER` | Serve `base + this adapter`. A **pre-converted GGUF** adapter (llama.cpp bases) or a PEFT dir (vLLM bases), mounted via `weights:`. Unset ⇒ base (champion). |
+| `MANTIS_LORA_SCALE` | llama.cpp only — adapter scale (default `1.0`; emits `--lora-scaled`). |
+| `MANTIS_LORA_NAME` | vLLM only — served-model-name for the adapter (default `challenger`). |
+
+> The serving image has **no** torch/transformers, so it can't convert a raw PEFT
+> dir for llama.cpp bases — point `MANTIS_LORA_ADAPTER` at a `.gguf`. A non-`.gguf`
+> ref for a llama.cpp base fails fast at boot.
 
 Point the gate's `MANTIS_CHAMPION_ENDPOINT` at the `holo3` deploy and
 `MANTIS_EVAL_ENDPOINT` at this one, then compare win-rate over the frozen holdout

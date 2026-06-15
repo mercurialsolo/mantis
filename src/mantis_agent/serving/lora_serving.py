@@ -96,6 +96,12 @@ class ServingPlan:
     adapter_local_dir: str | None = None
     adapter_gguf_path: str | None = None
     convert_cmd: list[str] | None = None
+    # #918 full-model-swap challenger: a merged-and-converted full GGUF served via
+    # llama-server ``-m`` *instead of* the base. Used for Holo3 (qwen3_5_moe),
+    # whose LoRA *adapter* can't be GGUF-converted but whose merged *full* model
+    # can (convert_hf_to_gguf supports the arch — the base GGUF proves it). When
+    # set, the executor swaps ``-m`` to this path and keeps the base ``--mmproj``.
+    model_path_override: str | None = None
     # Short, stable id for tagging the run / Augur (so the gate can attribute a
     # result to the right challenger). Empty string when serving the base.
     challenger_tag: str = ""
@@ -242,16 +248,46 @@ def plan_serving(
 ) -> ServingPlan:
     """Produce a :class:`ServingPlan` for a request.
 
-    Reads ``suite['_lora_adapter']`` (and optional ``_lora_name``,
-    ``_lora_scale``, ``_lora_max_rank``). When absent, returns a base-only plan
-    (no adapter args, base served-name) — the common production path is
-    untouched. When present, returns the backend-appropriate plan.
+    Reads ``suite['_challenger_model']`` (#918 full-model swap) or
+    ``suite['_lora_adapter']`` (+ optional ``_lora_name`` / ``_lora_scale`` /
+    ``_lora_max_rank``). When neither is set, returns a base-only plan (the common
+    production path is untouched). The two are mutually exclusive.
     """
     backend = serving_backend(cua_model)
+    raw_model = str(suite.get("_challenger_model") or "").strip()
     raw_ref = str(suite.get("_lora_adapter") or "").strip()
-    if not raw_ref:
+    if raw_model and raw_ref:
+        raise LoraServingError(
+            "set only one of _challenger_model (full-model swap) or _lora_adapter (adapter)"
+        )
+    if not raw_model and not raw_ref:
         return ServingPlan(
             backend=backend, lora_active=False, served_model_name=base_served_name
+        )
+
+    # #918: full-model-swap challenger (the only path that works for the
+    # qwen3_5_moe Holo3 base — its LoRA adapter can't be GGUF-converted, but a
+    # merged full model can). Only meaningful for llama.cpp (per-run model load);
+    # vLLM bases load one model at boot, so a merged model is a separate deploy.
+    if raw_model:
+        if backend != "llamacpp":
+            raise LoraServingError(
+                "_challenger_model (full-model swap) is supported only for llama.cpp "
+                "bases (holo3/gemma4-cua); for vLLM bases deploy the merged model as "
+                "its own endpoint"
+            )
+        mref = parse_adapter_ref(raw_model)
+        mpath = local_adapter_dir(mref, mounts)
+        if not mpath.endswith(".gguf"):
+            raise LoraServingError(
+                f"_challenger_model must be a full .gguf model (got {mpath!r})"
+            )
+        return ServingPlan(
+            backend=backend,
+            lora_active=False,  # a model swap, not an adapter overlay
+            served_model_name=base_served_name,
+            model_path_override=mpath,
+            challenger_tag=challenger_tag(mref),
         )
 
     ref = parse_adapter_ref(raw_ref)

@@ -196,10 +196,13 @@ deployment**: the champion arm submits without `_lora_adapter` (base weights), t
 challenger arm submits *with* it. Backend is auto-selected by base
 (`mantis_agent.serving.lora_serving`):
 
-* **llama.cpp** bases (`holo3`, the first real challenger) apply a GGUF adapter via
-  `llama-server --lora`. The trainer should emit a pre-converted `.gguf` adapter so
-  the serving image needs no torch/transformers (a raw PEFT dir triggers an
-  in-server convert step instead).
+* **llama.cpp** bases apply a GGUF adapter via `llama-server --lora` (the trainer
+  emits a pre-converted `.gguf`; a raw PEFT dir triggers an in-server convert).
+  **Exception — `holo3` (qwen3_5_moe, #918):** its LoRA *adapter* can't be
+  GGUF-converted (`convert_lora_to_gguf` lacks the MoE arch), so the challenger is
+  a **full merged-GGUF model swap** (`_challenger_model` → `-m`, base `--mmproj`
+  reused). The trainer merges (peft) + `convert_hf_to_gguf` (which *does* support
+  the arch — the base GGUF proves it) + quantizes.
 * **vLLM** bases (`fara`/`opencua`/`evocua`) serve the PEFT dir via
   `--enable-lora`; the adapter is addressed by its served-model-name.
 
@@ -302,6 +305,7 @@ generates the next rollouts. *Days.*
 | Champion/challenger gate | ✅ on main |
 | Serve `base + LoRA adapter` challenger at `/v1/predict` (#911) | ✅ on main + deployed (GPU run deploy-gated) |
 | Holdout-eval runner — generate sim-env suites + gate vs `/v1/predict` (#916) | ✅ on main (`experiments/holdout/run_gate_eval.py`; live run spend-gated) |
+| Serve Holo3 (qwen3_5_moe) challenger — full merged-GGUF swap (#918) | ✅ on main (`_challenger_model`; trainer-side merge + live run spend-gated) |
 | Logprob capture (GRPO prerequisite, #889) | ✅ on main |
 | `RolloutRunner` execution adapter (generator → Daytona → Augur) | ⏳ P1 (#894) |
 | `mantis-trainer` data contract | ✅ scaffold + dataset implemented |

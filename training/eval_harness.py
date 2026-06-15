@@ -414,17 +414,18 @@ def load_report(path: Path) -> EvalReport:
 
 
 def _http_runner_factory(
-    endpoint: str, token: str = "", *, lora_adapter: str = "", cua_model: str = ""
+    endpoint: str, token: str = "", *, lora_adapter: str = "",
+    challenger_model: str = "", cua_model: str = "",
 ) -> RunnerFn:
     """Build a runner that submits each task through the production
     ``/v1/predict`` endpoint and polls until terminal. Used by the
     ``run`` subcommand. Lazy: only imported when the CLI actually fires.
 
-    #911: pass ``lora_adapter`` to evaluate a **challenger** — the server serves
-    ``base + adapter`` when the suite carries ``_lora_adapter``. The *champion*
-    run uses the same endpoint with ``lora_adapter=""`` (serves the base), so the
-    promotion gate can point both arms at one deployment. ``cua_model`` overrides
-    the base model (default server pick is ``holo3``).
+    #911/#918: pass ``lora_adapter`` (adapter overlay) or ``challenger_model`` (a
+    full merged-GGUF swap — the working path for the qwen3_5_moe Holo3 base) to
+    evaluate a **challenger**. The *champion* run uses the same endpoint with
+    neither set (serves the base), so the promotion gate can point both arms at
+    one deployment. ``cua_model`` overrides the base model (default ``holo3``).
     """
     import requests
 
@@ -450,9 +451,13 @@ def _http_runner_factory(
                 {"intent": f"Navigate to {task.url}", "type": "navigate",
                  "section": "setup", "required": True},
             ])
-        # #911: attach the challenger adapter to the suite so the server serves
-        # base + adapter. Ensure a task_suite exists even on the plan_text path.
-        if lora_adapter:
+        # #911/#918: attach the challenger to the suite so the server serves the
+        # challenger. _challenger_model (#918 full-model swap, e.g. Holo3) takes
+        # precedence over _lora_adapter (#911). Ensure a task_suite exists even on
+        # the plan_text path.
+        if challenger_model:
+            body.setdefault("task_suite", {})["_challenger_model"] = challenger_model
+        elif lora_adapter:
             body.setdefault("task_suite", {})["_lora_adapter"] = lora_adapter
         headers = {"Content-Type": "application/json"}
         if token:
@@ -488,6 +493,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     runner = _http_runner_factory(
         args.runner, token=args.token,
         lora_adapter=getattr(args, "lora_adapter", ""),
+        challenger_model=getattr(args, "challenger_model", ""),
         cua_model=getattr(args, "cua_model", ""),
     )
     report = run_eval(runner, tasks, name=args.name or Path(args.tasks).stem)
@@ -538,6 +544,10 @@ def main(argv: list[str] | None = None) -> int:
                      help="#911: serve base + this LoRA adapter (challenger arm). "
                           "Ref: '<volume>:/checkpoints/<algo>' or a mounted path. "
                           "Omit for the champion arm (serves the base).")
+    run.add_argument("--challenger-model", default="",
+                     help="#918: serve this full merged-GGUF model (challenger arm) — the "
+                          "working path for the qwen3_5_moe Holo3 base. Mutually exclusive "
+                          "with --lora-adapter.")
     run.add_argument("--cua-model", default="",
                      help="Override the base model (default server pick: holo3)")
     run.set_defaults(func=_cmd_run)
