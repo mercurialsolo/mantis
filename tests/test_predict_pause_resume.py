@@ -270,10 +270,13 @@ def test_resume_plan_signature_mismatch_returns_400(client, monkeypatch, tmp_pat
     _wait_for_status(test_client, run_id, want={"paused"})
 
     # Tamper with pause_state.json — change the plan signature so the
-    # synchronous guard in _detached_action("resume", ...) fires.
+    # synchronous guard in _detached_action("resume", ...) fires. The guard
+    # only applies on the LEGACY path (no checkpointed suite), so drop
+    # resolved_task_suite to exercise the re-derive + guard.
     data_root = Path(bs.runtime._run_path(run_id))  # bs is bs_routes here — the singleton lives on it
     pause_path = data_root / "pause_state.json"
     blob = json.loads(pause_path.read_text())
+    blob.pop("resolved_task_suite", None)
     blob["plan_signature"] = "some-other-signature-from-an-edited-plan"
     pause_path.write_text(json.dumps(blob))
 
@@ -285,6 +288,96 @@ def test_resume_plan_signature_mismatch_returns_400(client, monkeypatch, tmp_pat
     assert resume.status_code == 400, resume.text
     detail = resume.json()["detail"]
     assert "signature mismatch" in detail.lower()
+
+
+def test_resume_restores_checkpoint_suite_ignoring_redecompose_drift(client, monkeypatch):
+    """End-user bug fix: when the run paused with a resolved micro-suite in its
+    checkpoint, resume restores it VERBATIM — so a plan that would re-decompose
+    to a different signature (cache miss across replicas) no longer wedges the
+    run in 'paused'. The signature guard is bypassed because there's no
+    re-derivation."""
+    test_client, bs = client
+    call_count = {"n": 0}
+
+    def _switching_stub(self, task_suite, payload, run_id=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _stub_run_micro_first_call(self, task_suite, payload, run_id)
+        # On resume, assert we got the checkpointed suite verbatim.
+        assert task_suite.get("_plan_signature") == "fixed-sig-for-tests"
+        return _stub_run_micro_resume(self, task_suite, payload, run_id)
+
+    monkeypatch.setattr(BasetenCUARuntime, "_run_micro", _switching_stub, raising=True)
+
+    submit = test_client.post(
+        "/v1/predict", headers=_auth_headers(), json=_minimal_payload(),
+    )
+    run_id = submit.json()["run_id"]
+    _wait_for_status(test_client, run_id, want={"paused"})
+
+    # The checkpoint persisted the resolved suite at pause.
+    pause_path = Path(bs.runtime._run_path(run_id)) / "pause_state.json"
+    blob = json.loads(pause_path.read_text())
+    assert blob.get("resolved_task_suite", {}).get("_plan_signature") == "fixed-sig-for-tests"
+
+    # Simulate non-deterministic re-decompose drift: tamper the stored signature
+    # AND the saved payload so a re-derive WOULD mismatch. With the checkpointed
+    # suite present, resume must ignore both and succeed.
+    blob["plan_signature"] = "would-mismatch-if-rederived"
+    pause_path.write_text(json.dumps(blob))
+
+    resume = test_client.post(
+        "/v1/predict",
+        headers=_auth_headers(),
+        json={"action": "resume", "run_id": run_id, "user_input": "123456"},
+    )
+    assert resume.status_code == 200, resume.text  # not 400 — no wedge
+    final = _wait_for_status(test_client, run_id, want={"succeeded"})
+    assert final["status"] == "succeeded"
+
+
+def test_resume_reads_run_state_from_store_when_disk_missing(client, monkeypatch):
+    """Cross-replica durability: pause mirrors status/pause_state/payload into
+    the shared run-state store. A resume landing on a DIFFERENT replica (disk
+    files absent) reads them from the store and resumes — no wedge, no
+    eventual-consistency miss."""
+    import shutil
+
+    from mantis_agent.run_state_store import RunStateStore
+
+    test_client, bs = client
+    # Inject a plain-dict store (stands in for the cross-replica modal.Dict).
+    bs.runtime._run_state_store = RunStateStore({})
+
+    call_count = {"n": 0}
+
+    def _switching_stub(self, task_suite, payload, run_id=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return _stub_run_micro_first_call(self, task_suite, payload, run_id)
+        return _stub_run_micro_resume(self, task_suite, payload, run_id)
+
+    monkeypatch.setattr(BasetenCUARuntime, "_run_micro", _switching_stub, raising=True)
+
+    submit = test_client.post("/v1/predict", headers=_auth_headers(), json=_minimal_payload())
+    run_id = submit.json()["run_id"]
+    _wait_for_status(test_client, run_id, want={"paused"})
+
+    # Simulate the resume landing on a fresh replica whose Volume hasn't
+    # propagated: delete the on-disk run dir entirely. Only the shared store
+    # carries status + pause_state + payload now.
+    run_dir = Path(bs.runtime._run_path(run_id))
+    shutil.rmtree(run_dir, ignore_errors=True)
+    assert not run_dir.exists()
+
+    resume = test_client.post(
+        "/v1/predict",
+        headers=_auth_headers(),
+        json={"action": "resume", "run_id": run_id, "user_input": "123456"},
+    )
+    assert resume.status_code == 200, resume.text  # not 400/404 — store had it
+    final = _wait_for_status(test_client, run_id, want={"succeeded"})
+    assert final["status"] == "succeeded"
 
 
 def test_resume_unknown_run_returns_404(client):

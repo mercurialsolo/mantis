@@ -52,9 +52,16 @@ KIND_PAUSE_REQUEST = "pause_request"
 # one and the brain transparently re-creates), and we want both
 # records discoverable for forensics.
 KIND_SESSION = "session"
+# mantis-server pause/resume (#909-followup): the paused run's resolved
+# micro-suite + original payload, mirrored off the /data Volume so a resume
+# landing on a different replica reads them immediately (no eventual-consistency
+# miss → no re-decompose / "pause_state missing").
+KIND_PAUSE_STATE = "pause_state"
+KIND_RESUME_PAYLOAD = "resume_payload"
 
 _VALID_KINDS = frozenset({
     KIND_STATUS, KIND_VIEWER, KIND_AUGUR, KIND_PAUSE_REQUEST, KIND_SESSION,
+    KIND_PAUSE_STATE, KIND_RESUME_PAYLOAD,
 })
 
 
