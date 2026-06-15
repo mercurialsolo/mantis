@@ -2290,18 +2290,48 @@ class RunExecutor:
             return None
         score = 1.0 if passed else 0.0
         term_idx = max(0, len(results) - 1)
+        # Per-step shaping so GRPO siblings vary by HOW WELL they did, not only
+        # pass/fail — otherwise an all-pass / all-fail group is degenerate (zero
+        # group-relative advantage) even when the policy clearly differed in
+        # effort. ``process`` = efficiency (fewer brain iterations → higher);
+        # ``progress`` = task progress (1.0 on success, else fraction of steps
+        # that succeeded). Both populate the reward formula's process (0.5) /
+        # progress (1.5) terms via score_components — the trainer-feedback fix.
+        process, progress = self._shaping_components(results, passed=passed)
         try:
             augur.set_score(
                 term_idx, score, comparator="verifier",
-                components={"oracle_pass": score},
+                components={"oracle_pass": score, "process": process, "progress": progress},
             )
             logger.warning(
-                "[#906] oracle verdict stamped: task=%s passed=%s step=%s",
-                task_id, passed, term_idx,
+                "[#906] oracle verdict stamped: task=%s passed=%s process=%.3f progress=%.3f step=%s",
+                task_id, passed, process, progress, term_idx,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[#906] set_score failed: %s", exc)
         return passed
+
+    def _shaping_components(self, results: list, *, passed: bool) -> "tuple[float, float]":
+        """Return ``(process, progress)`` in [0,1] for per-step reward shaping.
+
+        ``process`` (efficiency): fewer brain iterations relative to the step
+        budget → higher. Read from the AugurAdapter's per-step emission counts
+        (the policy's effort) so it varies meaningfully across siblings even
+        when the outcome is identical. ``progress``: 1.0 on success, else the
+        fraction of plan steps that succeeded (partial credit so all-fail
+        siblings still differ by how far they got)."""
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        emissions = dict(getattr(augur, "_step_emission_counts", {}) or {})
+        effort = sum(emissions.values()) if emissions else len(results)
+        cap = max(int(getattr(runner, "max_steps", 0) or 0), len(results) * 4, 20)
+        process = max(0.0, min(1.0, 1.0 - (effort / cap))) if cap else 0.0
+        if passed:
+            progress = 1.0
+        else:
+            n_ok = sum(1 for r in results if getattr(r, "success", False))
+            progress = round(n_ok / max(1, len(results)), 4)
+        return round(process, 4), round(progress, 4)
 
     def _apply_model_judge_reward(self, results: list) -> None:
         """Grade the run with a model judge + write the verdict (#906 extension).

@@ -29,15 +29,31 @@ def test_mixed_group_is_grpo_usable():
     g = rrs._classify_group([_r(True), _r(False), _r(True)])
     assert g["grpo_usable"] is True
     assert g["distinct_outcomes"] == 2
-    assert g["reward_std"] > 0
-    assert g["reason"] == ""
+    assert "mixed outcomes" in g["reason"]
 
 
-def test_all_pass_group_is_degenerate():
+def test_all_pass_no_shaping_is_degenerate():
     g = rrs._classify_group([_r(True), _r(True), _r(True)])
     assert g["grpo_usable"] is False
-    assert g["reward_std"] == 0.0
     assert "all pass" in g["reason"]
+
+
+def test_all_pass_with_shaped_variance_is_usable():
+    # #906 process/progress shaping: all-pass siblings vary by effort →
+    # meaningful Augur episode_return spread → GRPO-usable.
+    shaped = {"r0": 28.9, "r1": 28.2, "r2": 27.6}  # std ≈ 0.53 ≥ 0.05
+    g = rrs._classify_group([_r(True), _r(True), _r(True)], shaped)
+    assert g["grpo_usable"] is True
+    assert g["shaped_episode_return_std"] >= rrs._MEANINGFUL_STD
+    assert "shaped reward variance" in g["reason"]
+
+
+def test_all_pass_with_hair_variance_stays_degenerate():
+    # Step-cost "hair" (the original noise complaint) is below threshold.
+    hair = {"r0": 18.8087, "r1": 18.8087, "r2": 18.8091}  # std ≈ 0.0002
+    g = rrs._classify_group([_r(True), _r(True), _r(True)], hair)
+    assert g["grpo_usable"] is False
+    assert g["shaped_episode_return_std"] < rrs._MEANINGFUL_STD
 
 
 def test_all_fail_group_is_degenerate():
@@ -49,4 +65,4 @@ def test_all_fail_group_is_degenerate():
 
 def test_single_sibling_not_usable():
     g = rrs._classify_group([_r(True)])
-    assert g["grpo_usable"] is False  # need ≥2 distinct outcomes
+    assert g["grpo_usable"] is False

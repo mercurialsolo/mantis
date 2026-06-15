@@ -135,24 +135,74 @@ def _run_sibling(
     }
 
 
-def _classify_group(results: list[dict[str, Any]]) -> dict[str, Any]:
+# Augur reward spread below this (≈ step-cost "hair") is noise, not signal.
+_MEANINGFUL_STD = 0.05
+
+
+def _augur_group_rewards(group_id: str, env: dict[str, str]) -> dict[str, float]:
+    """Fetch each sibling's Augur ``episode_return`` (process/progress-shaped)
+    for the group — the reward the trainer actually standardizes. Bearer reads
+    only; returns {} on any failure so the gate falls back to local outcomes."""
+    base = "https://mantis-cua.ngrok-free.app/api/v1"
+    key = env.get("AUGUR_API_KEY") or (
+        env.get("AUGUR_DSN", "").split("token=", 1)[-1].split("&", 1)[0]
+        if "token=" in env.get("AUGUR_DSN", "") else ""
+    )
+    if not key:
+        return {}
+    h = {"Authorization": f"Bearer {key}", "ngrok-skip-browser-warning": "1"}
+    out: dict[str, float] = {}
+    try:
+        runs = requests.get(f"{base}/runs?tenant=staffai&group_id={group_id}&limit=50",
+                            headers=h, timeout=30).json()
+        for r in (runs.get("result") or runs.get("runs") or []):
+            rid = r.get("run_id")
+            if not rid:
+                continue
+            rew = requests.get(f"{base}/runs/{rid}/reward/default-v1?tenant=staffai",
+                               headers=h, timeout=30).json()
+            er = rew.get("episode_return")
+            if er is not None:
+                out[rid] = float(er)
+    except Exception:  # noqa: BLE001 — best-effort; gate falls back to local outcomes
+        return {}
+    return out
+
+
+def _classify_group(results: list[dict[str, Any]],
+                    augur_rewards: dict[str, float] | None = None) -> dict[str, Any]:
     """Group-variance gate (mantis-trainer feedback): GRPO standardizes
-    ``(r − mean)/(std + eps)``, so an all-pass or all-fail group has only
-    step-cost "hair" variance → ±1 noise advantages. A group is GRPO-usable
-    only when its oracle OUTCOMES are mixed (real reward spread)."""
+    ``(r − mean)/(std + eps)``, so a group with only step-cost "hair" variance
+    yields ±1 noise advantages. A group is GRPO-usable when it has REAL reward
+    spread — either mixed oracle outcomes OR (with #906 process/progress
+    shaping) meaningful Augur ``episode_return`` variance from differing
+    effort/progress even on an all-pass / all-fail group."""
     import statistics
     outcomes = [bool(r.get("oracle_passed")) for r in results if "oracle_passed" in r]
-    rewards = [float(r["reward"]) for r in results if "reward" in r]
     distinct = len(set(outcomes))
-    std = statistics.pstdev(rewards) if len(rewards) > 1 else 0.0
-    usable = distinct > 1  # mixed pass/fail → genuine variance
     n_pass = sum(1 for o in outcomes if o)
-    reason = "" if usable else (
-        f"degenerate: all {'pass' if n_pass else 'fail'} ({n_pass}/{len(outcomes)})"
-        " — GRPO advantage would be noise; exclude or re-sample"
-    )
+
+    shaped = sorted((augur_rewards or {}).values())
+    shaped_std = statistics.pstdev(shaped) if len(shaped) > 1 else 0.0
+    local_std = statistics.pstdev([float(r["reward"]) for r in results if "reward" in r]) \
+        if len([r for r in results if "reward" in r]) > 1 else 0.0
+
+    mixed = distinct > 1
+    shaped_signal = shaped_std >= _MEANINGFUL_STD
+    usable = mixed or shaped_signal
+    if usable:
+        reason = ("mixed outcomes" if mixed else
+                  f"shaped reward variance (episode_return std={shaped_std:.3f})")
+    else:
+        reason = (
+            f"degenerate: all {'pass' if n_pass else 'fail'} ({n_pass}/{len(outcomes)})"
+            f" and shaped std {shaped_std:.4f} < {_MEANINGFUL_STD}"
+            " — GRPO advantage would be noise; exclude or re-sample"
+        )
     return {"n": len(outcomes), "n_pass": n_pass, "distinct_outcomes": distinct,
-            "reward_std": round(std, 4), "grpo_usable": usable, "reason": reason}
+            "local_reward_std": round(local_std, 4),
+            "shaped_episode_return_std": round(shaped_std, 4),
+            "grpo_usable": usable, "reason": reason}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -210,21 +260,23 @@ def main(argv: list[str] | None = None) -> int:
 
     results = [_run(spec) for spec in specs]
 
-    # Variance gate (mantis-trainer feedback): if the group is degenerate
-    # (all-pass / all-fail → noise advantages), keep adding siblings until it
-    # has mixed outcomes or we hit the cap.
+    # Variance gate (mantis-trainer feedback): a group is GRPO-usable with real
+    # reward spread — mixed outcomes OR (with #906 process/progress shaping)
+    # meaningful Augur episode_return variance. Keep adding siblings while
+    # degenerate, up to the cap.
     gid = specs[0].group_id
-    while (args.variance_seek and not _classify_group(results)["grpo_usable"]
+    while (args.variance_seek
+           and not _classify_group(results, _augur_group_rewards(gid, env))["grpo_usable"]
            and len(results) < args.max_siblings):
         idx = len(results)
-        print(f"  [variance-seek] group degenerate after {idx} siblings — adding sibling {idx}")
+        print(f"  [variance-seek] group still degenerate after {idx} siblings — adding sibling {idx}")
         extra = RolloutSpec(
             spec_id=f"{template.template_id}__seed{args.seed}__s{idx}",
             template=template, env_seed=args.seed, group_id=gid, sibling_index=idx,
         )
         results.append(_run(extra))
 
-    gate = _classify_group(results)
+    gate = _classify_group(results, _augur_group_rewards(gid, env))
     print("\n[sweep result]")
     print(json.dumps({
         "group_id": gid,

@@ -49,7 +49,12 @@ def test_oracle_pass_stamps_verifier_score_1():
     args, kwargs = augur.set_score.call_args
     assert args[0] == 2 and args[1] == 1.0
     assert kwargs["comparator"] == "verifier"
-    assert kwargs["components"] == {"oracle_pass": 1.0}
+    # oracle_pass + process/progress shaping components (so all-pass/all-fail
+    # groups still vary by effort/progress — the GRPO degeneracy fix).
+    comps = kwargs["components"]
+    assert comps["oracle_pass"] == 1.0
+    assert comps["progress"] == 1.0  # passed → full progress
+    assert 0.0 <= comps["process"] <= 1.0  # efficiency in [0,1]
     # graded the right task against /__env__/oracle
     assert g.call_args[0][0] == "https://env.example/__env__/oracle"
     assert g.call_args[1]["params"] == {"task_id": "t01"}
