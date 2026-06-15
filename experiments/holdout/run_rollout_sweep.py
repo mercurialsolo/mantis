@@ -66,7 +66,8 @@ def _seed_env(env_url: str, seed: int, admin_token: str, preview_token: str) -> 
 
 def _run_sibling(
     spec: Any, info: dict[str, str], token: str, temperature: float,
-    *, max_steps: int, poll_seconds: int,
+    *, max_steps: int, poll_seconds: int, model_judge: bool = False,
+    task_text: str = "", oracle_less: bool = False,
 ) -> dict[str, Any]:
     tmpl = spec.template
     steps = rst._substitute(tmpl.plan_steps or [], info["url"])
@@ -84,10 +85,18 @@ def _run_sibling(
     suite["_sampling_temperature"] = temperature        # → sibling diversity (#905)
     # #906: server grades this oracle at finalize + stamps the verdict on the
     # terminal step so Augur reward reflects ground truth → GRPO reward variance.
-    suite["_oracle_url"] = info["url"]
-    suite["_oracle_task_id"] = tmpl.oracle_task_id
-    suite["_oracle_admin_token"] = info["admin_token"]
-    suite["_oracle_preview_token"] = info["preview_token"]
+    if not oracle_less:
+        suite["_oracle_url"] = info["url"]
+        suite["_oracle_task_id"] = tmpl.oracle_task_id
+        suite["_oracle_admin_token"] = info["admin_token"]
+        suite["_oracle_preview_token"] = info["preview_token"]
+    if model_judge:  # #906 extension: model-judge (primary signal on oracle-less)
+        suite["_model_judge_enabled"] = True
+        if oracle_less:
+            suite["_task_instruction"] = task_text or tmpl.oracle_task_id.replace("_", " ")
+        else:
+            suite["_model_judge_force"] = True  # cross-check mode where an oracle exists
+            suite["_task_instruction"] = task_text or tmpl.oracle_task_id.replace("_", " ")
 
     code, resp = rst._post(token, {
         "task_suite": suite, "profile_id": suite["_profile_id"],
@@ -130,6 +139,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--max-steps", type=int, default=25)
     ap.add_argument("--poll-seconds", type=int, default=600)
+    ap.add_argument("--model-judge", action="store_true",
+                    help="#906: also run the model-judge (rm_outcome + judge_ids)")
+    ap.add_argument("--no-oracle", action="store_true",
+                    help="#906: skip the env oracle (simulate an oracle-less task; judge is the signal)")
     args = ap.parse_args(argv)
 
     if args.task_key not in SEALED_TASKS:
@@ -163,7 +176,10 @@ def main(argv: list[str] | None = None) -> int:
     for spec in specs:
         print(f"  → sibling {spec.sibling_index} ({spec.spec_id})")
         results.append(_run_sibling(spec, info, token, args.temperature,
-                                    max_steps=args.max_steps, poll_seconds=args.poll_seconds))
+                                    max_steps=args.max_steps, poll_seconds=args.poll_seconds,
+                                    model_judge=args.model_judge,
+                                    task_text=spec_def.get("task_text", ""),
+                                    oracle_less=args.no_oracle))
 
     rewards = [r.get("reward") for r in results if "reward" in r]
     variance = len(set(rewards)) > 1 if rewards else False

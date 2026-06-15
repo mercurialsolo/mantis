@@ -93,6 +93,7 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
     "indeed.t01_search_save_remote": {
         "env": "indeed",
         "plan_name": "t01_search_save_remote",
+        "task_text": "Search 'software engineer' in 'Austin, TX' with remote on, and save job_00007.",
         "oracle_task_id": "t01_search_save_remote",
         "steps": [
             _nav(
@@ -111,6 +112,7 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
     "indeed.t03_employer_review_applicant": {
         "env": "indeed",
         "plan_name": "t03_employer_review_applicant",
+        "task_text": "On the employer posting for job_00003, move the new applicant to 'reviewed'.",
         "oracle_task_id": "t03_employer_review_applicant",
         "steps": [
             _nav(
@@ -129,6 +131,7 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
     "linkedin.t02_post_text_update": {
         "env": "linkedin",
         "plan_name": "t02_post_text_update",
+        "task_text": "Create a LinkedIn feed post containing text and at least one #hashtag.",
         "oracle_task_id": "t02_post_text_update",
         "steps": [
             _nav("{env_url}/feed/", "Open the LinkedIn home feed"),

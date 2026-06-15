@@ -2232,6 +2232,10 @@ class RunExecutor:
             # GRPO siblings get identical reward (all "succeeded" plan-completion)
             # and the group-relative advantage collapses to zero (#905).
             oracle_passed = self._apply_oracle_reward(state.results)
+            # #906 extension: model-as-judge outcome reward (RLAIF). Opt-in;
+            # the primary signal on oracle-LESS tasks, a below-oracle
+            # cross-check (rm_verifier_disagreement) where an oracle exists.
+            self._apply_model_judge_reward(state.results)
             # #901/#906: only flag oracle-VERIFIED successes as eval candidates.
             # When no oracle is configured, fall back to plan-completion status
             # (legacy behaviour). Gated on a canonical task_spec_id.
@@ -2298,6 +2302,70 @@ class RunExecutor:
         except Exception as exc:  # noqa: BLE001
             logger.warning("[#906] set_score failed: %s", exc)
         return passed
+
+    def _apply_model_judge_reward(self, results: list) -> None:
+        """Grade the run with a model judge + write the verdict (#906 extension).
+
+        Opt-in via ``runner._model_judge_enabled``. Reads the task instruction
+        (``runner._task_instruction`` → falls back to the eval task_spec) and
+        the terminal step's screenshot, asks a different-family Claude judge
+        whether the task succeeded, and writes:
+
+        * ``record_judge_decision(judge_type="model", promote=False)`` for
+          ``judge_ids`` provenance (operative verdict unchanged — the gate
+          stays oracle-only), and
+        * ``set_score(comparator="model-judge")`` for the ``rm_outcome`` reward
+          term (the only outcome signal on oracle-less tasks).
+        """
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        if augur is None or not bool(getattr(runner, "_model_judge_enabled", False)):
+            return
+        if not results:
+            return
+        # #906 guardrail: the judge is the PRIMARY outcome signal only on
+        # oracle-LESS tasks. Where an env oracle exists it is authoritative —
+        # running the judge there lets a judge "fail" override the oracle's
+        # verifier in the reward formula (the gate stays oracle-only), so skip
+        # unless explicitly forced into cross-check mode.
+        has_oracle = bool(str(getattr(runner, "_oracle_task_id", "") or "").strip())
+        if has_oracle and not bool(getattr(runner, "_model_judge_force", False)):
+            return
+        instruction = str(getattr(runner, "_task_instruction", "") or "").strip()
+        if not instruction:
+            spec = getattr(runner, "_eval_task_spec", None) or {}
+            instruction = str((spec or {}).get("instruction", "") or "").strip()
+        if not instruction:
+            instruction = str(getattr(runner, "plan_name", "") or "").replace("_", " ")
+        png = getattr(results[-1], "screenshot_png", None)
+        if not png:
+            return
+        term_idx = max(0, len(results) - 1)
+        try:
+            from ..learning.model_judge import ModelJudge
+            judge = ModelJudge(
+                model=str(getattr(runner, "_model_judge_model", "") or "")
+                or "claude-sonnet-4-6",
+            )
+            verdict = judge.judge(instruction, png)
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks the run
+            logger.warning("[#906-judge] grade failed: %s", exc)
+            return
+        if verdict is None:
+            return
+        augur.record_judge_decision(
+            term_idx, judge_id=judge.judge_id, judge_type="model",
+            status=verdict.status, reason=verdict.reason,
+            confidence=verdict.confidence, promote=False,
+        )
+        augur.set_score(
+            term_idx, verdict.score, comparator="model-judge",
+            components={"judge_confidence": float(verdict.confidence)},
+        )
+        logger.warning(
+            "[#906-judge] model-judge: passed=%s conf=%.2f step=%s (%s)",
+            verdict.passed, verdict.confidence, term_idx, judge.judge_id,
+        )
 
     def _emit_augur_env_fingerprint(self, step_index: int) -> None:
         """Stamp the current step's env fingerprint (#633 §4).

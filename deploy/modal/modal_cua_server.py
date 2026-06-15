@@ -1235,6 +1235,13 @@ def _run_holo3_executor(
         micro_runner._oracle_admin_token = str(task_suite.get("_oracle_admin_token", "") or "")
         micro_runner._oracle_preview_token = str(task_suite.get("_oracle_preview_token", "") or "")
 
+        # #906 extension: opt-in model-as-judge outcome reward (RLAIF). Primary
+        # signal on oracle-less tasks; below-oracle cross-check where both exist.
+        micro_runner._model_judge_enabled = bool(task_suite.get("_model_judge_enabled", False))
+        micro_runner._model_judge_force = bool(task_suite.get("_model_judge_force", False))
+        micro_runner._model_judge_model = str(task_suite.get("_model_judge_model", "") or "")
+        micro_runner._task_instruction = str(task_suite.get("_task_instruction", "") or "")
+
         # #683: forward the orchestrator-composed ``task_spec`` so the
         # child Phase-1 / Phase-2 worker session opens with the same
         # canonical task definition. The trajectory buffer's

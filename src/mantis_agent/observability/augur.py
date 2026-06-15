@@ -935,6 +935,49 @@ class AugurAdapter:
                     "AugurAdapter.set_score(step=%s) failed: %s", step_index, exc,
                 )
 
+    def record_judge_decision(
+        self,
+        step_index: int,
+        *,
+        judge_id: str,
+        judge_type: str = "model",
+        status: str = "unknown",
+        reason: str = "",
+        confidence: float | None = None,
+        promote: bool = False,
+    ) -> None:
+        """Record a model-judge decision on a step for provenance (#906, SDK 0.x).
+
+        Populates ``input_provenance.judge_ids`` so the reward layer knows a
+        judge ran. ``promote=False`` (default) keeps the operative
+        ``step.verdict`` as whatever the verifier/oracle set — the
+        champion/challenger gate stays oracle-only; the judge only contributes
+        the ``rm_outcome`` reward term (written separately via
+        :meth:`set_score` with ``comparator="model-judge"``).
+        """
+        if not self.active or not hasattr(self._session, "record_judge_decision"):
+            return
+        try:
+            self._session.record_judge_decision(
+                int(step_index) + 1,  # Augur is 1-based at the boundary
+                judge_id=judge_id,
+                judge_type=judge_type,
+                verdict={"status": status, "reason": reason},
+                confidence=confidence,
+                promote=promote,
+            )
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks runs
+            if is_verbose():
+                logger.warning(
+                    "AugurAdapter.record_judge_decision(step=%s) failed: %r",
+                    step_index, exc,
+                )
+            else:
+                logger.debug(
+                    "AugurAdapter.record_judge_decision(step=%s) failed: %s",
+                    step_index, exc,
+                )
+
     def set_capture_mode(self, mode: str) -> None:
         """Switch the active capture mode mid-run (#524, SDK 0.1.3+).
 
