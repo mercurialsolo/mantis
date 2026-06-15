@@ -2225,14 +2225,177 @@ class RunExecutor:
             # successful terminal status so health / trigger / failed runs
             # never pollute the candidate pool. One representative per run;
             # Augur merges candidates per task downstream.
+            # #906: write the ground-truth env-oracle verdict onto the terminal
+            # step BEFORE close, correcting the runtime's self-verifier (which is
+            # a known false-negative for AJAX/JSON saves → no_state_change). This
+            # is what makes the Augur reward reflect ground truth — without it,
+            # GRPO siblings get identical reward (all "succeeded" plan-completion)
+            # and the group-relative advantage collapses to zero (#905).
+            oracle_passed = self._apply_oracle_reward(state.results)
+            # #906 extension: model-as-judge outcome reward (RLAIF). Opt-in;
+            # the primary signal on oracle-LESS tasks, a below-oracle
+            # cross-check (rm_verifier_disagreement) where an oracle exists.
+            self._apply_model_judge_reward(state.results)
+            # #901/#906: only flag oracle-VERIFIED successes as eval candidates.
+            # When no oracle is configured, fall back to plan-completion status
+            # (legacy behaviour). Gated on a canonical task_spec_id.
             ts_id = str(getattr(runner, "_eval_task_spec_id", "") or "")
-            if ts_id and str(runner._final_status or "") in ("succeeded", "completed"):
+            if oracle_passed is None:
+                eligible = str(runner._final_status or "") in ("succeeded", "completed")
+            else:
+                eligible = bool(oracle_passed)
+            if ts_id and eligible:
                 augur.mark_for_eval(
                     step_index=max(0, len(state.results) - 1),
                     reason=f"representative_success:{ts_id}",
                 )
             augur.close(status=runner._final_status or None)
             runner._augur = None
+
+    def _apply_oracle_reward(self, results: list) -> bool | None:
+        """Grade the env oracle and stamp its verdict on the terminal step (#906).
+
+        Opt-in: the runner must carry ``_oracle_url`` + ``_oracle_task_id``
+        (set by the server from the suite's ``_oracle_*`` keys for sim-env eval
+        runs). Returns ``True``/``False`` for the oracle verdict, or ``None``
+        when no oracle is configured (caller falls back to plan-completion).
+
+        The oracle is ground truth; we overwrite the terminal step's
+        ``verifier`` verdict so Augur's reward formula scores the run by what
+        actually happened, not the agent's self-assessment.
+        """
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        oracle_url = str(getattr(runner, "_oracle_url", "") or "").rstrip("/")
+        task_id = str(getattr(runner, "_oracle_task_id", "") or "")
+        if augur is None or not oracle_url or not task_id:
+            return None
+        admin = str(getattr(runner, "_oracle_admin_token", "") or "")
+        preview = str(getattr(runner, "_oracle_preview_token", "") or "")
+        headers = {"X-Daytona-Skip-Preview-Warning": "true"}
+        if admin:
+            headers["X-Env-Admin"] = admin
+        if preview:
+            headers["x-daytona-preview-token"] = preview
+        passed: bool | None = None
+        try:
+            import requests
+            resp = requests.get(
+                f"{oracle_url}/__env__/oracle", params={"task_id": task_id},
+                headers=headers, timeout=20,
+            )
+            passed = bool(resp.json().get("passed"))
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks the run
+            logger.warning("[#906] oracle grade failed (%s): %s", task_id, exc)
+            return None
+        score = 1.0 if passed else 0.0
+        term_idx = max(0, len(results) - 1)
+        # Per-step shaping so GRPO siblings vary by HOW WELL they did, not only
+        # pass/fail — otherwise an all-pass / all-fail group is degenerate (zero
+        # group-relative advantage) even when the policy clearly differed in
+        # effort. ``process`` = efficiency (fewer brain iterations → higher);
+        # ``progress`` = task progress (1.0 on success, else fraction of steps
+        # that succeeded). Both populate the reward formula's process (0.5) /
+        # progress (1.5) terms via score_components — the trainer-feedback fix.
+        process, progress = self._shaping_components(results, passed=passed)
+        try:
+            augur.set_score(
+                term_idx, score, comparator="verifier",
+                components={"oracle_pass": score, "process": process, "progress": progress},
+            )
+            logger.warning(
+                "[#906] oracle verdict stamped: task=%s passed=%s process=%.3f progress=%.3f step=%s",
+                task_id, passed, process, progress, term_idx,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[#906] set_score failed: %s", exc)
+        return passed
+
+    def _shaping_components(self, results: list, *, passed: bool) -> "tuple[float, float]":
+        """Return ``(process, progress)`` in [0,1] for per-step reward shaping.
+
+        ``process`` (efficiency): fewer brain iterations relative to the step
+        budget → higher. Read from the AugurAdapter's per-step emission counts
+        (the policy's effort) so it varies meaningfully across siblings even
+        when the outcome is identical. ``progress``: 1.0 on success, else the
+        fraction of plan steps that succeeded (partial credit so all-fail
+        siblings still differ by how far they got)."""
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        emissions = dict(getattr(augur, "_step_emission_counts", {}) or {})
+        effort = sum(emissions.values()) if emissions else len(results)
+        cap = max(int(getattr(runner, "max_steps", 0) or 0), len(results) * 4, 20)
+        process = max(0.0, min(1.0, 1.0 - (effort / cap))) if cap else 0.0
+        if passed:
+            progress = 1.0
+        else:
+            n_ok = sum(1 for r in results if getattr(r, "success", False))
+            progress = round(n_ok / max(1, len(results)), 4)
+        return round(process, 4), round(progress, 4)
+
+    def _apply_model_judge_reward(self, results: list) -> None:
+        """Grade the run with a model judge + write the verdict (#906 extension).
+
+        Opt-in via ``runner._model_judge_enabled``. Reads the task instruction
+        (``runner._task_instruction`` → falls back to the eval task_spec) and
+        the terminal step's screenshot, asks a different-family Claude judge
+        whether the task succeeded, and writes:
+
+        * ``record_judge_decision(judge_type="model", promote=False)`` for
+          ``judge_ids`` provenance (operative verdict unchanged — the gate
+          stays oracle-only), and
+        * ``set_score(comparator="model-judge")`` for the ``rm_outcome`` reward
+          term (the only outcome signal on oracle-less tasks).
+        """
+        runner = self.parent
+        augur = getattr(runner, "_augur", None)
+        if augur is None or not bool(getattr(runner, "_model_judge_enabled", False)):
+            return
+        if not results:
+            return
+        # #906 guardrail: the judge is the PRIMARY outcome signal only on
+        # oracle-LESS tasks. Where an env oracle exists it is authoritative —
+        # running the judge there lets a judge "fail" override the oracle's
+        # verifier in the reward formula (the gate stays oracle-only), so skip
+        # unless explicitly forced into cross-check mode.
+        has_oracle = bool(str(getattr(runner, "_oracle_task_id", "") or "").strip())
+        if has_oracle and not bool(getattr(runner, "_model_judge_force", False)):
+            return
+        instruction = str(getattr(runner, "_task_instruction", "") or "").strip()
+        if not instruction:
+            spec = getattr(runner, "_eval_task_spec", None) or {}
+            instruction = str((spec or {}).get("instruction", "") or "").strip()
+        if not instruction:
+            instruction = str(getattr(runner, "plan_name", "") or "").replace("_", " ")
+        png = getattr(results[-1], "screenshot_png", None)
+        if not png:
+            return
+        term_idx = max(0, len(results) - 1)
+        try:
+            from ..learning.model_judge import ModelJudge
+            judge = ModelJudge(
+                model=str(getattr(runner, "_model_judge_model", "") or "")
+                or "claude-sonnet-4-6",
+            )
+            verdict = judge.judge(instruction, png)
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks the run
+            logger.warning("[#906-judge] grade failed: %s", exc)
+            return
+        if verdict is None:
+            return
+        augur.record_judge_decision(
+            term_idx, judge_id=judge.judge_id, judge_type="model",
+            status=verdict.status, reason=verdict.reason,
+            confidence=verdict.confidence, promote=False,
+        )
+        augur.set_score(
+            term_idx, verdict.score, comparator="model-judge",
+            components={"judge_confidence": float(verdict.confidence)},
+        )
+        logger.warning(
+            "[#906-judge] model-judge: passed=%s conf=%.2f step=%s (%s)",
+            verdict.passed, verdict.confidence, term_idx, judge.judge_id,
+        )
 
     def _emit_augur_env_fingerprint(self, step_index: int) -> None:
         """Stamp the current step's env fingerprint (#633 §4).

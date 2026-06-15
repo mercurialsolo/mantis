@@ -843,7 +843,19 @@ def execute_step(
         getattr(runner, "_step_handler_override", {}).get(index)
         if hasattr(runner, "_step_handler_override") else None
     )
-    if override == "holo3" and runner.brain is not None:
+    # #908: force the Holo3 brain-grounded loop from the first attempt (not only
+    # on failure-escalation) so RL rollouts exercise the POLICY (brain.think) —
+    # that's the only path that emits planner-layer modelio + per-token logprobs,
+    # which the GRPO importance ratio ρ_t = exp(logπ_θ − logπ_old) requires.
+    # Gated to grounding-bearing action steps so deterministic navigate stays
+    # deterministic. Opt-in via the suite's ``_force_holo3_grounding``.
+    _force_holo3 = (
+        bool(getattr(runner, "_force_holo3_grounding", False))
+        and runner.brain is not None
+        and bool(getattr(step, "grounding", False))
+        and step.type in ("click", "submit")
+    )
+    if (override == "holo3" or _force_holo3) and runner.brain is not None:
         # Bump the budget on escalation — the canonical case is
         # "scroll down to find an off-screen target then click it",
         # but in CRM / settings flows the target may also live on a
