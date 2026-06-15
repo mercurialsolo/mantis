@@ -45,6 +45,66 @@ follow-up:** add an upload oracle — e.g. avatar/document upload to `mantis_aut
   the split, drives `task_text` from `metadata.start_path`, then grades via
   `GET /__env__/oracle?task_id=metadata.oracle_task_id` → `criteria.task_success`.
 
+## Generating GRPO sibling rollouts (`run_rollout_sweep.py`)
+
+The slow loop needs **sibling groups**: N rollouts of the *same* task instance
+(template × env-seed) that share a `group_id`, with reward variance across
+siblings so the group-relative advantage is non-zero.
+`run_rollout_sweep.py` turns `SeedSweepGenerator` specs into real graded runs —
+each sibling submits the template's micro-plan at `temperature > 0` (divergent
+trajectories), forces Holo3 grounding (per-token logprobs for the GRPO ratio),
+and is graded by the env oracle (#906).
+
+```
+python experiments/holdout/run_rollout_sweep.py indeed.t01_search_save_remote \
+    --seed 42 --siblings 3 --temperature 0.7 --max-parallel 4
+```
+
+**THIS SPENDS** — N sibling Modal GPU runs per `(template, seed)`.
+
+### Per-state-key parallelism (`state_key_dispatcher.py`)
+
+Mantis **cannot** service two concurrent calls that share a `state_key`: the key
+resolves (`server_utils.resolve_ids`) to a Chrome `profile_id` (user-data-dir)
+*and* a `workflow_id` (checkpoint), so two in-flight runs on one key race on the
+same profile + checkpoint. **Distinct keys are safe to run in parallel** (Modal
+scales out containers via `@modal.concurrent`).
+
+`StateKeyDispatcher` encodes that rule with the collision policy chosen **per
+call**:
+
+| Mode | `session=` | Behavior | Used by |
+|---|---|---|---|
+| **independent** | `False` (default) | auto-allocate a *fresh unique* `state_key`, run in parallel up to `max_parallel` | the sweep — siblings each get a distinct `sweep-<spec_id>` key |
+| **session** | `True` | reuse a caller-supplied `state_key`, queued **FIFO** behind other session calls on that key (one at a time); distinct session keys still run in parallel | logged-in profiles / resumable checkpoints |
+
+Waiting session calls don't occupy a worker slot (the real work is submitted to
+the pool only once its same-key predecessor finishes), so a same-key backlog
+can't deadlock the pool.
+
+```python
+from state_key_dispatcher import Call, StateKeyDispatcher
+
+with StateKeyDispatcher(max_parallel=4) as d:
+    # independent: 4 rollouts in parallel, each its own fresh key
+    results = d.run_all([Call(make_work(spec)) for spec in specs])
+
+    # session: two calls that must share one logged-in profile → serialized FIFO
+    f1 = d.submit(step_a, state_key="acme-session", session=True)
+    f2 = d.submit(step_b, state_key="acme-session", session=True)  # waits for f1
+```
+
+The sweep fans out siblings with `--max-parallel` (default 4; `1` = the old
+sequential behavior). `variance-seek` stays sequential (decide, then add one) but
+routes through the dispatcher too. Pure-Python/threads (no network) → unit-tested
+in `tests/test_state_key_dispatcher.py`.
+
+> **Throughput caveat:** client-side parallelism only becomes wall-clock speedup
+> if the deployed CUA server actually runs the distinct-key calls on separate
+> Modal containers. `MANTIS_RUNTIME_CONCURRENCY` defaults to 1 *per container*, so
+> real parallelism comes from scale-out (`@modal.concurrent` min/max containers) —
+> size the autoscaler max to match your `--max-parallel`.
+
 ## Freezing into an Augur eval-version (the official holdout)
 
 The producer pipeline (mantis #901/#902) emits a `task_spec` + a `mark_for_eval`

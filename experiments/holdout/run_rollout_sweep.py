@@ -39,6 +39,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sealed_plans import SANDBOXES, SEALED_TASKS  # noqa: E402
+from state_key_dispatcher import Call, StateKeyDispatcher  # noqa: E402
 
 import run_sealed_task as rst  # noqa: E402  (reuse env-resolve/submit/grade seams)
 
@@ -225,6 +226,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="keep adding siblings (to --max-siblings) until the group has mixed outcomes (real GRPO variance)")
     ap.add_argument("--max-siblings", type=int, default=6,
                     help="variance-seek cap on total siblings per group")
+    ap.add_argument("--max-parallel", type=int, default=4,
+                    help="client-side cap on simultaneous sibling runs. Siblings each "
+                         "get a distinct state_key (sweep-<spec_id>), so they are safe "
+                         "to fan out in parallel; 1 = sequential (old behavior)")
     args = ap.parse_args(argv)
 
     if args.task_key not in SEALED_TASKS:
@@ -262,7 +267,16 @@ def main(argv: list[str] | None = None) -> int:
                             task_text=spec_def.get("task_text", ""),
                             oracle_less=args.no_oracle)
 
-    results = [_run(spec) for spec in specs]
+    # Siblings each carry a distinct state_key (sweep-<spec_id> → its own Chrome
+    # profile + checkpoint), so they're INDEPENDENT under Mantis's per-state-key
+    # rule and safe to fan out in parallel up to --max-parallel. The dispatcher's
+    # resolved key is unused here (each _run already stamps its own ids).
+    dispatcher = StateKeyDispatcher(max_parallel=max(1, args.max_parallel))
+    print(f"[sweep] dispatching {len(specs)} siblings with max_parallel={args.max_parallel}")
+    results = dispatcher.run_all(
+        [Call((lambda s: lambda _k: _run(s))(spec), state_key=f"sweep-{spec.spec_id}")
+         for spec in specs]
+    )
 
     # Variance gate (mantis-trainer feedback): a group is GRPO-usable with real
     # reward spread — mixed outcomes OR (with #906 process/progress shaping)
@@ -278,8 +292,14 @@ def main(argv: list[str] | None = None) -> int:
             spec_id=f"{template.template_id}__seed{args.seed}__s{idx}",
             template=template, env_seed=args.seed, group_id=gid, sibling_index=idx,
         )
-        results.append(_run(extra))
+        # variance-seek is inherently sequential (decide, then add one), so this
+        # single extra goes straight through the dispatcher and we await it.
+        results.append(
+            dispatcher.submit((lambda s: lambda _k: _run(s))(extra),
+                              state_key=f"sweep-{extra.spec_id}").result()
+        )
 
+    dispatcher.shutdown()
     gate = _classify_group(results, _augur_group_rewards(gid, env))
     print("\n[sweep result]")
     print(json.dumps({
