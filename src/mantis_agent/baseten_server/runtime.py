@@ -822,6 +822,7 @@ class BasetenCUARuntime:
                             "augur metadata write failed run=%s: %s",
                             run_id, exc,
                         )
+                task_suite = None
                 if payload.get("_mode") == "pure_cua":
                     result = self._run_pure_cua(payload, run_id=run_id)
                 else:
@@ -837,6 +838,15 @@ class BasetenCUARuntime:
                 # this exact shape on the next ``action=status`` round-trip.
                 if result.get("_paused"):
                     pause_payload = result.pop("pause_state", None) or {}
+                    # Persist the RESOLVED micro-suite in the checkpoint so
+                    # action=resume restores the exact paused plan verbatim —
+                    # never re-decompose (LLM, non-deterministic) or re-load the
+                    # container-local ``decomposed_<hash>.json`` cache, which can
+                    # MISS on a different replica → fresh plan → signature
+                    # mismatch → run wedged in 'paused' forever (end-user bug,
+                    # run 20260615_074614). Keyed implicitly by run_id (the file).
+                    if task_suite and not pause_payload.get("resolved_task_suite"):
+                        pause_payload["resolved_task_suite"] = task_suite
                     self._save_pause_state(run_id, pause_payload)
                     self._save_detached_result(run_id, result)
                     self._write_detached_status(
@@ -1210,26 +1220,35 @@ class BasetenCUARuntime:
                 raise RuntimeError(
                     f"resume in progress for {run_id!r}; poll status before retrying"
                 )
-            # Synchronous plan-signature guard so a stale pause_state
-            # surfaces as a 400 on this round-trip — not later via
-            # status polling on a doomed worker.
-            stored_sig = str(pause_state.get("plan_signature", ""))
-            current_sig = ""
-            try:
-                rebuilt_suite = self._task_suite_from_payload(dict(original_payload))
-                current_sig = str(rebuilt_suite.get("_plan_signature", ""))
-            except Exception:  # noqa: BLE001 — surface the mismatch, not the rebuild error
-                current_sig = ""
-            if stored_sig and current_sig and stored_sig != current_sig:
-                raise ValueError(
-                    "plan signature mismatch on resume: stored "
-                    f"{stored_sig[:12]!r} ≠ current {current_sig[:12]!r}. "
-                    "The plan referenced by this run_id has changed since it paused."
-                )
             resume_payload = dict(original_payload)
             resume_payload["_detached_run_id"] = run_id
             resume_payload["_resume_pause_state"] = pause_state
             resume_payload["_resume_user_input"] = user_input
+            # Restore the EXACT paused plan from the checkpoint — verbatim, no
+            # re-decompose and no hash-cache lookup. Passing it as ``task_suite``
+            # makes _task_suite_from_payload return it as-is, so the plan can't
+            # drift across replicas and the signature always matches. (Fixes the
+            # end-user "plan signature mismatch on resume → wedged paused" bug.)
+            stored_suite = pause_state.get("resolved_task_suite")
+            if stored_suite:
+                resume_payload["task_suite"] = dict(stored_suite)
+            else:
+                # Legacy pauses (pre-checkpoint-suite) fall back to the
+                # re-derive + signature guard so a genuinely changed plan still
+                # surfaces as a 400 rather than running the wrong plan.
+                stored_sig = str(pause_state.get("plan_signature", ""))
+                current_sig = ""
+                try:
+                    rebuilt_suite = self._task_suite_from_payload(dict(original_payload))
+                    current_sig = str(rebuilt_suite.get("_plan_signature", ""))
+                except Exception:  # noqa: BLE001 — surface the mismatch, not the rebuild error
+                    current_sig = ""
+                if stored_sig and current_sig and stored_sig != current_sig:
+                    raise ValueError(
+                        "plan signature mismatch on resume: stored "
+                        f"{stored_sig[:12]!r} ≠ current {current_sig[:12]!r}. "
+                        "The plan referenced by this run_id has changed since it paused."
+                    )
             now = _utc_now()
             self._write_detached_status(
                 run_id,
