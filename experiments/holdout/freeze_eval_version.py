@@ -49,7 +49,19 @@ from typing import Any
 import requests
 
 DEFAULT_BASE = "https://mantis-cua.ngrok-free.app/api/v1"
-DEFAULT_TENANT = "staffai"
+
+
+def _default_tenant() -> str:
+    """Tenant from ``AUGUR_TENANT`` env, else the ``tenant=`` param of
+    ``AUGUR_DSN`` — never hard-code a tenant/customer name in source
+    (tests/test_docs_client_isolation)."""
+    t = (os.environ.get("AUGUR_TENANT") or "").strip()
+    if t:
+        return t
+    dsn = os.environ.get("AUGUR_DSN", "")
+    if "tenant=" in dsn:
+        return dsn.split("tenant=", 1)[1].split("&", 1)[0]
+    return ""
 
 # An (status_code, json_body) HTTP seam so the logic is testable without network.
 HttpGet = Callable[[str, dict[str, str]], "tuple[int, Any]"]
@@ -164,7 +176,7 @@ def freeze_version(
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Freeze an Augur eval-version from producer candidates")
     ap.add_argument("--base", default=os.environ.get("AUGUR_BASE", DEFAULT_BASE))
-    ap.add_argument("--tenant", default=os.environ.get("AUGUR_TENANT", DEFAULT_TENANT))
+    ap.add_argument("--tenant", default=_default_tenant())
     ap.add_argument("--list", action="store_true", help="list freezable candidates and exit (read-only)")
     ap.add_argument("--name", help="eval-version name to freeze")
     ap.add_argument("--description", default="")

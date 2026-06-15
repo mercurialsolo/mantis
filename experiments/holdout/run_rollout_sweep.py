@@ -144,22 +144,26 @@ def _augur_group_rewards(group_id: str, env: dict[str, str]) -> dict[str, float]
     for the group — the reward the trainer actually standardizes. Bearer reads
     only; returns {} on any failure so the gate falls back to local outcomes."""
     base = "https://mantis-cua.ngrok-free.app/api/v1"
+    dsn = env.get("AUGUR_DSN", "")
     key = env.get("AUGUR_API_KEY") or (
-        env.get("AUGUR_DSN", "").split("token=", 1)[-1].split("&", 1)[0]
-        if "token=" in env.get("AUGUR_DSN", "") else ""
+        dsn.split("token=", 1)[-1].split("&", 1)[0] if "token=" in dsn else ""
+    )
+    # Tenant from env/DSN — never hard-code a customer name in source.
+    tenant = (env.get("AUGUR_TENANT") or "").strip() or (
+        dsn.split("tenant=", 1)[1].split("&", 1)[0] if "tenant=" in dsn else ""
     )
     if not key:
         return {}
     h = {"Authorization": f"Bearer {key}", "ngrok-skip-browser-warning": "1"}
     out: dict[str, float] = {}
     try:
-        runs = requests.get(f"{base}/runs?tenant=staffai&group_id={group_id}&limit=50",
+        runs = requests.get(f"{base}/runs?tenant={tenant}&group_id={group_id}&limit=50",
                             headers=h, timeout=30).json()
         for r in (runs.get("result") or runs.get("runs") or []):
             rid = r.get("run_id")
             if not rid:
                 continue
-            rew = requests.get(f"{base}/runs/{rid}/reward/default-v1?tenant=staffai",
+            rew = requests.get(f"{base}/runs/{rid}/reward/default-v1?tenant={tenant}",
                                headers=h, timeout=30).json()
             er = rew.get("episode_return")
             if er is not None:
