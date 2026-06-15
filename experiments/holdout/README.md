@@ -54,14 +54,16 @@ turns that live candidate pool into the frozen version:
 1. Run each `sealed` task through Mantis (real plan per env). Successes auto-flag
    as `source:producer` eval candidates (augur#178). Inspect what's freezable:
    `python experiments/holdout/freeze_eval_version.py --list` (read-only).
-2. Freeze the sealed split into an immutable Augur **eval-version**:
+2. Freeze the sealed split into an immutable Augur **eval-version**, passing the
+   explicit `task_spec_ids` (augur#181 honors the filter):
+   `POST /eval-versions {name, task_spec_ids:[…]}` (operator session) — or
    `AUGUR_SESSION_COOKIE='session=…' python experiments/holdout/freeze_eval_version.py
-   --name mantis-holdout-v1 --select-prefix boattrader.`
+   --name mantis-holdout-v1 --task-spec-id micro_indeed.t01_search_save_remote.v1 …`
 3. `python -m mantis_trainer.holdout --version mantis-holdout-v1 --out tasks/eval_set.json`
    materializes the runnable holdout.
 
-**Status (2026-06-14): `mantis-holdout-v1` is frozen** — run-backed, containing 3
-oracle-verified producer candidates: `micro_indeed.t01_search_save_remote.v1`
+**Status (2026-06-14): `mantis-holdout-v1` is frozen — CLEAN** (3 distinct
+oracle-verified task_specs, no probe noise): `micro_indeed.t01_search_save_remote.v1`
 (search+save), `micro_indeed.t03_employer_review_applicant.v1` (navigate),
 `micro_linkedin.t02_post_text_update.v1` (crud_create) — 2 envs, 3 capability
 types. Each was driven through the deployed Modal CUA server against its live
@@ -75,15 +77,13 @@ rejected (401). Done from a logged-in Augur tab via an in-page
 the session cookie; never exposed). `freeze_eval_version.py` does the same with
 `AUGUR_SESSION_COOKIE` when headless.
 
-**Curation gap (augur#181) — the version is a SUPERSET.** `POST /eval-versions`
-snapshots the *entire merged candidate pool* (`{name, description}` only; no
-`task_spec_ids` filter). Producer `mark_for_eval` tags are sticky: `demote-from-eval`
-returns 200 but is a no-op for them, and `bulk/archive` sets `archived_at` but the
-merge ignores it. So `mantis-holdout-v1` also carries 6 probe candidates from
-`#901/#902` verification runs (`mantis:probe` env, `micro_example_com`). **Consumer
-workaround:** the gate/materializer filters to specs that map to a manifest
-`oracle_task_id` (the probe specs have no env/oracle mapping → skipped). Fixed
-cleanly once augur#181 lands (exclude archived from merge, or honor `task_spec_ids`).
+**Curation (augur#181 — RESOLVED).** `POST /eval-versions` now honors a
+`task_spec_ids` / `run_ids` filter **and** the candidate merge now excludes
+archived runs — so a version freezes to exactly the specs you select. `v1` is
+frozen with the explicit 3 `task_spec_ids` and contains no probe noise. (Before
+#181: freeze snapshotted the whole pool; `demote-from-eval` no-op'd producer tags
+and `bulk/archive`'s `archived_at` was ignored — the v0 superset that motivated
+the issue.)
 
 **Keying note.** Producer candidates are keyed `micro_<env>.<plan_name>.v1`
 (`build_micro_suite` prefixes `micro_`), e.g. `micro_indeed.t01_search_save_remote.v1`
