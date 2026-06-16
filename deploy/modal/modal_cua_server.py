@@ -875,6 +875,23 @@ def _run_holo3_executor(
     else:
         print(f"Holo3 GGUF cached at {HOLO3_MODEL_DIR}")
 
+    # #promote: champion cutover. Once a challenger passes the gate (registry
+    # champion: sft-c3e0d799f432-f00fa0 — win_rate 1.0 / +0.3 / p=0.969 / 0 reg over
+    # the v2 holdout), serve its merged GGUF as the DEFAULT model (-m); the base
+    # mmproj is reused (vision tensors aren't fine-tuned). This is the default-path
+    # swap (healthy), distinct from the per-request _challenger_model override which
+    # still takes precedence below. Env-overridable so rollback is a redeploy with
+    # HOLO3_CHAMPION_GGUF="" (falls back to the stock base), or `modal app rollback`.
+    _champion_gguf = os.environ.get(
+        "HOLO3_CHAMPION_GGUF",
+        f"{TRAINER_MOUNT}/checkpoints/sft-c3e0d799f432-f00fa0/merged.Q8_0.gguf",
+    )
+    if _champion_gguf and os.path.exists(_champion_gguf):
+        print(f"[promote] default model = champion challenger: {_champion_gguf}")
+        model_path = _champion_gguf
+    elif _champion_gguf:
+        print(f"[promote] champion gguf {_champion_gguf!r} absent on mount — serving base")
+
     # #911: optional LoRA challenger. ``_lora_adapter`` in the suite → apply the
     # adapter to the Holo3 GGUF base via ``--lora`` (served model name unchanged).
     # The base model id is needed only if a raw PEFT dir must be converted; the
@@ -968,12 +985,21 @@ def _run_holo3_executor(
         profile_dir=profile_dir,
     )
     from mantis_agent.extraction import ClaudeExtractor, ExtractionSchema
+    # #508 parity (was a Modal↔Baseten gap): a top-level `extraction_schema` —
+    # injected into the suite as `_extraction_schema` by the /v1/predict handler —
+    # wins over the plan-derived `_objective`, mirroring baseten_server.runtime.
+    # Without this the Modal CUA path silently ran schema-less → the extractor
+    # rejected with `no_schema_configured`.
     schema = None
-    objective_data = task_suite.get("_objective")
-    if objective_data:
-        from mantis_agent.graph.objective import ObjectiveSpec
-        objective = ObjectiveSpec.from_dict(objective_data)
-        schema = ExtractionSchema.from_objective(objective)
+    payload_schema = task_suite.get("_extraction_schema")
+    if isinstance(payload_schema, dict):
+        schema = ExtractionSchema.from_dict(payload_schema)
+    else:
+        objective_data = task_suite.get("_objective")
+        if objective_data:
+            from mantis_agent.graph.objective import ObjectiveSpec
+            objective = ObjectiveSpec.from_dict(objective_data)
+            schema = ExtractionSchema.from_objective(objective)
     # Per-plan extractor model override — A/B-able from the submit
     # payload via `build_micro_suite(extractor_model=...)`. Empty
     # falls through to ClaudeExtractor's default. Print so operators
@@ -2858,6 +2884,18 @@ def build_api_app(executor_resolver=None, function_call_lookup=None,
             task_file_contents = _build_suite_from_payload(payload)
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(400, str(exc)) from exc
+
+        # #508 parity: forward a top-level `extraction_schema` into the suite as
+        # `_extraction_schema` so the executor's extractor honors it (baseten did
+        # this; the Modal CUA path silently dropped it → `no_schema_configured`).
+        _payload_schema = payload.get("extraction_schema")
+        if isinstance(_payload_schema, dict):
+            try:
+                _suite_obj = json.loads(task_file_contents)
+                _suite_obj["_extraction_schema"] = _payload_schema
+                task_file_contents = json.dumps(_suite_obj)
+            except (ValueError, TypeError):
+                pass  # non-JSON suite (rare) → leave as-is
 
         # DX-3 (#785 follow-up): dry-run preview. Returns the resolved
         # task_suite + summary + cost estimate without acquiring the

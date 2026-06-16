@@ -58,3 +58,25 @@ The `capture_link_in_new_tab` handler:
 - The `target_role` field is **ignored** by pure-CUA executors. Plans that rely on it must declare `runtime.compute_backend: browser_use_plane` (#785).
 - Selectors above are observed at 2026-06-07. HN's markup is stable but not contractually so; if a selector starts missing, log a recipe update PR — don't silently fall back to vision.
 - Vision fallback is intentional when `target_role` resolves to no selector for the current site — keeps the plan author's intent observable rather than crashing.
+
+## Pure-CUA (vision) path — what works, what doesn't (live, 2026-06-16)
+
+Run against the deployed `mantis-cua-server` (holo3 vision CUA, `cua_model: holo3`),
+without the Browser-Use Plane:
+
+- **Navigate + render: works.** HN loads cleanly (verified by the run's screenshot).
+- **Single-viewport extraction: works *once the schema is plumbed*.** Supply an
+  `extraction_schema` (top-level on `/v1/predict`) or a plan `_objective` with the
+  fields. A real story extracted end-to-end, e.g.
+  `{"title": "Running local models is good now", "points": "642"}`.
+  - **Note:** the top-level `extraction_schema` was previously **dropped on the
+    Modal CUA path** (honored only on Baseten) → the extractor rejected
+    `no_schema_configured`. Fixed — `modal_cua_server` now forwards it (mirrors
+    `baseten_server`). Before the fix, pass the schema via the plan `_objective`.
+- **Full-list collection (scroll + extract loop): NOT reliable on pure-CUA.** A
+  `navigate → extract → scroll → loop` plan (`plans/hn_frontpage.json`, local)
+  halts on `scroll_no_movement_advance` (the holo3 scroll action isn't detected as
+  page movement; `budget:12` doesn't change it), and per-viewport extraction is
+  inconsistent (sometimes the page title instead of stories). This is the #785
+  conclusion: **reliable HN list/URL collection needs the DOM-aware Browser-Use
+  Plane recipe above**, not vision-only. A newer model doesn't change this.
