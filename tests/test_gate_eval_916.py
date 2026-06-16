@@ -62,6 +62,25 @@ def test_challenger_arm_sets_adapter():
     assert suite["_lora_adapter"] == "mantis-trainer-vol:/checkpoints/sft-x"
 
 
+def test_challenger_model_full_swap_arm():
+    # #918: full-model-swap challenger sets _challenger_model (not _lora_adapter).
+    suite = rge.build_eval_suite(
+        _SPEC, _INFO, arm=rge.CHALLENGER, task_key=_KEY,
+        challenger_model="mantis-trainer-vol:/checkpoints/sft-x/merged.Q8_0.gguf",
+    )
+    assert suite["_challenger_model"].endswith("merged.Q8_0.gguf")
+    assert "_lora_adapter" not in suite
+
+
+def test_challenger_model_takes_precedence_over_adapter():
+    suite = rge.build_eval_suite(
+        _SPEC, _INFO, arm=rge.CHALLENGER, task_key=_KEY,
+        lora_adapter="vol:/a.gguf", challenger_model="vol:/m.gguf",
+    )
+    assert suite["_challenger_model"] == "vol:/m.gguf"
+    assert "_lora_adapter" not in suite
+
+
 def test_arms_use_distinct_profile_ids():
     champ = rge.build_eval_suite(_SPEC, _INFO, arm=rge.CHAMPION, task_key=_KEY)
     chal = rge.build_eval_suite(_SPEC, _INFO, arm=rge.CHALLENGER, task_key=_KEY)

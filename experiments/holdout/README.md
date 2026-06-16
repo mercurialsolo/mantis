@@ -116,13 +116,25 @@ The trainer's gate evaluates a **challenger** (`base + LoRA adapter`, #911) vs t
 feeds the per-arm results to `promotion_gate.evaluate` → a `GateVerdict`.
 
 ```
-# champion (base) vs challenger (adapter) over the 3 mantis-holdout-v1 tasks
+# champion (base) vs challenger over the 3 mantis-holdout-v1 tasks.
+# Holo3 (qwen3_5_moe): use --challenger-model (a merged full GGUF, #918) — its
+# LoRA *adapter* can't be GGUF-converted, but the *merged* model can.
 python experiments/holdout/run_gate_eval.py \
     --task indeed.t01_search_save_remote \
     --task indeed.t03_employer_review_applicant \
     --task linkedin.t02_post_text_update \
-    --lora-adapter mantis-trainer-vol:/checkpoints/sft-c3e0d799f432
+    --challenger-model mantis-trainer-vol:/checkpoints/sft-c3e0d799f432/merged.Q8_0.gguf
+# (non-MoE / vLLM bases instead take --lora-adapter <ref>, a --lora overlay.)
 ```
+
+**#918 — why `--challenger-model` for Holo3.** `/v1/predict` serves a challenger
+two ways: `_lora_adapter` (a `--lora` overlay) or `_challenger_model` (a full
+merged-GGUF `-m` swap). Holo3's `qwen3_5_moe` LoRA adapter can't be converted to
+GGUF (`convert_lora_to_gguf` doesn't support the MoE arch), but the **merged**
+model can (`convert_hf_to_gguf` does — the base GGUF proves it). The trainer
+produces the merged GGUF (peft `merge_and_unload` → `convert_hf_to_gguf.py` →
+quantize Q8_0 → `mantis-trainer-vol`); the runner serves it via `-m`, reusing the
+base `--mmproj`. This is what unblocks real (non-`failed`) challenger arms.
 
 Each (task, arm) gets a distinct `profile_id` (`gate-<arm>-<task>`), so the two
 arms never collide on one Chrome profile (the per-`profile_id` 409 rule) and all

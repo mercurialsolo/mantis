@@ -1,17 +1,23 @@
-# Holo3 promotion-gate CHALLENGER (#911) — base + trained LoRA adapter.
+# Holo3 promotion-gate CHALLENGER (#911/#918) — full merged model.
 #
-# Identical to ../holo3/config.yaml (the CHAMPION) except for two things:
-#   1. a `weights:` entry that mounts the trained GGUF adapter, and
-#   2. `MANTIS_LORA_ADAPTER` in the start_command pointing at it.
-# The champion deployment leaves the adapter unset → serves the base. The gate
-# points MANTIS_CHAMPION_ENDPOINT at the champion deploy and MANTIS_EVAL_ENDPOINT
-# at this one, then compares win-rate over the frozen holdout.
+# Holo3 is qwen3_5_moe: its LoRA *adapter* can't be GGUF-converted
+# (convert_lora_to_gguf doesn't support the MoE arch — #918), but the *merged*
+# full model can (convert_hf_to_gguf supports it — the base GGUF proves it). So a
+# Holo3 challenger is served as a **full-model swap**, not a `--lora` overlay.
 #
-# IMPORTANT: swap the adapter `source` below for YOUR trained checkpoint. It must
-# be a **pre-converted GGUF** LoRA adapter (llama.cpp `convert_lora_to_gguf.py`,
-# run in the trainer) — the serving image has no torch/transformers to convert a
-# raw PEFT dir. Redeploy per the repo rule: `--no-cache` + a unique
-# `--deployment-name` (feedback_baseten_deployment_name_uniqueness).
+# This deployment is identical to ../holo3/config.yaml (the CHAMPION) except it
+# points MANTIS_HOLO3_MODEL_DIR at the trained, merged, GGUF-converted model
+# (mounted via `weights:`) instead of the stock base. The champion deploy serves
+# the base; the gate points MANTIS_CHAMPION_ENDPOINT at it and
+# MANTIS_EVAL_ENDPOINT at this one.
+#
+# TRAINER STEPS to produce the artifact (heavy; done in the trainer, not here):
+#   1. peft merge_and_unload: adapter + Hcompany/Holo3-35B-A3B → merged HF dir
+#   2. llama.cpp convert_hf_to_gguf.py <merged_dir> --outfile merged.gguf
+#   3. llama-quantize merged.gguf Holo3-challenger.Q8_0.gguf Q8_0
+#   4. publish (HF repo or Baseten weights source) alongside the base mmproj
+# Swap the `source` below for your merged-model repo. Redeploy per the repo rule:
+# `--no-cache` + a unique `--deployment-name` (feedback_baseten_deployment_name_uniqueness).
 model_name: mantis-holo3-cua-challenger
 external_package_dirs:
   - ../../../src
@@ -28,8 +34,8 @@ build_commands:
   - cd /opt/llama.cpp && cmake -B build -DGGML_CUDA=ON -DGGML_NATIVE=OFF -DGGML_AMX_TILE=OFF -DGGML_AMX_INT8=OFF -DGGML_AMX_BF16=OFF -DCMAKE_CUDA_ARCHITECTURES="80;90" -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON && cmake --build build --target llama-server --config Release -j$(nproc)
   - mkdir -p /workspace/mantis-data && ln -snf /workspace/mantis-data /data
 docker_server:
-  # MANTIS_LORA_ADAPTER → base + adapter (see baseten_server.runtime._boot_lora_args).
-  start_command: bash -lc "PYTHONPATH=/packages MANTIS_MODEL=holo3 MANTIS_LLAMA_PORT=18080 MANTIS_DATA_DIR=/workspace/mantis-data MANTIS_REPO_ROOT=/packages MANTIS_LORA_ADAPTER=/models/holo3_adapter/adapter.gguf MANTIS_MAX_RUNTIME_MINUTES=240 MANTIS_MAX_COST_USD=75 MANTIS_MAX_STEPS_PER_PLAN=500 MANTIS_CONTEXT_SIZE=32768 MANTIS_FORM_TARGET_PROVIDER=holo3 uvicorn mantis_agent.baseten_server:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 300"
+  # MANTIS_HOLO3_MODEL_DIR points at the merged challenger model (full-model swap).
+  start_command: bash -lc "PYTHONPATH=/packages MANTIS_MODEL=holo3 MANTIS_LLAMA_PORT=18080 MANTIS_DATA_DIR=/workspace/mantis-data MANTIS_REPO_ROOT=/packages MANTIS_HOLO3_MODEL_DIR=/models/holo3_challenger MANTIS_MAX_RUNTIME_MINUTES=240 MANTIS_MAX_COST_USD=75 MANTIS_MAX_STEPS_PER_PLAN=500 MANTIS_CONTEXT_SIZE=32768 MANTIS_FORM_TARGET_PROVIDER=holo3 uvicorn mantis_agent.baseten_server:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 300"
   server_port: 8000
   predict_endpoint: /predict
   readiness_endpoint: /health
@@ -43,16 +49,16 @@ runtime:
     stop_traffic_threshold_seconds: 1800
     restart_threshold_seconds: 1800
 weights:
+  # CHALLENGER: the trained, merged, GGUF-converted full model + the base mmproj
+  # (vision projector is not fine-tuned). Replace `source` with your repo.
+  - source: "hf://your-org/holo3-challenger-merged-gguf@main"
+    mount_location: "/models/holo3_challenger"
+    allow_patterns:
+      - "*.Q8_0.gguf"
   - source: "hf://mradermacher/Holo3-35B-A3B-GGUF@main"
-    mount_location: "/models/holo3"
+    mount_location: "/models/holo3_challenger"
     allow_patterns:
-      - "Holo3-35B-A3B.Q8_0.gguf"
       - "Holo3-35B-A3B.mmproj-f16.gguf"
-  # CHALLENGER adapter — replace with your trained GGUF-converted LoRA checkpoint.
-  - source: "hf://your-org/holo3-challenger-lora-gguf@main"
-    mount_location: "/models/holo3_adapter"
-    allow_patterns:
-      - "adapter.gguf"
 secrets:
   anthropic_api_key: null
   proxy_url: null

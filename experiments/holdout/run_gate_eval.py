@@ -90,12 +90,15 @@ def build_eval_suite(
     arm: str,
     task_key: str,
     lora_adapter: str = "",
+    challenger_model: str = "",
 ) -> dict[str, Any]:
     """Build the ``/v1/predict`` ``task_suite`` for one (task, arm).
 
-    Champion arm omits ``_lora_adapter`` (serves the base); challenger arm sets it
-    (serves base + adapter, #911). ``profile_id``/``workflow_id`` are scoped per
-    (arm, task) so the two arms never collide on one Chrome profile (#912).
+    Champion arm serves the base (no challenger field); challenger arm sets either
+    ``_challenger_model`` (#918 full merged-GGUF swap — the working path for the
+    qwen3_5_moe Holo3 base) or ``_lora_adapter`` (#911 adapter, for non-MoE/vLLM
+    bases). ``profile_id``/``workflow_id`` are scoped per (arm, task) so the two
+    arms never collide on one Chrome profile (#912).
     """
     micro = _micro_plan_dicts(spec_def, info["url"])
     domain = spec_def["oracle_task_id"].split(".")[0]
@@ -109,7 +112,9 @@ def build_eval_suite(
     suite["_oracle_task_id"] = spec_def["oracle_task_id"]
     suite["_oracle_admin_token"] = info["admin_token"]
     suite["_oracle_preview_token"] = info["preview_token"]
-    if lora_adapter:  # #911 — challenger arm
+    if challenger_model:  # #918 — full-model swap challenger arm
+        suite["_challenger_model"] = challenger_model
+    elif lora_adapter:  # #911 — adapter challenger arm
         suite["_lora_adapter"] = lora_adapter
     return suite
 
@@ -152,10 +157,13 @@ def arm_from_results(results: list[dict[str, Any]], label: str = "arm") -> ArmRe
 
 def _run_one(
     task_key: str, spec_def: dict[str, Any], info: dict[str, str], token: str,
-    *, arm: str, lora_adapter: str, max_steps: int, poll_seconds: int,
+    *, arm: str, lora_adapter: str, challenger_model: str, max_steps: int, poll_seconds: int,
 ) -> dict[str, Any]:
     """Submit one (task, arm) to /v1/predict, poll to terminal, oracle-grade."""
-    suite = build_eval_suite(spec_def, info, arm=arm, task_key=task_key, lora_adapter=lora_adapter)
+    suite = build_eval_suite(
+        spec_def, info, arm=arm, task_key=task_key,
+        lora_adapter=lora_adapter, challenger_model=challenger_model,
+    )
     code, resp = rst._post(token, {
         "task_suite": suite, "profile_id": suite["_profile_id"],
         "workflow_id": suite["_workflow_id"], "cua_model": "holo3",
@@ -197,8 +205,8 @@ def _resolve_envs(task_keys: list[str], dayt: str) -> dict[str, dict[str, str]]:
 
 
 def run_gate(
-    task_keys: list[str], *, lora_adapter: str, max_steps: int, poll_seconds: int,
-    max_parallel: int, gate: PromotionGate,
+    task_keys: list[str], *, lora_adapter: str = "", challenger_model: str = "",
+    max_steps: int, poll_seconds: int, max_parallel: int, gate: PromotionGate,
 ) -> tuple[GateVerdict, list[dict[str, Any]]]:
     """Run champion + challenger arms over the holdout tasks and gate them."""
     env = rst._load_env()
@@ -217,9 +225,10 @@ def run_gate(
         spec = SEALED_TASKS[task_key]
         info = infos[spec["env"]]
         adapter = lora_adapter if arm == CHALLENGER else ""
+        cmodel = challenger_model if arm == CHALLENGER else ""
         return lambda _k: _run_one(
             task_key, spec, info, token, arm=arm, lora_adapter=adapter,
-            max_steps=max_steps, poll_seconds=poll_seconds,
+            challenger_model=cmodel, max_steps=max_steps, poll_seconds=poll_seconds,
         )
 
     dispatcher = StateKeyDispatcher(max_parallel=max(1, max_parallel))
@@ -238,7 +247,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--task", action="append", dest="tasks", default=[],
                     help=f"holdout task key (repeatable); known: {sorted(SEALED_TASKS)}")
     ap.add_argument("--lora-adapter", default="",
-                    help="#911 challenger adapter ref (omit ⇒ challenger == base, sanity run)")
+                    help="#911 challenger adapter ref (--lora; non-MoE / vLLM bases)")
+    ap.add_argument("--challenger-model", default="",
+                    help="#918 full merged-GGUF challenger ref (-m swap; the working path "
+                         "for the qwen3_5_moe Holo3 base). Mutually exclusive with --lora-adapter")
     ap.add_argument("--max-steps", type=int, default=25)
     ap.add_argument("--poll-seconds", type=int, default=600)
     ap.add_argument("--max-parallel", type=int, default=4)
@@ -267,18 +279,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {len(keys)} task(s) → {args.emit_tasks}")
         return 0
 
-    if not args.lora_adapter:
-        print("⚠️  no --lora-adapter: champion and challenger both serve the base "
+    if args.lora_adapter and args.challenger_model:
+        print("ERROR: pass only one of --lora-adapter / --challenger-model", file=sys.stderr)
+        return 2
+    if not args.lora_adapter and not args.challenger_model:
+        print("⚠️  no challenger ref: champion and challenger both serve the base "
               "(a plumbing sanity run — expect delta≈0, promote=False).", file=sys.stderr)
 
     verdict, results = run_gate(
-        keys, lora_adapter=args.lora_adapter, max_steps=args.max_steps,
-        poll_seconds=args.poll_seconds, max_parallel=args.max_parallel,
-        gate=PromotionGate(),
+        keys, lora_adapter=args.lora_adapter, challenger_model=args.challenger_model,
+        max_steps=args.max_steps, poll_seconds=args.poll_seconds,
+        max_parallel=args.max_parallel, gate=PromotionGate(),
     )
     print("\n[gate eval result]")
     print(json.dumps({
         "lora_adapter": args.lora_adapter,
+        "challenger_model": args.challenger_model,
         "results": results,
         "verdict": {
             "promote": verdict.promote, "reason": verdict.reason,

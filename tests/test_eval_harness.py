@@ -317,6 +317,26 @@ def test_http_runner_attaches_adapter_on_plan_text_path(monkeypatch):
     assert bodies[0]["task_suite"]["_lora_adapter"] == "/data/ckpt/x"
 
 
+def test_http_runner_challenger_model_full_swap(monkeypatch):
+    bodies = _capture_post(monkeypatch)
+    runner = _http_runner_factory(
+        "https://x.modal.run", challenger_model="mantis-trainer-vol:/checkpoints/sft-x/m.gguf"
+    )
+    runner(_micro_task())
+    assert bodies[0]["task_suite"]["_challenger_model"].endswith("m.gguf")
+    assert "_lora_adapter" not in bodies[0]["task_suite"]
+
+
+def test_http_runner_challenger_model_precedence(monkeypatch):
+    bodies = _capture_post(monkeypatch)
+    runner = _http_runner_factory(
+        "https://x.modal.run", lora_adapter="/a.gguf", challenger_model="/m.gguf"
+    )
+    runner(_micro_task())
+    assert bodies[0]["task_suite"]["_challenger_model"] == "/m.gguf"
+    assert "_lora_adapter" not in bodies[0]["task_suite"]
+
+
 def test_http_runner_forwards_cua_model(monkeypatch):
     bodies = _capture_post(monkeypatch)
     runner = _http_runner_factory("https://x.modal.run", cua_model="fara")

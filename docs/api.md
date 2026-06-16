@@ -102,7 +102,8 @@ The following go **inside `task_suite`** (not top-level), alongside the plan:
 
 | Suite field | Description |
 |---|---|
-| `_lora_adapter` | ([#911](https://github.com/mercurialsolo/mantis/issues/911)) Serve **base + this LoRA adapter** (the promotion-gate *challenger*). A ref `"<volume>:/checkpoints/<algo>"` (the trainer volume `mantis-trainer-vol` is mounted read-only on the executors) or a mounted path. For llama.cpp bases (`holo3`) prefer a pre-converted `.gguf` adapter; vLLM bases serve the PEFT dir directly. Omit to serve the base (the *champion*). **Modal only** — on Baseten the adapter is a deployment-level env (`MANTIS_LORA_ADAPTER`), see [Baseten hosting](hosting/baseten.md). |
+| `_challenger_model` | ([#918](https://github.com/mercurialsolo/mantis/issues/918)) Serve this **full merged-GGUF model** in place of the base (the promotion-gate *challenger* via a `-m` swap, base `--mmproj` reused). This is the working path for the **`holo3` (qwen3_5_moe)** base, whose LoRA *adapter* can't be GGUF-converted but whose *merged* model can. A `"<volume>:/path/merged.gguf"` ref. llama.cpp bases only; mutually exclusive with `_lora_adapter`. |
+| `_lora_adapter` | ([#911](https://github.com/mercurialsolo/mantis/issues/911)) Serve **base + this LoRA adapter** (an *overlay*, not a full swap). A ref `"<volume>:/checkpoints/<algo>"` or a mounted path. For llama.cpp bases a pre-converted `.gguf` adapter (does **not** work for the `holo3` MoE arch — use `_challenger_model`); vLLM bases (`fara`) serve the PEFT dir directly. Omit (with `_challenger_model`) to serve the base. **Modal only** — on Baseten the challenger is a deployment-level env (`MANTIS_LORA_ADAPTER` / `MANTIS_HOLO3_GGUF`), see [Baseten hosting](hosting/baseten.md). |
 | `_lora_name` | vLLM only — served-model-name for the adapter (default `challenger`). |
 | `_lora_scale` | llama.cpp only — adapter scale (default `1.0`; emits `--lora-scaled`). |
 

@@ -476,20 +476,23 @@ def _prepare_lora_serving(
     base_served_name: str = "model",
     llamacpp_base_model: str | None = None,
 ):
-    """Resolve (and, for a raw PEFT dir, materialize) a LoRA challenger (#911).
+    """Resolve (and, for a raw PEFT dir, materialize) a LoRA / full-model
+    challenger (#911, #918).
 
-    Returns a :class:`ServingPlan`. When the suite carries no ``_lora_adapter``
-    the plan is base-only (no extra args, base served-name) and the production
-    path is unchanged. For a llama.cpp base whose ref is a raw PEFT dir (not a
-    pre-converted ``.gguf``), runs the convert step once and caches the GGUF on
-    ``/data`` — but the recommended path is for the trainer to emit a ``.gguf``
-    adapter so the serving image needs no torch/transformers deps.
+    Returns a :class:`ServingPlan`. When the suite carries no challenger field
+    (``_lora_adapter`` or ``_challenger_model``) the plan is base-only and the
+    production path is unchanged. ``_challenger_model`` (#918) → a full merged
+    GGUF served via ``-m`` (the only path that works for the qwen3_5_moe Holo3
+    base). ``_lora_adapter`` (#911) → ``--lora`` (a pre-converted ``.gguf``, or a
+    raw PEFT dir converted once + cached — note convert_lora_to_gguf does NOT
+    support the MoE adapter, which is why Holo3 uses ``_challenger_model``).
     """
     from mantis_agent.serving.lora_serving import ServingPlan, plan_serving
 
     # No challenger → base-only. Short-circuit (don't call serving_backend, which
     # fail-fasts on unknown bases) so the common production path is untouched.
-    if not str(suite.get("_lora_adapter") or "").strip():
+    if not (str(suite.get("_lora_adapter") or "").strip()
+            or str(suite.get("_challenger_model") or "").strip()):
         return ServingPlan(
             backend="base", lora_active=False, served_model_name=base_served_name
         )
@@ -502,6 +505,18 @@ def _prepare_lora_serving(
         base_served_name=base_served_name,
         llamacpp_base_model=llamacpp_base_model,
     )
+
+    # #918: full-model-swap challenger — verify the merged GGUF exists, no convert.
+    if plan.model_path_override:
+        print(f"[#918] serving full-model challenger tag={plan.challenger_tag} "
+              f"model={plan.model_path_override}")
+        if not os.path.exists(plan.model_path_override):
+            raise RuntimeError(
+                f"[#918] challenger model not found at {plan.model_path_override!r} — is "
+                f"{TRAINER_VOL_NAME} populated and the ref correct? "
+                f"({suite.get('_challenger_model')!r})"
+            )
+        return plan
 
     print(
         f"[#911] serving challenger adapter tag={plan.challenger_tag} "
@@ -827,11 +842,14 @@ def _run_holo3_executor(
     lora_plan = _prepare_lora_serving(
         _suite_preview, "holo3", llamacpp_base_model=(os.environ.get("HOLO3_LORA_BASE") or None)
     )
+    # #918: a full-model-swap challenger serves a merged GGUF via -m (the working
+    # path for the qwen3_5_moe Holo3 LoRA); the base mmproj is reused unchanged.
+    serve_model_path = lora_plan.model_path_override or model_path
 
     # Start llama-server — no reasoning-budget (Holo3 overthinks with budget=512)
     cmd = [
         "/opt/llama.cpp/build/bin/llama-server",
-        "-m", model_path,
+        "-m", serve_model_path,
         "--mmproj", mmproj_path,
         "--host", "0.0.0.0", "--port", "8080",
         "-ngl", "99", "-c", "8192", "-ub", "2048",
