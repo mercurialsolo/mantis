@@ -40,6 +40,7 @@ import argparse
 import json
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,7 @@ def build_eval_suite(
     task_key: str,
     lora_adapter: str = "",
     challenger_model: str = "",
+    run_nonce: str = "",
 ) -> dict[str, Any]:
     """Build the ``/v1/predict`` ``task_suite`` for one (task, arm).
 
@@ -99,10 +101,15 @@ def build_eval_suite(
     qwen3_5_moe Holo3 base) or ``_lora_adapter`` (#911 adapter, for non-MoE/vLLM
     bases). ``profile_id``/``workflow_id`` are scoped per (arm, task) so the two
     arms never collide on one Chrome profile (#912).
+
+    #920: ``run_nonce`` (a per-invocation id) is appended to the profile so a
+    *prior* gate run's stale Chrome-profile lock can't 409 this run and cost an
+    arm. Each gate invocation uses fresh profiles; the env is reset per run so
+    there's no login to preserve.
     """
     micro = _micro_plan_dicts(spec_def, info["url"])
     domain = spec_def["oracle_task_id"].split(".")[0]
-    ident = f"gate-{arm}-{task_key}"
+    ident = f"gate-{arm}-{task_key}" + (f"-{run_nonce}" if run_nonce else "")
     suite = build_micro_suite(micro, domain, profile_id=ident, workflow_id=ident)
     suite["_plan_name"] = spec_def["oracle_task_id"]
     suite["_browser_extra_headers"] = rst._daytona_headers(info["preview_token"])
@@ -157,12 +164,13 @@ def arm_from_results(results: list[dict[str, Any]], label: str = "arm") -> ArmRe
 
 def _run_one(
     task_key: str, spec_def: dict[str, Any], info: dict[str, str], token: str,
-    *, arm: str, lora_adapter: str, challenger_model: str, max_steps: int, poll_seconds: int,
+    *, arm: str, lora_adapter: str, challenger_model: str, run_nonce: str,
+    max_steps: int, poll_seconds: int,
 ) -> dict[str, Any]:
     """Submit one (task, arm) to /v1/predict, poll to terminal, oracle-grade."""
     suite = build_eval_suite(
         spec_def, info, arm=arm, task_key=task_key,
-        lora_adapter=lora_adapter, challenger_model=challenger_model,
+        lora_adapter=lora_adapter, challenger_model=challenger_model, run_nonce=run_nonce,
     )
     code, resp = rst._post(token, {
         "task_suite": suite, "profile_id": suite["_profile_id"],
@@ -215,6 +223,10 @@ def run_gate(
         raise SystemExit("ERROR: MANTIS_API_TOKEN + DAYTONA_API_KEY required")
     infos = _resolve_envs(task_keys, dayt)
 
+    # #920: a per-invocation nonce so fresh profiles are used each run — a prior
+    # run's stale Chrome-profile lock can't 409 this run and cost an arm.
+    nonce = uuid.uuid4().hex[:8]
+
     # One job per (task, arm). Distinct profile_id per job → all independent (#912).
     jobs: list[tuple[str, str]] = []  # (task_key, arm)
     for key in task_keys:
@@ -228,12 +240,13 @@ def run_gate(
         cmodel = challenger_model if arm == CHALLENGER else ""
         return lambda _k: _run_one(
             task_key, spec, info, token, arm=arm, lora_adapter=adapter,
-            challenger_model=cmodel, max_steps=max_steps, poll_seconds=poll_seconds,
+            challenger_model=cmodel, run_nonce=nonce,
+            max_steps=max_steps, poll_seconds=poll_seconds,
         )
 
     dispatcher = StateKeyDispatcher(max_parallel=max(1, max_parallel))
     results = dispatcher.run_all(
-        [Call(_mk(k, arm), state_key=f"gate-{arm}-{k}") for (k, arm) in jobs]
+        [Call(_mk(k, arm), state_key=f"gate-{arm}-{k}-{nonce}") for (k, arm) in jobs]
     )
     dispatcher.shutdown()
 

@@ -90,6 +90,17 @@ def test_arms_use_distinct_profile_ids():
     assert chal["_profile_id"].startswith("gate-challenger-")
 
 
+def test_run_nonce_makes_profiles_unique_across_runs():
+    # #920: a per-invocation nonce → a prior run's stale Chrome lock can't 409 us.
+    a = rge.build_eval_suite(_SPEC, _INFO, arm=rge.CHAMPION, task_key=_KEY, run_nonce="aaaa")
+    b = rge.build_eval_suite(_SPEC, _INFO, arm=rge.CHAMPION, task_key=_KEY, run_nonce="bbbb")
+    assert a["_profile_id"] == f"gate-champion-{_KEY}-aaaa"
+    assert a["_profile_id"] != b["_profile_id"]  # different runs → different profiles
+    # still distinct across arms within a run
+    chal = rge.build_eval_suite(_SPEC, _INFO, arm=rge.CHALLENGER, task_key=_KEY, run_nonce="aaaa")
+    assert chal["_profile_id"] != a["_profile_id"]
+
+
 # ── arm_from_results ────────────────────────────────────────────────────
 
 
