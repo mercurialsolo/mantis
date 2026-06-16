@@ -445,6 +445,7 @@ def _start_vllm(model_dir: str, port: int, tp: int,
     if extra_args:
         cmd.extend(extra_args)
     print(f"Starting vLLM (TP={tp}): {' '.join(cmd[-8:])}")
+    _kill_stale_inference_server()  # #923: free the port if a warm container leaked one
     proc = subprocess.Popen(cmd, stdout=open("/tmp/vllm.log", "w"), stderr=subprocess.STDOUT)
 
     time.sleep(5)
@@ -467,6 +468,45 @@ def _start_vllm(model_dir: str, port: int, tp: int,
         time.sleep(5)
 
     raise RuntimeError("vLLM startup timeout")
+
+
+def _kill_stale_inference_server() -> None:
+    """#923: kill any leftover llama-server / vLLM before booting a new one.
+
+    A run lands on a 1-input container, but Modal keeps containers WARM and reuses
+    them for later runs. If a prior run's inference server is still bound to the
+    fixed port (8080 llama.cpp / 8000 vLLM), the next run's boot loses the
+    ``bind()`` race and crashes (the #923 symptom under gate ``--max-parallel``).
+    Worse, since #911/#918 the served model is per-request, so a reused server may
+    be serving the WRONG model. Kill any stale server first so the new (correct)
+    model binds cleanly. Dependency-free (/proc scan — no procps); no-op on a
+    fresh container.
+    """
+    import glob
+    import signal
+
+    killed = False
+    for cmdline_path in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            with open(cmdline_path, "rb") as f:
+                cmd = f.read().replace(b"\x00", b" ").decode("utf-8", "ignore")
+        except OSError:
+            continue
+        if "llama-server" in cmd or "vllm.entrypoints.openai.api_server" in cmd:
+            try:
+                pid = int(cmdline_path.split("/")[2])
+            except (ValueError, IndexError):
+                continue
+            if pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed = True
+                print(f"[#923] killed stale inference server pid={pid}: {cmd[:60]}")
+            except OSError:
+                pass
+    if killed:
+        time.sleep(1.5)  # let the OS release the listening socket before rebinding
 
 
 def _prepare_lora_serving(
@@ -858,6 +898,7 @@ def _run_holo3_executor(
     ]
     cmd += lora_plan.extra_server_args
     print(f"Starting Holo3 llama-server: {' '.join(cmd[-8:])}")
+    _kill_stale_inference_server()  # #923: free 8080 if a warm container leaked one
     llama_proc = subprocess.Popen(cmd, stdout=open("/tmp/llama.log", "w"), stderr=subprocess.STDOUT)
     wait_for_openai_server(8080, llama_proc, "llama-server")
 
@@ -1806,6 +1847,7 @@ def _run_gemma4_cua_executor(
     if mmproj:
         cmd.extend(["--mmproj", mmproj])
     print(f"Starting Gemma4-CUA: {' '.join(cmd[-8:])}")
+    _kill_stale_inference_server()  # #923: free 8080 if a warm container leaked one
     llama_proc = subprocess.Popen(cmd, stdout=open("/tmp/llama.log", "w"), stderr=subprocess.STDOUT)
     wait_for_openai_server(8080, llama_proc, "llama-server")
 

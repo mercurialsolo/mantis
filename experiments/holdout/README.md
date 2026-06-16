@@ -136,11 +136,19 @@ produces the merged GGUF (peft `merge_and_unload` → `convert_hf_to_gguf.py` �
 quantize Q8_0 → `mantis-trainer-vol`); the runner serves it via `-m`, reusing the
 base `--mmproj`. This is what unblocks real (non-`failed`) challenger arms.
 
-Each (task, arm) gets a distinct `profile_id` (`gate-<arm>-<task>`), so the two
-arms never collide on one Chrome profile (the per-`profile_id` 409 rule) and all
-runs fan out in parallel via `StateKeyDispatcher` (`--max-parallel`, #912).
+Each (task, arm) gets a distinct `profile_id` (`gate-<arm>-<task>-<nonce>`), so the
+two arms never collide on one Chrome profile (the per-`profile_id` 409 rule) and
+all runs fan out in parallel via `StateKeyDispatcher` (`--max-parallel`, #912).
 Omitting `--lora-adapter` runs champion == challenger (a plumbing sanity run;
 expect `delta≈0`, `promote=False`). **This spends** — 2 × N Modal GPU runs.
+
+**Verdict integrity under concurrency (#923).** A run that didn't actually execute
+— infra crash (e.g. a warm-container `llama-server` port collision), cancel, or
+poll timeout — is **fail-closed**: it's scored as a loss (`oracle_passed=False`,
+tagged `infra_failed`) rather than credited from the env oracle, since champion +
+challenger share the env and a crashed arm would otherwise read the *other* arm's
+stale pass. Infra-failed arms are flagged in the summary; re-run them (the
+serving-side port fix in #923 makes `--max-parallel > 1` collision-free).
 
 **Equivalent path:** `--emit-tasks <path>` writes an `eval_harness`-shaped
 `--tasks` JSON with the generated `micro_plan`s, so `training/eval_harness.py
