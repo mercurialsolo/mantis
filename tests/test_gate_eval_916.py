@@ -158,6 +158,63 @@ def test_mapped_arms_drive_promotion_gate():
     assert verdict.promote is True
 
 
+# ── #923 fail-closed on infra failure ───────────────────────────────────
+
+
+def test_failed_arm_is_failclosed_and_skips_stale_oracle(monkeypatch):
+    # A crashed challenger arm (terminal_status=failed) must NOT be credited from
+    # the env oracle (which would show the OTHER arm's stale pass). Fail-closed.
+    graded = {"called": False}
+
+    def fake_post(token, body):
+        if "action" not in body:           # the submit
+            return 200, {"run_id": "r-fail"}
+        return 200, {"status": "failed"}   # status poll → infra crash
+
+    def fake_grade(url, tid, admin, prev):
+        graded["called"] = True
+        return {"passed": True}            # stale env shows a pass
+
+    monkeypatch.setattr(rge.rst, "_post", fake_post)
+    monkeypatch.setattr(rge.rst, "_grade", fake_grade)
+
+    out = rge._run_one(
+        _KEY, _SPEC, _INFO, "tok", arm=rge.CHALLENGER, lora_adapter="",
+        challenger_model="vol:/m.gguf", run_nonce="n1", max_steps=5, poll_seconds=5,
+    )
+    assert out["terminal_status"] == "failed"
+    assert out["oracle_passed"] is False          # not credited
+    assert out["infra_failed"] is True
+    assert graded["called"] is False              # never read the stale oracle
+
+
+def test_succeeded_arm_reads_oracle(monkeypatch):
+    def fake_post(token, body):
+        if "action" not in body:
+            return 200, {"run_id": "r-ok"}
+        return 200, {"status": "completed_with_failures"}
+
+    monkeypatch.setattr(rge.rst, "_post", fake_post)
+    monkeypatch.setattr(rge.rst, "_grade", lambda *a: {"passed": True})
+
+    out = rge._run_one(
+        _KEY, _SPEC, _INFO, "tok", arm=rge.CHAMPION, lora_adapter="",
+        challenger_model="", run_nonce="n1", max_steps=5, poll_seconds=5,
+    )
+    assert out["oracle_passed"] is True
+    assert "infra_failed" not in out
+
+
+def test_submit_error_is_infra_failed(monkeypatch):
+    monkeypatch.setattr(rge.rst, "_post", lambda t, b: (500, {"raw": "boom"}))
+    out = rge._run_one(
+        _KEY, _SPEC, _INFO, "tok", arm=rge.CHALLENGER, lora_adapter="",
+        challenger_model="", run_nonce="n1", max_steps=5, poll_seconds=5,
+    )
+    assert out["oracle_passed"] is False
+    assert out["infra_failed"] is True
+
+
 def test_no_adapter_sanity_run_does_not_promote():
     # champion == challenger (both base) → zero delta → HOLD.
     same = rge.arm_from_results([

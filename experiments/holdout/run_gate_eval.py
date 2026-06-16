@@ -68,6 +68,12 @@ from mantis_agent.server_utils import (  # noqa: E402
 CHAMPION = "champion"
 CHALLENGER = "challenger"
 
+# All terminal statuses (stop polling). _RAN_STATES is the subset where the run
+# actually executed, so the env oracle grade is trustworthy. `failed`/`cancelled`
+# (e.g. a llama-server crash, #923) are terminal but NOT ran → fail-closed.
+_RAN_STATES = {"succeeded", "completed", "completed_with_failures", "halted"}
+_TERMINAL_STATES = _RAN_STATES | {"failed", "cancelled"}
+
 
 def _micro_plan_dicts(spec_def: dict[str, Any], env_url: str) -> list[dict[str, Any]]:
     """Resolve a holdout task's plan steps → built ``_micro_plan`` dicts.
@@ -179,24 +185,35 @@ def _run_one(
     })
     tid = spec_def["oracle_task_id"]
     if code != 200 or not resp.get("run_id"):
-        return {"task_id": tid, "arm": arm, "submit_error": resp, "oracle_passed": False}
+        return {"task_id": tid, "arm": arm, "submit_error": resp,
+                "oracle_passed": False, "infra_failed": True}
     run_id = resp["run_id"]
 
     final = None
     deadline = time.monotonic() + poll_seconds
     while time.monotonic() < deadline:
         _, s = rst._post(token, {"action": "status", "run_id": run_id})
-        if s.get("status") in {"succeeded", "completed", "completed_with_failures",
-                               "failed", "cancelled", "halted"}:
+        if s.get("status") in _TERMINAL_STATES:
             final = s
             break
         time.sleep(8)
 
-    grade = rst._grade(info["url"], tid, info["admin_token"], info["preview_token"])
+    status = (final or {}).get("status")
     cost = float(((final or {}).get("costs") or {}).get("total", 0.0))
+    # #923 fail-closed: a run that didn't actually execute (infra crash — e.g. a
+    # llama-server port collision — , cancel, or poll timeout) must NOT be credited
+    # from the env oracle: champion + challenger share the env, so a crashed arm
+    # would read the OTHER arm's stale pass and corrupt the verdict. Count it as a
+    # loss (oracle_passed=False) and tag it so it's auditable / excludable.
+    if status not in _RAN_STATES:
+        return {"task_id": tid, "arm": arm, "run_id": run_id,
+                "terminal_status": status, "oracle_passed": False,
+                "cost": cost, "infra_failed": True}
+
+    grade = rst._grade(info["url"], tid, info["admin_token"], info["preview_token"])
     return {
         "task_id": tid, "arm": arm, "run_id": run_id,
-        "terminal_status": (final or {}).get("status"),
+        "terminal_status": status,
         "oracle_passed": bool(grade.get("passed")), "cost": cost,
     }
 
@@ -318,6 +335,14 @@ def main(argv: list[str] | None = None) -> int:
             "champion_cost": verdict.champion_cost, "challenger_cost": verdict.challenger_cost,
         },
     }, indent=2))
+    # #923: surface infra failures (e.g. a llama-server port collision) — these are
+    # fail-closed (counted as losses), so flag them so an operator can re-run the
+    # affected arms (ideally --max-parallel 1) rather than trust a flake-skewed verdict.
+    infra = [r for r in results if r.get("infra_failed")]
+    if infra:
+        print(f"\n⚠️  {len(infra)} arm(s) infra-failed (fail-closed as losses) — "
+              f"re-run before trusting the verdict: "
+              f"{[(r.get('arm'), r.get('task_id')) for r in infra]}", file=sys.stderr)
     print(f"\n{'✅ PROMOTE' if verdict.promote else '❌ HOLD'} — {verdict.reason}")
     return 0
 
