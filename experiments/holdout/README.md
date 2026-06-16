@@ -197,6 +197,41 @@ Until those runs land, `eval_set.json` here is the **curated definition** (the
 source of truth for *what* the holdout contains); the Augur eval-version is the
 frozen, run-backed instance.
 
+## Expanding to `mantis-holdout-v2` (#920)
+
+`mantis-holdout-v1` has only **3 runnable tasks** — too few for the gate's paired
+bootstrap to certify a real improvement (a clean win tops out at
+`prob_improvement ≈ 0.70`; clearing `0.95` needs **~15+** tasks). #920 expands the
+holdout so a genuinely better challenger can finally **PROMOTE**.
+
+`sealed_plans.SEALED_TASKS` now carries **~18 tasks across 8 envs** — the 4
+v1-frozen tasks (`status="verified"`) plus **14 v2 candidates**
+(`status="candidate"`), each authored offline and **grounded** from its env's
+`app/oracles/*` + `app/templates/*` (the canonical source). Candidates span
+`login`, `form_fill`, `crud_create`/`crud_edit`, `export`, `navigate` clusters
+across indeed / mercor / auth / shopify / crm / shop.
+
+**Authored offline; not yet runnable.** These are *candidates* — the freeze only
+admits tasks that successfully **ran** (run → eval-candidate → freeze), so each
+needs a live pass. Two-step:
+
+1. **Live-verify** (spend-gated): wire each env's sandbox/URL in `SANDBOXES`
+   (the v2 envs are placeholders today; Modal-hosted envs — crm/shop/shopify/auth
+   — need a Modal URL rather than a Daytona id), then run each candidate through
+   Mantis (`run_sealed_task.py`) until its oracle grades `passed`, fixing
+   interaction quirks (select-vs-text fill, AJAX no-nav, exact labels).
+2. **Freeze** the survivors into `mantis-holdout-v2` via `freeze_eval_version.py`
+   (operator session cookie), then `python -m mantis_trainer.holdout --version
+   mantis-holdout-v2` materializes the runnable set.
+
+**Deliberately excluded** (need capabilities a static plan lacks, authored during
+the live pass instead): `auth.T07_email_otp` (read a *dynamic* OTP from `/inbox`
+at runtime) and `boattrader.BT01/BT02/BT03` (need a live-discovered listing id +
+loop/guard for the Caterpillar-spec / gated-reveal logic).
+
+Re-gating `run_gate_eval.py --challenger-model <ref>` over the frozen v2 is what
+yields the flywheel's first real **PROMOTE**.
+
 ## Why these tasks
 
 - **Type coverage over site coverage** — every capability an agent needs is
