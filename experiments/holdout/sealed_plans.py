@@ -26,13 +26,17 @@ SANDBOXES: dict[str, str] = {
     "mercor": "f0f3ffc9-4879-48a9-98db-b5b5224fe20f",
     "linkedin": "f43c50dd-0edb-4667-8b50-2ff2f697de24",
     "fiverr": "d2c59f51-ca2e-48d2-b436-370b18673b79",
-    # #920 v2-candidate envs — sandbox ids TODO: the live-verification pass
-    # resolves + fills these (Daytona id, or a Modal sim-env URL for the
-    # Modal-hosted envs crm/shop/shopify/auth). Empty ⇒ _daytona_env fails
-    # fast at run time, by design — these tasks aren't runnable until wired.
+    # #920 v2 envs — Daytona-for-all (live-identified 2026-06-16 by reading each
+    # sandbox's /srv/app/oracles/ over the Daytona SDK).
+    "shopify": "3e75162f-0b96-4857-a17c-065b722fa243",  # live, startable
+    "boattrader": "f5dd5b31-890c-4cd6-80b8-a4c12837c50a",  # archived→restored; BT tasks authored live
+    # crm / shop / auth have NO Daytona sandbox — they are Modal-native envs
+    # (deploy/sim_envs/modal_mantis_{crm,shop,auth}.py, Dockerfile-based). Wiring
+    # them needs either a Modal deploy (blocked: shared-secret auth) or a
+    # from-scratch Daytona build (a known hang — feedback_daytona_fresh_build_hang).
+    # Left empty ⇒ _resolve_env fails fast; their candidate tasks are skipped
+    # until one of those paths is taken.
     "auth": "",
-    "boattrader": "",
-    "shopify": "",
     "crm": "",
     "shop": "",
 }

@@ -201,12 +201,13 @@ def _run_one(
     }
 
 
-def _resolve_envs(task_keys: list[str], dayt: str) -> dict[str, dict[str, str]]:
-    """Resolve the Daytona sandbox info for every distinct env, reset each once."""
+def _resolve_envs(task_keys: list[str], env: dict[str, str]) -> dict[str, dict[str, str]]:
+    """Resolve every distinct env (Daytona id or direct Modal/URL), reset each
+    once. Backend-agnostic via ``rst._resolve_env`` (#920)."""
     infos: dict[str, dict[str, str]] = {}
     for env_name in sorted({SEALED_TASKS[k]["env"] for k in task_keys}):
-        print(f"[env] resolving Daytona sandbox for '{env_name}' …")
-        info = rst._daytona_env(SANDBOXES[env_name], dayt)
+        print(f"[env] resolving '{env_name}' …")
+        info = rst._resolve_env(env_name, SANDBOXES.get(env_name, ""), env)
         rst._reset_env(info["url"], info["admin_token"], info["preview_token"])
         infos[env_name] = info
     return infos
@@ -218,10 +219,10 @@ def run_gate(
 ) -> tuple[GateVerdict, list[dict[str, Any]]]:
     """Run champion + challenger arms over the holdout tasks and gate them."""
     env = rst._load_env()
-    token, dayt = env.get("MANTIS_API_TOKEN", ""), env.get("DAYTONA_API_KEY", "")
-    if not token or not dayt:
-        raise SystemExit("ERROR: MANTIS_API_TOKEN + DAYTONA_API_KEY required")
-    infos = _resolve_envs(task_keys, dayt)
+    token = env.get("MANTIS_API_TOKEN", "")
+    if not token:
+        raise SystemExit("ERROR: MANTIS_API_TOKEN required")
+    infos = _resolve_envs(task_keys, env)
 
     # #920: a per-invocation nonce so fresh profiles are used each run — a prior
     # run's stale Chrome-profile lock can't 409 this run and cost an arm.

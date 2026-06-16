@@ -107,6 +107,37 @@ def _daytona_headers(preview_token: str) -> dict[str, str]:
     return h
 
 
+def _resolve_env(env_name: str, sandbox_ref: str, env: dict[str, str]) -> dict[str, str]:
+    """Resolve a holdout env to ``{url, preview_token, admin_token}`` — backend
+    agnostic (#920).
+
+    ``sandbox_ref`` (the ``SANDBOXES[env_name]`` value) is either:
+    * a **direct URL** (``https://…``) — a Modal/other-hosted sim env reached
+      directly (no Daytona preview token). The ``X-Env-Admin`` token comes from
+      ``<ENV>_ADMIN_TOKEN`` (e.g. ``CRM_ADMIN_TOKEN``) or the shared
+      ``ENV_ADMIN_TOKEN`` in ``.env``; or
+    * a **Daytona sandbox id** — resolved via :func:`_daytona_env` (boots uvicorn,
+      returns the preview url + token + the in-sandbox ``ENV_ADMIN_TOKEN``).
+
+    Raises if the env isn't wired (empty ref) so the failure is explicit, not a
+    silent base-env run.
+    """
+    ref = (sandbox_ref or "").strip()
+    if not ref:
+        raise RuntimeError(
+            f"env {env_name!r} is not wired in SANDBOXES (empty) — add a Daytona "
+            f"sandbox id or a direct https URL before running it."
+        )
+    if ref.startswith("http://") or ref.startswith("https://"):
+        admin = (
+            env.get(f"{env_name.upper()}_ADMIN_TOKEN")
+            or env.get("ENV_ADMIN_TOKEN")
+            or ""
+        )
+        return {"url": ref.rstrip("/"), "preview_token": "", "admin_token": admin}
+    return _daytona_env(ref, env.get("DAYTONA_API_KEY", ""))
+
+
 def _reset_env(env_url: str, admin_token: str, preview_token: str) -> tuple[int, str]:
     r = requests.post(
         f"{env_url}/__env__/reset",
@@ -159,13 +190,12 @@ def run(task_key: str, *, max_steps: int = 25, poll_seconds: int = 600) -> int:
     env_name = spec["env"]
     env = _load_env()
     token = env.get("MANTIS_API_TOKEN", "")
-    dayt = env.get("DAYTONA_API_KEY", "")
-    if not token or not dayt:
-        print("ERROR: MANTIS_API_TOKEN + DAYTONA_API_KEY required in .env", file=sys.stderr)
+    if not token:
+        print("ERROR: MANTIS_API_TOKEN required in .env", file=sys.stderr)
         return 2
 
-    print(f"[env] resolving Daytona sandbox for '{env_name}' …")
-    info = _daytona_env(SANDBOXES[env_name], dayt)
+    print(f"[env] resolving env '{env_name}' …")
+    info = _resolve_env(env_name, SANDBOXES.get(env_name, ""), env)
     print(f"  url={info['url']}")
     print(f"  preview_token={'set' if info['preview_token'] else 'MISSING'}  "
           f"admin_token={'set' if info['admin_token'] else 'MISSING'}")
