@@ -215,11 +215,22 @@ across indeed / mercor / auth / shopify / crm / shop.
 admits tasks that successfully **ran** (run → eval-candidate → freeze), so each
 needs a live pass. Two-step:
 
-1. **Live-verify** (spend-gated): wire each env's sandbox/URL in `SANDBOXES`
-   (the v2 envs are placeholders today; Modal-hosted envs — crm/shop/shopify/auth
-   — need a Modal URL rather than a Daytona id), then run each candidate through
-   Mantis (`run_sealed_task.py`) until its oracle grades `passed`, fixing
-   interaction quirks (select-vs-text fill, AJAX no-nav, exact labels).
+1. **Live-verify** (spend-gated): the env resolver (`run_sealed_task._resolve_env`,
+   #920) accepts a `SANDBOXES` value that's a Daytona sandbox id **or** a direct
+   `https://` URL. Env wiring as of 2026-06-16 (identified by reading each
+   sandbox's `/srv/app/oracles/`):
+     - **Daytona-wired:** indeed, mercor, linkedin, fiverr, **shopify**
+       (`3e75162f`), **boattrader** (`f5dd5b31`, archived→restored).
+     - **No Daytona home — `crm` / `shop` / `auth`** are Modal-native envs
+       (`deploy/sim_envs/modal_mantis_*.py`, Dockerfile-based); they have no
+       sandbox, and a from-scratch Daytona build is a known hang. Wire them by
+       Modal-deploying (then put the `web` URL in `SANDBOXES`) — needs the
+       env-secret authorization — or skip them: the ~10–13 Daytona tasks already
+       clear gate significance (at ~⅓ decisive wins, `(2/3)¹⁰≈0.017` →
+       `prob_improvement ≈ 0.98 > 0.95`).
+   Then run each candidate through Mantis (`run_sealed_task.py`) until its oracle
+   grades `passed`, fixing interaction quirks (select-vs-text fill, AJAX no-nav,
+   exact labels).
 2. **Freeze** the survivors into `mantis-holdout-v2` via `freeze_eval_version.py`
    (operator session cookie), then `python -m mantis_trainer.holdout --version
    mantis-holdout-v2` materializes the runnable set.
