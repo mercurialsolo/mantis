@@ -268,7 +268,7 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
 
     # shopify t04 — create a support ticket.
     "shopify.t04_create_support_ticket": {
-        "env": "shopify", "status": "candidate",
+        "env": "shopify", "status": "verified",  # #920 smoke-passed on base 2026-06-17
         "plan_name": "t04_create_support_ticket", "oracle_task_id": "t04_create_support_ticket",
         "task_text": "Create a support ticket with a subject, category, and description.",
         "steps": [
@@ -292,7 +292,7 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
     },
     # shopify t03 — export payouts CSV (audit-logged; download, no nav).
     "shopify.t03_export_payouts_csv": {
-        "env": "shopify", "status": "candidate",
+        "env": "shopify", "status": "verified",  # #920 smoke-passed on base 2026-06-17
         "plan_name": "t03_export_payouts_csv", "oracle_task_id": "t03_export_payouts_csv",
         "task_text": "Export the payouts list as CSV.",
         "steps": [
@@ -302,12 +302,15 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
     },
     # shopify t11 — open a store's detail page from the Stores list.
     "shopify.t11_view_store_detail": {
-        "env": "shopify", "status": "candidate",
+        "env": "shopify", "status": "verified",  # #920 smoke-passed on base 2026-06-17 (nav-direct fix)
         "plan_name": "t11_view_store_detail", "oracle_task_id": "t11_view_store_detail",
         "task_text": "Open a store's detail page from the Stores list.",
         "steps": [
             _nav("{env_url}/stores", "Open the Stores list"),
-            _click("Open the first store's detail page", label="EA demostore", required=False),
+            # Vision click on the store-name link was a no_state_change (the SoM
+            # click didn't navigate); navigate the store-detail URL directly — the
+            # oracle logs `store_viewed` on the GET /stores/<id> route. (#920 v2 fix)
+            _nav("{env_url}/stores/store_00001", "Open store_00001's detail page (EA demostore)"),
         ],
     },
 
@@ -381,3 +384,20 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
         ],
     },
 }
+
+
+# #920 — the runnable v2 holdout: every task here is live-verified on base (oracle
+# `passed`, no infra failure) against a wired Daytona env, so the promotion gate
+# can run against it for a real (if still N-limited) champion/challenger verdict.
+# Grow this as deferred candidates get fixed (indeed.t02 / mercor.t01 multi-step
+# wizards; shopify.t05 multi-Save disambiguation) or Modal-native envs (crm/shop/
+# auth) get wired. `run_gate_eval.py --v2` selects exactly this set.
+V2_HOLDOUT: list[str] = [
+    "indeed.t01_search_save_remote",
+    "indeed.t03_employer_review_applicant",
+    "linkedin.t02_post_text_update",
+    "fiverr.t03_leave_5star_review",
+    "shopify.t03_export_payouts_csv",
+    "shopify.t04_create_support_ticket",
+    "shopify.t11_view_store_detail",
+]
