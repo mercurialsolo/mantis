@@ -195,18 +195,21 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
 
     # indeed t02 — multi-step Easy Apply wizard on job_00012 (jk 000000000000000c).
     "indeed.t02_easy_apply": {
-        "env": "indeed", "status": "candidate",
+        "env": "indeed", "status": "verified",  # #920 smoke-passed on base 2026-06-17 (nav-into-wizard fix)
         "plan_name": "t02_easy_apply", "oracle_task_id": "t02_easy_apply",
         "task_text": "Easy-apply to job_00012 with phone, resume, and screening answers.",
         "steps": [
-            _nav("{env_url}/jobs/000000000000000c", "Open job_00012 and its Easy apply flow"),
-            _click("Click 'Easy apply' to start the application", label="Easy apply", required=False),
+            # /apply/<jk> GET serves step1 directly (the "Apply now" CTA links here);
+            # the wizard is 3 form pages each with a "Continue", then a review →
+            # "Submit application". Contact fields are required + cleanly labelled;
+            # resume (step2) is pre-selected and screening (step3) has defaults.
+            _nav("{env_url}/apply/000000000000000c", "Open the application wizard (step 1: contact info)"),
             _fill("Full name", "Jordan Rivera", "Type the applicant full name"),
             _fill("Email", "jordan.rivera@example.com", "Type the applicant email"),
             _fill("Phone", "(555) 123-4567", "Type the applicant phone"),
-            _submit("Continue", "Advance to the resume step", required=False),
-            _submit("Continue", "Keep the pre-selected resume and advance", required=False),
-            _submit("Continue", "Advance past the screening questions (defaults pre-filled)", required=False),
+            _submit("Continue", "Submit contact info → resume step", required=False),
+            _submit("Continue", "Keep the pre-selected resume → screening step", required=False),
+            _submit("Continue", "Accept screening defaults → review", required=False),
             _submit("Submit application", "Submit the application", required=False),
         ],
     },
@@ -216,14 +219,18 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
         "plan_name": "t01_apply_to_ml_engineer", "oracle_task_id": "t01_apply_to_ml_engineer",
         "task_text": "Apply to job_00001 with the screening answers.",
         "steps": [
-            _nav("{env_url}/jobs/job_00001", "Open job_00001 and its apply flow"),
-            _click("Click 'Apply' to start the application", label="Apply", required=False),
+            # /apply/<id> GET serves step 1; the flow is profile → resume →
+            # screening → review, each advanced by "Next", then "Submit application".
+            _nav("{env_url}/apply/job_00001", "Open the application (step 1: profile)"),
             _fill("Headline", "Internal Medicine Physician, 8 years", "Type the profile headline"),
+            _fill("Skills (comma-separated)", "clinical-reasoning, literature-review, case-study", "Type skills"),
             _fill("Hourly rate ($/hr)", "150", "Type the hourly rate"),
             _submit("Next", "Advance to the resume step", required=False),
             _fill("Resume text", "Board-certified Internal Medicine physician, 8+ years clinical practice with strong diagnostic reasoning.", "Type resume text"),
             _submit("Next", "Advance to the screening step", required=False),
-            _fill("Are you board-eligible or board-certified in Internal Medicine?", "Yes, board-certified", "Answer the board-certification question"),
+            # job_00001 screening_qs (seed.py) — must be non-empty for the oracle.
+            _fill("Are you board-eligible or board-certified in Internal Medicine?", "Yes, board-certified in Internal Medicine.", "Answer the board-certification question"),
+            _fill("Briefly describe a complex case you handled in the last year.", "Managed atypical pneumonia with multi-system complications requiring integrated diagnostic reasoning and literature review.", "Answer the complex-case question"),
             _fill("What is your earliest start date?", "2026-07-01", "Answer the start-date question"),
             _submit("Next", "Advance to review", required=False),
             _submit("Submit application", "Submit the application", required=False),
@@ -268,7 +275,7 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
 
     # shopify t04 — create a support ticket.
     "shopify.t04_create_support_ticket": {
-        "env": "shopify", "status": "candidate",
+        "env": "shopify", "status": "verified",  # #920 smoke-passed on base 2026-06-17
         "plan_name": "t04_create_support_ticket", "oracle_task_id": "t04_create_support_ticket",
         "task_text": "Create a support ticket with a subject, category, and description.",
         "steps": [
@@ -292,7 +299,7 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
     },
     # shopify t03 — export payouts CSV (audit-logged; download, no nav).
     "shopify.t03_export_payouts_csv": {
-        "env": "shopify", "status": "candidate",
+        "env": "shopify", "status": "verified",  # #920 smoke-passed on base 2026-06-17
         "plan_name": "t03_export_payouts_csv", "oracle_task_id": "t03_export_payouts_csv",
         "task_text": "Export the payouts list as CSV.",
         "steps": [
@@ -302,12 +309,15 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
     },
     # shopify t11 — open a store's detail page from the Stores list.
     "shopify.t11_view_store_detail": {
-        "env": "shopify", "status": "candidate",
+        "env": "shopify", "status": "verified",  # #920 smoke-passed on base 2026-06-17 (nav-direct fix)
         "plan_name": "t11_view_store_detail", "oracle_task_id": "t11_view_store_detail",
         "task_text": "Open a store's detail page from the Stores list.",
         "steps": [
             _nav("{env_url}/stores", "Open the Stores list"),
-            _click("Open the first store's detail page", label="EA demostore", required=False),
+            # Vision click on the store-name link was a no_state_change (the SoM
+            # click didn't navigate); navigate the store-detail URL directly — the
+            # oracle logs `store_viewed` on the GET /stores/<id> route. (#920 v2 fix)
+            _nav("{env_url}/stores/store_00001", "Open store_00001's detail page (EA demostore)"),
         ],
     },
 
@@ -381,3 +391,21 @@ SEALED_TASKS: dict[str, dict[str, Any]] = {
         ],
     },
 }
+
+
+# #920 — the runnable v2 holdout: every task here is live-verified on base (oracle
+# `passed`, no infra failure) against a wired Daytona env, so the promotion gate
+# can run against it for a real (if still N-limited) champion/challenger verdict.
+# Grow this as deferred candidates get fixed (indeed.t02 / mercor.t01 multi-step
+# wizards; shopify.t05 multi-Save disambiguation) or Modal-native envs (crm/shop/
+# auth) get wired. `run_gate_eval.py --v2` selects exactly this set.
+V2_HOLDOUT: list[str] = [
+    "indeed.t01_search_save_remote",
+    "indeed.t02_easy_apply",
+    "indeed.t03_employer_review_applicant",
+    "linkedin.t02_post_text_update",
+    "fiverr.t03_leave_5star_review",
+    "shopify.t03_export_payouts_csv",
+    "shopify.t04_create_support_ticket",
+    "shopify.t11_view_store_detail",
+]

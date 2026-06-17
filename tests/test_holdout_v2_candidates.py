@@ -15,9 +15,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "experiments" / "holdout"))
 
-from sealed_plans import SANDBOXES, SEALED_TASKS  # noqa: E402
+from sealed_plans import SANDBOXES, SEALED_TASKS, V2_HOLDOUT  # noqa: E402
 
 _VALID_STEP_TYPES = {"navigate", "click", "submit", "fill_field"}
+
+
+def test_v2_holdout_is_live_verified_and_wired():
+    # The runnable v2 set: every entry exists, is marked verified, on a wired env.
+    assert len(V2_HOLDOUT) >= 6, f"v2 holdout too small: {len(V2_HOLDOUT)}"
+    assert len(set(V2_HOLDOUT)) == len(V2_HOLDOUT), "duplicate task in V2_HOLDOUT"
+    for key in V2_HOLDOUT:
+        assert key in SEALED_TASKS, f"{key} not in SEALED_TASKS"
+        spec = SEALED_TASKS[key]
+        assert spec.get("status", "verified") == "verified", f"{key} is not verified"
+        assert SANDBOXES.get(spec["env"]), f"{key}'s env {spec['env']!r} not wired"
 
 
 def test_holdout_has_enough_tasks_for_gate_significance():

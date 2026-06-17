@@ -48,7 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from sealed_plans import SANDBOXES, SEALED_TASKS  # noqa: E402
+from sealed_plans import SANDBOXES, SEALED_TASKS, V2_HOLDOUT  # noqa: E402
 from state_key_dispatcher import Call, StateKeyDispatcher  # noqa: E402
 
 import run_sealed_task as rst  # noqa: E402  (reuse env-resolve/submit/grade seams)
@@ -287,9 +287,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-parallel", type=int, default=4)
     ap.add_argument("--emit-tasks", default="",
                     help="write an eval_harness --tasks JSON (generated micro_plans) and exit")
+    ap.add_argument("--v2", action="store_true",
+                    help="run the live-verified v2 holdout set (sealed_plans.V2_HOLDOUT)")
     args = ap.parse_args(argv)
 
-    keys = args.tasks or sorted(SEALED_TASKS)
+    keys = args.tasks or (V2_HOLDOUT if args.v2 else sorted(SEALED_TASKS))
     unknown = [k for k in keys if k not in SEALED_TASKS]
     if unknown:
         print(f"unknown task(s) {unknown}; known: {sorted(SEALED_TASKS)}", file=sys.stderr)
