@@ -254,9 +254,10 @@ yields the flywheel's first real **PROMOTE**.
 ### Live-verified runnable v2 set (`V2_HOLDOUT`, 2026-06-17)
 
 Smoke-verified on base (oracle `passed`, no infra failure) → `sealed_plans.V2_HOLDOUT`
-(**7 tasks / 5 envs**): `indeed.t01`, `indeed.t03`, `linkedin.t02`, `fiverr.t03`,
-`shopify.t03_export_payouts_csv`, `shopify.t04_create_support_ticket`,
-`shopify.t11_view_store_detail`. Run the gate against exactly this set:
+(**8 tasks / 5 envs**): `indeed.t01`, `indeed.t02_easy_apply`, `indeed.t03`,
+`linkedin.t02`, `fiverr.t03`, `shopify.t03_export_payouts_csv`,
+`shopify.t04_create_support_ticket`, `shopify.t11_view_store_detail`. Run the gate
+against exactly this set:
 
 ```
 python experiments/holdout/run_gate_eval.py --v2 \
@@ -264,14 +265,22 @@ python experiments/holdout/run_gate_eval.py --v2 \
     --max-parallel 1 --poll-seconds 1200
 ```
 
-**Still candidate / deferred** (offline-authored, failed the base smoke — grow the
-set by fixing these): `indeed.t02_easy_apply` + `mercor.t01_apply_to_ml_engineer`
-(multi-step apply wizards halt mid-flow); `shopify.t05_update_business_email` (fill
-lands but the settings page has multiple section "Save" buttons — needs DOM-level
-disambiguation); and the Modal-native `crm`/`shop`/`auth` tasks (no Daytona
-sandbox). 7 tasks beats the 4-task set but is still N-limited for a
-`prob_improvement ≥ 0.95` margin — fixing the deferred tasks / wiring more envs is
-how v2 reaches significance.
+**Still candidate / deferred** (grow the set by fixing these):
+`mercor.t01_apply_to_ml_engineer` — the re-authored wizard now runs all steps to a
+clean submit, but the oracle still rejects (one of: screening answers not
+persisting from the long dynamic-label fields, or candidate/job mismatch); needs
+DB-state triage. `shopify.t05_update_business_email` — fill lands on the right
+field but the settings page has multiple section "Save" buttons → needs DOM-level
+disambiguation. The Modal-native `crm`/`shop`/`auth` tasks have no Daytona sandbox
+(need a Modal deploy, ≈8 more tasks — the biggest grow). 8 tasks beats the 4-task
+set (at ~⅓ decisive wins `(2/3)⁸≈0.04` → `prob≈0.96`), but a robust
+`prob_improvement ≥ 0.95` margin still wants the deferred tasks fixed / more envs
+wired.
+
+> `indeed.t02` + `mercor.t01` recovered by re-grounding from the env templates:
+> the apply CTA navigates into a multi-page `/apply/<id>` wizard ("Apply now" link,
+> not an "Easy apply" button), so the plan navigates the wizard URL directly then
+> fills each page's exact-labelled fields + Continue/Next → Submit.
 
 ## Why these tasks
 
