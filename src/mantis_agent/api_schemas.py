@@ -324,6 +324,13 @@ class PureCUARequest(BaseModel):
     max_steps: int = Field(default=30, ge=1, le=MAX_STEPS_PER_PLAN)
     frames_per_inference: int = Field(default=1, ge=1, le=8)
 
+    # #931 P2: opt-in screenshot grounding. When true (and the deployment
+    # has an Anthropic key), the brain's click coords are refined by the
+    # screenshot grounding model — the CUA-clean fix for small/ambiguous
+    # targets the brain mis-clicks. Off by default (pure brain); costs
+    # ≈$0.005/click. Falls back to brain-only if no key is available.
+    ground_clicks: bool = False
+
     # Run options (mirrors PredictRequest shape so tenant caps clamp the
     # same way). ``state_key`` / ``profile_id`` / ``workflow_id`` semantics
     # match PredictRequest (#341).

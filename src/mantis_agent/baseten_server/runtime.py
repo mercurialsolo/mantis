@@ -120,6 +120,17 @@ def _chrome_reuse_enabled() -> bool:
     return os.environ.get("MANTIS_CHROME_REUSE", "enabled").lower() != "disabled"
 
 
+def _should_ground_cua_clicks(payload: dict[str, Any], *, has_anthropic_key: bool) -> bool:
+    """#931 P2: whether /v1/cua should refine the brain's clicks with the
+    screenshot grounding model.
+
+    True only when the caller opted in (``ground_clicks``) AND a key is
+    available — without a key ClaudeGrounding can't run, so we fall back to
+    brain-only rather than hard-failing the request.
+    """
+    return bool(payload.get("ground_clicks")) and has_anthropic_key
+
+
 def _chrome_profile_dir_for_suite(task_suite: dict[str, Any]) -> str:
     """Per-tenant, per-profile Chrome user-data-dir for a Baseten request.
 
@@ -2536,12 +2547,29 @@ class BasetenCUARuntime:
                     som_enabled=routing_policy.som_enabled,
                     som_for_unstructured_clicks=bool(override),
                 )
+            # #931 P2: opt-in screenshot grounding for click precision. Pure
+            # CUA is brain-only by default (grounding=None); when the caller
+            # sets ``ground_clicks`` and an Anthropic key is present, refine
+            # the brain's click coords with the screenshot grounding model —
+            # the CUA-clean fix for small/ambiguous targets (vs DOM SoM).
+            cua_grounding = None
+            if _should_ground_cua_clicks(
+                payload, has_anthropic_key=bool(os.environ.get("ANTHROPIC_API_KEY"))
+            ):
+                from mantis_agent.grounding import ClaudeGrounding
+                cua_grounding = ClaudeGrounding(cache=self.grounding_cache)
+                logger.info("  [pure_cua] ground_clicks=true — screenshot grounding enabled")
+            elif bool(payload.get("ground_clicks")):
+                logger.warning(
+                    "  [pure_cua] ground_clicks requested but no ANTHROPIC_API_KEY "
+                    "— running brain-only"
+                )
             runner = GymRunner(
                 brain=brain_for_run,
                 env=env,
                 max_steps=max_steps,
                 frames_per_inference=frames,
-                grounding=None,  # pure CUA: no Claude grounding
+                grounding=cua_grounding,  # None = pure brain; set when ground_clicks opts in
                 page_discovery=page_discovery,
                 routing_policy=routing_policy,
             )
