@@ -7,7 +7,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- Apache-2.0 `LICENSE`, `NOTICE`, `SECURITY.md`, `CONTRIBUTING.md`,
+- AGPL-3.0-or-later `LICENSE`, `NOTICE`, `SECURITY.md`, `CONTRIBUTING.md`,
   `CODE_OF_CONDUCT.md`, GitHub issue templates, and PR template.
 - License metadata, classifiers, keywords, and project URLs in
   `pyproject.toml`.
@@ -17,7 +17,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/integrations/any-agent.md`.
 
 ### Changed
-- License badge in README updated from MIT to Apache-2.0.
+- Relicensed the project to the GNU Affero General Public License v3.0 or later
+  (AGPL-3.0-or-later) — network-copyleft: operators of a modified Mantis offered
+  over a network must provide the corresponding source to its users. `LICENSE`,
+  `NOTICE`, `pyproject.toml`, `CONTRIBUTING.md`, and the README badge updated to
+  match.
 
 ## [0.1.0] - 2025-04-30
 

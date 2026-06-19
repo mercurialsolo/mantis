@@ -3,11 +3,11 @@ Copyright 2025 Mantis contributors
 
 This product includes software developed by the Mantis project contributors.
 
-Licensed under the Apache License, Version 2.0 (the "License"); you may not
-use this product except in compliance with the License. You may obtain a copy
-of the License at:
+Licensed under the GNU Affero General Public License, Version 3.0 or later
+(the "License"); you may not use this product except in compliance with the
+License. You may obtain a copy of the License at:
 
-    http://www.apache.org/licenses/LICENSE-2.0
+    https://www.gnu.org/licenses/agpl-3.0.txt
 
 Third-party components (linked or invoked at runtime) retain their own
 upstream licenses; consult the dependency tree (`pip show <package>`) for
