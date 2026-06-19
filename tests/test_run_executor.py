@@ -836,6 +836,51 @@ def test_no_state_change_skipped_for_non_form_steps(monkeypatch):
     assert state.results[0].data == "ok"
 
 
+def test_submit_kept_when_live_url_changed_despite_stale_snapshot(monkeypatch):
+    """#931 P0: a submit that genuinely navigated (e.g. a connection
+    request / posted form) must NOT be demoted just because the snapshot's
+    stale ``_last_known_url`` showed no delta. The live ``env.current_url``
+    moving is ground-truth proof the submit landed."""
+    from mantis_agent.gym import step_snapshot as _snap
+
+    runner = _runner_stub()
+    runner.env = MagicMock(current_url="https://x.test/feed")
+    runner._pre_step_env_url = "https://x.test/login"
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True, data="ok"))
+
+    monkeypatch.setattr(_snap, "capture", lambda r: MagicMock())
+    monkeypatch.setattr(_snap, "diff", lambda a, b: MagicMock(has_changes=False))
+
+    eff_step = MicroIntent(intent="x", type="submit")
+    RunExecutor(runner)._maybe_demote_form_no_change(state, eff_step, MagicMock())
+
+    assert state.results[0].success is True
+    assert "no_state_change" not in (state.results[0].data or "")
+
+
+def test_submit_still_demotes_when_live_url_unchanged(monkeypatch):
+    """Same live URL + no visual change → genuinely missed submit, still
+    demoted (the live-URL escape must not blanket-suppress demotion)."""
+    from mantis_agent.gym import step_snapshot as _snap
+
+    runner = _runner_stub()
+    runner.env = MagicMock(current_url="https://x.test/login")
+    runner._pre_step_env_url = "https://x.test/login"
+    runner._last_submit_pre_screenshot = None  # visual verifier returns False
+    state = _state()
+    state.results.append(StepResult(step_index=0, intent="x", success=True, data="ok"))
+
+    monkeypatch.setattr(_snap, "capture", lambda r: MagicMock())
+    monkeypatch.setattr(_snap, "diff", lambda a, b: MagicMock(has_changes=False))
+
+    eff_step = MicroIntent(intent="x", type="submit")
+    RunExecutor(runner)._maybe_demote_form_no_change(state, eff_step, MagicMock())
+
+    assert state.results[0].success is False
+    assert ":no_state_change" in state.results[0].data
+
+
 # ── Click-shape no-state-change demote (epic #377 Phase A) ────────
 
 
