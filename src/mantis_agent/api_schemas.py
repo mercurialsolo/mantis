@@ -287,16 +287,28 @@ class PredictRequest(BaseModel):
 
 
 class PureCUARequest(BaseModel):
-    """``POST /v1/cua`` — pure CUA loop: brain ↔ XdotoolGymEnv, no Claude.
+    """``POST /v1/cua`` — pure CUA loop: brain ↔ XdotoolGymEnv.
 
     Bypasses ``PlanDecomposer``, ``ClaudeGrounding`` and ``ClaudeExtractor``
-    entirely. The configured brain (Holo3 / Gemma4) emits screen-space
+    on the main path. The configured brain (Holo3 / Gemma4) emits screen-space
     actions (``click`` / ``double_click`` / ``type_text`` / ``key_press`` /
     ``scroll`` / ``drag`` / ``wait`` / ``done``) which the gym env executes
     directly via xdotool against the headed Chrome inside Xvfb.
 
     Use when you want to measure the brain's intrinsic plan-following and
-    grounding accuracy on a single instruction, with zero Claude assist.
+    grounding accuracy on a single instruction.
+
+    Claude assist is NOT unconditionally absent. Two in-loop hooks fire only
+    when the serving container has ``ANTHROPIC_API_KEY`` set:
+
+    * The Claude *director* (``gym/claude_director.py``) — on a detected
+      action loop it can substitute a single tactical unstuck action
+      (click / scroll / key_press / wait; never ``type_text`` or planning).
+      Disable with ``MANTIS_CUA_DIRECTOR=disabled``.
+    * Opt-in screenshot grounding for click precision when the request sets
+      ``ground_clicks: true`` (see that field).
+
+    With no key and ``ground_clicks`` unset, the loop is brain-only.
     """
 
     model_config = {"extra": "allow"}

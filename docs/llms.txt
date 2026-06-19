@@ -1056,11 +1056,16 @@ perception-action loop and use Holo3 as the brain.
 
 ### 9a. `POST /v1/cua` — Holo3 pass-through (Mantis as a thin CUA driver)
 
-When you want Holo3 to drive the browser directly with **zero Claude
-spend** and **no decomposition** — Mantis becomes a hosted brain ↔
-xdotool loop. Useful for benchmarks measuring intrinsic plan-following,
-or for plugging Mantis into an external CUA harness that already owns
-its own planner.
+When you want Holo3 to drive the browser directly with **no decomposition**
+— Mantis becomes a hosted brain ↔ xdotool loop. Useful for benchmarks
+measuring intrinsic plan-following, or for plugging Mantis into an external
+CUA harness that already owns its own planner.
+
+Claude assist is off by **default**, not absolute: with `ANTHROPIC_API_KEY`
+on the container the in-loop Claude *director* may substitute one tactical
+action to break a detected loop (`MANTIS_CUA_DIRECTOR=disabled` to suppress),
+and `ground_clicks: true` opts into screenshot grounding for click precision.
+For zero Claude spend, deploy without the key / leave `ground_clicks` unset.
 
 ```
 /v1/predict  →  MicroPlanRunner  →  ClaudeExtractor + ClaudeGrounding + Holo3Brain  →  GymRunner

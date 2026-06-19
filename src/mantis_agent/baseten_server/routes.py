@@ -1102,13 +1102,22 @@ async def cua_v1(
     request: Request,
     tenant: TenantConfig = Depends(_require_run_scope),
 ) -> dict[str, Any]:
-    """Pure CUA loop — brain ↔ XdotoolGymEnv only, no Claude.
+    """Pure CUA loop — brain ↔ XdotoolGymEnv.
 
-    Mantis is a pure pass-through for the configured brain (Holo3):
+    Mantis is a pass-through for the configured brain (Holo3) on the main path:
 
     * No ``PlanDecomposer`` — the instruction is handed verbatim.
-    * No ``ClaudeGrounding`` — click coords come straight from the brain.
-    * No ``ClaudeExtractor`` — no post-step verification.
+    * No ``ClaudeGrounding`` — click coords come straight from the brain,
+      unless the request opts in with ``ground_clicks: true``.
+    * No ``ClaudeExtractor`` — though TYPE actions are read back for the
+      ``type_verified`` log/verdict (#931).
+
+    Claude is NOT unconditionally absent: when the container has
+    ``ANTHROPIC_API_KEY``, the in-loop Claude *director* may substitute a
+    single tactical action to break a detected action loop (no planning, no
+    typing). Gate it off with ``MANTIS_CUA_DIRECTOR=disabled``. See
+    :class:`~mantis_agent.api_schemas.PureCUARequest` for the full assist
+    matrix.
 
     Action surface available to the brain (executed by xdotool against
     the headed Chrome inside Xvfb): ``click``, ``double_click``,
