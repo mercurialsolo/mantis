@@ -3,11 +3,11 @@
   "domain": "multi_app",
   "steps": [
     {
-      "intent": "Navigate to the staff CRM at https://staffai-test-crm.exe.xyz",
+      "intent": "Navigate to the CRM login page.",
       "type": "navigate",
       "section": "crm",
       "required": false,
-      "params": {"url": "https://staffai-test-crm.exe.xyz"},
+      "params": {"url": "${CRM_BASE_URL}"},
       "hints": {}
     },
     {

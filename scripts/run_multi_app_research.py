@@ -6,13 +6,14 @@ until terminal. Exercises the #931 fill/submit verification on the CRM
 login plus cross-app navigation. No fixture seeding needed (the plan reads
 "the first lead", any row works).
 
-The CRM-login values in the plan are ``${CRM_USER}`` / ``${CRM_PASSWORD}``
-placeholders — credentials are NOT committed to the repo. Supply them via env
-at run time (the harness substitutes ``${VAR}`` tokens from the environment).
+The CRM target + login values in the plan are ``${CRM_BASE_URL}`` /
+``${CRM_USER}`` / ``${CRM_PASSWORD}`` placeholders — neither the customer CRM
+host nor its credentials are committed to the repo. Supply them via env at run
+time (the harness substitutes ``${VAR}`` tokens from the environment).
 
 Usage::
 
-    MANTIS_API_TOKEN=... CRM_USER=... CRM_PASSWORD=... \\
+    MANTIS_API_TOKEN=... CRM_BASE_URL=https://... CRM_USER=... CRM_PASSWORD=... \\
         uv run python scripts/run_multi_app_research.py
 """
 
