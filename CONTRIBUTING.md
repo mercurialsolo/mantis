@@ -107,4 +107,5 @@ participating you agree to abide by its terms.
 ## License
 
 By contributing, you agree your contributions are licensed under the
-[Apache License 2.0](LICENSE) — the same terms as the rest of the project.
+[GNU Affero General Public License v3.0 or later](LICENSE) — the same terms as
+the rest of the project.

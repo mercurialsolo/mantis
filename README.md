@@ -3,7 +3,7 @@
 A unified perception-reasoning-action agent for computer use. Given a structured plan, Mantis drives a real browser (or any Xvfb-rendered application), takes actions, extracts structured data, and produces both a JSON result and an optional polished video walkthrough.
 
 [![Docs](https://img.shields.io/badge/docs-mkdocs--material-teal)](https://mercurialsolo.github.io/mantis/)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/license-AGPL_v3-blue.svg)](LICENSE)
 
 ```
        ┌──────────────────────┐         ┌─────────────────────────┐
@@ -165,4 +165,8 @@ Don't have `uv`? `pip install -e ".[dev,docs]"` plus the underlying commands
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See [LICENSE](LICENSE).
+
+Mantis is network-copyleft: if you run a modified version of Mantis as a network
+service, you must offer the complete corresponding source of your modified version
+to its users.
