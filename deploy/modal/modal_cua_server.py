@@ -875,17 +875,14 @@ def _run_holo3_executor(
     else:
         print(f"Holo3 GGUF cached at {HOLO3_MODEL_DIR}")
 
-    # #promote: champion cutover. Once a challenger passes the gate (registry
-    # champion: sft-c3e0d799f432-f00fa0 — win_rate 1.0 / +0.3 / p=0.969 / 0 reg over
-    # the v2 holdout), serve its merged GGUF as the DEFAULT model (-m); the base
-    # mmproj is reused (vision tensors aren't fine-tuned). This is the default-path
-    # swap (healthy), distinct from the per-request _challenger_model override which
-    # still takes precedence below. Env-overridable so rollback is a redeploy with
-    # HOLO3_CHAMPION_GGUF="" (falls back to the stock base), or `modal app rollback`.
-    _champion_gguf = os.environ.get(
-        "HOLO3_CHAMPION_GGUF",
-        f"{TRAINER_MOUNT}/checkpoints/sft-c3e0d799f432-f00fa0/merged.Q8_0.gguf",
-    )
+    # #promote: champion cutover — OPT-IN. Serve a gate-promoted champion's merged
+    # GGUF as the default model (-m) ONLY when HOLO3_CHAMPION_GGUF is explicitly set
+    # to its path on the trainer mount (base mmproj reused). Default empty → serve
+    # the stock base. Opt-in (not a hardcoded checkpoint) so we never silently serve
+    # a checkpoint the holdout gate didn't promote: sft-c3e0d799f432-f00fa0 was
+    # promoted on a contaminated 10-task run, then HELD by the clean 8-task v2
+    # holdout (mean_delta -0.125, regresses t01) — so the default is base again.
+    _champion_gguf = os.environ.get("HOLO3_CHAMPION_GGUF", "")
     if _champion_gguf and os.path.exists(_champion_gguf):
         print(f"[promote] default model = champion challenger: {_champion_gguf}")
         model_path = _champion_gguf
