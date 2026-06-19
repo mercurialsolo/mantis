@@ -1,0 +1,143 @@
+{
+  "source_plan": "Multi-app research workflow: authenticate to the staff CRM and read a lead, then traverse two more web apps (lu.ma, Hacker News) and extract from each. Exercises cross-app navigation plus the #931 fill/submit verification on the CRM login.",
+  "domain": "multi_app",
+  "steps": [
+    {
+      "intent": "Navigate to the staff CRM at https://staffai-test-crm.exe.xyz",
+      "type": "navigate",
+      "section": "crm",
+      "required": false,
+      "params": {"url": "https://staffai-test-crm.exe.xyz"},
+      "hints": {}
+    },
+    {
+      "intent": "Enter the CRM user ID in the user ID field (only if the login form is visible; the test CRM may auto-authenticate and show the dashboard directly, in which case this soft-fails and the runner moves on).",
+      "type": "fill_field",
+      "section": "crm",
+      "grounding": true,
+      "required": false,
+      "reverse": "Clear the user ID field",
+      "params": {"label": "user ID", "value": "${CRM_USER}"},
+      "hints": {"skip_if": "dashboard already showing — site may auto-authenticate the test account"}
+    },
+    {
+      "intent": "Enter the CRM password in the password field (only if the login form is visible).",
+      "type": "fill_field",
+      "section": "crm",
+      "grounding": true,
+      "required": false,
+      "reverse": "Clear the password field",
+      "params": {"label": "password", "value": "${CRM_PASSWORD}"},
+      "hints": {"skip_if": "dashboard already showing"}
+    },
+    {
+      "intent": "Click the Login button to authenticate (only if the login form is visible).",
+      "type": "submit",
+      "section": "crm",
+      "required": false,
+      "params": {"label": "Login"},
+      "hints": {"skip_if": "dashboard already showing"}
+    },
+    {
+      "intent": "Open the Leads section from the navigation.",
+      "type": "submit",
+      "section": "crm",
+      "required": false,
+      "params": {"label": "Leads"},
+      "hints": {}
+    },
+    {
+      "intent": "Read the leads table and capture the visible lead names, companies, and statuses.",
+      "type": "extract_data",
+      "section": "crm",
+      "claude_only": true,
+      "required": false,
+      "params": {"claude_only": true},
+      "extract": {
+        "schema_name": "crm_leads",
+        "entity_name": "crm_lead",
+        "fields": [
+          {"name": "name", "type": "str", "required": true},
+          {"name": "company", "type": "str", "required": false},
+          {"name": "status", "type": "str", "required": false}
+        ]
+      },
+      "hints": {}
+    },
+    {
+      "intent": "Click the first lead's name link in the leads table (a row link in the Name column, NOT the pagination bar) to open its detail page.",
+      "type": "submit",
+      "section": "crm",
+      "required": false,
+      "params": {"label": "first lead name"},
+      "hints": {}
+    },
+    {
+      "intent": "Read the lead detail page and capture the company, contact name, and status.",
+      "type": "extract_data",
+      "section": "crm",
+      "claude_only": true,
+      "required": false,
+      "params": {"claude_only": true},
+      "extract": {
+        "schema_name": "crm_lead_detail",
+        "entity_name": "crm_lead_detail",
+        "fields": [
+          {"name": "company", "type": "str", "required": true},
+          {"name": "contact_name", "type": "str", "required": false},
+          {"name": "status", "type": "str", "required": false}
+        ]
+      },
+      "hints": {}
+    },
+    {
+      "intent": "Navigate to lu.ma's event discovery page at https://luma.com/discover",
+      "type": "navigate",
+      "section": "luma",
+      "required": false,
+      "params": {"url": "https://luma.com/discover"},
+      "hints": {}
+    },
+    {
+      "intent": "Read the lu.ma discover page and capture the titles of the first few featured events.",
+      "type": "extract_data",
+      "section": "luma",
+      "claude_only": true,
+      "required": false,
+      "params": {"claude_only": true},
+      "extract": {
+        "schema_name": "luma_events",
+        "entity_name": "luma_event",
+        "fields": [
+          {"name": "title", "type": "str", "required": true}
+        ]
+      },
+      "hints": {}
+    },
+    {
+      "intent": "Navigate to Hacker News at https://news.ycombinator.com",
+      "type": "navigate",
+      "section": "hn",
+      "required": false,
+      "params": {"url": "https://news.ycombinator.com"},
+      "hints": {}
+    },
+    {
+      "intent": "Read the Hacker News front page and capture the rank and title of the top few stories.",
+      "type": "extract_data",
+      "section": "hn",
+      "claude_only": true,
+      "required": false,
+      "params": {"claude_only": true},
+      "extract": {
+        "schema_name": "hn_top",
+        "entity_name": "hn_story",
+        "fields": [
+          {"name": "rank", "type": "int", "required": false},
+          {"name": "title", "type": "str", "required": true}
+        ]
+      },
+      "hints": {}
+    }
+  ]
+}
