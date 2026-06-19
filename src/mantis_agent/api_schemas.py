@@ -331,6 +331,14 @@ class PureCUARequest(BaseModel):
     # ≈$0.005/click. Falls back to brain-only if no key is available.
     ground_clicks: bool = False
 
+    # #931 P3: opt-in decompose-then-cua. When true (and a key is present),
+    # the instruction is decomposed into an ordered sub-goal roadmap by the
+    # Claude decomposer up front, and the brain is driven with that augmented
+    # task — bridging /v1/predict's planning with /v1/cua's open-endedness on
+    # long multi-step flows. Off by default; falls back to the raw
+    # instruction if no key / decomposition fails.
+    decompose: bool = False
+
     # Run options (mirrors PredictRequest shape so tenant caps clamp the
     # same way). ``state_key`` / ``profile_id`` / ``workflow_id`` semantics
     # match PredictRequest (#341).
