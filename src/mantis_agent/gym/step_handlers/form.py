@@ -974,9 +974,68 @@ class ClaudeGuidedFormHandler:
                 time.sleep(0.15)
                 env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Delete"}))
                 time.sleep(0.2)
+                # #931 P1: rich-text editors (LinkedIn message box, Reddit
+                # composer) are contenteditable — the probe reports it via
+                # ``tag_info``. Prefer the host-focused CDP insert, which
+                # the editor's framework registers; fall back to the TYPE
+                # ladder when CDP is unavailable or no editable host is in
+                # focus.
+                is_contenteditable = bool((tag_info or {}).get("contentEditable"))
+                ce_inserted = False
+                if type_value and is_contenteditable:
+                    inserter = getattr(env, "cdp_contenteditable_insert", None)
+                    if callable(inserter):
+                        try:
+                            ce_inserted = bool(inserter(type_value))
+                        except Exception as e:  # noqa: BLE001 — fall back to TYPE
+                            logger.debug("  [claude-form] contenteditable insert failed: %s", e)
+                        if ce_inserted:
+                            time.sleep(0.3)
+                            logger.info(
+                                "  [claude-form] fill_field '%s' = '%s' (contenteditable)",
+                                label[:40], type_value[:30],
+                            )
+                            return StepResult(
+                                step_index=index, intent=step.intent, success=True,
+                                steps_used=2, duration=2.0,
+                                data=f"fill:{label[:40]}:contenteditable",
+                            )
                 if type_value:
-                    env.step(Action(action_type=ActionType.TYPE, params={"text": type_value}))
+                    type_res = env.step(Action(action_type=ActionType.TYPE, params={"text": type_value}))
                     time.sleep(0.4)
+                    # #931 P0: honor the post-type read-back verdict
+                    # (``type_verified``). When it positively shows the
+                    # text didn't land, re-type once, then demote so the
+                    # verdict/log matches reality instead of optimistic
+                    # success. ``tv is None`` (CDP off / no focused field)
+                    # preserves the legacy behavior — no new failures.
+                    tv = (getattr(type_res, "info", None) or {}).get("type_verified")
+                    if tv is not None and not tv.get("success"):
+                        logger.warning(
+                            "  [claude-form] fill_field '%s': typed text not "
+                            "detected (expected %r, field shows %r) — retrying once",
+                            label[:40], type_value[:40], str(tv.get("actual"))[:40],
+                        )
+                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "ctrl+a"}))
+                        time.sleep(0.1)
+                        env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Delete"}))
+                        time.sleep(0.1)
+                        retry_res = env.step(Action(action_type=ActionType.TYPE, params={"text": type_value}))
+                        time.sleep(0.4)
+                        tv2 = (getattr(retry_res, "info", None) or {}).get("type_verified")
+                        if tv2 is not None and not tv2.get("success"):
+                            logger.warning(
+                                "  [claude-form] fill_field '%s': retype still not "
+                                "detected (field shows %r) — failing step",
+                                label[:40], str(tv2.get("actual"))[:40],
+                            )
+                            failed = StepResult(
+                                step_index=index, intent=step.intent, success=False,
+                                steps_used=2, duration=2.0,
+                                data=f"type_not_landed:{label[:30]}",
+                            )
+                            failed.failure_class = "type_not_landed"
+                            return failed
                 logger.info(f"  [claude-form] fill_field '{label[:40]}' = '{type_value[:30]}'")
                 return StepResult(
                     step_index=index, intent=step.intent, success=True,

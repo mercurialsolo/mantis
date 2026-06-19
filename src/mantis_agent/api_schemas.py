@@ -287,16 +287,28 @@ class PredictRequest(BaseModel):
 
 
 class PureCUARequest(BaseModel):
-    """``POST /v1/cua`` — pure CUA loop: brain ↔ XdotoolGymEnv, no Claude.
+    """``POST /v1/cua`` — pure CUA loop: brain ↔ XdotoolGymEnv.
 
     Bypasses ``PlanDecomposer``, ``ClaudeGrounding`` and ``ClaudeExtractor``
-    entirely. The configured brain (Holo3 / Gemma4) emits screen-space
+    on the main path. The configured brain (Holo3 / Gemma4) emits screen-space
     actions (``click`` / ``double_click`` / ``type_text`` / ``key_press`` /
     ``scroll`` / ``drag`` / ``wait`` / ``done``) which the gym env executes
     directly via xdotool against the headed Chrome inside Xvfb.
 
     Use when you want to measure the brain's intrinsic plan-following and
-    grounding accuracy on a single instruction, with zero Claude assist.
+    grounding accuracy on a single instruction.
+
+    Claude assist is NOT unconditionally absent. Two in-loop hooks fire only
+    when the serving container has ``ANTHROPIC_API_KEY`` set:
+
+    * The Claude *director* (``gym/claude_director.py``) — on a detected
+      action loop it can substitute a single tactical unstuck action
+      (click / scroll / key_press / wait; never ``type_text`` or planning).
+      Disable with ``MANTIS_CUA_DIRECTOR=disabled``.
+    * Opt-in screenshot grounding for click precision when the request sets
+      ``ground_clicks: true`` (see that field).
+
+    With no key and ``ground_clicks`` unset, the loop is brain-only.
     """
 
     model_config = {"extra": "allow"}
@@ -311,6 +323,21 @@ class PureCUARequest(BaseModel):
     # GymRunner knobs.
     max_steps: int = Field(default=30, ge=1, le=MAX_STEPS_PER_PLAN)
     frames_per_inference: int = Field(default=1, ge=1, le=8)
+
+    # #931 P2: opt-in screenshot grounding. When true (and the deployment
+    # has an Anthropic key), the brain's click coords are refined by the
+    # screenshot grounding model — the CUA-clean fix for small/ambiguous
+    # targets the brain mis-clicks. Off by default (pure brain); costs
+    # ≈$0.005/click. Falls back to brain-only if no key is available.
+    ground_clicks: bool = False
+
+    # #931 P3: opt-in decompose-then-cua. When true (and a key is present),
+    # the instruction is decomposed into an ordered sub-goal roadmap by the
+    # Claude decomposer up front, and the brain is driven with that augmented
+    # task — bridging /v1/predict's planning with /v1/cua's open-endedness on
+    # long multi-step flows. Off by default; falls back to the raw
+    # instruction if no key / decomposition fails.
+    decompose: bool = False
 
     # Run options (mirrors PredictRequest shape so tenant caps clamp the
     # same way). ``state_key`` / ``profile_id`` / ``workflow_id`` semantics

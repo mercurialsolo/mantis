@@ -102,9 +102,20 @@ def probe_element_tag_at(env: Any, x: int, y: int) -> dict | None:
         f"const vy = {int(y)} - chromeH;"
         "const el = document.elementFromPoint(vx, vy);"
         "if (!el) return null;"
+        # #931 P1: a click into a rich-text editor often lands on a
+        # non-editable child (placeholder overlay, decorative <span>, an
+        # icon, or a child with its own contenteditable=false) whose
+        # ``isContentEditable`` is false — which used to be rejected as
+        # ``form_target_not_input:SPAN``. Walk up to the nearest
+        # contenteditable host so the editor as a whole is recognized.
+        "let editable = !!el.isContentEditable;"
+        "if (!editable && el.closest) {"
+        "  const host = el.closest('[contenteditable=\"\"], [contenteditable=\"true\"]');"
+        "  if (host) editable = true;"
+        "}"
         "return {"
         "tag: (el.tagName || '').toUpperCase(),"
-        "contentEditable: !!el.isContentEditable"
+        "contentEditable: editable"
         "};"
         "})()"
     )

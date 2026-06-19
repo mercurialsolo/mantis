@@ -744,6 +744,116 @@ class XdotoolGymEnv(GymEnvironment):
         ok, _ = self._cdp_call("Input.insertText", {"text": text})
         return ok
 
+    def cdp_contenteditable_insert(self, text: str) -> bool:
+        """#931 P1: replace the focused contenteditable host's content with
+        ``text`` via CDP, then dispatch a synthetic ``input`` event.
+
+        Rich-text editors (LinkedIn's message box, Reddit's composer) are
+        ``contenteditable`` ``<div>``s, not ``<input>``s — the plain TYPE
+        ladder focuses a pixel that may be a non-editable child and the
+        text never lands. Here we focus the nearest editable HOST of the
+        active element, select its contents, insert via ``Input.insertText``
+        (a native input the editor's framework registers), and fire an
+        ``input`` event so Draft/Quill-style editors sync their model.
+
+        Returns ``False`` (caller falls back to the TYPE ladder) when CDP
+        is unavailable or no editable host is in focus. CUA note: this is
+        action-side dispatch of a vision-derived fill, not DOM grounding.
+        """
+        eval_fn = getattr(self, "cdp_evaluate", None)
+        if not callable(eval_fn):
+            return False
+        try:
+            focused = eval_fn(
+                "(() => {"
+                "const a = document.activeElement;"
+                "if (!a) return false;"
+                "const host = a.isContentEditable ? a : "
+                "(a.closest ? a.closest('[contenteditable=\"\"], [contenteditable=\"true\"]') : null);"
+                "if (!host) return false;"
+                "host.focus();"
+                "const sel = window.getSelection();"
+                "if (sel) { const r = document.createRange(); r.selectNodeContents(host);"
+                " sel.removeAllRanges(); sel.addRange(r); }"
+                "return true;"
+                "})()"
+            )
+        except Exception as exc:  # noqa: BLE001 — never fatal; caller falls back
+            logger.debug("cdp_contenteditable_insert focus raised: %s", exc)
+            return False
+        if not focused:
+            return False
+        if not self._cdp_insert_text(text):
+            return False
+        try:
+            eval_fn(
+                "(() => {"
+                "const h = document.activeElement;"
+                "if (h) h.dispatchEvent(new InputEvent('input', "
+                "{bubbles:true, inputType:'insertText'}));"
+                "return true;"
+                "})()"
+            )
+        except Exception:  # noqa: BLE001 — best-effort event sync
+            pass
+        return True
+
+    def _read_active_element_text(self) -> str | None:
+        """Read the focused element's current text via CDP, or ``None``.
+
+        Returns the ``value`` of an ``<input>``/``<textarea>`` or the
+        ``textContent`` of a contenteditable host. ``None`` when there is
+        no focused text field (so the caller treats it as "couldn't
+        verify" rather than "empty"), or on any CDP failure.
+
+        Per ``feedback_cua_cdp_post_action_verify.md`` this is an
+        action-side post-action read (confirming OUR type landed), not
+        DOM-grounding — it never derives the next action's target.
+        """
+        try:
+            return self.cdp_evaluate(
+                "(() => {"
+                "const el = document.activeElement;"
+                "if (!el) return null;"
+                "if (el.isContentEditable) return String(el.textContent == null ? '' : el.textContent);"
+                "if (el.value !== undefined && el.value !== null) return String(el.value);"
+                "return null;"
+                "})()"
+            )
+        except Exception:  # noqa: BLE001 — verification must never be fatal
+            return None
+
+    @staticmethod
+    def _type_matches(expected: str, actual: str) -> bool:
+        """Whitespace-normalized match tolerant of field auto-formatting.
+
+        Exact normalized equality, or expected contained in actual (covers
+        phone/card inputs that inject separators, and prefixed fields).
+        """
+        exp = " ".join((expected or "").split())
+        act = " ".join((actual or "").split())
+        if not exp:
+            return True
+        return exp == act or exp in act
+
+    def _verify_typed_text(self, expected: str) -> dict | None:
+        """Post-type read-back verdict for ``gym_result.info['type_verified']``.
+
+        Returns ``{"success", "expected", "actual"}`` when the focused
+        element could be read, else ``None`` (unverified). Gated by
+        ``MANTIS_VERIFY_TYPE`` (default on) and CDP availability.
+        """
+        if os.environ.get("MANTIS_VERIFY_TYPE", "enabled").strip().lower() in ("0", "off", "disabled", "false"):
+            return None
+        actual = self._read_active_element_text()
+        if actual is None:
+            return None
+        return {
+            "success": self._type_matches(expected, actual),
+            "expected": expected,
+            "actual": actual,
+        }
+
     def cdp_history_back(self, *, settle_seconds: float = 1.5) -> bool:
         """#583: navigate back via ``window.history.back()`` over CDP.
 
@@ -1329,7 +1439,18 @@ class XdotoolGymEnv(GymEnvironment):
                 time.sleep(settle)
 
         obs = self._capture()
-        return GymResult(observation=obs, reward=0.0, done=False, info={})
+        info: dict = {}
+        # #931 P0: read back the focused field after a TYPE so logs and
+        # verdicts reflect whether the text actually landed (kills the
+        # blanket "(unverified)" log). URL-shaped text drives the omnibox
+        # (no DOM field to read) — skip it.
+        if action.action_type == ActionType.TYPE:
+            typed = str(action.params.get("text") or action.params.get("content") or "")
+            if typed and not (typed.startswith("http://") or typed.startswith("https://")):
+                verdict = self._verify_typed_text(typed)
+                if verdict is not None:
+                    info["type_verified"] = verdict
+        return GymResult(observation=obs, reward=0.0, done=False, info=info)
 
     def close(self) -> None:
         """Kill browser and Xvfb.

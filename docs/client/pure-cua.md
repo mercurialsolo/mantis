@@ -29,6 +29,28 @@ from the brain's model space (Holo3 / OpenCUA use Qwen smart-resize;
 Fara uses raw screen pixels at its training resolution — see
 [Coordinate spaces](../reference/coordinate-spaces.md)). On small targets accuracy drops versus the grounded path. That's the whole point of "pure CUA" — you're measuring what the brain can do unassisted.
 
+## How "pure" it actually is (Claude assist matrix)
+
+"No Claude" is the **default**, not an absolute guarantee. Two assists exist:
+
+| Assist | When it fires | What it does |
+|---|---|---|
+| Claude **director** | Container has `ANTHROPIC_API_KEY` **and** an action loop is detected | Substitutes a *single* tactical action (click / scroll / key_press / wait) to break the loop. Never plans, never types. Gate off with `MANTIS_CUA_DIRECTOR=disabled`. |
+| Screenshot **grounding** | Request sets `ground_clicks: true` | Refines the brain's click coords with the screenshot grounding model (≈$0.005/click). Off by default. |
+| **Decompose-then-cua** | Request sets `decompose: true` | Decomposes the instruction into an ordered sub-goal roadmap (Claude) up front and drives the brain with the augmented task — bridges planning and open-endedness on long multi-step flows. Off by default. |
+
+For a strictly brain-only run (e.g. an ablation baseline), deploy without an
+Anthropic key (or set `MANTIS_CUA_DIRECTOR=disabled`) and leave
+`ground_clicks` unset.
+
+Two reliability behaviors apply on this path regardless of Claude:
+
+- **Typed-text read-back** — after each `type_text`, the focused field is read
+  back so the run log says `(verified)` / `TYPING FAILED` instead of the old
+  blanket `(unverified)` (#931). Disable with `MANTIS_VERIFY_TYPE=disabled`.
+- **Contenteditable** rich-text editors (message boxes, composers) are filled
+  via a host-focused CDP insert rather than raw keystrokes.
+
 ## Action surface
 
 What the brain can emit, all executed by xdotool against the headed

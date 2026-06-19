@@ -824,8 +824,13 @@ class GymRunner:
         last_director_step: int = -100
         director_cooldown_steps: int = 3
         anthropic_api_key: str = os.environ.get("ANTHROPIC_API_KEY", "") or ""
+        # #931 P3: off-switch for the in-loop Claude director. Default on
+        # when a key is present (documented behavior); operators wanting a
+        # strictly brain-only run set MANTIS_CUA_DIRECTOR=disabled.
+        director_toggle = os.environ.get("MANTIS_CUA_DIRECTOR", "enabled").strip().lower()
         director_enabled = (
             bool(anthropic_api_key)
+            and director_toggle not in ("0", "off", "disabled", "false")
             and type(self.brain).__name__ != "ClaudeBrain"
         )
 

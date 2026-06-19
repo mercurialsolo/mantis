@@ -120,6 +120,39 @@ def _chrome_reuse_enabled() -> bool:
     return os.environ.get("MANTIS_CHROME_REUSE", "enabled").lower() != "disabled"
 
 
+def _build_decomposed_task(instruction: str, subgoals: list[str]) -> str:
+    """#931 P3: augment a /v1/cua instruction with an ordered sub-goal
+    roadmap from the decomposer.
+
+    Bridges /v1/predict's planning with /v1/cua's open-endedness: the brain
+    still drives the loop, but sees an explicit checklist to follow instead
+    of a single under-specified sentence — which is where the small model
+    loops/derails on long multi-step flows. Returns the raw instruction
+    unchanged when there are no sub-goals.
+    """
+    cleaned = [s.strip() for s in subgoals if s and s.strip()]
+    if not cleaned:
+        return instruction
+    lines = "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(cleaned))
+    return (
+        f"{instruction}\n\n"
+        "Complete the task as the following ordered sub-goals. Do them in "
+        "order and confirm each visibly succeeded before moving to the next:\n"
+        f"{lines}"
+    )
+
+
+def _should_ground_cua_clicks(payload: dict[str, Any], *, has_anthropic_key: bool) -> bool:
+    """#931 P2: whether /v1/cua should refine the brain's clicks with the
+    screenshot grounding model.
+
+    True only when the caller opted in (``ground_clicks``) AND a key is
+    available — without a key ClaudeGrounding can't run, so we fall back to
+    brain-only rather than hard-failing the request.
+    """
+    return bool(payload.get("ground_clicks")) and has_anthropic_key
+
+
 def _chrome_profile_dir_for_suite(task_suite: dict[str, Any]) -> str:
     """Per-tenant, per-profile Chrome user-data-dir for a Baseten request.
 
@@ -2536,17 +2569,58 @@ class BasetenCUARuntime:
                     som_enabled=routing_policy.som_enabled,
                     som_for_unstructured_clicks=bool(override),
                 )
+            # #931 P2: opt-in screenshot grounding for click precision. Pure
+            # CUA is brain-only by default (grounding=None); when the caller
+            # sets ``ground_clicks`` and an Anthropic key is present, refine
+            # the brain's click coords with the screenshot grounding model —
+            # the CUA-clean fix for small/ambiguous targets (vs DOM SoM).
+            cua_grounding = None
+            if _should_ground_cua_clicks(
+                payload, has_anthropic_key=bool(os.environ.get("ANTHROPIC_API_KEY"))
+            ):
+                from mantis_agent.grounding import ClaudeGrounding
+                cua_grounding = ClaudeGrounding(cache=self.grounding_cache)
+                logger.info("  [pure_cua] ground_clicks=true — screenshot grounding enabled")
+            elif bool(payload.get("ground_clicks")):
+                logger.warning(
+                    "  [pure_cua] ground_clicks requested but no ANTHROPIC_API_KEY "
+                    "— running brain-only"
+                )
             runner = GymRunner(
                 brain=brain_for_run,
                 env=env,
                 max_steps=max_steps,
                 frames_per_inference=frames,
-                grounding=None,  # pure CUA: no Claude grounding
+                grounding=cua_grounding,  # None = pure brain; set when ground_clicks opts in
                 page_discovery=page_discovery,
                 routing_policy=routing_policy,
             )
+            # #931 P3: decompose-then-cua. Opt-in: run the Claude decomposer
+            # on the instruction up front to seed an ordered sub-goal roadmap,
+            # then drive the brain with the augmented task. Bridges
+            # /v1/predict's planning with /v1/cua's open-endedness for long
+            # multi-step flows. Falls back to the raw instruction on no-key /
+            # decomposition failure — never hard-fails the run.
+            run_task = instruction
+            if bool(payload.get("decompose")) and os.environ.get("ANTHROPIC_API_KEY"):
+                try:
+                    from mantis_agent.plan_decomposer import PlanDecomposer
+                    dplan = PlanDecomposer(
+                        api_key=os.environ["ANTHROPIC_API_KEY"]
+                    ).decompose_text(instruction)
+                    subgoals = [
+                        s.intent for s in getattr(dplan, "steps", []) if getattr(s, "intent", "")
+                    ]
+                    run_task = _build_decomposed_task(instruction, subgoals)
+                    logger.info("  [pure_cua] decompose=true — seeded %d sub-goals", len(subgoals))
+                except Exception as e:  # noqa: BLE001 — fall back to raw instruction
+                    logger.warning("  [pure_cua] decompose failed (%s) — raw instruction", e)
+            elif bool(payload.get("decompose")):
+                logger.warning(
+                    "  [pure_cua] decompose requested but no ANTHROPIC_API_KEY — raw instruction"
+                )
             gym_result = runner.run(
-                task=instruction,
+                task=run_task,
                 task_id="cua",
                 start_url=start_url,
             )

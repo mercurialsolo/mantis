@@ -1316,6 +1316,29 @@ class RunExecutor:
             logger.debug("post-submit diff capture failed: %s", exc)
             delta = None
         if delta is not None and not delta.has_changes:
+            # #931 P0: URL-first escape (mirrors the click-demotion #381
+            # signal). The snapshot's ``url`` reads the stale
+            # ``runner._last_known_url``; a submit that genuinely
+            # navigated (a connection request, a posted form) can leave
+            # that proxy unchanged and get falsely demoted to
+            # ``no_state_change`` even though the browser moved. The
+            # live ``env.current_url`` can't be self-mutated by a handler
+            # without a real navigation, so a changed live URL is
+            # ground-truth proof the submit landed — keep success.
+            pre_url = getattr(runner, "_pre_step_env_url", None)
+            post_url = _read_env_url(runner.env)
+            if (
+                isinstance(pre_url, str) and isinstance(post_url, str)
+                and pre_url and post_url and pre_url != post_url
+            ):
+                logger.info(
+                    "  [%d] submit had no runner-state delta but live URL "
+                    "changed (%s → %s) — keeping success",
+                    state.step_index, pre_url[:60], post_url[:60],
+                )
+                if hasattr(runner, "_last_submit_pre_screenshot"):
+                    runner._last_submit_pre_screenshot = None
+                return
             # Before demoting, consult the SPA-aware visual verifier:
             # CRM-style logins (staff-crm is the canonical case) replace
             # the login form with a dashboard at the SAME URL, so the
