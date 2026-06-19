@@ -974,6 +974,32 @@ class ClaudeGuidedFormHandler:
                 time.sleep(0.15)
                 env.step(Action(action_type=ActionType.KEY_PRESS, params={"keys": "Delete"}))
                 time.sleep(0.2)
+                # #931 P1: rich-text editors (LinkedIn message box, Reddit
+                # composer) are contenteditable — the probe reports it via
+                # ``tag_info``. Prefer the host-focused CDP insert, which
+                # the editor's framework registers; fall back to the TYPE
+                # ladder when CDP is unavailable or no editable host is in
+                # focus.
+                is_contenteditable = bool((tag_info or {}).get("contentEditable"))
+                ce_inserted = False
+                if type_value and is_contenteditable:
+                    inserter = getattr(env, "cdp_contenteditable_insert", None)
+                    if callable(inserter):
+                        try:
+                            ce_inserted = bool(inserter(type_value))
+                        except Exception as e:  # noqa: BLE001 — fall back to TYPE
+                            logger.debug("  [claude-form] contenteditable insert failed: %s", e)
+                        if ce_inserted:
+                            time.sleep(0.3)
+                            logger.info(
+                                "  [claude-form] fill_field '%s' = '%s' (contenteditable)",
+                                label[:40], type_value[:30],
+                            )
+                            return StepResult(
+                                step_index=index, intent=step.intent, success=True,
+                                steps_used=2, duration=2.0,
+                                data=f"fill:{label[:40]}:contenteditable",
+                            )
                 if type_value:
                     type_res = env.step(Action(action_type=ActionType.TYPE, params={"text": type_value}))
                     time.sleep(0.4)

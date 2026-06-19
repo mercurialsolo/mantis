@@ -423,6 +423,63 @@ def test_fill_field_tag_guard_allows_contenteditable_div(monkeypatch):
     assert result.success is True
 
 
+def test_fill_field_contenteditable_uses_cdp_insert(monkeypatch):
+    """#931 P1: when the probe reports contenteditable, fill_field routes
+    through ``cdp_contenteditable_insert`` (host-focused CDP insert) and
+    does NOT fall back to the raw TYPE ladder."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform", lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 200, "y": 300}
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(return_value={"tag": "DIV", "contentEditable": True})
+    env.cdp_contenteditable_insert = MagicMock(return_value=True)
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Type the message", type="fill_field",
+        params={"label": "Message", "value": "hi there"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    assert result.data.endswith(":contenteditable")
+    env.cdp_contenteditable_insert.assert_called_once_with("hi there")
+    types = [call.args[0].action_type for call in env.step.call_args_list]
+    assert ActionType.TYPE not in types  # never reached the raw type ladder
+
+
+def test_fill_field_contenteditable_falls_back_to_type_on_failure(monkeypatch):
+    """If the CDP contenteditable insert can't focus an editable host, the
+    handler falls through to the existing TYPE ladder (no regression)."""
+    monkeypatch.setattr("mantis_agent.gym.step_handlers.form.time.sleep", lambda *_: None)
+    monkeypatch.setattr(
+        "mantis_agent.gym.step_handlers.form.random.uniform", lambda a, b: a,
+    )
+
+    runner = _FakeRunner()
+    extractor = MagicMock()
+    extractor.find_form_target.return_value = {"x": 200, "y": 300}
+    env = MagicMock()
+    env.cdp_evaluate = MagicMock(return_value={"tag": "DIV", "contentEditable": True})
+    env.cdp_contenteditable_insert = MagicMock(return_value=False)
+    ctx = _ctx(runner, env=env, extractor=extractor)
+
+    step = MicroIntent(
+        intent="Type the message", type="fill_field",
+        params={"label": "Message", "value": "hi there"},
+    )
+    result = ClaudeGuidedFormHandler(runner).execute(step, ctx)
+
+    assert result.success is True
+    types = [call.args[0].action_type for call in env.step.call_args_list]
+    assert ActionType.TYPE in types  # fell back to the raw type ladder
+
+
 # ── submit ──────────────────────────────────────────────────────────
 
 

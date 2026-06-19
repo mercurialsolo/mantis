@@ -744,6 +744,60 @@ class XdotoolGymEnv(GymEnvironment):
         ok, _ = self._cdp_call("Input.insertText", {"text": text})
         return ok
 
+    def cdp_contenteditable_insert(self, text: str) -> bool:
+        """#931 P1: replace the focused contenteditable host's content with
+        ``text`` via CDP, then dispatch a synthetic ``input`` event.
+
+        Rich-text editors (LinkedIn's message box, Reddit's composer) are
+        ``contenteditable`` ``<div>``s, not ``<input>``s — the plain TYPE
+        ladder focuses a pixel that may be a non-editable child and the
+        text never lands. Here we focus the nearest editable HOST of the
+        active element, select its contents, insert via ``Input.insertText``
+        (a native input the editor's framework registers), and fire an
+        ``input`` event so Draft/Quill-style editors sync their model.
+
+        Returns ``False`` (caller falls back to the TYPE ladder) when CDP
+        is unavailable or no editable host is in focus. CUA note: this is
+        action-side dispatch of a vision-derived fill, not DOM grounding.
+        """
+        eval_fn = getattr(self, "cdp_evaluate", None)
+        if not callable(eval_fn):
+            return False
+        try:
+            focused = eval_fn(
+                "(() => {"
+                "const a = document.activeElement;"
+                "if (!a) return false;"
+                "const host = a.isContentEditable ? a : "
+                "(a.closest ? a.closest('[contenteditable=\"\"], [contenteditable=\"true\"]') : null);"
+                "if (!host) return false;"
+                "host.focus();"
+                "const sel = window.getSelection();"
+                "if (sel) { const r = document.createRange(); r.selectNodeContents(host);"
+                " sel.removeAllRanges(); sel.addRange(r); }"
+                "return true;"
+                "})()"
+            )
+        except Exception as exc:  # noqa: BLE001 — never fatal; caller falls back
+            logger.debug("cdp_contenteditable_insert focus raised: %s", exc)
+            return False
+        if not focused:
+            return False
+        if not self._cdp_insert_text(text):
+            return False
+        try:
+            eval_fn(
+                "(() => {"
+                "const h = document.activeElement;"
+                "if (h) h.dispatchEvent(new InputEvent('input', "
+                "{bubbles:true, inputType:'insertText'}));"
+                "return true;"
+                "})()"
+            )
+        except Exception:  # noqa: BLE001 — best-effort event sync
+            pass
+        return True
+
     def _read_active_element_text(self) -> str | None:
         """Read the focused element's current text via CDP, or ``None``.
 
