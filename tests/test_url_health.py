@@ -38,6 +38,39 @@ def test_expand_expected_domains_empty_for_no_netloc() -> None:
     assert expand_expected_domains("") == set()
 
 
+def test_expand_expected_domains_includes_known_redirect_alias() -> None:
+    # #931 follow-up: lu.ma 301s to luma.com — the redirect must not be
+    # classified wrong_domain (it hard-halts multi-app chains). Both
+    # directions resolve to the same equivalence group.
+    from_lu_ma = expand_expected_domains("https://lu.ma/discover")
+    assert "lu.ma" in from_lu_ma
+    assert "luma.com" in from_lu_ma
+    from_luma_com = expand_expected_domains("https://luma.com/discover")
+    assert "lu.ma" in from_luma_com
+    assert "luma.com" in from_luma_com
+
+
+def test_redirect_alias_is_not_wrong_domain() -> None:
+    # The end-to-end shape of the bug: requested lu.ma, landed luma.com.
+    expected = expand_expected_domains("https://lu.ma/discover")
+    assert classify(
+        current_url="https://luma.com/discover",
+        expected_domains=expected,
+        page_title="Discover Events · Luma",
+    ) == "ok"
+
+
+def test_unrelated_domain_still_wrong_domain() -> None:
+    # The alias map must not over-match: a genuine off-site redirect
+    # (login wall on another domain) is still wrong_domain.
+    expected = expand_expected_domains("https://lu.ma/discover")
+    assert classify(
+        current_url="https://accounts.example.com/login",
+        expected_domains=expected,
+        page_title="Sign in",
+    ) == "wrong_domain"
+
+
 # ── classifier: dns ───────────────────────────────────────────────────
 
 

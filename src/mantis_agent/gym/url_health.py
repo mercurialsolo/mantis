@@ -97,6 +97,19 @@ _SOFT_404_BODY_MARKERS: tuple[str, ...] = (
 )
 
 
+# Known domain-equivalence groups: a redirect between members of the same
+# group is a legitimate brand short-link ↔ canonical bounce, NOT a
+# wrong_domain failure. Without this, a multi-app chain that navigates to a
+# redirecting domain (lu.ma 301s to luma.com — the right page loads, title
+# present) gets hard-halted by the navigate handler's wrong_domain check.
+# Members are normalised netlocs (lowercase, no `www.`, no port). Extend
+# conservatively as new redirecting brands surface — an explicit map avoids
+# the false-equivalence risk of a fuzzy "same brand token" heuristic.
+_DOMAIN_EQUIVALENCE_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"lu.ma", "luma.com"}),
+)
+
+
 def _normalize_netloc(netloc: str) -> str:
     """Strip leading `www.`, lowercase, drop port. Comparison-friendly."""
     if not netloc:
@@ -107,18 +120,33 @@ def _normalize_netloc(netloc: str) -> str:
     return nl
 
 
+def _equivalent_domains(netloc: str) -> set[str]:
+    """All domains in `netloc`'s known equivalence group (incl. itself)."""
+    out: set[str] = set()
+    for group in _DOMAIN_EQUIVALENCE_GROUPS:
+        if netloc in group:
+            out |= set(group)
+    return out
+
+
 def expand_expected_domains(start_url: str) -> set[str]:
     """Derive the expected-domain set from a plan's start_url.
 
     Returns the normalised netloc + common subdomain variants the plan
-    is likely to land on (e.g. `www.` ↔ bare, `m.` mobile). Callers can
-    extend this with site-specific aliases via Phase 1's SiteConfig.
+    is likely to land on (e.g. `www.` ↔ bare, `m.` mobile), plus any
+    known equivalent domains (brand short-link ↔ canonical redirects, e.g.
+    `lu.ma` ↔ `luma.com`) so a legitimate cross-domain redirect isn't
+    classified `wrong_domain`. Callers can extend this with site-specific
+    aliases via Phase 1's SiteConfig.
     """
     parsed = urlparse(start_url)
     netloc = _normalize_netloc(parsed.netloc)
     if not netloc:
         return set()
-    return {netloc, f"www.{netloc}", f"m.{netloc}"}
+    expanded: set[str] = set()
+    for base in {netloc} | _equivalent_domains(netloc):
+        expanded |= {base, f"www.{base}", f"m.{base}"}
+    return expanded
 
 
 def classify(

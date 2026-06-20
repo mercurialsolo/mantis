@@ -66,6 +66,11 @@ plans/*
 # (sim-env {{ENV_URL}} target, no credentials, no customer data) and is the exact
 # file live_runner loads, so the test guards the real shipped artifact, not a copy.
 !plans/bt03_gated_reveal.json
+# Exception: the multi-app smoke test (#931 follow-up). Spans 3 apps
+# (CRM → lu.ma → Hacker News); CRM login uses ${CRM_USER}/${CRM_PASSWORD}
+# env placeholders — NO credentials in the file. scripts/run_multi_app_research.py
+# substitutes them at run time.
+!plans/multi-app-research.json
 tasks/
 internal-docs/
 # Test-only plans (often contain throwaway credentials for staging
