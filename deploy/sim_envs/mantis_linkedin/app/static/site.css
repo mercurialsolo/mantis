@@ -646,6 +646,21 @@ pre.md-body {
   font-family: inherit; font-size: 14px;
 }
 .msg-composer textarea:focus { outline: 0; }
+/* Contenteditable composer (LinkedIn parity). The placeholder is an
+   absolutely-positioned SIBLING overlay laid on top of the editor — it
+   intentionally does NOT set pointer-events:none, so a pixel on the
+   visible "Write a message…" text resolves (via elementFromPoint) to the
+   overlay <span>, reproducing the grounding trap. */
+.msg-form__field { position: relative; }
+.msg-form__contenteditable {
+  width: 100%; min-height: 40px; padding: 8px; border: 0;
+  font-family: inherit; font-size: 14px; outline: 0;
+  white-space: pre-wrap; word-break: break-word;
+}
+.msg-form__placeholder {
+  position: absolute; top: 0; left: 0; right: 0;
+  padding: 8px; font-size: 14px; color: rgba(0,0,0,0.5);
+}
 .msg-composer-actions {
   display: flex; align-items: center; justify-content: space-between;
   padding-top: 4px;
