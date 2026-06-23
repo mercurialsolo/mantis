@@ -106,12 +106,30 @@ def probe_element_tag_at(env: Any, x: int, y: int) -> dict | None:
         # non-editable child (placeholder overlay, decorative <span>, an
         # icon, or a child with its own contenteditable=false) whose
         # ``isContentEditable`` is false — which used to be rejected as
-        # ``form_target_not_input:SPAN``. Walk up to the nearest
-        # contenteditable host so the editor as a whole is recognized.
-        "let editable = !!el.isContentEditable;"
-        "if (!editable && el.closest) {"
-        "  const host = el.closest('[contenteditable=\"\"], [contenteditable=\"true\"]');"
-        "  if (host) editable = true;"
+        # ``form_target_not_input:SPAN``.
+        #
+        # #931 follow-up (LinkedIn message box): the editor's placeholder
+        # ("Write a message…") is a SIBLING overlay stacked ON TOP of the
+        # contenteditable ``<div role="textbox">`` at the same pixel — so
+        # the ancestor-only ``closest()`` walk below never reaches it.
+        # ``elementsFromPoint`` returns the whole z-stack at the grounded
+        # pixel, so we can find the editor underneath the overlay. This
+        # stays point-anchored (the same vision-chosen coordinate); it
+        # resolves the editable host AT that pixel, it does not derive a
+        # new target by DOM traversal.
+        "const isEditableEl = (n) => {"
+        "  if (!n) return false;"
+        "  if (n.isContentEditable) return true;"
+        "  if (n.closest && n.closest('[contenteditable=\"\"], [contenteditable=\"true\"]')) return true;"
+        "  const role = (n.getAttribute && n.getAttribute('role')) || '';"
+        "  if (role === 'textbox') return true;"
+        "  return false;"
+        "};"
+        "let editable = isEditableEl(el);"
+        "if (!editable) {"
+        "  let stack = [];"
+        "  try { stack = document.elementsFromPoint(vx, vy) || []; } catch (e) { stack = []; }"
+        "  for (const n of stack) { if (isEditableEl(n)) { editable = true; break; } }"
         "}"
         "return {"
         "tag: (el.tagName || '').toUpperCase(),"

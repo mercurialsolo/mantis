@@ -745,58 +745,96 @@ class XdotoolGymEnv(GymEnvironment):
         return ok
 
     def cdp_contenteditable_insert(self, text: str) -> bool:
-        """#931 P1: replace the focused contenteditable host's content with
-        ``text`` via CDP, then dispatch a synthetic ``input`` event.
+        """#931 P1: insert ``text`` into the focused contenteditable host and
+        **verify it landed**, returning ``False`` if it did not.
 
         Rich-text editors (LinkedIn's message box, Reddit's composer) are
         ``contenteditable`` ``<div>``s, not ``<input>``s — the plain TYPE
         ladder focuses a pixel that may be a non-editable child and the
-        text never lands. Here we focus the nearest editable HOST of the
-        active element, select its contents, insert via ``Input.insertText``
-        (a native input the editor's framework registers), and fire an
-        ``input`` event so Draft/Quill-style editors sync their model.
+        text never lands.
 
-        Returns ``False`` (caller falls back to the TYPE ladder) when CDP
-        is unavailable or no editable host is in focus. CUA note: this is
-        action-side dispatch of a vision-derived fill, not DOM grounding.
+        #931 follow-up — two fixes for the LinkedIn message box:
+
+        1. **Fire the real input pipeline.** LinkedIn's editor (Draft/
+           Lexical-style) only syncs its model — and only then enables the
+           greyed-out Send button — when a native ``beforeinput`` event
+           fires. ``Input.insertText`` + a hand-rolled ``input`` event does
+           NOT fire ``beforeinput``, so text never reached the model. We
+           now insert via ``document.execCommand('insertText', …)``, which
+           drives the full ``beforeinput``→``input`` pipeline the editor
+           listens to. The ``Input.insertText`` path remains a fallback.
+
+        2. **Verify, don't assume.** The old version returned ``True`` as
+           soon as the CDP call succeeded, with no read-back — so an empty
+           box was reported as "filled", and the director then looped
+           clicking a disabled Send until the hard-loop guard stopped the
+           run. We now read the host's ``textContent`` back and return
+           whether the expected text is actually present.
+
+        Returns ``False`` (caller falls back to the verified TYPE ladder)
+        when CDP is unavailable, no editable host is in focus, or the
+        read-back shows the text did not land. CUA note: action-side
+        dispatch of a vision-derived fill + post-action read-back verify
+        (per ``feedback_cua_cdp_post_action_verify.md``), not DOM grounding.
         """
         eval_fn = getattr(self, "cdp_evaluate", None)
         if not callable(eval_fn):
             return False
+        text_js = json.dumps(text)
+        # Primary attempt: focus the editable host, select its contents,
+        # and insert via execCommand (drives beforeinput→input natively),
+        # then read the host's text back in the same call.
         try:
-            focused = eval_fn(
+            result = eval_fn(
                 "(() => {"
                 "const a = document.activeElement;"
-                "if (!a) return false;"
-                "const host = a.isContentEditable ? a : "
-                "(a.closest ? a.closest('[contenteditable=\"\"], [contenteditable=\"true\"]') : null);"
-                "if (!host) return false;"
+                "let host = (a && a.isContentEditable) ? a : "
+                "(a && a.closest ? a.closest('[contenteditable=\"\"], [contenteditable=\"true\"]') : null);"
+                # Fall back to whatever contenteditable / textbox currently
+                # holds focus (the active pixel may be a non-editable child).
+                "if (!host) host = document.querySelector("
+                "'[contenteditable=\"true\"]:focus, [contenteditable=\"\"]:focus, [role=\"textbox\"]:focus');"
+                "if (!host) return {ok:false};"
                 "host.focus();"
                 "const sel = window.getSelection();"
                 "if (sel) { const r = document.createRange(); r.selectNodeContents(host);"
                 " sel.removeAllRanges(); sel.addRange(r); }"
-                "return true;"
+                "let inserted = false;"
+                f"try {{ inserted = document.execCommand('insertText', false, {text_js}); }} catch (e) {{ inserted = false; }}"
+                "return {ok:true, inserted: inserted, text: String(host.textContent == null ? '' : host.textContent)};"
                 "})()"
             )
         except Exception as exc:  # noqa: BLE001 — never fatal; caller falls back
-            logger.debug("cdp_contenteditable_insert focus raised: %s", exc)
-            return False
-        if not focused:
-            return False
+            logger.debug("cdp_contenteditable_insert execCommand raised: %s", exc)
+            result = None
+
+        if isinstance(result, dict) and not result.get("ok"):
+            return False  # no editable host in focus — caller uses TYPE ladder
+        if isinstance(result, dict) and self._type_matches(text, str(result.get("text") or "")):
+            return True  # execCommand landed and the read-back confirms it
+
+        # Fallback: execCommand was a no-op (some editors block it) — try the
+        # native Input.insertText, fire beforeinput+input explicitly, re-read.
         if not self._cdp_insert_text(text):
             return False
         try:
-            eval_fn(
+            readback = eval_fn(
                 "(() => {"
-                "const h = document.activeElement;"
-                "if (h) h.dispatchEvent(new InputEvent('input', "
-                "{bubbles:true, inputType:'insertText'}));"
-                "return true;"
+                "const a = document.activeElement;"
+                "let host = (a && a.isContentEditable) ? a : "
+                "(a && a.closest ? a.closest('[contenteditable=\"\"], [contenteditable=\"true\"]') : null);"
+                "if (!host) return null;"
+                "host.dispatchEvent(new InputEvent('beforeinput', "
+                f"{{bubbles:true, cancelable:true, inputType:'insertText', data:{text_js}}}));"
+                "host.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText'}));"
+                "return String(host.textContent == null ? '' : host.textContent);"
                 "})()"
             )
         except Exception:  # noqa: BLE001 — best-effort event sync
-            pass
-        return True
+            readback = None
+        if readback is None:
+            return False
+        return self._type_matches(text, str(readback))
 
     def _read_active_element_text(self) -> str | None:
         """Read the focused element's current text via CDP, or ``None``.

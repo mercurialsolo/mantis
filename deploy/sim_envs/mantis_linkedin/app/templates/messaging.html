@@ -62,8 +62,24 @@
         </ul>
         <form class="msg-composer" method="post"
               action="/messaging/{{ active.id }}/send" data-testid="msg-composer">
-          <textarea name="body" placeholder="Write a message…" rows="2"
-                    data-testid="msg-composer-input"></textarea>
+          {# LinkedIn parity: the composer is a contenteditable rich-text
+             editor (role=textbox), NOT a <textarea>. The "Write a message…"
+             placeholder is a SIBLING overlay stacked on top of the editor —
+             so the visible-text pixel an agent grounds on resolves to a
+             non-editable <span>, not the editor. Send stays disabled until
+             the editor's model updates on a native `input` event. This
+             reproduces the three real-LinkedIn traps the #931 follow-up
+             fix handles (sibling-overlay grounding, beforeinput model sync,
+             read-back verification). #}
+          <div class="msg-form__field" data-testid="msg-composer-field">
+            <div class="msg-form__contenteditable" contenteditable="true"
+                 role="textbox" aria-multiline="true" aria-label="Write a message…"
+                 data-testid="msg-composer-input"></div>
+            <div class="msg-form__placeholder" data-testid="msg-composer-placeholder">
+              <span>Write a message…</span>
+            </div>
+          </div>
+          <input type="hidden" name="body" data-testid="msg-composer-hidden"/>
           <div class="msg-composer-actions">
             <div class="msg-composer-tools">
               <button type="button" class="msg-tool">📎</button>
@@ -71,7 +87,7 @@
               <button type="button" class="msg-tool">🖼</button>
             </div>
             <button class="btn-primary" type="submit"
-                    data-testid="msg-send">Send</button>
+                    data-testid="msg-send" disabled>Send</button>
           </div>
         </form>
       {% else %}
@@ -86,11 +102,26 @@
 {% block scripts %}
 <script>
   (function(){
-    var t = document.querySelector('[data-testid="msg-composer-input"]');
+    var ed = document.querySelector('[data-testid="msg-composer-input"]');
+    var ph = document.querySelector('[data-testid="msg-composer-placeholder"]');
+    var hidden = document.querySelector('[data-testid="msg-composer-hidden"]');
     var btn = document.querySelector('[data-testid="msg-send"]');
-    if (!t || !btn) return;
-    function sync(){ btn.disabled = !t.value.trim(); }
-    t.addEventListener('input', sync); sync();
+    if (!ed || !btn) return;
+    // Send + the hidden form field only update on the native input pipeline.
+    // A script that sets textContent WITHOUT dispatching 'input' leaves Send
+    // greyed and submits an empty body — the exact LinkedIn failure mode.
+    function sync(){
+      var txt = (ed.textContent || '').trim();
+      if (hidden) hidden.value = ed.textContent || '';
+      btn.disabled = !txt;
+      if (ph) ph.style.display = txt ? 'none' : '';
+    }
+    ed.addEventListener('input', sync);
+    // The placeholder overlay sits ON TOP of the editor and receives the
+    // click (so elementFromPoint at the visible text returns its <span>);
+    // mousedown hands focus to the contenteditable underneath.
+    if (ph) ph.addEventListener('mousedown', function(e){ e.preventDefault(); ed.focus(); });
+    sync();
   })();
 </script>
 {% endblock %}
