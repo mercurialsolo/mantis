@@ -71,6 +71,11 @@ plans/*
 # env placeholders — NO credentials in the file. scripts/run_multi_app_research.py
 # substitutes them at run time.
 !plans/multi-app-research.json
+# Exception: canonical LinkedIn connection-request plan (#936 activation).
+# Generic — ${PROFILE_URL} placeholder, no credentials/customer data. Declares
+# hints.expect_text_present on the Send step so an in-place connect isn't
+# falsely demoted to submit_failed.
+!plans/linkedin-connect.json
 tasks/
 internal-docs/
 # Test-only plans (often contain throwaway credentials for staging

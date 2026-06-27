@@ -257,7 +257,7 @@
         },
         "hints": {
           "type": "object",
-          "description": "Per-step grounding hints. Recognised keys: layout ('listings' | 'single'), spam_indicators, spam_label, entity_name."
+          "description": "Per-step grounding + verification hints. Recognised keys: layout ('listings' | 'single'), spam_indicators, spam_label, entity_name; and for click/submit steps the post-action success contract: expect_url_contains (str|list — every substring must appear in the post-action URL, else demote wrong_target), expect_url_excludes (str|list — substrings that must NOT appear), expect_text_present (str|list — for IN-PLACE submits that don't navigate, e.g. a LinkedIn connect where the modal closes, the URL stays the same and the button flips to 'Pending'; the listed phrase confirms success so the step isn't falsely demoted to submit_failed), fallback_url (a predictable URL the recovery layer navigates to after repeated click misses)."
         }
       }
     },

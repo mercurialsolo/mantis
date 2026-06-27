@@ -1,0 +1,51 @@
+{
+  "source_plan": "Send a LinkedIn connection request: open a profile, click Connect, and send the invitation. Demonstrates hints.expect_text_present on the Send step — the connect succeeds IN PLACE (the invitation modal closes, the URL does not change, and the button flips to 'Pending'), so the submit verifier needs the declared affordance to avoid a false submit_failed.",
+  "domain": "linkedin_connect",
+  "steps": [
+    {
+      "intent": "Navigate to the LinkedIn profile to connect with.",
+      "type": "navigate",
+      "section": "profile",
+      "required": true,
+      "params": {"url": "${PROFILE_URL}", "wait_after_load_seconds": 6},
+      "hints": {}
+    },
+    {
+      "intent": "Confirm the profile loaded and a Connect action is available (not already connected or pending).",
+      "type": "extract_data",
+      "section": "profile",
+      "claude_only": true,
+      "gate": true,
+      "required": false,
+      "verify": "a 'Connect' button is visible in the profile action bar"
+    },
+    {
+      "intent": "Click the Connect button in the profile action bar to open the invitation dialog.",
+      "type": "submit",
+      "section": "profile",
+      "required": true,
+      "grounding": true,
+      "params": {"label": "Connect", "aliases": ["Connect"]},
+      "hints": {}
+    },
+    {
+      "intent": "Send the invitation (click 'Send' / 'Send without a note' in the invitation dialog).",
+      "type": "submit",
+      "section": "profile",
+      "required": true,
+      "grounding": true,
+      "params": {"label": "Send", "aliases": ["Send", "Send without a note", "Send now"]},
+      "hints": {
+        "expect_text_present": ["Pending", "Invitation sent", "Invite sent"]
+      }
+    },
+    {
+      "intent": "Confirm the invitation was sent (the action button now reads 'Pending').",
+      "type": "extract_data",
+      "section": "profile",
+      "claude_only": true,
+      "required": false,
+      "verify": "the connect action now shows 'Pending' (invitation sent), not 'Connect'"
+    }
+  ]
+}
