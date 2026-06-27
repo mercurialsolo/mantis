@@ -730,6 +730,20 @@ RULES:
                  "expect_url_excludes": ["/items/"]}
       Only emit these for submit / click / navigate steps (URL is
       meaningful). Skip on fill_field / select_option / extract_data.
+    • `hints.expect_text_present` — list of phrases that confirm an
+      IN-PLACE submit succeeded when there is NO navigation and nothing
+      new appears (so the URL / modal checks can't see it). The success
+      signal is a toast or a control flipping state. Emit for submit
+      steps whose source names the post-action confirmation:
+        Source: "click 'Connect' to send the invitation — the button
+                 should change to 'Pending'"
+        → hints={"expect_text_present": ["Pending", "Invitation sent"]}
+        Source: "click Send — a 'Message sent' confirmation appears"
+        → hints={"expect_text_present": ["Message sent", "Sent"]}
+      Without this, a same-URL submit that dismisses a modal (LinkedIn
+      connect, send-message) is falsely demoted to ``submit_failed``
+      even though it landed. Skip when the action navigates (use
+      expect_url_contains there instead).
     • `hints.fallback_url` — when the click / submit has a STRUCTURAL
       ALTERNATIVE that the agent can navigate to directly if the
       click keeps misfiring. The runner's recovery layer will REPLACE
