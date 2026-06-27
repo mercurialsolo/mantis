@@ -2868,7 +2868,7 @@ class GymRunner:
                 reason = type_verify.get("reason", "unknown")
                 parts.append(f"TYPING FAILED: tried to type \"{typed}\" but {reason}")
             else:
-                parts.append(f"typed \"{typed}\" (unverified)")
+                parts.append(f"typed \"{typed}\" (could NOT confirm it landed — verify the field shows the text before continuing)")
         elif action.action_type == ActionType.KEY_PRESS:
             parts.append(f"pressed {action.params.get('keys', '')}")
         elif action.action_type == ActionType.CLICK and not parts:

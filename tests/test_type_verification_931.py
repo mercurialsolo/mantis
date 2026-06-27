@@ -51,25 +51,42 @@ def test_type_matches(expected, actual, ok):
 def test_verify_typed_text_success(monkeypatch):
     env = _env()
     monkeypatch.delenv("MANTIS_VERIFY_TYPE", raising=False)
-    monkeypatch.setattr(env, "_read_active_element_text", lambda: "alice@x.io", raising=False)
+    monkeypatch.setattr(env, "_active_field_probe",
+                        lambda: {"has_field": True, "text": "alice@x.io"}, raising=False)
     v = env._verify_typed_text("alice@x.io")
     assert v == {"success": True, "expected": "alice@x.io", "actual": "alice@x.io"}
 
 
-def test_verify_typed_text_failure(monkeypatch):
+def test_verify_typed_text_failure_field_empty(monkeypatch):
     env = _env()
     monkeypatch.delenv("MANTIS_VERIFY_TYPE", raising=False)
-    monkeypatch.setattr(env, "_read_active_element_text", lambda: "", raising=False)
+    monkeypatch.setattr(env, "_active_field_probe",
+                        lambda: {"has_field": True, "text": ""}, raising=False)
     v = env._verify_typed_text("hunter2")
     assert v is not None and v["success"] is False and v["actual"] == ""
 
 
-def test_verify_typed_text_unverified_when_no_field(monkeypatch):
-    """No focused text field (CDP returns None) → no verdict, so the
-    handler keeps its legacy optimistic success (no new false failures)."""
+def test_verify_typed_text_failure_when_focus_stolen(monkeypatch):
+    """CDP answers but NO editable field is focused after the type — the
+    passkey-popup focus-steal case. This MUST be an explicit failure with a
+    reason, NOT a silent ``None`` (the (unverified) trap the report flagged)."""
     env = _env()
     monkeypatch.delenv("MANTIS_VERIFY_TYPE", raising=False)
-    monkeypatch.setattr(env, "_read_active_element_text", lambda: None, raising=False)
+    monkeypatch.setattr(env, "_active_field_probe",
+                        lambda: {"has_field": False}, raising=False)
+    v = env._verify_typed_text("Shivesh@12")
+    assert v is not None
+    assert v["success"] is False
+    assert v["actual"] == ""
+    assert "focus" in v["reason"].lower() or "popup" in v["reason"].lower()
+
+
+def test_verify_typed_text_unverified_when_cdp_unavailable(monkeypatch):
+    """CDP genuinely can't be consulted (probe returns None) → no verdict,
+    preserving legacy behavior on envs without CDP (tests / Playwright)."""
+    env = _env()
+    monkeypatch.delenv("MANTIS_VERIFY_TYPE", raising=False)
+    monkeypatch.setattr(env, "_active_field_probe", lambda: None, raising=False)
     assert env._verify_typed_text("anything") is None
 
 
@@ -77,7 +94,8 @@ def test_verify_typed_text_disabled_by_env(monkeypatch):
     env = _env()
     monkeypatch.setenv("MANTIS_VERIFY_TYPE", "disabled")
     # Even with a readable field, the toggle short-circuits to unverified.
-    monkeypatch.setattr(env, "_read_active_element_text", lambda: "x", raising=False)
+    monkeypatch.setattr(env, "_active_field_probe",
+                        lambda: {"has_field": True, "text": "x"}, raising=False)
     assert env._verify_typed_text("x") is None
 
 
@@ -93,7 +111,8 @@ def _stub_step_env(monkeypatch, active_text):
     monkeypatch.setenv("MANTIS_ADAPTIVE_SETTLE", "disabled")  # else-branch sleeps settle_time=0
     monkeypatch.setattr(env, "_execute_action", lambda a: None, raising=False)
     monkeypatch.setattr(env, "_capture", lambda: object(), raising=False)
-    monkeypatch.setattr(env, "_read_active_element_text", lambda: active_text, raising=False)
+    monkeypatch.setattr(env, "_active_field_probe",
+                        lambda: {"has_field": True, "text": active_text}, raising=False)
     return env
 
 
