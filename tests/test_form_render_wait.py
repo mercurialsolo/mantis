@@ -115,6 +115,7 @@ def test_wait_returns_immediately_when_first_screenshot_is_rendered(
 ) -> None:
     """Common case: the page is already painted. No sleeps, single
     screenshot call."""
+    monkeypatch.setenv("MANTIS_ADAPTIVE_SETTLE", "disabled")  # exercise the legacy blank-retry fallback
     sleep_calls: list[float] = []
     monkeypatch.setattr(
         "mantis_agent.gym.step_handlers.form.time.sleep",
@@ -134,6 +135,7 @@ def test_wait_returns_immediately_when_first_screenshot_is_rendered(
 def test_wait_retries_when_first_screenshots_are_blank(monkeypatch) -> None:
     """Two blank captures, then a rendered one — the helper should
     return the rendered frame and have slept twice."""
+    monkeypatch.setenv("MANTIS_ADAPTIVE_SETTLE", "disabled")  # exercise the legacy blank-retry fallback
     sleep_calls: list[float] = []
     monkeypatch.setattr(
         "mantis_agent.gym.step_handlers.form.time.sleep",
@@ -159,6 +161,7 @@ def test_wait_gives_up_after_max_retries_and_returns_last_screenshot(monkeypatch
     It returns the last (still-blank) screenshot after ``max_retries``
     so the caller can decide what to do — usually let find_form_target
     return not_found and the existing retry chain kick in."""
+    monkeypatch.setenv("MANTIS_ADAPTIVE_SETTLE", "disabled")  # exercise the legacy blank-retry fallback
     sleep_calls: list[float] = []
     monkeypatch.setattr(
         "mantis_agent.gym.step_handlers.form.time.sleep",
@@ -180,6 +183,7 @@ def test_wait_with_zero_retries_returns_first_screenshot(monkeypatch) -> None:
     """Defensive: max_retries=0 must not loop. Returns the first
     screenshot regardless of whether it's blank — caller cap of 0
     means 'don't retry, return what you got'."""
+    monkeypatch.setenv("MANTIS_ADAPTIVE_SETTLE", "disabled")  # exercise the legacy blank-retry fallback
     sleep_calls: list[float] = []
     monkeypatch.setattr(
         "mantis_agent.gym.step_handlers.form.time.sleep",

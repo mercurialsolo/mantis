@@ -124,7 +124,29 @@ def _wait_for_rendered_screenshot(
     can drive the helper deterministically by mocking only
     ``time.sleep`` (a no-op sleep moves the loop forward in zero real
     time without needing to also mock ``time.time``).
+
+    Readiness signal (cold-SPA-mount fix): the legacy ``_is_blank_screenshot``
+    loop only waits out a FULLY blank (≥99% white) frame — it returns a
+    partially-rendered page (header/skeleton painted, form not yet) as
+    "ready", so grounding runs too early and burns ``form_target_not_found``
+    retries (Augur run li_predict_fresh: 3 wasted grounding calls before
+    LinkedIn's login form painted). When adaptive settle is enabled we
+    instead wait for the visible CONTENT to stop GROWING — automatic and
+    self-tuning per site, so no per-plan ``wait_after_load_seconds`` is
+    needed in the common case. Falls back to the blank loop when adaptive
+    settle is off or the env has no screenshot callable.
     """
+    capture = getattr(env, "screenshot", None) or getattr(env, "_screenshot", None)
+    if adaptive_settle.is_enabled() and callable(capture):
+        budget = max(0.0, max_retries * poll_seconds)
+        frame, _waited = adaptive_settle.wait_for_content_stable(
+            capture, max_seconds=budget,
+        )
+        if frame is not None and not _is_blank_screenshot(frame):
+            return frame
+        # Content gate left us on a still-blank frame (rare) — fall through
+        # to the legacy blank-retry loop below for one more chance.
+
     img = env.screenshot()
     for _ in range(max(0, max_retries)):
         if not _is_blank_screenshot(img):
