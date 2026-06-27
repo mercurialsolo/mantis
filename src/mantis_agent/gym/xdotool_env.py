@@ -874,18 +874,78 @@ class XdotoolGymEnv(GymEnvironment):
             return True
         return exp == act or exp in act
 
+    def _active_field_probe(self) -> dict | None:
+        """Probe the focused element after a TYPE, distinguishing the two
+        cases the old ``_read_active_element_text`` conflated into ``None``:
+
+        - ``None`` — CDP is unavailable or the probe threw. Genuinely
+          can't tell (env without CDP). Caller stays unverified.
+        - ``{"has_field": True, "text": str}`` — an editable field
+          (input / textarea / contenteditable) holds focus; read its text.
+        - ``{"has_field": False}`` — CDP answered but NO editable field is
+          focused (``activeElement`` is ``<body>`` / null / non-editable).
+          After a TYPE this is the focus-stolen signature: on login pages a
+          passkey / credential popup grabs focus, so the keystrokes never
+          reach the ``<input>`` and it stays empty. This MUST read as a
+          failure, not a benign "unverified" — that divergence (logs say
+          typed, video shows empty) is the bug this fixes.
+
+        Per ``feedback_cua_cdp_post_action_verify.md`` this is an
+        action-side post-action read (confirming OUR type landed), not
+        DOM-grounding — it never derives the next action's target.
+        """
+        eval_fn = getattr(self, "cdp_evaluate", None)
+        if not callable(eval_fn):
+            return None
+        try:
+            state = eval_fn(
+                "(() => {"
+                "const el = document.activeElement;"
+                "if (!el || el === document.body || el === document.documentElement) return {has_field:false};"
+                "if (el.isContentEditable) return {has_field:true, text:String(el.textContent == null ? '' : el.textContent)};"
+                "const tag = (el.tagName || '').toUpperCase();"
+                "if ((tag === 'INPUT' || tag === 'TEXTAREA') && el.value !== undefined && el.value !== null)"
+                "  return {has_field:true, text:String(el.value)};"
+                "return {has_field:false};"
+                "})()"
+            )
+        except Exception:  # noqa: BLE001 — verification must never be fatal
+            return None
+        if not isinstance(state, dict):
+            return None
+        if state.get("has_field"):
+            return {"has_field": True, "text": str(state.get("text") or "")}
+        return {"has_field": False}
+
     def _verify_typed_text(self, expected: str) -> dict | None:
         """Post-type read-back verdict for ``gym_result.info['type_verified']``.
 
-        Returns ``{"success", "expected", "actual"}`` when the focused
-        element could be read, else ``None`` (unverified). Gated by
-        ``MANTIS_VERIFY_TYPE`` (default on) and CDP availability.
+        Returns ``{"success", "expected", "actual"}`` when CDP can observe
+        the focused field, else ``None`` (truly unverifiable — CDP off).
+        Gated by ``MANTIS_VERIFY_TYPE`` (default on).
+
+        Crucially: when CDP answers but no editable field holds focus after
+        the type, this returns ``success=False`` with a ``reason`` — the
+        focus-stolen case (passkey popup) that previously fell through to a
+        false-reassuring "(unverified)".
         """
         if os.environ.get("MANTIS_VERIFY_TYPE", "enabled").strip().lower() in ("0", "off", "disabled", "false"):
             return None
-        actual = self._read_active_element_text()
-        if actual is None:
+        probe = self._active_field_probe()
+        if probe is None:
             return None
+        if not probe.get("has_field"):
+            return {
+                "success": False,
+                "expected": expected,
+                "actual": "",
+                "reason": (
+                    "no input field is focused after typing — the text did not "
+                    "land (a passkey / credential popup can steal focus on login "
+                    "pages). Dismiss the popup, click the field, and retype."
+                ),
+            }
+        actual = str(probe.get("text") or "")
         return {
             "success": self._type_matches(expected, actual),
             "expected": expected,
