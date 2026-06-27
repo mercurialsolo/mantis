@@ -1339,6 +1339,30 @@ class RunExecutor:
                 if hasattr(runner, "_last_submit_pre_screenshot"):
                     runner._last_submit_pre_screenshot = None
                 return
+            # Plan-declared success affordance. Some submits succeed in
+            # place with NO navigation and NO modal appearing — the success
+            # signal is a confirmation toast or a control flipping state
+            # (LinkedIn "Connect": the invite sends, the modal CLOSES, and
+            # the button reads "Pending"). ``verify_post_click_navigation``
+            # below only recognises content APPEARING, so those were falsely
+            # demoted to ``submit_failed`` even though the action landed
+            # (the false-negative mirror of the type-verify bug). When the
+            # plan names the expected post-submit affordance via
+            # ``hints.expect_text_present``, confirm it with the cheap
+            # Haiku-first ``verify_gate`` and keep success when it's visible.
+            # No hint → empty list → no-op (zero change for existing plans).
+            expect_text = self._normalize_expect_text(
+                getattr(effective_step, "hints", {}) or {}
+            )
+            if expect_text and self._submit_affordance_visible(runner, expect_text):
+                logger.info(
+                    "  [%d] submit had no URL/snapshot delta but declared "
+                    "success affordance %s is visible — keeping success",
+                    state.step_index, expect_text,
+                )
+                if hasattr(runner, "_last_submit_pre_screenshot"):
+                    runner._last_submit_pre_screenshot = None
+                return
             # Before demoting, consult the SPA-aware visual verifier:
             # CRM-style logins (staff-crm is the canonical case) replace
             # the login form with a dashboard at the SAME URL, so the
@@ -1808,6 +1832,58 @@ class RunExecutor:
                 "grounding) instead of the default text-match handler",
                 step_index, no_state_changes,
             )
+
+    @staticmethod
+    def _normalize_expect_text(hints: dict) -> list[str]:
+        """Normalize ``hints.expect_text_present`` (str | list | None) to a
+        clean list of non-empty phrases. Empty when the hint is absent."""
+        raw = (hints or {}).get("expect_text_present") or []
+        if isinstance(raw, str):
+            raw = [raw]
+        return [str(s).strip() for s in raw if str(s).strip()]
+
+    def _submit_affordance_visible(self, runner: Any, phrases: list[str]) -> bool:
+        """True iff a plan-declared success phrase is visible after a submit
+        that produced no URL / snapshot delta.
+
+        Covers the in-place-success case (LinkedIn connect → "Pending",
+        "Invitation sent"; "Send message" → "Sent") that
+        ``verify_post_click_navigation`` misses because nothing *appears* —
+        the modal dismisses and a toast/control-state confirms success.
+
+        Uses the cheap Haiku-first ``verify_gate``. Returns False on any
+        unavailable input / API error so the caller falls through to the
+        existing demotion — an additive override that only KEEPS success
+        when the named affordance is genuinely on screen, so it can't mask
+        a real failure for plans that don't opt in.
+        """
+        extractor = getattr(runner, "extractor", None)
+        if extractor is None or not phrases:
+            return False
+        verify = getattr(extractor, "verify_gate", None)
+        if verify is None:
+            return False
+        try:
+            post = runner._safe_screenshot()
+        except Exception:  # noqa: BLE001 — never break runs
+            return False
+        if post is None:
+            return False
+        quoted = ", ".join(f"'{p}'" for p in phrases)
+        condition = (
+            "The action just completed successfully. At least one of these "
+            f"confirmation signals is visible on the page: {quoted} — for "
+            "example a button/status that now reads one of these, or a "
+            "confirmation toast/message containing one of these phrases."
+        )
+        try:
+            passed, _reason = verify(post, condition)
+        except Exception as exc:  # noqa: BLE001 — never break runs
+            logger.debug("submit affordance verify raised: %s", exc)
+            return False
+        if passed:
+            runner.costs["claude_extract"] += 1
+        return bool(passed)
 
     def _submit_visually_changed(
         self, runner: Any, effective_step: MicroIntent,
