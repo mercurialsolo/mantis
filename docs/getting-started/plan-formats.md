@@ -144,6 +144,41 @@ to `step_index + 1` instead of teleporting / hanging. A synthetic
 `StepResult` records the decision (`var=value→target`) so the run
 trace is grep-able.
 
+**Post-action success contract — `hints` on click / submit steps.**
+
+The runner verifies that a `click` / `submit` actually accomplished
+something and **demotes a step that reported success but produced no
+observable change** (so the next step doesn't run against a stale page).
+By default the signal is the URL: a submit that navigates is success, a
+same-URL submit gets a visual double-check. Declare the expected outcome
+to make this precise:
+
+| Hint | Meaning |
+| --- | --- |
+| `expect_url_contains` | str or list — every substring must appear in the post-action URL, else the step is demoted `wrong_target`. |
+| `expect_url_excludes` | str or list — substrings that must **not** appear (e.g. "must not drift to a detail page"). |
+| `expect_text_present` | str or list — for **in-place submits that don't navigate**. The success signal is a confirmation toast or a control flipping state. |
+
+Use `expect_text_present` when success leaves the URL unchanged and
+nothing new *appears* — the canonical case is a LinkedIn connection
+request: clicking **Send** closes the invitation modal, the URL stays on
+the profile, and the button flips to "Pending". Without the hint the
+runner sees "nothing appeared" and falsely demotes the (already-sent)
+invite to `submit_failed`; with it, a cheap vision check confirms the
+phrase is visible and keeps the success.
+
+```jsonc
+{
+  "intent": "Send the invitation",
+  "type": "submit",
+  "params": {"label": "Send", "aliases": ["Send", "Send without a note"]},
+  "hints": {"expect_text_present": ["Pending", "Invitation sent"]}
+}
+```
+
+The hint is opt-in: omit it and behaviour is unchanged. See
+`plans/linkedin-connect.json` for the full reference plan.
+
 **Multi-row `extract_data` / `extract_rows` — top-N from a list page.**
 
 Set `extract.max_items > 1` on an `extract_data` step (or use step type
