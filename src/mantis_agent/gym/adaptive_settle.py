@@ -154,6 +154,115 @@ def wait_until_stable(
     return time_fn() - start
 
 
+def _content_score(img: "Image.Image | None") -> int:
+    """Theme-agnostic "how much is painted on screen" proxy.
+
+    Counts strong edges (adjacent-pixel transitions) on a 48×48 grayscale
+    downsample. A blank / skeleton frame has near-zero edges; a fully
+    rendered form/page has hundreds. Edge count — not near-white-pixel
+    count — so it works on dark-themed UIs too (a dark page still has
+    edges where content is). Cost is fixed (~4.6k comparisons) regardless
+    of viewport size.
+    """
+    if img is None:
+        return 0
+    try:
+        small = img.convert("L").resize((48, 48), Image.NEAREST)
+    except Exception:  # noqa: BLE001 — never fatal
+        return 0
+    px = list(small.getdata())
+    if not px:
+        return 0
+    w = h = 48
+    delta = 24  # grayscale step that counts as an "edge"
+    edges = 0
+    for y in range(h):
+        row = y * w
+        for x in range(w):
+            p = px[row + x]
+            if x + 1 < w and abs(p - px[row + x + 1]) > delta:
+                edges += 1
+            if y + 1 < h and abs(p - px[row + w + x]) > delta:
+                edges += 1
+    return edges
+
+
+def wait_for_content_stable(
+    capture: Callable[[], "Image.Image | None"],
+    *,
+    max_seconds: float,
+    poll_interval: float = 0.25,
+    growth_tolerance: float = 0.06,
+    require_stable: int = 2,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    time_fn: Callable[[], float] = time.monotonic,
+) -> "tuple[Image.Image | None, float]":
+    """Poll ``capture()`` until the page stops painting NEW content, or
+    ``max_seconds`` elapses. Returns ``(last_frame, seconds_waited)``.
+
+    Where :func:`wait_until_stable` waits for the frame to stop *changing*
+    (it returns early on a momentarily-stable skeleton, the cold-SPA-mount
+    trap), this waits for the visible-content metric to stop *growing*. A
+    frame whose :func:`_content_score` doesn't rise beyond ``growth_tolerance``
+    (relative to the running peak) for ``require_stable`` consecutive polls
+    is "settled".
+
+    This is the right signal because the only thing distinguishing a sparse
+    page that's DONE (e.g. example.com) from a sparse page that's still
+    LOADING (a LinkedIn skeleton) is temporal — content is still arriving in
+    the second case. So:
+
+    * fast / already-rendered pages return after ~1-2 polls (content isn't
+      growing) — minimal added latency,
+    * slow SPAs wait exactly until the form paints and the score plateaus —
+      no per-site constant needed,
+    * perpetual-motion pages (carousels, spinners) plateau once their peak
+      stops climbing, and the ``max_seconds`` cap bounds the pathological
+      case.
+
+    Screenshot-only — no DOM/network signal — so it works on the production
+    xdotool path and stays CUA-compliant (load-readiness observation, not
+    target derivation). Clock + capture are injected for deterministic tests.
+    """
+    start = time_fn()
+    frame = _safe_capture(capture)
+    if max_seconds <= 0:
+        return frame, 0.0
+    deadline = start + max_seconds
+    peak = _content_score(frame)
+    stable = 0
+    while time_fn() < deadline:
+        sleep_fn(poll_interval)
+        f = _safe_capture(capture)
+        if f is None:
+            continue
+        frame = f
+        score = _content_score(f)
+        if score > peak * (1.0 + growth_tolerance):
+            # Still painting new content — reset the plateau counter.
+            stable = 0
+        else:
+            stable += 1
+            if stable >= require_stable:
+                elapsed = time_fn() - start
+                _credit_settle(elapsed)
+                return frame, elapsed
+        if score > peak:
+            peak = score
+    elapsed = time_fn() - start
+    _credit_settle(elapsed)
+    return frame, elapsed
+
+
+def _safe_capture(capture: Callable[[], "Image.Image | None"]) -> "Image.Image | None":
+    """Call ``capture()``; return ``None`` on any error (never fatal)."""
+    try:
+        return capture()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("adaptive-settle: capture raised %s", exc)
+        return None
+
+
 def settle_after_action(
     env: Any,
     *,
