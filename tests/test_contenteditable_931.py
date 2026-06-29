@@ -120,3 +120,74 @@ def test_probe_js_looks_through_sibling_overlay_stack():
     probe_element_tag_at(env, 100, 200)
     assert "elementsFromPoint" in captured["js"]
     assert "textbox" in captured["js"]
+
+
+# ── env.step(TYPE) contenteditable fallback (cua-issues 2026-06-29) ──────
+#
+# The /v1/cua Claude loop types via env.step(TYPE) with raw xdotool only.
+# When the read-back shows the text didn't land (contenteditable editors,
+# focus-stolen fields), step() now falls back to cdp_contenteditable_insert
+# and re-verifies — porting the #934 recovery to every env.step(TYPE) caller.
+
+
+def _type_step_env(monkeypatch):
+    env = _env()
+    env._human_speed = False
+    env._settle_time = 0.0
+    monkeypatch.setenv("MANTIS_ADAPTIVE_SETTLE", "disabled")
+    monkeypatch.setattr(env, "_execute_action", lambda a: None, raising=False)
+    monkeypatch.setattr(env, "_capture", lambda: object(), raising=False)
+    return env
+
+
+def test_step_type_falls_back_to_contenteditable_on_verify_fail(monkeypatch):
+    from mantis_agent.actions import Action, ActionType
+
+    env = _type_step_env(monkeypatch)
+    # First read-back: empty (raw type didn't land). After the insert: landed.
+    verdicts = iter([
+        {"success": False, "expected": "hi", "actual": ""},
+        {"success": True, "expected": "hi", "actual": "hi"},
+    ])
+    monkeypatch.setattr(env, "_verify_typed_text", lambda t: next(verdicts), raising=False)
+    seen = {"inserted": False}
+    monkeypatch.setattr(
+        env, "cdp_contenteditable_insert",
+        lambda t: seen.__setitem__("inserted", True) or True, raising=False,
+    )
+    res = env.step(Action(action_type=ActionType.TYPE, params={"text": "hi"}))
+    assert seen["inserted"] is True
+    assert res.info["type_verified"]["success"] is True
+
+
+def test_step_type_no_fallback_when_first_verify_succeeds(monkeypatch):
+    from mantis_agent.actions import Action, ActionType
+
+    env = _type_step_env(monkeypatch)
+    monkeypatch.setattr(
+        env, "_verify_typed_text",
+        lambda t: {"success": True, "expected": "x", "actual": "x"}, raising=False,
+    )
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        env, "cdp_contenteditable_insert",
+        lambda t: calls.__setitem__("n", calls["n"] + 1) or True, raising=False,
+    )
+    res = env.step(Action(action_type=ActionType.TYPE, params={"text": "x"}))
+    assert calls["n"] == 0  # plain input that landed → no fallback
+    assert res.info["type_verified"]["success"] is True
+
+
+def test_step_type_fallback_keeps_failure_when_insert_cannot_land(monkeypatch):
+    """Insert runs but the text still doesn't land → verdict stays failed
+    (no false success — the honesty contract holds)."""
+    from mantis_agent.actions import Action, ActionType
+
+    env = _type_step_env(monkeypatch)
+    monkeypatch.setattr(
+        env, "_verify_typed_text",
+        lambda t: {"success": False, "expected": "hi", "actual": ""}, raising=False,
+    )
+    monkeypatch.setattr(env, "cdp_contenteditable_insert", lambda t: False, raising=False)
+    res = env.step(Action(action_type=ActionType.TYPE, params={"text": "hi"}))
+    assert res.info["type_verified"]["success"] is False
