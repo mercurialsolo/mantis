@@ -37,6 +37,7 @@ from PIL import Image
 from ..actions import Action, ActionType
 from . import adaptive_settle
 from .base import GymEnvironment, GymObservation, GymResult
+from .vendor_trap import is_browser_vendor_url
 
 logger = logging.getLogger(__name__)
 
@@ -1402,6 +1403,17 @@ class XdotoolGymEnv(GymEnvironment):
         Chrome exposes; it preserves cookies, session storage,
         history, and back-forward state same as a user-typed URL.
         """
+        # S01 guard: never navigate to a browser-vendor download/update
+        # page. These are never a task destination — reaching one means a
+        # stray keystroke activated Chrome's "Reinstall Chrome" nag, which
+        # in cua-issues run S01 dead-ended on google.com/chrome. Refusing
+        # here also covers the brain emitting such a URL directly.
+        if is_browser_vendor_url(url):
+            logger.warning(
+                "refusing forbidden browser-vendor navigation to %s (S01 trap)",
+                url[:80],
+            )
+            return
         self._seed_request_cookies(url)
         target_host = self._url_host(url)
         logger.info(f"Navigating to {url[:80]} (via CDP Page.navigate)")
