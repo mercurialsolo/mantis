@@ -3375,7 +3375,20 @@ def build_api_app(executor_resolver=None, function_call_lookup=None,
                         ):
                             wire_status = "halted"
                         else:
-                            wire_status = "succeeded"
+                            # cua-issues 2026-06-29: this default used to be
+                            # an unconditional "succeeded", which stamped
+                            # success on every /v1/cua run (whose envelope
+                            # carried no terminal_status) regardless of
+                            # loop/max_steps. Honest default: only a result
+                            # that EXPLICITLY claims success stays succeeded;
+                            # an unknown/missing terminal status is NOT a
+                            # verified success → halted. (The cua path now
+                            # sets terminal_status, so it no longer lands here.)
+                            wire_status = (
+                                "succeeded"
+                                if isinstance(result, dict) and bool(result.get("success"))
+                                else "halted"
+                            )
                         status["status"] = wire_status
                         status["updated_at"] = datetime.now(timezone.utc).isoformat()
                         # Surface the finer detail under explicit keys
