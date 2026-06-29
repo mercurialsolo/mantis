@@ -1546,6 +1546,25 @@ class XdotoolGymEnv(GymEnvironment):
             typed = str(action.params.get("text") or action.params.get("content") or "")
             if typed and not (typed.startswith("http://") or typed.startswith("https://")):
                 verdict = self._verify_typed_text(typed)
+                # cua-issues 2026-06-29: the /v1/cua (Claude) loop types via
+                # raw xdotool only — it never used the contenteditable insert
+                # / focus-retry that form.py's fill_field has, so LinkedIn's
+                # contenteditable message box (W06), Reddit's login field
+                # (L06), and every search/composer left the field EMPTY while
+                # reporting nothing landed. When the read-back says the text
+                # didn't land, fall back to the #934 contenteditable insert
+                # (execCommand→beforeinput, the editor's model syncs) and
+                # re-verify. No-op for plain inputs that already succeeded, or
+                # when there's no editable host (the insert self-gates). Now
+                # every env.step(TYPE) caller — Claude loop included — gets it.
+                if verdict is not None and not verdict.get("success"):
+                    inserter = getattr(self, "cdp_contenteditable_insert", None)
+                    if callable(inserter):
+                        try:
+                            if inserter(typed):
+                                verdict = self._verify_typed_text(typed) or verdict
+                        except Exception as exc:  # noqa: BLE001 — never fatal
+                            logger.debug("TYPE contenteditable fallback raised: %s", exc)
                 if verdict is not None:
                     info["type_verified"] = verdict
         return GymResult(observation=obs, reward=0.0, done=False, info=info)
