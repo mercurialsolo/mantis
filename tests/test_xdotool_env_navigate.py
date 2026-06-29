@@ -68,6 +68,14 @@ def test_navigate_running_browser_uses_cdp_page_navigate(
     """Happy path: CDP available → Page.navigate fires with the target URL."""
     env, cdp_calls = env_with_cdp_recorder
 
+    # cua-issues 2026-06-29: _navigate_running_browser now verifies the live
+    # URL actually reached the target host (stale-tab guard). Simulate a
+    # committed navigation so the happy path stays a single Page.navigate.
+    monkeypatch.setattr(
+        type(env), "current_url",
+        property(lambda self: "https://example.com/page?status=Active&priority=High"),
+    )
+
     env._navigate_running_browser("https://example.com/page?status=Active&priority=High")
 
     # Exactly one CDP call: Page.navigate with our URL
