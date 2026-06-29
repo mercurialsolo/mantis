@@ -1161,4 +1161,37 @@ def run_executor_lifecycle(
     print(f"Time: {elapsed / 60:.0f} min")
     print(f"{'=' * 60}")
 
-    return {"passed": passed, "total": len(scores), "score": avg}
+    # Honest terminal status (cua-issues 2026-06-29): the /v1/cua envelope
+    # previously carried NO terminal_status, so the Modal/Baseten wire mapping
+    # hit its ``else → succeeded`` default and stamped EVERY run "succeeded" —
+    # a loop / max_steps run that accomplished nothing reported success
+    # (the 91% false-success rate in the frame-by-frame audit). Derive it from
+    # the per-task termination reasons: "completed" only when every task
+    # deliberately finished (done / env_done — the done-gate's province);
+    # "paused" when any task paused; otherwise "halted" (loop / max_steps).
+    terminal_status = derive_terminal_status(task_details)
+
+    return {
+        "passed": passed, "total": len(scores), "score": avg,
+        "terminal_status": terminal_status,
+        "termination_reason": "; ".join(
+            r for td in task_details
+            if (r := str(td.get("termination_reason") or ""))
+        ),
+    }
+
+
+def derive_terminal_status(task_details: list[dict[str, Any]]) -> str:
+    """Map per-task termination reasons to a wire terminal_status.
+
+    "completed" requires EVERY task to have ended in a deliberate done /
+    env_done (so the done-gate had its say); any paused task → "paused";
+    everything else (loop, max_steps, empty) → "halted". Empty input → halted
+    (no task ran = not a success).
+    """
+    reasons = [str(td.get("termination_reason") or "") for td in task_details]
+    if any(r == "paused" for r in reasons):
+        return "paused"
+    if reasons and all(r in _AUGUR_DONE_REASONS for r in reasons):
+        return "completed"
+    return "halted"

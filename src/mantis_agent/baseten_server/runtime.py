@@ -1054,7 +1054,12 @@ class BasetenCUARuntime:
                 elif rt_status in ("halted", "budget_exceeded", "time_exceeded"):
                     wire_status = "halted"
                 else:
-                    wire_status = "succeeded"
+                    # cua-issues 2026-06-29: was an unconditional "succeeded",
+                    # which stamped success on /v1/cua runs that carried no
+                    # terminal_status (loop/max_steps reported as success).
+                    # Only an explicit success flag keeps succeeded; otherwise
+                    # an unknown/missing terminal status → halted.
+                    wire_status = "succeeded" if bool(result.get("success")) else "halted"
                 status_blob: dict[str, Any] = {
                     "status": wire_status,
                     "finished_at": finished_at,
