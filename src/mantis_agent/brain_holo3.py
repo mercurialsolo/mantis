@@ -653,12 +653,9 @@ class Holo3Brain:
         if action_name in spatial_actions:
             if "x" in args and "y" in args:
                 try:
-                    sx, sy = _model_coords_to_screen(
-                        int(float(str(args["x"]))), int(float(str(args["y"]))),
-                        screen_size[0], screen_size[1],
+                    args["x"], args["y"] = self._coords_to_screen(
+                        args["x"], args["y"], screen_size,
                     )
-                    args["x"] = sx
-                    args["y"] = sy
                 except (ValueError, TypeError):
                     pass
 
@@ -667,16 +664,38 @@ class Holo3Brain:
                 xk, yk = f"{prefix}x", f"{prefix}y"
                 if xk in args and yk in args:
                     try:
-                        sx, sy = _model_coords_to_screen(
-                            int(float(str(args[xk]))), int(float(str(args[yk]))),
-                            screen_size[0], screen_size[1],
+                        args[xk], args[yk] = self._coords_to_screen(
+                            args[xk], args[yk], screen_size,
                         )
-                        args[xk] = sx
-                        args[yk] = sy
                     except (ValueError, TypeError):
                         pass
 
         return args
+
+    @staticmethod
+    def _coords_to_screen(
+        raw_x, raw_y, screen_size: tuple[int, int],
+    ) -> tuple[int, int]:
+        """Map a model x/y to absolute screen pixels, handling BOTH conventions
+        Holo3 emits:
+
+        - **Normalized fractions in [0,1]** written with a decimal point
+          (e.g. ``click(x=0.324, y=0.338)`` — S09): scale directly by the
+          screen dimension. The old ``int(float("0.324"))`` truncated to 0,
+          collapsing every such click to the top-left corner — a degenerate
+          no-op that looped the run out.
+        - **Resized-space integers** (e.g. ``640``): the existing Qwen
+          smart-resize conversion.
+
+        Disambiguated by the decimal point so an integer ``1`` stays a
+        resized-space coord, not a full-width fraction.
+        """
+        sx, sy = str(raw_x), str(raw_y)
+        fx, fy = float(sx), float(sy)
+        w, h = screen_size[0], screen_size[1]
+        if "." in sx and "." in sy and 0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0:
+            return int(round(fx * w)), int(round(fy * h))
+        return _model_coords_to_screen(int(fx), int(fy), w, h)
 
     def _parse_holo3_action(self, text: str, screen_size: tuple[int, int]) -> Action | None:
         """Parse Holo3's native text format: Action: name({...}) or name(key=val, ...).
