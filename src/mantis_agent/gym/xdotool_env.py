@@ -1341,6 +1341,44 @@ class XdotoolGymEnv(GymEnvironment):
                 env=self._env, capture_output=True, timeout=20,
             )
 
+    @staticmethod
+    def _url_host(url: str) -> str:
+        """Bare host of ``url`` (lowercased, ``www.`` stripped), or ""."""
+        try:
+            from urllib.parse import urlparse
+            host = (urlparse(str(url or "")).hostname or "").lower()
+        except Exception:  # noqa: BLE001
+            return ""
+        return host[4:] if host.startswith("www.") else host
+
+    def _await_navigation_commit(
+        self, target_host: str, *, max_seconds: float | None = None,
+    ) -> bool:
+        """Poll the live URL until its host matches ``target_host`` (the
+        navigation actually committed) or the budget expires.
+
+        Returns True iff the live URL reached the target host. Returns True
+        immediately when ``target_host`` is empty (can't verify → don't
+        block) or when there is no ``current_url`` signal (legacy adapters /
+        tests — preserve the old fire-and-settle behaviour). A bounded poll
+        plus a short paint settle on success.
+        """
+        budget = (self._settle_time + 2.0) if max_seconds is None else max_seconds
+        if not target_host or not hasattr(self, "current_url"):
+            time.sleep(budget)
+            return True
+        deadline = time.time() + max(0.5, budget)
+        while time.time() < deadline:
+            try:
+                cur = self.current_url or ""
+            except Exception:  # noqa: BLE001
+                cur = ""
+            if cur and self._url_host(cur) == target_host:
+                time.sleep(0.4)  # brief paint settle once committed
+                return True
+            time.sleep(0.25)
+        return False
+
     def _navigate_running_browser(self, url: str) -> None:
         """Navigate the already-running browser to ``url``.
 
@@ -1365,10 +1403,31 @@ class XdotoolGymEnv(GymEnvironment):
         history, and back-forward state same as a user-typed URL.
         """
         self._seed_request_cookies(url)
+        target_host = self._url_host(url)
         logger.info(f"Navigating to {url[:80]} (via CDP Page.navigate)")
         ok, _ = self._cdp_call("Page.navigate", {"url": url})
         if ok:
-            time.sleep(self._settle_time + 2)
+            # cua-issues 2026-06-29: Page.navigate returning ok means the
+            # COMMAND was accepted, NOT that the page reached the target.
+            # ~14 /v1/cua runs issued a navigate (to Reddit/jobs/login) yet
+            # the cached tab kept rendering linkedin.com/in/akhil08 — the
+            # screen never moved. Verify the live URL actually reaches the
+            # target host; if it's still stale, re-navigate once, then force
+            # a cache-bypassing reload. (Reading current_url to confirm our
+            # OWN navigation landed is action-side post-verify, not target
+            # grounding — feedback_cua_cdp_post_action_verify.)
+            if self._await_navigation_commit(target_host):
+                return
+            logger.warning(
+                "Page.navigate accepted but did not reach %s (stale tab) — "
+                "re-navigating", target_host or url[:60],
+            )
+            self._cdp_call("Page.navigate", {"url": url})
+            if self._await_navigation_commit(target_host):
+                return
+            logger.warning("still stale after retry — forcing Page.reload(ignoreCache)")
+            self._cdp_call("Page.reload", {"ignoreCache": True})
+            self._await_navigation_commit(target_host)
             return
 
         # Fallback: omnibox typing. Bypass CDP path inside _xdotool_type
