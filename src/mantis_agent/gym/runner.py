@@ -38,6 +38,7 @@ from ._runner_helpers import is_cancelled
 from .base import GymEnvironment
 from .done_gate import DoneAcceptanceDecision, check_done_acceptance
 from .loop_recovery import decide_recovery as _decide_loop_recovery
+from .vendor_trap import is_browser_vendor_url
 from .perceptual_diff import action_had_effect as _perceptual_action_had_effect
 from .predicates import (
     ObservationContext,
@@ -1896,6 +1897,36 @@ class GymRunner:
                 if gym_result.done:
                     termination_reason = "env_done"
                     break
+
+                # S01 vendor-trap guard. A stray Return on Chrome's
+                # "Can't update Chrome → Reinstall Chrome" bubble navigates
+                # to google.com/chrome and dead-ends behind the proxy
+                # (cua-issues run S01). A browser-vendor page is never task
+                # progress, so halt honestly here instead of looping to
+                # max_steps and reporting success. Reading current_url to
+                # verify where the last action landed is a CUA-legal
+                # post-action check (not target derivation). Probe only
+                # after actions that can navigate, to avoid per-WAIT CDP
+                # round-trips.
+                if action.action_type in (
+                    ActionType.CLICK, ActionType.DOUBLE_CLICK,
+                    ActionType.KEY_PRESS, ActionType.TYPE,
+                ):
+                    try:
+                        post_url = (
+                            self.env.current_url
+                            if hasattr(self.env, "current_url") else ""
+                        )
+                    except Exception:
+                        post_url = ""
+                    if is_browser_vendor_url(post_url):
+                        logger.warning(
+                            "vendor-trap: landed on %s — halting "
+                            "(S01 Reinstall-Chrome trap)",
+                            str(post_url)[:80],
+                        )
+                        termination_reason = "chrome_vendor_trap"
+                        break
 
                 if self._is_loop(self.hard_loop_window):
                     logger.warning("Hard action loop detected — stopping")
