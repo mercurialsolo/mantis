@@ -337,7 +337,10 @@ class RunResult:
     total_steps: int
     total_time: float
     trajectory: list[TrajectoryStep]
-    termination_reason: str  # "done", "max_steps", "loop", "env_done", "paused"
+    termination_reason: str  # "done", "max_steps", "loop", "env_done", "paused",
+    # "done_failed" (agent bailed: done(success=false)), "done_unverified"
+    # (success done force-accepted after the done-gate hit its rejection cap).
+    # The latter two map to a halted status, not succeeded (cua-issues).
     terminal_reward: float = 0.0
     reward_components: dict[str, float] = field(default_factory=dict)
     paused: bool = False
@@ -1371,7 +1374,26 @@ class GymRunner:
                             reward=0.0, done=True, inference_time=inference_time,
                             executor_backend="vision",
                         ))
-                        termination_reason = "done"
+                        # cua-issues 2026-06-29: be honest about WHY we accept
+                        # here. The verified-accept path is the elif above
+                        # (gate + verifier passed → "done"). This branch also
+                        # catches two NON-successes the audit flagged as false
+                        # "succeeded":
+                        #  - done(success=false): the agent explicitly bailed
+                        #    ("stuck", ERR_TUNNEL — A02/L07). Not a success.
+                        #  - success=true but done_rejections hit the cap: the
+                        #    gate/verifier rejected it max times and we're only
+                        #    accepting the (often identical) Nth done because we
+                        #    ran out of retries — UNVERIFIED (S02).
+                        # Both get a non-"done" reason so the status mapping
+                        # (task_loop._AUGUR_DONE_REASONS) reports halted, and
+                        # RunResult.success below resolves to False.
+                        if not done_success:
+                            termination_reason = "done_failed"
+                        elif done_rejections >= max_done_rejections:
+                            termination_reason = "done_unverified"
+                        else:
+                            termination_reason = "done"
                         break
 
                 # Force-fill substitution (Holo3-as-detector): when the model
