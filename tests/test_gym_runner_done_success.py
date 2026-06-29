@@ -53,7 +53,9 @@ class _Env(GymEnvironment):
 def test_done_success_false_returns_failed_result() -> None:
     result = GymRunner(_DoneBrain(False), _Env(), max_steps=1).run("task")
 
-    assert result.termination_reason == "done"
+    # #942 status-honesty: ``done(success=False)`` terminates as ``done_failed``
+    # so the reason no longer contradicts the False outcome.
+    assert result.termination_reason == "done_failed"
     assert result.success is False
 
 

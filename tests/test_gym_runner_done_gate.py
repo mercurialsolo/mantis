@@ -206,7 +206,9 @@ def test_done_gate_skipped_when_success_false(
     result = GymRunner(brain, env, max_steps=5).run("task")
 
     assert result.done_rejections_by_reason == {}
-    assert result.termination_reason == "done"
+    # #942 status-honesty: a self-reported failure-done is recorded as
+    # ``done_failed`` (not the bare ``done`` that read as a success upstream).
+    assert result.termination_reason == "done_failed"
     # success=False with no completed work → run is unsuccessful, but we
     # accepted the failure-done immediately rather than looping.
     assert result.success is False
@@ -232,8 +234,12 @@ def test_done_gate_respects_max_done_rejections_cap(
     assert (
         result.done_rejections_by_reason.get(REJECT_EMPTY_SUMMARY) == 2
     ), result.done_rejections_by_reason
-    assert result.termination_reason == "done"
-    assert result.success is True
+    # #942 status-honesty (S02): a done force-accepted only because it hit the
+    # rejection cap is ``done_unverified`` — we couldn't verify it, so it does
+    # NOT count as a success unless the env independently confirms (env_done +
+    # reward). _StableEnv does neither, so success is False.
+    assert result.termination_reason == "done_unverified"
+    assert result.success is False
 
 
 def test_done_gate_well_formed_done_terminates_successfully(
