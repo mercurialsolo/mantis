@@ -123,10 +123,15 @@ def _stub_run_micro_resume(self, task_suite, payload, run_id=None):
     assert payload.get("_resume_pause_state"), (
         "expected _resume_pause_state to be layered onto the payload"
     )
+    # #940 status-honesty: the wire mapping now reads ``terminal_status`` off
+    # the result envelope (a missing one maps to ``halted``, not a defaulted
+    # ``succeeded``). The real ``build_micro_result`` stamps this on every
+    # run; the stub must mimic it for a clean run to read as succeeded.
     return {
         "viable": 1,
         "leads": [{"url": "https://example.com/a"}],
         "run_id": run_id or "stub",
+        "terminal_status": "completed",
     }
 
 
@@ -227,7 +232,12 @@ def test_resume_on_non_paused_run_returns_400(client, monkeypatch):
 
     # Run that succeeds immediately (no pause).
     def _ok_stub(self, task_suite, payload, run_id=None):
-        return {"viable": 0, "leads": [], "run_id": run_id or "stub"}
+        # terminal_status mirrors build_micro_result so the honest #940 wire
+        # mapping reads this clean run as succeeded (not halted-by-default).
+        return {
+            "viable": 0, "leads": [], "run_id": run_id or "stub",
+            "terminal_status": "completed",
+        }
 
     monkeypatch.setattr(BasetenCUARuntime, "_run_micro", _ok_stub, raising=True)
     submit = test_client.post(
