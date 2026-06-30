@@ -190,6 +190,11 @@ daytona = [
     "daytona>=0.183",
     "requests>=2.28",
 ]
+# Morph microVM compute-plane backend (snapshot-booted VMs + pre-warm pool).
+morph = [
+    "morphcloud>=0.1",
+    "requests>=2.28",
+]
 # HUD evaluation harness.
 hud = [
     "hud-python>=0.5.34",

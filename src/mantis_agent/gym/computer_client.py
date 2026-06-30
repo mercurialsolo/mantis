@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from .base import GymEnvironment
 
-ComputerPlaneBackend = Literal["local", "modal", "e2b", "daytona"]
+ComputerPlaneBackend = Literal["local", "modal", "e2b", "daytona", "morph"]
 
 
 @dataclass
@@ -56,6 +56,14 @@ class ComputerPlaneConfig:
     session_router_auth_token: str | None = None
     session_ttl_seconds: int = 3600
 
+    # Morph backend (microVM provider). ``morph_snapshot_id`` names the booted
+    # Chrome+service snapshot to start from (falls back to MANTIS_MORPH_SNAPSHOT).
+    # ``morph_pool`` is an optional long-lived ``MorphPrewarmPool``; when set, a
+    # run CLAIMS a pre-booted instance instead of cold-starting one. Typed Any to
+    # avoid importing the pool (and morphcloud) at config-construction time.
+    morph_snapshot_id: str | None = None
+    morph_pool: Any = None
+
     # Per-executor overrides — `{"run_claude_cua": "modal"}`.
     per_executor_overrides: dict[str, ComputerPlaneBackend] = field(default_factory=dict)
 
@@ -78,6 +86,8 @@ class ComputerPlaneConfig:
             session_router_url=self.session_router_url,
             session_router_auth_token=self.session_router_auth_token,
             session_ttl_seconds=self.session_ttl_seconds,
+            morph_snapshot_id=self.morph_snapshot_id,
+            morph_pool=self.morph_pool,
             per_executor_overrides=self.per_executor_overrides,
         )
 
@@ -164,6 +174,26 @@ def make_computer_client(
         from .daytona_impl import DaytonaComputerImpl
 
         return DaytonaComputerImpl(
+            enable_cdp=cfg.enable_cdp,
+            **env_kwargs,
+        )
+
+    if backend == "morph":
+        from .morph_impl import MorphComputerImpl
+
+        # Hot path: claim a pre-booted instance from the warm pool (zero
+        # cold-start). Cold path: provision one from the snapshot directly.
+        pool = cfg.morph_pool
+        if pool is not None:
+            warm = pool.acquire()
+            return MorphComputerImpl(
+                instance=warm.instance,
+                base_url=warm.base_url,
+                enable_cdp=cfg.enable_cdp,
+                **env_kwargs,
+            )
+        return MorphComputerImpl(
+            snapshot_id=cfg.morph_snapshot_id or "",
             enable_cdp=cfg.enable_cdp,
             **env_kwargs,
         )
