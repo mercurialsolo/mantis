@@ -41,7 +41,11 @@ from mantis_agent.server_utils import (  # noqa: E402
 )
 
 ENDPOINT = "https://getmason--mantis-cua-server-api.modal.run"
-PLAN_PATH = REPO_ROOT / "plans" / "multi-app-research.json"
+# Plan path defaults to the CRM→lu.ma→HN chain but can be overridden with an
+# argv[1] plan filename (resolved under plans/) or absolute path, e.g.
+#   uv run python scripts/run_multi_app_research.py luma-linkedin-crm.json
+_PLAN_ARG = sys.argv[1] if len(sys.argv) > 1 else "multi-app-research.json"
+PLAN_PATH = Path(_PLAN_ARG) if Path(_PLAN_ARG).is_absolute() else REPO_ROOT / "plans" / _PLAN_ARG
 PROFILE_ID = f"multiapp-{int(time.time())}"
 WORKFLOW_ID = f"multiapp-{int(time.time())}"
 
@@ -55,16 +59,27 @@ def _token() -> str:
 
 
 def _post(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    r = requests.post(
-        f"{ENDPOINT}{path}",
-        headers={"X-Mantis-Token": _token(), "Content-Type": "application/json"},
-        data=json.dumps(body),
-        timeout=120,
-    )
-    try:
-        return r.status_code, r.json()
-    except Exception:
-        return r.status_code, {"raw": r.text}
+    # Retry transient network errors (ReadTimeout / ConnectionError) so a
+    # single blip on a status poll doesn't abort a whole canary run — the
+    # run keeps progressing server-side; only the client observation died.
+    last_exc: Exception | None = None
+    for attempt in range(4):
+        try:
+            r = requests.post(
+                f"{ENDPOINT}{path}",
+                headers={"X-Mantis-Token": _token(), "Content-Type": "application/json"},
+                data=json.dumps(body),
+                timeout=120,
+            )
+            try:
+                return r.status_code, r.json()
+            except Exception:
+                return r.status_code, {"raw": r.text}
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < 3:
+                time.sleep(2 * (attempt + 1))
+    raise last_exc  # type: ignore[misc]
 
 
 def _subst_env(obj: Any) -> Any:
@@ -103,7 +118,7 @@ def _build_suite() -> tuple[dict[str, Any], dict[str, Any]]:
 
 def main() -> int:
     print(f"endpoint:    {ENDPOINT}")
-    print(f"plan:        {PLAN_PATH.name} (CRM → lu.ma → Hacker News)")
+    print(f"plan:        {PLAN_PATH.name}")
     print(f"profile_id:  {PROFILE_ID}")
     print()
 
