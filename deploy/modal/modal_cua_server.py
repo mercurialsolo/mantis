@@ -4511,6 +4511,43 @@ def session_reaper() -> dict:
 
 
 @app.function(
+    image=api_image,
+    volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
+    secrets=[modal.Secret.from_dotenv()],
+    timeout=600,
+    memory=1024,
+    cpu=1,
+    schedule=modal.Period(hours=6),
+)
+def data_artifact_reaper() -> dict:
+    """Prune accumulated per-run artifacts from the ``/data`` volume.
+
+    The ``osworld-data`` volume is capped by Modal at 500K inodes regardless
+    of byte capacity. Per-run screenshot dirs (``/data/screenshots/*``) and
+    per-run state dirs (``/data/tenants/*/runs/*``) accumulate with no TTL; on
+    2026-06-30 they filled the inode cap (91% of it) and every run began
+    failing with ``ENOSPC`` at 0 steps. This runs every 6 hours and deletes
+    those two trees' children older than ``MANTIS_ARTIFACT_TTL_DAYS`` (default
+    3). It NEVER touches weights / training data / VM images / chrome profiles.
+
+    Look for ``data_artifact_reaper summary`` in ``modal app logs``.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    from mantis_agent.server.data_reaper import prune_run_artifacts
+
+    ttl_days = float(_os.environ.get("MANTIS_ARTIFACT_TTL_DAYS", "3"))
+    summary = prune_run_artifacts(_Path("/data"), ttl_seconds=ttl_days * 86400.0)
+    try:
+        vol.commit()
+    except Exception as exc:  # noqa: BLE001 — commit is best-effort bookkeeping
+        print(f"  data_artifact_reaper: vol.commit() raised: {exc}")
+    print(f"WARNING: data_artifact_reaper summary {summary}")
+    return summary
+
+
+@app.function(
     image=computer_plane_image,
     volumes={"/data": vol, TRAINER_MOUNT: trainer_vol},
     secrets=[modal.Secret.from_dotenv()],
