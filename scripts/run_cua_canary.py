@@ -55,16 +55,27 @@ def _token() -> str:
 
 
 def _post(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    r = requests.post(
-        f"{ENDPOINT}{path}",
-        json=body,
-        headers={"X-Mantis-Token": _token(), "Content-Type": "application/json"},
-        timeout=60,
-    )
-    try:
-        return r.status_code, r.json()
-    except ValueError:
-        return r.status_code, {"raw": r.text}
+    # Retry transient network errors (ReadTimeout / ConnectionError) so a
+    # single blip on a status poll doesn't abort the canary observation —
+    # the run keeps progressing server-side regardless.
+    last_exc: Exception | None = None
+    for attempt in range(4):
+        try:
+            r = requests.post(
+                f"{ENDPOINT}{path}",
+                json=body,
+                headers={"X-Mantis-Token": _token(), "Content-Type": "application/json"},
+                timeout=60,
+            )
+            try:
+                return r.status_code, r.json()
+            except ValueError:
+                return r.status_code, {"raw": r.text}
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < 3:
+                time.sleep(2 * (attempt + 1))
+    raise last_exc  # type: ignore[misc]
 
 
 def _build_task_suite() -> dict[str, Any]:
