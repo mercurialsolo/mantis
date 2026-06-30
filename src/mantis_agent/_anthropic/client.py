@@ -290,10 +290,18 @@ class AnthropicToolUseClient:
         model: str,
         *,
         log_prefix: str = "Anthropic",
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
         self._log_prefix = log_prefix
+        # Extra request headers merged into every POST — e.g. the
+        # ``anthropic-beta`` header that enables the computer-use tool
+        # type for the CUA brain. Without this seam the brain's
+        # ``computer_20251124`` tool was rejected with HTTP 400 on every
+        # call (the beta header had nowhere to ride through this shared
+        # client). Empty for the text/grounding/extraction callers.
+        self._extra_headers = dict(extra_headers or {})
 
     def post_messages_with_retry(
         self,
@@ -336,6 +344,7 @@ class AnthropicToolUseClient:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
+        headers.update(self._extra_headers)
         last_response = None
         self.last_retries_spent = 0
         _t0 = time.monotonic()
