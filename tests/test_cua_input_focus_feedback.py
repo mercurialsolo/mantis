@@ -72,3 +72,33 @@ def test_click_probe_exception_is_swallowed(click_env, monkeypatch) -> None:
     monkeypatch.setattr(XdotoolGymEnv, "_active_field_probe", _boom)
     result = click_env.step(_click())  # must not raise
     assert "focused_input" not in result.info
+
+
+def test_som_click_focuses_input_and_reports_focused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cdp_click_at_point must el.focus() a focusable target and surface
+    ``focused`` on _last_som_diag — the type-stall fix for the SoM path, where
+    el.click() alone never focused the input."""
+    env = XdotoolGymEnv.__new__(XdotoolGymEnv)
+    env.som_diagnostic = False
+    captured: dict = {}
+
+    def _fake_eval(self, js):  # noqa: ANN001
+        captured["js"] = js
+        return {
+            "ok": True, "focused": True,
+            "elv_tag": "INPUT", "elv_text": "",
+            "els_tag": "DIV", "els_text": "",
+            "outerHeight": 800, "innerHeight": 720, "chromeH": 80,
+            "vx": 270, "vy": 42,
+        }
+
+    monkeypatch.setattr(XdotoolGymEnv, "cdp_evaluate", _fake_eval)
+
+    ok = env.cdp_click_at_point(270, 122)
+
+    assert ok is True
+    # the JS payload focuses focusable elements before clicking
+    assert "focus" in captured["js"]
+    assert ".focus()" in captured["js"]
+    # the focus result is surfaced for the runner to read
+    assert env._last_som_diag["focused"] is True

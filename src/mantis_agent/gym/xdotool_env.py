@@ -1124,9 +1124,22 @@ class XdotoolGymEnv(GymEnvironment):
             "(e.className && typeof e.className === 'string' ? '.' + e.className.split(' ').slice(0,2).join('.') : '')) : null;"
             "const text = e => e ? (e.innerText || e.textContent || '').trim().slice(0, 40) : '';"
             "let ok = false;"
-            "if (elv) { try { elv.click(); ok = true; } catch (e) { ok = false; } }"
+            "let focused = false;"
+            # type-stall fix: a real mouse click focuses an input on mousedown,
+            # but ``elv.click()`` only fires the click event — it does NOT focus.
+            # So SoM clicks on a search/login/composer field left it UNFOCUSED;
+            # the brain then had no field to type into and stalled (it never
+            # reached a type()). Focus focusable targets first so the next
+            # TYPE lands. Mirrors native click ordering (focus → click).
+            "if (elv) { try {"
+            "  const tagU = (elv.tagName || '').toUpperCase();"
+            "  if ((tagU === 'INPUT' || tagU === 'TEXTAREA' || tagU === 'SELECT' || elv.isContentEditable) && typeof elv.focus === 'function') {"
+            "    try { elv.focus(); focused = (document.activeElement === elv); } catch (e) {}"
+            "  }"
+            "  elv.click(); ok = true;"
+            "} catch (e) { ok = false; } }"
             "return {"
-            "ok: ok,"
+            "ok: ok, focused: focused,"
             "outerHeight: oh, innerHeight: ih, chromeH: chromeH,"
             "vx: vx, vy: vy,"
             "elv_tag: tag(elv), elv_text: text(elv),"
@@ -1157,6 +1170,9 @@ class XdotoolGymEnv(GymEnvironment):
             "els_tag": str(result.get("els_tag") or ""),
             "els_text": str(result.get("els_text") or ""),
             "ok": bool(result.get("ok")),
+            # type-stall fix: did the SoM click focus a text field? Read by
+            # the runner to surface focused_input → "type now" feedback.
+            "focused": bool(result.get("focused")),
         }
         # One-line WARNING log so the SoM click's coordinate translation
         # is visible in Modal's INFO-suppressed capture without an
