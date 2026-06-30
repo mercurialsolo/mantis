@@ -1638,6 +1638,26 @@ class XdotoolGymEnv(GymEnvironment):
                             logger.debug("TYPE contenteditable fallback raised: %s", exc)
                 if verdict is not None:
                     info["type_verified"] = verdict
+        elif action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK):
+            # type-stall fix: report whether the click landed IN a text field.
+            # Focusing an input is visually silent — without this signal the
+            # runner's perceptual-diff reads "no observed effect", the brain
+            # treats the click as a no-op, and it wait()/re-clicks instead of
+            # typing (the /v1/cua type-stall: brain never commits to type()).
+            # Surfacing focused_input lets the runner tell the brain to type
+            # next AND flips loop-recovery off the wrongful submit-Return path
+            # (Rule 2 fires only when focused_input is None). CUA-legal
+            # post-action read of activeElement — not target derivation.
+            try:
+                probe = self._active_field_probe()
+            except Exception as exc:  # noqa: BLE001 — verification never fatal
+                logger.debug("post-click active-field probe raised: %s", exc)
+                probe = None
+            if isinstance(probe, dict) and probe.get("has_field"):
+                info["focused_input"] = {
+                    "focused_via_click": True,
+                    "value": str(probe.get("text") or ""),
+                }
         return GymResult(observation=obs, reward=0.0, done=False, info=info)
 
     def close(self) -> None:
