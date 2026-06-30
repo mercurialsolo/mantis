@@ -42,6 +42,14 @@ logger = logging.getLogger(__name__)
 # MANTIS_PROMPTS_DIR/claude_system.txt.
 SYSTEM_PROMPT = load_prompt("claude_system")
 
+# ``anthropic-beta`` header that MUST accompany the computer-use tool type
+# (``computer_20251124`` in ``_build_tools``) — the API rejects the tool
+# type with HTTP 400 without it. Single source of truth; passed into the
+# shared ``AnthropicToolUseClient`` via ``extra_headers`` (the client builds
+# its own base headers and would otherwise drop this entirely — the root
+# cause of every /v1/cua run brain-looping to a hard-loop halt).
+_ANTHROPIC_BETA_HEADER = "computer-use-2025-11-24,context-management-2025-06-27"
+
 # Claude computer_use tool + our custom done/wait tools
 CLAUDE_TOOLS = [
     {
@@ -185,6 +193,7 @@ class ClaudeBrain:
             client = AnthropicToolUseClient(
                 api_key=self.api_key, model=self.model,
                 log_prefix="[brain.claude.query]",
+                extra_headers={"anthropic-beta": _ANTHROPIC_BETA_HEADER},
             )
             resp = client.post_messages_with_retry(payload, timeout=60)
             if resp is None or resp.status_code != 200:
@@ -267,6 +276,7 @@ class ClaudeBrain:
             client = AnthropicToolUseClient(
                 api_key=self.api_key, model=self.model,
                 log_prefix="[brain.claude.think]",
+                extra_headers={"anthropic-beta": _ANTHROPIC_BETA_HEADER},
             )
             resp = client.post_messages_with_retry(
                 payload, timeout=120, max_attempts=2,
@@ -334,9 +344,7 @@ class ClaudeBrain:
         return {
             "x-api-key": self.api_key,
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": (
-                "computer-use-2025-11-24,context-management-2025-06-27"
-            ),
+            "anthropic-beta": _ANTHROPIC_BETA_HEADER,
             "content-type": "application/json",
         }
 
