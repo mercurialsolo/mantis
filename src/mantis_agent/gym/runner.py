@@ -1879,7 +1879,24 @@ class GymRunner:
                     thinking=thinking,
                     task=task,
                 )
-                if effect_check.effect_observed is False:
+                # type-stall fix: a click that LANDED IN a text field focuses
+                # it — which is visually silent, so the perceptual-diff below
+                # would falsely warn "no observed effect" and the brain would
+                # wait()/re-click instead of typing. When the env reports the
+                # click focused an input, tell the brain to type next and skip
+                # the false-alarm warning. (env sets focused_via_click only on
+                # a CLICK/DOUBLE_CLICK that landed in an editable field.)
+                clicked_into_field = (
+                    action.action_type in (ActionType.CLICK, ActionType.DOUBLE_CLICK)
+                    and isinstance(focused_input, dict)
+                    and focused_input.get("focused_via_click")
+                )
+                if clicked_into_field:
+                    feedback = (
+                        f"{feedback}; input field focused — type your text now "
+                        f"(do not click it again)"
+                    )
+                elif effect_check.effect_observed is False:
                     feedback = (
                         f"{feedback}; WARNING: high-risk action had no observed effect "
                         f"({effect_check.reason})"
