@@ -1739,6 +1739,18 @@ class GymRunner:
                         )
 
                 gym_result = self.env.step(action)
+                # type-stall fix: a SoM-dispatched click swaps the action to a
+                # no-op WAIT, so env.step's CLICK-branch focus probe never runs.
+                # If the SoM click focused a text field (cdp_click_at_point did
+                # el.focus()), surface focused_input here so the brain is told
+                # to type next instead of stalling on "no visible change".
+                if pending_executor_backend == "som":
+                    som_diag = getattr(self.env, "_last_som_diag", None)
+                    if isinstance(som_diag, dict) and som_diag.get("focused"):
+                        gym_result.info["focused_input"] = {
+                            "focused_via_click": True,
+                            "value": "",
+                        }
                 action_history.append(action)
                 for post_action in post_actions:
                     logger.warning(
