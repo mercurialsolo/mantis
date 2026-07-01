@@ -1577,6 +1577,44 @@ class XdotoolGymEnv(GymEnvironment):
 
     # ── GymEnvironment interface ─────────────────────────────────────
 
+    def _close_stale_tabs(self, keep: int = 1) -> None:
+        """Close accumulated page tabs so a reused session starts single-tab.
+
+        Keeps the first ``keep`` page tabs (Chrome lists the active tab first)
+        and closes the rest via the CDP ``/json/close/<id>`` REST endpoint.
+        Best-effort — a CDP hiccup must never break ``reset()``; on any error
+        we leave the tabs as-is and proceed. Only called on a fresh navigation
+        (a new task), so tabs the agent opens WITHIN a run are untouched.
+        """
+        try:
+            import json as _json
+            import urllib.request
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self._cdp_port}/json/list", timeout=2,
+            ) as resp:
+                tabs = _json.loads(resp.read().decode())
+        except Exception as exc:  # noqa: BLE001 — hygiene is best-effort
+            logger.debug("_close_stale_tabs: /json/list failed: %s", exc)
+            return
+        page_tabs = [t for t in tabs if t.get("type") == "page" and t.get("id")]
+        if len(page_tabs) <= keep:
+            return
+        closed = 0
+        for tab in page_tabs[keep:]:
+            try:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{self._cdp_port}/json/close/{tab['id']}",
+                    timeout=2,
+                ).read()
+                closed += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("_close_stale_tabs: close %s failed: %s", tab.get("id"), exc)
+        if closed:
+            logger.warning(
+                "reset: closed %d stale tab(s) (kept %d) — tab-drift guard",
+                closed, keep,
+            )
+
     def reset(self, task: str, **kwargs: Any) -> GymObservation:
         """Start Xvfb + browser, navigate to URL."""
         url = kwargs.get("start_url", "")  # Only navigate if explicitly passed
@@ -1584,6 +1622,16 @@ class XdotoolGymEnv(GymEnvironment):
         # Browser already running
         if self._browser_proc and self._browser_proc.poll() is None:
             if url and url != "about:blank":
+                # Tab hygiene (#tab-drift): a reused warm profile accumulates
+                # tabs across runs — the agent's target=_blank clicks, mid-task
+                # link-opens, etc. never get cleaned up. current_url and the CDP
+                # navigate/read target both pick "the FIRST page tab" from
+                # /json/list, so once stale tabs pile up they land on a PRIOR
+                # run's page (the serial-same-profile drift: S09→S04's URL,
+                # S03→github). Closing extras at the START of a fresh navigation
+                # (NOT on the no-URL sub-step reuse below) restores a clean
+                # single-tab session before we navigate.
+                self._close_stale_tabs()
                 self._navigate_running_browser(url)
             else:
                 # No URL — just capture current page state (for sub-plan micro-steps)
