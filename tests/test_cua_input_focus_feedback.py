@@ -102,3 +102,29 @@ def test_som_click_focuses_input_and_reports_focused(monkeypatch: pytest.MonkeyP
     assert ".focus()" in captured["js"]
     # the focus result is surfaced for the runner to read
     assert env._last_som_diag["focused"] is True
+
+
+def test_som_click_retargets_to_nearest_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """multi-step click fix: the SoM JS must retarget a non-actionable container
+    click to the nearest link/button so navigation clicks land (a click on
+    DIV.post-author-meta should snap to its child <a>, not no-op)."""
+    env = XdotoolGymEnv.__new__(XdotoolGymEnv)
+    env.som_diagnostic = False
+    captured: dict = {}
+
+    def _fake_eval(self, js):  # noqa: ANN001
+        captured["js"] = js
+        return {"ok": True, "focused": False, "retargeted": True,
+                "elv_tag": "DIV.post-author-meta", "target_tag": "A.post-author-name",
+                "elv_text": "", "els_tag": "", "els_text": "",
+                "outerHeight": 800, "innerHeight": 720, "chromeH": 80, "vx": 459, "vy": 247}
+
+    monkeypatch.setattr(XdotoolGymEnv, "cdp_evaluate", _fake_eval)
+    ok = env.cdp_click_at_point(459, 334)
+
+    assert ok is True
+    js = captured["js"]
+    # retarget helpers present
+    assert "closest('a[href],button" in js
+    assert "querySelectorAll('a[href],button" in js
+    assert "target.click()" in js  # clicks the retargeted element, not elv

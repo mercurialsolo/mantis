@@ -1131,18 +1131,41 @@ class XdotoolGymEnv(GymEnvironment):
             # the brain then had no field to type into and stalled (it never
             # reached a type()). Focus focusable targets first so the next
             # TYPE lands. Mirrors native click ordering (focus → click).
-            "if (elv) { try {"
-            "  const tagU = (elv.tagName || '').toUpperCase();"
-            "  if ((tagU === 'INPUT' || tagU === 'TEXTAREA' || tagU === 'SELECT' || elv.isContentEditable) && typeof elv.focus === 'function') {"
-            "    try { elv.focus(); focused = (document.activeElement === elv); } catch (e) {}"
+            "let retargeted = false;"
+            # multi-step click fix: a SoM click often resolves to a
+            # NON-actionable container (e.g. a feed row's DIV.post-author-meta)
+            # even when the brain aimed at a link inside it; ``elv.click()`` on
+            # that div does nothing, so navigation clicks looped forever. Snap
+            # to the nearest actionable element — an ancestor <a>/<button>, or a
+            # SINGLE actionable descendant whose box is near the click point
+            # (bounded by a 40px margin so we never jump to a distant link in a
+            # huge container).
+            "const isAct = (e) => { if (!e) return false; const t=(e.tagName||'').toUpperCase();"
+            "  return t==='A'||t==='BUTTON'||t==='INPUT'||t==='SELECT'||t==='TEXTAREA'||e.isContentEditable||"
+            "    typeof e.onclick==='function'||e.getAttribute('role')==='button'||e.getAttribute('role')==='link'; };"
+            "let target = elv;"
+            "if (elv && !isAct(elv)) {"
+            "  const anc = elv.closest && elv.closest('a[href],button,[role=button],[role=link]');"
+            "  if (anc) { target = anc; retargeted = true; }"
+            "  else if (elv.querySelectorAll) {"
+            "    const kids = elv.querySelectorAll('a[href],button,[role=button]');"
+            "    if (kids.length === 1) { const r = kids[0].getBoundingClientRect(); const m = 40;"
+            "      if (vx>=r.left-m && vx<=r.right+m && vy>=r.top-m && vy<=r.bottom+m) { target = kids[0]; retargeted = true; } }"
             "  }"
-            "  elv.click(); ok = true;"
+            "}"
+            "if (target) { try {"
+            "  const tagU = (target.tagName || '').toUpperCase();"
+            "  if ((tagU === 'INPUT' || tagU === 'TEXTAREA' || tagU === 'SELECT' || target.isContentEditable) && typeof target.focus === 'function') {"
+            "    try { target.focus(); focused = (document.activeElement === target); } catch (e) {}"
+            "  }"
+            "  target.click(); ok = true;"
             "} catch (e) { ok = false; } }"
             "return {"
-            "ok: ok, focused: focused,"
+            "ok: ok, focused: focused, retargeted: retargeted,"
             "outerHeight: oh, innerHeight: ih, chromeH: chromeH,"
             "vx: vx, vy: vy,"
             "elv_tag: tag(elv), elv_text: text(elv),"
+            "target_tag: tag(target),"
             "els_tag: tag(els), els_text: text(els)"
             "};"
             "})()"
